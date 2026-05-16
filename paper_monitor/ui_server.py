@@ -139,6 +139,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/journals/remove":
                 self.handle_remove_journal(payload)
                 return
+            if parsed.path == "/api/library/folders":
+                self.handle_create_library_folder(payload)
+                return
+            if parsed.path == "/api/library/items":
+                self.handle_add_library_item(payload)
+                return
+            if parsed.path == "/api/library/move":
+                self.handle_move_library_entry(payload)
+                return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown route")
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -325,21 +334,61 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         )
 
     def handle_library(self, query: dict[str, list[str]]) -> None:
-        self.refresh_journals()
-        from_date = first(query, "from_date") or ""
-        until_date = first(query, "until_date") or ""
-        journal = first(query, "journal") or ""
         storage = Storage(self.configured_db_path)
         try:
-            papers = list_library_papers(storage, from_date=from_date, until_date=until_date, journal=journal)
+            snapshot = library_snapshot(storage)
         finally:
             storage.close()
-        self.send_json(
-            {
-                "papers": [paper_to_api(paper) for paper in papers],
-                "journals": self.configured_journals,
-            }
-        )
+        self.send_json(snapshot)
+
+    def handle_create_library_folder(self, payload: dict[str, Any]) -> None:
+        name = str(payload.get("name") or "New Folder")
+        parent_id = int(payload.get("parent_id") or 1)
+        storage = Storage(self.configured_db_path)
+        try:
+            folder = storage.create_library_folder(parent_id=parent_id, name=name)
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json({"folder": library_folder_to_api(folder), **snapshot})
+
+    def handle_add_library_item(self, payload: dict[str, Any]) -> None:
+        paper_id = str(payload.get("paper_id") or "")
+        folder_id = int(payload.get("folder_id") or 1)
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+            if not paper:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json({"item": library_item_to_api(item, paper) if item else {}, **snapshot})
+
+    def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        target_folder_id = int(payload.get("target_folder_id") or 1)
+        storage = Storage(self.configured_db_path)
+        try:
+            if entry_type == "item":
+                storage.move_library_item(item_id=int(payload.get("id") or 0), folder_id=target_folder_id)
+            elif entry_type == "folder":
+                storage.move_library_folder(folder_id=int(payload.get("id") or 0), parent_id=target_folder_id)
+            else:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
+                return
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(snapshot)
 
     def handle_delete_pdf(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -750,7 +799,127 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "preprint_id": preprint_identifier(paper),
         "preprint_category": preprint_primary_category(paper),
         "preprint_categories": preprint_categories(paper),
+        "citation_label": citation_label(paper),
+        "bibtex": bibtex_entry(paper),
     }
+
+
+def library_snapshot(storage: Storage) -> dict[str, Any]:
+    return {
+        "root_id": 1,
+        "folders": [library_folder_to_api(folder) for folder in storage.list_library_folders()],
+        "items": [library_item_to_api(item, item) for item in storage.list_library_items()],
+    }
+
+
+def library_folder_to_api(folder: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(folder.get("id") or 0),
+        "name": folder.get("name") or "New Folder",
+        "parent_id": int(folder["parent_id"]) if folder.get("parent_id") is not None else None,
+    }
+
+
+def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": int(item.get("id") or 0),
+        "folder_id": int(item.get("folder_id") or 1),
+        "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
+        "paper": paper_to_api(paper),
+    }
+
+
+def citation_label(paper: dict[str, Any]) -> str:
+    authors = full_author_names(paper) or author_summary(paper)
+    lead = author_last_name(authors[0]) if authors else "Unknown"
+    if len(authors) > 1:
+        lead = f"{lead} et al."
+    journal = paper.get("journal") or "Unknown Journal"
+    volume = paper_volume(paper)
+    page = paper_page(paper)
+    year = publication_year(paper)
+    source = journal
+    if volume:
+        source = f"{source} {volume}"
+    if page:
+        source = f"{source}, {page}"
+    return f"{lead} {source} ({year})" if year else f"{lead} {source}"
+
+
+def bibtex_entry(paper: dict[str, Any]) -> str:
+    entry_type = "misc" if (paper.get("journal") or "").lower() == ARXIV_JOURNAL_NAME.lower() else "article"
+    fields = {
+        "title": paper.get("title") or "",
+        "author": " and ".join(full_author_names(paper)),
+        "journal": paper.get("journal") or "",
+        "year": publication_year(paper),
+        "volume": paper_volume(paper),
+        "pages": paper_page(paper),
+        "doi": paper.get("doi") or "",
+        "url": paper.get("url") or paper.get("landing_url") or "",
+    }
+    preprint_id = preprint_identifier(paper)
+    if preprint_id:
+        fields["eprint"] = preprint_id
+        fields["archivePrefix"] = "arXiv"
+        fields["primaryClass"] = preprint_primary_category(paper)
+    body = "\n".join(
+        f"  {key} = {{{bibtex_escape(value)}}},"
+        for key, value in fields.items()
+        if value
+    )
+    return f"@{entry_type}{{{bibtex_key(paper)},\n{body}\n}}"
+
+
+def full_author_names(paper: dict[str, Any]) -> list[str]:
+    raw = parse_raw_json(paper)
+    return authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw)
+
+
+def author_last_name(name: str) -> str:
+    clean = clean_author_name(name)
+    if not clean:
+        return "Unknown"
+    if "," in clean:
+        return clean.split(",", 1)[0].strip() or clean
+    return clean.split()[-1]
+
+
+def publication_year(paper: dict[str, Any]) -> str:
+    date_text = paper.get("publication_date") or ""
+    if len(date_text) >= 4 and date_text[:4].isdigit():
+        return date_text[:4]
+    raw = parse_raw_json(paper)
+    for key in ["published-print", "published-online", "issued", "created"]:
+        parts = (raw.get(key) or {}).get("date-parts") or []
+        if parts and parts[0]:
+            return str(parts[0][0])
+    return ""
+
+
+def paper_volume(paper: dict[str, Any]) -> str:
+    raw = parse_raw_json(paper)
+    value = raw.get("volume") or (raw.get("biblio") or {}).get("volume")
+    return clean_text(str(value or ""))
+
+
+def paper_page(paper: dict[str, Any]) -> str:
+    raw = parse_raw_json(paper)
+    value = raw.get("page") or raw.get("article-number") or (raw.get("biblio") or {}).get("first_page")
+    return clean_text(str(value or ""))
+
+
+def bibtex_key(paper: dict[str, Any]) -> str:
+    authors = full_author_names(paper) or author_summary(paper)
+    lead = author_last_name(authors[0]).lower() if authors else "paper"
+    year = publication_year(paper) or "undated"
+    title_word = next((part.lower() for part in re.findall(r"[A-Za-z0-9]+", paper.get("title") or "") if len(part) > 3), "paper")
+    key = re.sub(r"[^a-z0-9]+", "", f"{lead}{year}{title_word}")
+    return key or safe_slug(paper.get("paper_id") or "paper").replace("-", "")
+
+
+def bibtex_escape(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
 
 
 def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
@@ -844,39 +1013,6 @@ def dedup_names(names: list[str]) -> list[str]:
         seen.add(key)
         result.append(name)
     return result
-
-
-def list_library_papers(
-    storage: Storage,
-    *,
-    from_date: str = "",
-    until_date: str = "",
-    journal: str = "",
-) -> list[dict[str, Any]]:
-    clauses = [
-        "(download_status IN ('success', 'partial') OR analysis_status != 'not_started')",
-        "(section_allowed IS NULL OR section_allowed != 0)",
-    ]
-    params: list[Any] = []
-    if from_date:
-        clauses.append("publication_date >= ?")
-        params.append(from_date)
-    if until_date:
-        clauses.append("publication_date <= ?")
-        params.append(until_date)
-    if journal:
-        clauses.append("journal = ?")
-        params.append(journal)
-    rows = storage.conn.execute(
-        f"""
-        SELECT *
-        FROM papers
-        WHERE {' AND '.join(clauses)}
-        ORDER BY publication_date DESC, journal ASC, title ASC
-        """,
-        params,
-    ).fetchall()
-    return [dict(row) for row in rows]
 
 
 def start_fetch_progress(selected: str, journals: list[str]) -> None:
@@ -1844,6 +1980,104 @@ INDEX_HTML = """<!doctype html>
       padding: 0 10px;
       background: #fff;
     }
+    .library-shell {
+      display: grid;
+      grid-template-columns: minmax(180px, 240px) minmax(280px, 1fr) minmax(260px, 340px);
+      gap: 12px;
+      min-height: 560px;
+      outline: none;
+    }
+    .library-pane {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: auto;
+    }
+    .library-pane-header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      min-height: 38px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .library-tree, .library-list { padding: 8px; }
+    .library-row {
+      width: 100%;
+      min-height: 32px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 5px 8px;
+      text-align: left;
+      cursor: default;
+      font-size: 13px;
+    }
+    .library-row:hover { background: #f8fafc; }
+    .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
+    .library-row.current-folder { font-weight: 750; }
+    .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
+    .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .library-meta { color: var(--muted); font-size: 12px; }
+    .library-indent { display: inline-block; }
+    .library-detail {
+      padding: 14px;
+      color: #344054;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .library-detail h3 { margin: 0 0 8px; color: var(--ink); font-size: 16px; line-height: 1.3; letter-spacing: 0; }
+    .library-detail dl { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 10px; margin: 12px 0; }
+    .library-detail dt { color: var(--muted); }
+    .library-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .bibtex-box {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f8fafc;
+      color: #1f2937;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow: auto;
+    }
+    .library-context-menu {
+      position: fixed;
+      z-index: 50;
+      display: none;
+      min-width: 160px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 6px;
+    }
+    .library-context-menu.open { display: block; }
+    .library-context-menu button {
+      width: 100%;
+      min-height: 30px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .library-context-menu button:hover { background: #eef2f7; }
     .subject-controls { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .subject-option {
       border: 1px solid var(--line);
@@ -2051,6 +2285,7 @@ INDEX_HTML = """<!doctype html>
       .paper.with-figure .paper-layout { grid-template-columns: 1fr; }
       .paper-head { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
+      .library-shell { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2106,10 +2341,8 @@ INDEX_HTML = """<!doctype html>
           <div class="summary" id="summary"></div>
           <div class="report-tabs" id="reportTabs"></div>
           <div class="library-controls" id="libraryControls">
-            <input type="date" id="libraryFrom" title="From date">
-            <input type="date" id="libraryUntil" title="Until date">
-            <select id="libraryJournal" title="Journal"></select>
-            <button class="smallbtn" id="refreshLibrary">Refresh Library</button>
+            <button class="smallbtn" id="newLibraryFolder" type="button">New Folder</button>
+            <button class="smallbtn" id="refreshLibrary" type="button">Refresh Library</button>
           </div>
           <div class="papers" id="papers"></div>
         </section>
@@ -2172,12 +2405,13 @@ INDEX_HTML = """<!doctype html>
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
       papers: [],
-      libraryPapers: [],
+      libraryFolders: [],
+      libraryItems: [],
+      libraryRootId: 1,
+      libraryCurrentFolderId: 1,
+      librarySelection: {type: "folder", id: 1},
       mode: "report",
       activeReportJournal: "",
-      libraryFrom: "",
-      libraryUntil: "",
-      libraryJournal: "",
       noteWidth: 460,
       query: "",
       reportSequence: 0,
@@ -2314,7 +2548,6 @@ INDEX_HTML = """<!doctype html>
       renderCalendar();
       renderFilters();
       renderSubjectFilters();
-      renderLibraryJournalOptions();
       await loadJournalSettings();
     }
 
@@ -2569,14 +2802,122 @@ INDEX_HTML = """<!doctype html>
 
     async function loadLibrary() {
       state.mode = "library";
-      const params = new URLSearchParams();
-      if (state.libraryFrom) params.set("from_date", state.libraryFrom);
-      if (state.libraryUntil) params.set("until_date", state.libraryUntil);
-      if (state.libraryJournal) params.set("journal", state.libraryJournal);
-      const res = await fetch(`/api/library?${params.toString()}`);
+      const res = await fetch("/api/library");
       const data = await res.json();
-      state.libraryPapers = data.papers || [];
-      renderLibraryJournalOptions();
+      applyLibrarySnapshot(data);
+      renderLibrary();
+    }
+
+    function applyLibrarySnapshot(data) {
+      state.libraryRootId = Number(data.root_id || 1);
+      state.libraryFolders = data.folders || [];
+      state.libraryItems = data.items || [];
+      if (!libraryFolderById(state.libraryCurrentFolderId)) state.libraryCurrentFolderId = state.libraryRootId;
+      if (!librarySelectionExists(state.librarySelection)) {
+        state.librarySelection = {type: "folder", id: state.libraryCurrentFolderId};
+      }
+    }
+
+    function libraryFolderById(id) {
+      return state.libraryFolders.find((folder) => Number(folder.id) === Number(id));
+    }
+
+    function libraryItemById(id) {
+      return state.libraryItems.find((item) => Number(item.id) === Number(id));
+    }
+
+    function librarySelectionExists(selection) {
+      if (!selection) return false;
+      if (selection.type === "folder") return Boolean(libraryFolderById(selection.id));
+      if (selection.type === "item") return Boolean(libraryItemById(selection.id));
+      return false;
+    }
+
+    function libraryChildFolders(parentId) {
+      return state.libraryFolders
+        .filter((folder) => Number(folder.parent_id || 0) === Number(parentId))
+        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    }
+
+    function libraryFolderItems(folderId) {
+      const query = state.query.trim().toLowerCase();
+      return state.libraryItems
+        .filter((item) => Number(item.folder_id) === Number(folderId))
+        .filter((item) => {
+          if (!query) return true;
+          const paper = item.paper || {};
+          const haystack = `${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
+          return haystack.includes(query);
+        })
+        .sort((a, b) => (a.paper?.citation_label || "").localeCompare(b.paper?.citation_label || ""));
+    }
+
+    function libraryVisibleEntries() {
+      const query = state.query.trim().toLowerCase();
+      const folders = libraryChildFolders(state.libraryCurrentFolderId)
+        .filter((folder) => !query || (folder.name || "").toLowerCase().includes(query))
+        .map((folder) => ({type: "folder", id: Number(folder.id)}));
+      const items = libraryFolderItems(state.libraryCurrentFolderId)
+        .map((item) => ({type: "item", id: Number(item.id)}));
+      return folders.concat(items);
+    }
+
+    async function createLibraryFolder(parentId) {
+      const name = window.prompt("New folder name", "New Folder");
+      if (name === null) return;
+      const res = await fetch("/api/library/folders", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({parent_id: parentId || state.libraryCurrentFolderId, name})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not create folder");
+      applyLibrarySnapshot(data);
+      state.libraryCurrentFolderId = Number(data.folder?.parent_id || parentId || state.libraryCurrentFolderId);
+      if (data.folder?.id) state.librarySelection = {type: "folder", id: Number(data.folder.id)};
+      renderLibrary();
+    }
+
+    async function addPaperToLibrary(article, paperId) {
+      const button = article.querySelector('[data-action="add-library"]');
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Adding...";
+      }
+      try {
+        const res = await fetch("/api/library/items", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paperId, folder_id: state.libraryRootId || 1})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not add to library");
+        applyLibrarySnapshot(data);
+        if (button) button.textContent = "In Library";
+      } catch (error) {
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Add to Library";
+        }
+        const status = article.querySelector('[data-role="status"]');
+        if (status) {
+          status.textContent = error.message;
+          status.className = "status err";
+        }
+      }
+    }
+
+    async function moveLibraryEntry(type, id, targetFolderId) {
+      const res = await fetch("/api/library/move", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type, id, target_folder_id: targetFolderId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not move library entry");
+      applyLibrarySnapshot(data);
+      state.libraryCurrentFolderId = Number(targetFolderId || state.libraryRootId);
+      state.librarySelection = {type, id: Number(id)};
       renderLibrary();
     }
 
@@ -2740,16 +3081,6 @@ INDEX_HTML = """<!doctype html>
       if (next.has(value)) next.delete(value);
       else next.add(value);
       state.selectedFields = next.size ? next : new Set(["all"]);
-    }
-
-    function renderLibraryJournalOptions() {
-      const select = $("libraryJournal");
-      if (!select) return;
-      const current = state.libraryJournal;
-      select.innerHTML = `<option value="">All journals</option>` + state.journals
-        .map((journal) => `<option value="${escapeAttr(journal)}">${escapeHtml(journal)}</option>`)
-        .join("");
-      select.value = current;
     }
 
     async function loadJournalSettings() {
@@ -3077,18 +3408,247 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = "Library";
       const root = $("papers");
-      root.innerHTML = "";
-      const query = state.query.trim().toLowerCase();
-      const filtered = state.libraryPapers.filter((paper) => {
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
-        return !query || haystack.includes(query);
+      const folder = libraryFolderById(state.libraryCurrentFolderId) || libraryFolderById(state.libraryRootId) || {name: "Library"};
+      const visible = libraryVisibleEntries();
+      $("summary").textContent = `${state.libraryItems.length} shortcuts · ${visible.length} shown · Current folder: ${folder.name}`;
+      root.innerHTML = `
+        <div class="library-shell" id="libraryShell" tabindex="0">
+          <section class="library-pane" data-library-drop-folder="${state.libraryRootId}">
+            <div class="library-pane-header">Folders</div>
+            <div class="library-tree" id="libraryTree"></div>
+          </section>
+          <section class="library-pane" data-library-drop-folder="${state.libraryCurrentFolderId}">
+            <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
+            <div class="library-list" id="libraryList"></div>
+          </section>
+          <aside class="library-pane">
+            <div class="library-pane-header">Details</div>
+            <div class="library-detail" id="libraryDetail"></div>
+          </aside>
+        </div>
+        <div class="library-context-menu" id="libraryContextMenu">
+          <button type="button" data-action="new-folder">New Folder</button>
+        </div>
+      `;
+      renderLibraryTree();
+      renderLibraryList();
+      renderLibraryDetail();
+      wireLibraryInteractions();
+    }
+
+    function renderLibraryTree() {
+      const root = $("libraryTree");
+      if (!root) return;
+      root.innerHTML = renderLibraryFolderRows(state.libraryRootId, 0, true);
+    }
+
+    function renderLibraryFolderRows(folderId, depth, includeSelf) {
+      const folder = libraryFolderById(folderId);
+      let html = "";
+      if (folder && includeSelf) html += libraryRowMarkup("folder", folder, depth, true);
+      libraryChildFolders(folderId).forEach((child) => {
+        html += libraryRowMarkup("folder", child, depth + (includeSelf ? 1 : 0), true);
+        html += renderLibraryFolderRows(child.id, depth + (includeSelf ? 2 : 1), false);
       });
-      $("summary").textContent = `${state.libraryPapers.length} downloaded/analyzed · ${filtered.length} shown`;
-      if (!filtered.length) {
-        root.innerHTML = `<div class="empty">No downloaded or analyzed papers for these filters.</div>`;
+      return html;
+    }
+
+    function renderLibraryList() {
+      const root = $("libraryList");
+      if (!root) return;
+      const folders = libraryChildFolders(state.libraryCurrentFolderId);
+      const items = libraryFolderItems(state.libraryCurrentFolderId);
+      const rows = folders.map((folder) => libraryRowMarkup("folder", folder, 0, false))
+        .concat(items.map((item) => libraryRowMarkup("item", item, 0, false)));
+      root.innerHTML = rows.join("") || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`;
+    }
+
+    function libraryRowMarkup(type, entry, depth, treeRow) {
+      const id = Number(entry.id);
+      const selected = state.librarySelection?.type === type && Number(state.librarySelection.id) === id;
+      const current = type === "folder" && Number(state.libraryCurrentFolderId) === id;
+      const paper = entry.paper || {};
+      const name = type === "folder" ? entry.name : (paper.citation_label || paper.title || "Untitled paper");
+      const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
+      const icon = type === "folder" ? "▸" : "○";
+      const indent = treeRow ? `<span class="library-indent" style="width:${depth * 14}px"></span>` : "";
+      return `
+        <button class="library-row${selected ? " active" : ""}${current ? " current-folder" : ""}"
+          type="button"
+          draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"
+          data-library-type="${type}"
+          data-library-id="${id}"
+          ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}>
+          <span>${indent}${icon}</span>
+          <span class="library-name">${escapeHtml(name)}</span>
+          <span class="library-meta">${escapeHtml(String(meta || ""))}</span>
+        </button>
+      `;
+    }
+
+    function renderLibraryDetail() {
+      const root = $("libraryDetail");
+      if (!root) return;
+      const selection = state.librarySelection;
+      if (!selection) {
+        root.innerHTML = `<div class="empty">Select a folder or paper.</div>`;
         return;
       }
-      filtered.forEach((paper) => root.appendChild(renderPaper(paper)));
+      if (selection.type === "folder") {
+        const folder = libraryFolderById(selection.id);
+        const folders = libraryChildFolders(selection.id).length;
+        const items = libraryFolderItems(selection.id).length;
+        root.innerHTML = `
+          <h3>${escapeHtml(folder?.name || "Folder")}</h3>
+          <dl>
+            <dt>Type</dt><dd>Folder</dd>
+            <dt>Contains</dt><dd>${folders} folders · ${items} papers</dd>
+          </dl>
+        `;
+        return;
+      }
+      const item = libraryItemById(selection.id);
+      const paper = item?.paper || {};
+      root.innerHTML = `
+        <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        <div class="actions">
+          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Preview PDF</button>` : ""}
+          ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
+        </div>
+        <dl>
+          <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
+          <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
+          <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
+          <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
+          <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
+          <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
+        </dl>
+        <strong>BibTeX</strong>
+        <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
+      `;
+      root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => previewLibraryPdf(paper));
+      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
+    }
+
+    function wireLibraryInteractions() {
+      const shell = $("libraryShell");
+      if (!shell) return;
+      shell.focus();
+      shell.querySelectorAll(".library-row").forEach((row) => {
+        row.addEventListener("click", () => {
+          const type = row.dataset.libraryType;
+          const id = Number(row.dataset.libraryId);
+          selectLibraryEntry(type, id);
+        });
+        row.addEventListener("dblclick", () => {
+          if (row.dataset.libraryType === "folder") openLibraryFolder(Number(row.dataset.libraryId));
+        });
+        row.addEventListener("dragstart", (event) => {
+          event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify({
+            type: row.dataset.libraryType,
+            id: Number(row.dataset.libraryId)
+          }));
+          event.dataTransfer.effectAllowed = "move";
+        });
+        row.addEventListener("contextmenu", (event) => {
+          event.stopPropagation();
+          showLibraryContextMenu(event, row.dataset.libraryDropFolder || state.libraryCurrentFolderId);
+        });
+      });
+      shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
+        target.addEventListener("dragover", (event) => {
+          if (!event.dataTransfer.types.includes("application/x-paper-monitor-library")) return;
+          event.preventDefault();
+          target.classList.add("drag-over");
+        });
+        target.addEventListener("dragleave", () => target.classList.remove("drag-over"));
+        target.addEventListener("drop", async (event) => {
+          if (!event.dataTransfer.types.includes("application/x-paper-monitor-library")) return;
+          event.preventDefault();
+          target.classList.remove("drag-over");
+          const payload = JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "{}");
+          const folderId = Number(target.dataset.libraryDropFolder || state.libraryCurrentFolderId);
+          if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
+        });
+      });
+      shell.addEventListener("contextmenu", (event) => showLibraryContextMenu(event, state.libraryCurrentFolderId));
+    }
+
+    function selectLibraryEntry(type, id) {
+      state.librarySelection = {type, id: Number(id)};
+      renderLibrary();
+    }
+
+    function openLibraryFolder(folderId) {
+      if (!libraryFolderById(folderId)) return;
+      state.libraryCurrentFolderId = Number(folderId);
+      state.librarySelection = {type: "folder", id: Number(folderId)};
+      renderLibrary();
+    }
+
+    function selectedLibraryPaper() {
+      if (state.librarySelection?.type !== "item") return null;
+      return libraryItemById(state.librarySelection.id)?.paper || null;
+    }
+
+    function previewLibraryPdf(paper) {
+      if (!paper?.merged_pdf_url) return;
+      state.internalBrowserUrl = paper.url || "";
+      $("internalBrowserTitle").textContent = paper.citation_label || paper.title || "PDF Preview";
+      $("internalBrowserUrl").textContent = paper.merged_pdf_path || "";
+      $("internalBrowserFrame").src = paper.merged_pdf_url;
+      $("internalBrowser").classList.add("open");
+      $("internalBrowser").setAttribute("aria-hidden", "false");
+    }
+
+    function showLibraryContextMenu(event, parentId) {
+      event.preventDefault();
+      const menu = $("libraryContextMenu");
+      if (!menu) return;
+      menu.dataset.parentId = parentId || state.libraryCurrentFolderId;
+      menu.style.left = `${event.clientX}px`;
+      menu.style.top = `${event.clientY}px`;
+      menu.classList.add("open");
+      menu.querySelector('[data-action="new-folder"]').onclick = async () => {
+        hideLibraryContextMenu();
+        await createLibraryFolder(Number(menu.dataset.parentId || state.libraryCurrentFolderId));
+      };
+    }
+
+    function hideLibraryContextMenu() {
+      $("libraryContextMenu")?.classList.remove("open");
+    }
+
+    function handleLibraryKeydown(event) {
+      if (state.mode !== "library") return false;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
+      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key);
+      if (!handled) return false;
+      event.preventDefault();
+      if (event.key === " ") {
+        const paper = selectedLibraryPaper();
+        if (paper?.merged_pdf_url) previewLibraryPdf(paper);
+        return true;
+      }
+      if (event.key === "ArrowLeft") {
+        const current = libraryFolderById(state.libraryCurrentFolderId);
+        if (current?.parent_id) openLibraryFolder(Number(current.parent_id));
+        return true;
+      }
+      if (event.key === "ArrowRight") {
+        if (state.librarySelection?.type === "folder") openLibraryFolder(Number(state.librarySelection.id));
+        return true;
+      }
+      const entries = libraryVisibleEntries();
+      if (!entries.length) return true;
+      const currentIndex = entries.findIndex((entry) => entry.type === state.librarySelection?.type && Number(entry.id) === Number(state.librarySelection?.id));
+      const fallback = event.key === "ArrowDown" ? 0 : entries.length - 1;
+      const nextIndex = currentIndex < 0
+        ? fallback
+        : Math.max(0, Math.min(entries.length - 1, currentIndex + (event.key === "ArrowDown" ? 1 : -1)));
+      state.librarySelection = entries[nextIndex];
+      renderLibrary();
+      return true;
     }
 
     function updatePaperState(paperId, paper) {
@@ -3098,8 +3658,9 @@ INDEX_HTML = """<!doctype html>
       const cachedReport = state.reportCache[paper.publication_date];
       const cachedIndex = (cachedReport?.papers || []).findIndex((item) => item.paper_id === paperId);
       if (cachedIndex >= 0) cachedReport.papers[cachedIndex] = paper;
-      const libraryIndex = state.libraryPapers.findIndex((item) => item.paper_id === paperId);
-      if (libraryIndex >= 0) state.libraryPapers[libraryIndex] = paper;
+      state.libraryItems.forEach((item) => {
+        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
+      });
     }
 
     function renderPaper(paper) {
@@ -3136,6 +3697,7 @@ INDEX_HTML = """<!doctype html>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
               ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page inside Paper Monitor">↗ Open</button>` : ""}
+              <button class="action" data-action="add-library" title="Add a shortcut to Library">Add to Library</button>
               <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
               <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>
               ${paper.merged_pdf_path ? `<button class="action" data-action="open-pdf" title="Open merged PDF in Preview">PDF</button>` : ""}
@@ -3152,6 +3714,7 @@ INDEX_HTML = """<!doctype html>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
       if (openPageButton) openPageButton.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
+      article.querySelector('[data-action="add-library"]').addEventListener("click", () => addPaperToLibrary(article, paper.paper_id));
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
       article.querySelector('[data-action="analyze"]').addEventListener("click", () => runAction(article, paper.paper_id, "analyze"));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
@@ -3520,21 +4083,9 @@ INDEX_HTML = """<!doctype html>
       await loadReport();
     });
     $("reportMode").addEventListener("click", renderReport);
-    $("libraryMode").addEventListener("click", async () => {
-      $("libraryFrom").value = state.libraryFrom;
-      $("libraryUntil").value = state.libraryUntil;
-      await loadLibrary();
-    });
+    $("libraryMode").addEventListener("click", loadLibrary);
     $("refreshLibrary").addEventListener("click", loadLibrary);
-    $("libraryFrom").addEventListener("change", (event) => {
-      state.libraryFrom = event.target.value;
-    });
-    $("libraryUntil").addEventListener("change", (event) => {
-      state.libraryUntil = event.target.value;
-    });
-    $("libraryJournal").addEventListener("change", (event) => {
-      state.libraryJournal = event.target.value;
-    });
+    $("newLibraryFolder").addEventListener("click", () => createLibraryFolder(state.libraryCurrentFolderId));
     $("toggleSidebar").addEventListener("click", () => {
       document.querySelector(".app").classList.toggle("sidebar-collapsed");
       updateSidebarToggle();
@@ -3568,13 +4119,16 @@ INDEX_HTML = """<!doctype html>
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
     $("openExternalBrowser").addEventListener("click", openExternalBrowser);
     window.addEventListener("keydown", (event) => {
+      if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
       if ($("internalBrowser").classList.contains("open")) {
         closeInternalBrowser();
         return;
       }
+      hideLibraryContextMenu();
       closeAnalysis();
     });
+    window.addEventListener("click", hideLibraryContextMenu);
     window.addEventListener("dragover", (event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     });

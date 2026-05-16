@@ -62,6 +62,29 @@ CREATE TABLE IF NOT EXISTS fetch_runs (
   started_at TEXT NOT NULL,
   finished_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS library_folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  parent_id INTEGER REFERENCES library_folders(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_folders_parent ON library_folders(parent_id, sort_order, name);
+
+CREATE TABLE IF NOT EXISTS library_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  folder_id INTEGER NOT NULL REFERENCES library_folders(id) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(folder_id, paper_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_items_folder ON library_items(folder_id, sort_order, id);
+CREATE INDEX IF NOT EXISTS idx_library_items_paper ON library_items(paper_id);
 """
 
 
@@ -71,16 +94,54 @@ class Storage:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=15000")
         self.conn.executescript(SCHEMA)
         self._ensure_schema_columns()
+        self._ensure_library_root()
+        self._seed_library_from_existing_papers()
 
     def _ensure_schema_columns(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
         if "image_url" not in columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
             self.conn.commit()
+
+    def _ensure_library_root(self) -> None:
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO library_folders (id, name, parent_id, created_at, updated_at, sort_order)
+            VALUES (1, 'Library', NULL, ?, ?, 0)
+            """,
+            (timestamp, timestamp),
+        )
+        self.conn.commit()
+
+    def _seed_library_from_existing_papers(self) -> None:
+        existing = self.conn.execute("SELECT COUNT(*) AS count FROM library_items").fetchone()
+        if int(existing["count"] or 0) > 0:
+            return
+        rows = self.conn.execute(
+            """
+            SELECT paper_id
+            FROM papers
+            WHERE (download_status IN ('success', 'partial') OR analysis_status != 'not_started')
+              AND (section_allowed IS NULL OR section_allowed != 0)
+            ORDER BY publication_date DESC, journal ASC, title ASC
+            """
+        ).fetchall()
+        timestamp = now_iso()
+        for index, row in enumerate(rows, start=1):
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO library_items (folder_id, paper_id, created_at, sort_order)
+                VALUES (1, ?, ?, ?)
+                """,
+                (row["paper_id"], timestamp, index),
+            )
+        self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -368,6 +429,118 @@ class Storage:
             (image_url, paper_id),
         )
         self.conn.commit()
+
+    def create_library_folder(self, *, parent_id: int = 1, name: str) -> dict[str, Any]:
+        parent_id = int(parent_id or 1)
+        clean_name = " ".join(name.strip().split()) or "New Folder"
+        sort_order = self._next_library_sort_order("library_folders", parent_id)
+        timestamp = now_iso()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO library_folders (name, parent_id, created_at, updated_at, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (clean_name, parent_id, timestamp, timestamp, sort_order),
+        )
+        self.conn.commit()
+        return self.get_library_folder(int(cursor.lastrowid)) or {}
+
+    def get_library_folder(self, folder_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM library_folders WHERE id = ?", (int(folder_id),)).fetchone()
+        return dict(row) if row else None
+
+    def add_library_item(self, *, paper_id: str, folder_id: int = 1) -> dict[str, Any]:
+        folder_id = int(folder_id or 1)
+        sort_order = self._next_library_sort_order("library_items", folder_id)
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO library_items (folder_id, paper_id, created_at, sort_order)
+            VALUES (?, ?, ?, ?)
+            """,
+            (folder_id, paper_id, timestamp, sort_order),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ? AND paper_id = ?
+            """,
+            (folder_id, paper_id),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def move_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
+        folder_id = int(folder_id or 1)
+        item_id = int(item_id)
+        sort_order = self._next_library_sort_order("library_items", folder_id)
+        self.conn.execute(
+            "UPDATE library_items SET folder_id = ?, sort_order = ? WHERE id = ?",
+            (folder_id, sort_order, item_id),
+        )
+        self.conn.commit()
+        row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (item_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def move_library_folder(self, *, folder_id: int, parent_id: int) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        parent_id = int(parent_id or 1)
+        if folder_id == 1:
+            raise ValueError("Root folder cannot be moved")
+        if folder_id == parent_id or self._folder_is_descendant(parent_id, folder_id):
+            raise ValueError("Folder cannot be moved inside itself")
+        sort_order = self._next_library_sort_order("library_folders", parent_id)
+        self.conn.execute(
+            """
+            UPDATE library_folders
+            SET parent_id = ?, sort_order = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (parent_id, sort_order, now_iso(), folder_id),
+        )
+        self.conn.commit()
+        return self.get_library_folder(folder_id) or {}
+
+    def list_library_folders(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM library_folders
+            ORDER BY COALESCE(parent_id, 0), sort_order, name
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_library_items(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT library_items.*, papers.*
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            ORDER BY library_items.folder_id, library_items.sort_order, papers.title
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _next_library_sort_order(self, table: str, folder_id: int) -> int:
+        parent_column = "parent_id" if table == "library_folders" else "folder_id"
+        row = self.conn.execute(
+            f"SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM {table} WHERE {parent_column} = ?",
+            (int(folder_id),),
+        ).fetchone()
+        return int(row["next_order"] or 1)
+
+    def _folder_is_descendant(self, candidate_id: int, ancestor_id: int) -> bool:
+        current = int(candidate_id)
+        while current and current != 1:
+            row = self.conn.execute("SELECT parent_id FROM library_folders WHERE id = ?", (current,)).fetchone()
+            if not row:
+                return False
+            current = int(row["parent_id"] or 1)
+            if current == int(ancestor_id):
+                return True
+        return False
 
 
 def _bool_to_int(value: Any) -> int | None:
