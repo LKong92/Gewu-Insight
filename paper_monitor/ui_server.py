@@ -230,6 +230,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "journalCounts": count_by_journal(papers),
                 "fetched": fetched,
                 "missingJournals": missing_journals,
+                "fetchActive": is_fetch_active(selected),
             }
         )
 
@@ -900,6 +901,11 @@ def try_start_fetch(selected: str) -> bool:
 def finish_active_fetch(selected: str) -> None:
     with FETCH_PROGRESS_LOCK:
         ACTIVE_FETCH_DATES.discard(selected)
+
+
+def is_fetch_active(selected: str) -> bool:
+    with FETCH_PROGRESS_LOCK:
+        return selected in ACTIVE_FETCH_DATES
 
 
 def update_fetch_progress(selected: str, *, journal: str, completed: int, total: int) -> None:
@@ -2283,7 +2289,7 @@ INDEX_HTML = """<!doctype html>
       const sequence = ++state.reportSequence;
       const cached = state.reportCache[selectedDate];
       if (cached) {
-        setPendingFetchDate(selectedDate, (cached.missingJournals || []).length > 0);
+        setPendingFetchDate(selectedDate, reportStillFetching(cached));
         updateCalendarCountFromReport(selectedDate, cached);
         applyReportData(selectedDate, cached, sequence);
       } else {
@@ -2291,7 +2297,7 @@ INDEX_HTML = """<!doctype html>
       }
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
-        setPendingFetchDate(selectedDate, (data.missingJournals || []).length > 0);
+        setPendingFetchDate(selectedDate, reportStillFetching(data));
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         applyReportData(selectedDate, data, sequence);
@@ -2339,9 +2345,21 @@ INDEX_HTML = """<!doctype html>
       if (selectedDate === state.selectedDate) renderReport();
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
-        setPendingFetchDate(selectedDate, false);
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
+        if (data.fetchActive && (data.missingJournals || []).length) {
+          await waitForDateFetchToFinish(selectedDate);
+          const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+          setPendingFetchDate(selectedDate, false);
+          updateCalendarCountFromReport(selectedDate, finalData);
+          state.reportCache[selectedDate] = finalData;
+          if (selectedDate === state.selectedDate) {
+            const sequence = ++state.reportSequence;
+            applyReportData(selectedDate, finalData, sequence);
+          }
+          return;
+        }
+        setPendingFetchDate(selectedDate, false);
         if (data.fetched) await loadMonth();
         if (selectedDate === state.selectedDate) {
           const sequence = ++state.reportSequence;
@@ -2370,6 +2388,23 @@ INDEX_HTML = """<!doctype html>
 
     function reportFetchIsPending(selectedDate) {
       return state.fetchingDates.has(selectedDate) || state.pendingFetchDates.has(selectedDate);
+    }
+
+    function reportStillFetching(data) {
+      return Boolean(data.fetchActive || ((data.missingJournals || []).length && !data.fetched));
+    }
+
+    async function waitForDateFetchToFinish(selectedDate) {
+      const deadline = Date.now() + 20 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await sleep(700);
+        const progress = await refreshFetchProgress(selectedDate);
+        if (progress && progress.active === false) return;
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise((resolve) => window.setTimeout(resolve, ms));
     }
 
     function updateCalendarCountFromReport(selectedDate, data) {
@@ -2413,8 +2448,9 @@ INDEX_HTML = """<!doctype html>
           state.fetchProgress[selectedDate] = data.progress;
           if (selectedDate === state.selectedDate && state.fetchingDates.has(selectedDate)) renderReport();
         }
+        return data.progress || null;
       } catch (error) {
-        return;
+        return null;
       }
     }
 
