@@ -2144,6 +2144,7 @@ INDEX_HTML = """<!doctype html>
       reportSequence: 0,
       reportCache: {},
       fetchingDates: new Set(),
+      pendingFetchDates: new Set(),
       noMatchDates: new Set(),
       fetchProgress: {},
       progressPollers: {},
@@ -2284,12 +2285,14 @@ INDEX_HTML = """<!doctype html>
       const sequence = ++state.reportSequence;
       const cached = state.reportCache[selectedDate];
       if (cached) {
+        setPendingFetchDate(selectedDate, (cached.missingJournals || []).length > 0);
         applyReportData(selectedDate, cached, sequence);
       } else {
         showReportLoading(selectedDate);
       }
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+        setPendingFetchDate(selectedDate, (data.missingJournals || []).length > 0);
         state.reportCache[selectedDate] = data;
         applyReportData(selectedDate, data, sequence);
         if ((data.missingJournals || []).length) {
@@ -2333,9 +2336,11 @@ INDEX_HTML = """<!doctype html>
       if (state.fetchingDates.has(selectedDate)) return;
       if (state.backgroundFetchDate && state.backgroundFetchDate !== selectedDate) {
         state.pendingFetchDate = selectedDate;
+        setPendingFetchDate(selectedDate, true);
         return;
       }
       state.backgroundFetchDate = selectedDate;
+      setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
       startProgressPolling(selectedDate);
@@ -2343,6 +2348,7 @@ INDEX_HTML = """<!doctype html>
       if (selectedDate === state.selectedDate) renderReport();
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
+        setPendingFetchDate(selectedDate, false);
         state.reportCache[selectedDate] = data;
         if (data.fetched) await loadMonth();
         if (selectedDate === state.selectedDate) {
@@ -2350,6 +2356,7 @@ INDEX_HTML = """<!doctype html>
           applyReportData(selectedDate, data, sequence);
         }
       } catch (error) {
+        setPendingFetchDate(selectedDate, false);
         if (selectedDate === state.selectedDate) {
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         }
@@ -2364,6 +2371,17 @@ INDEX_HTML = """<!doctype html>
         state.pendingFetchDate = "";
         if (pendingDate && pendingDate === state.selectedDate) refreshMissingDateInBackground(pendingDate);
       }
+    }
+
+    function setPendingFetchDate(selectedDate, value) {
+      const before = state.pendingFetchDates.has(selectedDate);
+      if (value) state.pendingFetchDates.add(selectedDate);
+      else state.pendingFetchDates.delete(selectedDate);
+      if (before !== state.pendingFetchDates.has(selectedDate)) renderCalendar();
+    }
+
+    function reportFetchIsPending(selectedDate) {
+      return state.fetchingDates.has(selectedDate) || state.pendingFetchDates.has(selectedDate);
     }
 
     async function startProgressPolling(selectedDate) {
@@ -2713,12 +2731,13 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
-      if (state.fetchingDates.has(state.selectedDate)) {
+      const fetchPending = reportFetchIsPending(state.selectedDate);
+      if (fetchPending) {
         root.innerHTML = fetchProgressMarkup(state.selectedDate);
       }
       const groups = groupedReportPapers(filtered);
       if (!groups.length) {
-        if (!state.fetchingDates.has(state.selectedDate)) {
+        if (!fetchPending) {
           markNoMatchDate(state.selectedDate, true);
           root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
         }
