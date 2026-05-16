@@ -1952,7 +1952,6 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       gap: 10px;
       justify-content: flex-start;
-      flex-wrap: wrap;
       margin: -4px 0 2px;
       color: var(--muted);
       font-size: 13px;
@@ -2865,7 +2864,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
-      renderRefetchControls(root, groups);
+      renderRefetchControls(root, activeGroup?.journal || "");
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
       activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
@@ -2908,31 +2907,27 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function renderRefetchControls(root, groups) {
-      if (!groups.length) return;
+    function renderRefetchControls(root, journal) {
+      if (!journal) return;
       const bar = document.createElement("div");
       bar.className = "refetch-bar";
-      groups.forEach((group) => {
-        const button = document.createElement("button");
-        button.className = "action";
-        button.type = "button";
-        button.textContent = `Refetch ${group.journal}`;
-        button.disabled = Boolean(state.refetchingSource);
-        const status = document.createElement("span");
-        status.className = "status";
-        status.dataset.role = "refetch-status";
-        if (state.refetchingSource === group.journal) status.textContent = "Refetching...";
-        button.addEventListener("click", () => refetchActiveSource(group.journal, button, status));
-        bar.appendChild(button);
-        bar.appendChild(status);
-      });
+      bar.innerHTML = `
+        <button class="action" type="button">Refetch ${escapeHtml(journal)}</button>
+        <span class="status" data-role="refetch-status"></span>
+      `;
+      const button = bar.querySelector("button");
+      const status = bar.querySelector('[data-role="refetch-status"]');
+      const busy = state.refetchingSource === journal;
+      button.disabled = Boolean(state.refetchingSource);
+      status.textContent = busy ? "Refetching..." : "";
+      button.addEventListener("click", () => refetchActiveSource(journal, button, status));
       root.appendChild(bar);
     }
 
     async function refetchActiveSource(journal, button, status) {
       if (!journal || state.refetchingSource) return;
       state.refetchingSource = journal;
-      document.querySelectorAll(".refetch-bar button").forEach((item) => item.disabled = true);
+      button.disabled = true;
       status.textContent = "Refetching...";
       status.className = "status";
       try {
@@ -2963,7 +2958,7 @@ INDEX_HTML = """<!doctype html>
         status.className = "status err";
       } finally {
         if (state.refetchingSource === journal) state.refetchingSource = "";
-        document.querySelectorAll(".refetch-bar button").forEach((item) => item.disabled = false);
+        button.disabled = false;
       }
     }
 
@@ -3053,7 +3048,6 @@ INDEX_HTML = """<!doctype html>
     function groupedReportPapers(papers) {
       const order = new Map(state.journals.map((journal, index) => [journal, index]));
       const groups = new Map();
-      state.journals.forEach((journal) => groups.set(journal, []));
       [...papers]
         .sort((a, b) => {
           const journalDelta = (order.get(a.journal) ?? 9999) - (order.get(b.journal) ?? 9999)
@@ -3067,6 +3061,9 @@ INDEX_HTML = """<!doctype html>
           if (!groups.has(journal)) groups.set(journal, []);
           groups.get(journal).push(paper);
         });
+      if (state.selectedJournals.has("arXiv") && !groups.has("arXiv")) {
+        groups.set("arXiv", []);
+      }
       return [...groups].map(([journal, groupPapers]) => ({journal, papers: groupPapers}));
     }
 
