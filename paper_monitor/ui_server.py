@@ -2284,6 +2284,7 @@ INDEX_HTML = """<!doctype html>
       const cached = state.reportCache[selectedDate];
       if (cached) {
         setPendingFetchDate(selectedDate, (cached.missingJournals || []).length > 0);
+        updateCalendarCountFromReport(selectedDate, cached);
         applyReportData(selectedDate, cached, sequence);
       } else {
         showReportLoading(selectedDate);
@@ -2291,6 +2292,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
         setPendingFetchDate(selectedDate, (data.missingJournals || []).length > 0);
+        updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         applyReportData(selectedDate, data, sequence);
         if ((data.missingJournals || []).length) {
@@ -2338,6 +2340,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
         setPendingFetchDate(selectedDate, false);
+        updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         if (data.fetched) await loadMonth();
         if (selectedDate === state.selectedDate) {
@@ -2367,6 +2370,26 @@ INDEX_HTML = """<!doctype html>
 
     function reportFetchIsPending(selectedDate) {
       return state.fetchingDates.has(selectedDate) || state.pendingFetchDates.has(selectedDate);
+    }
+
+    function updateCalendarCountFromReport(selectedDate, data) {
+      const sourceCounts = data.journalCounts || {};
+      const counts = Object.keys(sourceCounts).length ? {...sourceCounts} : countPapersByJournal(data.papers || []);
+      const missing = (data.missingJournals || []).length > 0;
+      if (Object.keys(counts).length || !missing) {
+        state.counts[selectedDate] = counts;
+      }
+      const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+      if (total > 0) state.noMatchDates.delete(selectedDate);
+      if (selectedDate.startsWith(fmtMonth(state.viewYear, state.viewMonth))) renderCalendar();
+    }
+
+    function countPapersByJournal(papers) {
+      return papers.reduce((counts, paper) => {
+        const journal = paper.journal || "Unknown";
+        counts[journal] = (counts[journal] || 0) + 1;
+        return counts;
+      }, {});
     }
 
     async function startProgressPolling(selectedDate) {
