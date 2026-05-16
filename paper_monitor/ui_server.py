@@ -2866,12 +2866,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function createLibraryFolder(parentId) {
-      const name = window.prompt("New folder name", "New Folder");
-      if (name === null) return;
       const res = await fetch("/api/library/folders", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({parent_id: parentId || state.libraryCurrentFolderId, name})
+        body: JSON.stringify({parent_id: parentId || state.libraryCurrentFolderId, name: "New Folder"})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not create folder");

@@ -433,6 +433,7 @@ class Storage:
     def create_library_folder(self, *, parent_id: int = 1, name: str) -> dict[str, Any]:
         parent_id = int(parent_id or 1)
         clean_name = " ".join(name.strip().split()) or "New Folder"
+        clean_name = self._unique_library_folder_name(parent_id, clean_name)
         sort_order = self._next_library_sort_order("library_folders", parent_id)
         timestamp = now_iso()
         cursor = self.conn.execute(
@@ -530,6 +531,19 @@ class Storage:
             (int(folder_id),),
         ).fetchone()
         return int(row["next_order"] or 1)
+
+    def _unique_library_folder_name(self, parent_id: int, base_name: str) -> str:
+        rows = self.conn.execute(
+            "SELECT name FROM library_folders WHERE parent_id = ?",
+            (int(parent_id),),
+        ).fetchall()
+        existing = {str(row["name"]) for row in rows}
+        if base_name not in existing:
+            return base_name
+        index = 2
+        while f"{base_name} {index}" in existing:
+            index += 1
+        return f"{base_name} {index}"
 
     def _folder_is_descendant(self, candidate_id: int, ancestor_id: int) -> bool:
         current = int(candidate_id)
