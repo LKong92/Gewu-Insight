@@ -1304,6 +1304,23 @@ FIELD_KEYWORDS = {
         "frequency comb",
         "spectroscopy",
     ],
+    "quantum_information": [
+        "quantum information",
+        "quantum computing",
+        "quantum computer",
+        "quantum processor",
+        "quantum communication",
+        "quantum network",
+        "quantum internet",
+        "quantum error",
+        "quantum algorithm",
+        "quantum simulation",
+        "quantum cryptography",
+        "quantum key distribution",
+        "qubit",
+        "qubits",
+        "entanglement",
+    ],
     "materials": [
         "material",
         "materials",
@@ -1952,7 +1969,6 @@ INDEX_HTML = """<!doctype html>
               <button class="smallbtn" id="reportMode">Report</button>
               <button class="smallbtn" id="libraryMode">Library</button>
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
-              <button class="smallbtn" id="selectAll">All Journals</button>
             </div>
           </div>
           <div class="summary" id="summary"></div>
@@ -2275,6 +2291,7 @@ INDEX_HTML = """<!doctype html>
     function renderSubjectFilters() {
       const options = [
         ["physics", "Physics"],
+        ["quantum_information", "Quantum Information"],
         ["materials", "Materials"],
         ["chemistry", "Chemistry"],
         ["all", "All Fields"],
@@ -2472,6 +2489,7 @@ INDEX_HTML = """<!doctype html>
       });
       const subjectText = {
         "physics": "Physics",
+        "quantum_information": "Quantum Information",
         "materials": "Materials",
         "chemistry": "Chemistry",
         "all": "All Fields",
@@ -3051,15 +3069,6 @@ INDEX_HTML = """<!doctype html>
       state.viewMonth = Number(state.selectedDate.slice(5, 7));
       await loadMonth();
       await loadReport();
-    });
-    $("selectAll").addEventListener("click", () => {
-      const allSelected = state.journals.every((journal) => state.selectedJournals.has(journal));
-      state.selectedJournals = new Set(allSelected ? [] : state.journals);
-      state.noMatchDates = new Set();
-      renderFilters();
-      renderSectionFilters();
-      if (state.mode === "library") renderLibrary();
-      else renderReport();
     });
     $("reportMode").addEventListener("click", renderReport);
     $("libraryMode").addEventListener("click", async () => {
