@@ -2154,6 +2154,7 @@ INDEX_HTML = """<!doctype html>
       noMatchDates: new Set(),
       fetchProgress: {},
       progressPollers: {},
+      fetchCompletionWatchers: new Set(),
       logoRequests: {},
       figureRequests: {},
       figureQueue: [],
@@ -2378,16 +2379,21 @@ INDEX_HTML = """<!doctype html>
           applyReportData(selectedDate, data, sequence);
         }
       } catch (error) {
-        setPendingFetchDate(selectedDate, false);
         if (selectedDate === state.selectedDate) {
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         }
       } finally {
-        state.fetchingDates.delete(selectedDate);
-        await refreshFetchProgress(selectedDate);
-        stopProgressPolling(selectedDate);
-        renderCalendar();
-        if (selectedDate === state.selectedDate) renderReport();
+        const progress = await refreshFetchProgress(selectedDate);
+        if (progress && progress.active !== false) {
+          setPendingFetchDate(selectedDate, true);
+          state.fetchingDates.add(selectedDate);
+          await startProgressPolling(selectedDate);
+          watchFetchCompletion(selectedDate);
+          renderCalendar();
+          if (selectedDate === state.selectedDate) renderReport();
+          return;
+        }
+        finishFetchUi(selectedDate);
       }
     }
 
@@ -2417,6 +2423,38 @@ INDEX_HTML = """<!doctype html>
 
     function sleep(ms) {
       return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    function finishFetchUi(selectedDate) {
+      setPendingFetchDate(selectedDate, false);
+      state.fetchingDates.delete(selectedDate);
+      stopProgressPolling(selectedDate);
+      renderCalendar();
+      if (selectedDate === state.selectedDate) renderReport();
+    }
+
+    function watchFetchCompletion(selectedDate) {
+      if (state.fetchCompletionWatchers.has(selectedDate)) return;
+      state.fetchCompletionWatchers.add(selectedDate);
+      (async () => {
+        try {
+          await waitForDateFetchToFinish(selectedDate);
+          const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+          updateCalendarCountFromReport(selectedDate, finalData);
+          state.reportCache[selectedDate] = finalData;
+          if (selectedDate === state.selectedDate) {
+            const sequence = ++state.reportSequence;
+            applyReportData(selectedDate, finalData, sequence);
+          }
+        } catch (error) {
+          if (selectedDate === state.selectedDate) {
+            $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+          }
+        } finally {
+          state.fetchCompletionWatchers.delete(selectedDate);
+          finishFetchUi(selectedDate);
+        }
+      })();
     }
 
     async function retryMissingSources(selectedDate, initialData) {
