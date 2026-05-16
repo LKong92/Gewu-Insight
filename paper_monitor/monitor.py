@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 from .config import AppConfig, JournalConfig
+from .sources.arxiv import ARXIV_CONDENSED_MATTER_CODES, ARXIV_JOURNAL_NAME, fetch_arxiv_condensed_matter
 from .sources.crossref import fetch_crossref_journal
 from .sources.openalex import fetch_openalex_journal
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
@@ -131,6 +132,43 @@ def fetch_one_journal(
         "source_errors": source_errors,
         "saved": saved,
         "blocked_by_section": blocked,
+    }
+
+
+def fetch_one_arxiv_preprint_source(
+    *,
+    storage: Storage,
+    start_date: date,
+    end_date: date,
+    categories: list[str] | None = None,
+) -> dict[str, Any]:
+    selected_categories = categories or ARXIV_CONDENSED_MATTER_CODES
+    arxiv_result = _run_source(
+        storage=storage,
+        source="arxiv",
+        journal_name=ARXIV_JOURNAL_NAME,
+        start_date=start_date,
+        end_date=end_date,
+        fetch=lambda: fetch_arxiv_condensed_matter(
+            start_date=start_date,
+            end_date=end_date,
+            categories=selected_categories,
+        ),
+    )
+    saved = 0
+    for paper in dedup_by_id(arxiv_result["papers"]):
+        paper["publisher_section"] = paper.get("publisher_section") or "preprint"
+        paper["section_allowed"] = True
+        storage.upsert_paper(paper)
+        saved += 1
+
+    return {
+        "source_counts": {"arxiv": len(arxiv_result["papers"])},
+        "source_statuses": {"arxiv": arxiv_result["status"]},
+        "source_attempts": 1,
+        "source_errors": 1 if arxiv_result["status"] == "error" else 0,
+        "saved": saved,
+        "blocked_by_section": 0,
     }
 
 

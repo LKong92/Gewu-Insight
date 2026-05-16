@@ -21,11 +21,12 @@ from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
 from .download import download_paper
 from .http import request_with_retries
-from .monitor import run_journal_monitor
+from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
+from .sources.arxiv import ARXIV_CONDENSED_MATTER_CODES, ARXIV_JOURNAL_NAME
 from .sources.publisher import enrich_image_from_landing_page
 from .storage import Storage
-from .text import safe_slug
+from .text import clean_text, safe_slug
 from .time_utils import today_jst
 
 
@@ -33,6 +34,7 @@ FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
+PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 
 
 def run_ui_server(
@@ -43,7 +45,7 @@ def run_ui_server(
     open_browser: bool = False,
 ) -> None:
     config = load_config()
-    journals = [journal.name for journal in config.journals]
+    journals = configured_source_names(config)
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -194,21 +196,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 fetch_storage = None
                 try:
                     config = load_config()
-                    fetch_config = config_for_journals(config, missing_journals)
                     fetch_storage = Storage(self.configured_db_path)
                     start_fetch_progress(selected, missing_journals)
-                    run_journal_monitor(
-                        config=fetch_config,
+                    fetch_missing_sources_for_date(
+                        config=config,
                         storage=fetch_storage,
-                        start_date=selected_date,
-                        end_date=selected_date,
-                        enrich=True,
-                        progress_callback=lambda journal, completed, total: update_fetch_progress(
-                            selected,
-                            journal=journal,
-                            completed=completed,
-                            total=total,
-                        ),
+                        selected=selected,
+                        selected_date=selected_date,
+                        missing_sources=missing_journals,
                     )
                     fetched = True
                 finally:
@@ -217,7 +212,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     if fetch_storage:
                         fetch_storage.close()
                 storage = Storage(self.configured_db_path)
-                self.configured_journals = [journal.name for journal in config.journals]
+                self.configured_journals = configured_source_names(config)
                 missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
             papers = storage.list_papers(
                 start_date=selected,
@@ -628,7 +623,54 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def refresh_journals(self) -> None:
         config = load_config()
-        self.configured_journals = [journal.name for journal in config.journals]
+        self.configured_journals = configured_source_names(config)
+
+
+def configured_source_names(config: AppConfig) -> list[str]:
+    names = [journal.name for journal in config.journals]
+    for preprint in PREPRINT_JOURNALS:
+        if preprint not in names:
+            names.append(preprint)
+    return names
+
+
+def fetch_missing_sources_for_date(
+    *,
+    config: AppConfig,
+    storage: Storage,
+    selected: str,
+    selected_date: date,
+    missing_sources: list[str],
+) -> None:
+    total = len(missing_sources)
+    completed = 0
+    journal_names = [source for source in missing_sources if source not in PREPRINT_JOURNALS]
+
+    if journal_names:
+        fetch_config = config_for_journals(config, journal_names)
+
+        def update_journal_progress(journal: str, journal_completed: int, _journal_total: int) -> None:
+            update_fetch_progress(selected, journal=journal, completed=completed + journal_completed, total=total)
+
+        run_journal_monitor(
+            config=fetch_config,
+            storage=storage,
+            start_date=selected_date,
+            end_date=selected_date,
+            enrich=True,
+            progress_callback=update_journal_progress,
+        )
+        completed += len(journal_names)
+
+    if ARXIV_JOURNAL_NAME in missing_sources:
+        fetch_one_arxiv_preprint_source(
+            storage=storage,
+            start_date=selected_date,
+            end_date=selected_date,
+            categories=ARXIV_CONDENSED_MATTER_CODES,
+        )
+        completed += 1
+        update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
 
 
 def prepare_internal_page_html(html: str, base_url: str) -> str:
@@ -704,6 +746,9 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
+        "preprint_id": preprint_identifier(paper),
+        "preprint_category": preprint_primary_category(paper),
+        "preprint_categories": preprint_categories(paper),
     }
 
 
@@ -717,7 +762,7 @@ def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
 
 def author_summary(paper: dict[str, Any]) -> list[str]:
     raw = parse_raw_json(paper)
-    names = authors_from_openalex(raw) or authors_from_crossref(raw)
+    names = authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw)
     if len(names) <= 6:
         return names
     return names[:3] + ["…"] + names[-3:]
@@ -747,6 +792,32 @@ def authors_from_crossref(raw: dict[str, Any]) -> list[str]:
         if name:
             names.append(name)
     return dedup_names(names)
+
+
+def authors_from_arxiv(raw: dict[str, Any]) -> list[str]:
+    return dedup_names([clean_author_name(str(name)) for name in raw.get("authors") or [] if name])
+
+
+def preprint_identifier(paper: dict[str, Any]) -> str:
+    if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
+        return ""
+    raw = parse_raw_json(paper)
+    return clean_text(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
+
+
+def preprint_categories(paper: dict[str, Any]) -> list[str]:
+    if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
+        return []
+    raw = parse_raw_json(paper)
+    return [clean_text(category) for category in raw.get("categories") or [] if clean_text(category)]
+
+
+def preprint_primary_category(paper: dict[str, Any]) -> str:
+    if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
+        return ""
+    raw = parse_raw_json(paper)
+    primary = clean_text(raw.get("primary_category") or "")
+    return primary or (preprint_categories(paper)[0] if preprint_categories(paper) else "")
 
 
 def parse_raw_json(paper: dict[str, Any]) -> dict[str, Any]:
@@ -938,6 +1009,8 @@ def resolve_journal_metadata(name: str) -> dict[str, Any]:
 
 
 def resolve_journal_logo_url(name: str, homepage_url: str = "") -> str:
+    if name.lower().strip() == ARXIV_JOURNAL_NAME.lower():
+        return ""
     known = KNOWN_JOURNAL_LOGOS.get(name.lower().strip())
     if known:
         return known
@@ -1026,6 +1099,7 @@ KNOWN_JOURNAL_HOME_PAGES = {
     "nature nanotechnology": "https://www.nature.com/nnano/",
     "physical review letters": "https://journals.aps.org/prl/",
     "physical review x": "https://journals.aps.org/prx/",
+    "arxiv": "https://arxiv.org/",
 }
 
 
@@ -1380,6 +1454,13 @@ def classify_fields(paper: dict[str, Any]) -> list[str]:
         for field, keywords in FIELD_KEYWORDS.items()
         if any(keyword in text for keyword in keywords)
     ]
+    if journal == ARXIV_JOURNAL_NAME.lower():
+        categories = preprint_categories(paper)
+        if any(category.startswith("cond-mat") for category in categories):
+            fields.insert(0, "physics")
+        if "cond-mat.mtrl-sci" in categories:
+            fields.append("materials")
+        fields = list(dict.fromkeys(fields))
     return fields or ["other"]
 
 
@@ -1557,7 +1638,7 @@ INDEX_HTML = """<!doctype html>
     }
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .filter-title { font-size: 13px; color: var(--muted); }
-    .journal-toggle, .section-toggle {
+    .journal-toggle, .section-toggle, .preprint-category-toggle {
       display: grid;
       grid-template-columns: 18px 1fr auto;
       gap: 8px;
@@ -1567,9 +1648,12 @@ INDEX_HTML = """<!doctype html>
       padding: 8px 10px;
       background: #fff;
     }
-    .journal-toggle input, .section-toggle input { width: 16px; height: 16px; }
-    .journal-toggle span, .section-toggle span { font-size: 14px; min-width: 0; }
-    .journal-toggle b, .section-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .preprint-category-list { display: flex; flex-direction: column; gap: 6px; padding-left: 14px; }
+    .preprint-category-toggle { padding: 7px 8px; }
+    .journal-toggle input, .section-toggle input, .preprint-category-toggle input { width: 16px; height: 16px; }
+    .journal-toggle span, .section-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
+    .preprint-category-toggle span { font-size: 12px; line-height: 1.2; }
+    .journal-toggle b, .section-toggle b, .preprint-category-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
     .journal-setting-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -1942,6 +2026,11 @@ INDEX_HTML = """<!doctype html>
         <div id="journalFilters"></div>
       </div>
       <div class="filters">
+        <div class="filter-title">Preprint Filter</div>
+        <div id="preprintFilters"></div>
+        <div class="preprint-category-list" id="preprintCategoryFilters"></div>
+      </div>
+      <div class="filters">
         <div class="filter-title">Section Filter</div>
         <div id="sectionFilters"></div>
       </div>
@@ -2007,6 +2096,18 @@ INDEX_HTML = """<!doctype html>
   </div>
   <script>
     const initialToday = localIsoDate(new Date());
+    const PREPRINT_JOURNALS = new Set(["arXiv"]);
+    const ARXIV_CATEGORIES = [
+      ["cond-mat.dis-nn", "Disordered Systems"],
+      ["cond-mat.mes-hall", "Mesoscale and Nanoscale Physics"],
+      ["cond-mat.mtrl-sci", "Materials Science"],
+      ["cond-mat.other", "Other Condensed Matter"],
+      ["cond-mat.quant-gas", "Quantum Gases"],
+      ["cond-mat.soft", "Soft Condensed Matter"],
+      ["cond-mat.stat-mech", "Statistical Mechanics"],
+      ["cond-mat.str-el", "Strongly Correlated Electrons"],
+      ["cond-mat.supr-con", "Superconductivity"]
+    ];
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -2015,6 +2116,7 @@ INDEX_HTML = """<!doctype html>
       journalsConfig: [],
       journalHistory: [],
       selectedJournals: new Set(),
+      selectedPreprintCategories: new Set(ARXIV_CATEGORIES.map(([code]) => code)),
       selectedFields: new Set(["physics"]),
       selectedSections: new Set(),
       counts: {},
@@ -2223,6 +2325,14 @@ INDEX_HTML = """<!doctype html>
       if (!state.selectedJournals.size) state.journals.forEach((journal) => state.selectedJournals.add(journal));
     }
 
+    function withPreprintJournals(journals) {
+      const names = [...journals];
+      PREPRINT_JOURNALS.forEach((journal) => {
+        if (!names.includes(journal)) names.push(journal);
+      });
+      return names;
+    }
+
     function renderCalendar() {
       $("todayLabel").textContent = localIsoDate(new Date());
       $("monthLabel").textContent = fmtMonth(state.viewYear, state.viewMonth);
@@ -2268,11 +2378,11 @@ INDEX_HTML = """<!doctype html>
     function renderFilters() {
       const counts = {};
       state.papers
-        .filter((paper) => subjectMatches(paper) && sectionMatches(paper))
+        .filter((paper) => !isPreprintPaper(paper) && subjectMatches(paper) && sectionMatches(paper))
         .forEach((paper) => counts[paper.journal] = (counts[paper.journal] || 0) + 1);
       const root = $("journalFilters");
       root.innerHTML = "";
-      state.journals.forEach((journal) => {
+      state.journals.filter((journal) => !PREPRINT_JOURNALS.has(journal)).forEach((journal) => {
         const label = document.createElement("label");
         label.className = "journal-toggle";
         label.innerHTML = `<input type="checkbox" ${state.selectedJournals.has(journal) ? "checked" : ""}>
@@ -2285,6 +2395,49 @@ INDEX_HTML = """<!doctype html>
           renderReport();
         });
         root.appendChild(label);
+      });
+      renderPreprintFilters();
+    }
+
+    function renderPreprintFilters() {
+      const root = $("preprintFilters");
+      const categoryRoot = $("preprintCategoryFilters");
+      if (!root || !categoryRoot) return;
+      const arxivPapers = state.papers.filter((paper) => isPreprintPaper(paper) && subjectMatches(paper) && sectionMatches(paper));
+      root.innerHTML = "";
+      const label = document.createElement("label");
+      label.className = "journal-toggle";
+      label.innerHTML = `<input type="checkbox" ${state.selectedJournals.has("arXiv") ? "checked" : ""}>
+        <span>arXiv</span><b>${arxivPapers.length}</b>`;
+      label.querySelector("input").addEventListener("change", (event) => {
+        if (event.target.checked) state.selectedJournals.add("arXiv");
+        else state.selectedJournals.delete("arXiv");
+        state.noMatchDates = new Set();
+        renderSectionFilters();
+        renderFilters();
+        renderReport();
+      });
+      root.appendChild(label);
+
+      const counts = {};
+      arxivPapers.forEach((paper) => {
+        paperPreprintCategories(paper).forEach((category) => counts[category] = (counts[category] || 0) + 1);
+      });
+      categoryRoot.innerHTML = "";
+      ARXIV_CATEGORIES.forEach(([code, title]) => {
+        const categoryLabel = document.createElement("label");
+        categoryLabel.className = "preprint-category-toggle";
+        categoryLabel.innerHTML = `<input type="checkbox" ${state.selectedPreprintCategories.has(code) ? "checked" : ""}>
+          <span>${escapeHtml(code)} · ${escapeHtml(title)}</span><b>${counts[code] || 0}</b>`;
+        categoryLabel.querySelector("input").addEventListener("change", (event) => {
+          if (event.target.checked) state.selectedPreprintCategories.add(code);
+          else state.selectedPreprintCategories.delete(code);
+          state.noMatchDates = new Set();
+          renderSectionFilters();
+          renderFilters();
+          renderReport();
+        });
+        categoryRoot.appendChild(categoryLabel);
       });
     }
 
@@ -2392,7 +2545,7 @@ INDEX_HTML = """<!doctype html>
       state.reportCache = {};
       state.journalsConfig = data.journals || state.journalsConfig;
       state.journalHistory = data.history || state.journalHistory;
-      state.journals = (data.journals || []).map((journal) => journal.name);
+      state.journals = withPreprintJournals((data.journals || []).map((journal) => journal.name));
       syncSelectedJournals();
       renderJournalSettings();
       renderJournalHistory();
@@ -2414,7 +2567,7 @@ INDEX_HTML = """<!doctype html>
       state.reportCache = {};
       state.journalsConfig = data.journals || state.journalsConfig;
       state.journalHistory = data.history || state.journalHistory;
-      state.journals = (data.journals || []).map((journal) => journal.name);
+      state.journals = withPreprintJournals((data.journals || []).map((journal) => journal.name));
       syncSelectedJournals();
       renderJournalSettings();
       renderJournalHistory();
@@ -2427,6 +2580,23 @@ INDEX_HTML = """<!doctype html>
       return [...state.selectedFields].some((field) => paperMatchesField(paper, field));
     }
 
+    function isPreprintPaper(paper) {
+      return PREPRINT_JOURNALS.has(paper.journal);
+    }
+
+    function paperPreprintCategories(paper) {
+      const categories = Array.isArray(paper.preprint_categories) ? paper.preprint_categories : [];
+      if (categories.length) return categories;
+      return paper.preprint_category ? [paper.preprint_category] : [];
+    }
+
+    function preprintCategoryMatches(paper) {
+      if (!isPreprintPaper(paper)) return true;
+      const categories = paperPreprintCategories(paper);
+      if (!categories.length) return true;
+      return categories.some((category) => state.selectedPreprintCategories.has(category));
+    }
+
     function paperMatchesField(paper, value) {
       if (value === "all") return true;
       const fields = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : [paper.discipline || "other"];
@@ -2436,7 +2606,7 @@ INDEX_HTML = """<!doctype html>
     function renderSectionFilters() {
       const counts = {};
       state.papers
-        .filter((paper) => subjectMatches(paper) && state.selectedJournals.has(paper.journal))
+        .filter((paper) => subjectMatches(paper) && state.selectedJournals.has(paper.journal) && preprintCategoryMatches(paper))
         .forEach((paper) => {
           const section = normalizedSection(paper.section);
           counts[section] = (counts[section] || 0) + 1;
@@ -2457,6 +2627,7 @@ INDEX_HTML = """<!doctype html>
           if (event.target.checked) state.selectedSections.add(section);
           else state.selectedSections.delete(section);
           state.noMatchDates = new Set();
+          renderFilters();
           renderReport();
         });
         root.appendChild(label);
@@ -2484,8 +2655,8 @@ INDEX_HTML = """<!doctype html>
       const query = state.query.trim().toLowerCase();
       const filtered = state.papers.filter((paper) => {
         const inJournal = state.selectedJournals.has(paper.journal);
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
-        return inJournal && subjectMatches(paper) && sectionMatches(paper) && (!query || haystack.includes(query));
+        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
+        return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && sectionMatches(paper) && (!query || haystack.includes(query));
       });
       const subjectText = {
         "physics": "Physics",
@@ -2618,7 +2789,7 @@ INDEX_HTML = """<!doctype html>
       const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
       const completed = Number(progress.completed || 0);
       const total = Number(progress.total || 0);
-      const detail = total ? `${completed} / ${total} journals completed` : "Preparing fetch";
+      const detail = total ? `${completed} / ${total} sources completed` : "Preparing fetch";
       return `
         <div class="empty fetch-progress">
           <div class="fetch-progress-head">
@@ -2641,7 +2812,7 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       const query = state.query.trim().toLowerCase();
       const filtered = state.libraryPapers.filter((paper) => {
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
+        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
         return !query || haystack.includes(query);
       });
       $("summary").textContent = `${state.libraryPapers.length} downloaded/analyzed · ${filtered.length} shown`;
@@ -2669,6 +2840,8 @@ INDEX_HTML = """<!doctype html>
       article.className = `paper${showFigure ? " with-figure" : ""}`;
       article.dataset.paperId = paper.paper_id;
       const authorText = authorLine(paper);
+      const identifierText = paper.doi || paper.preprint_id || "no DOI";
+      const preprintCategoryText = paper.preprint_category || "";
       article.innerHTML = `
         <div class="paper-layout">
           ${showFigure ? `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>` : ""}
@@ -2679,7 +2852,8 @@ INDEX_HTML = """<!doctype html>
                 <div class="meta">
                   <span class="journal-name">${escapeHtml(paper.journal)}</span>
                   <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
-                  <span>${escapeHtml(paper.doi || "no DOI")}</span>
+                  <span>${escapeHtml(identifierText)}</span>
+                  ${preprintCategoryText ? `<span>${escapeHtml(preprintCategoryText)}</span>` : ""}
                   <span class="authors">${escapeHtml(authorText)}</span>
                 </div>
               </div>
