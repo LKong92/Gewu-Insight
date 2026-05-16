@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS papers (
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
   raw_json TEXT,
+  image_url TEXT,
   download_status TEXT NOT NULL DEFAULT 'not_attempted',
   download_message TEXT,
   main_pdf_path TEXT,
@@ -71,6 +72,13 @@ class Storage:
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._ensure_schema_columns()
+
+    def _ensure_schema_columns(self) -> None:
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
+        if "image_url" not in columns:
+            self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
+            self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
@@ -101,6 +109,7 @@ class Storage:
                 "type_crossref",
                 "publisher_section",
                 "section_allowed",
+                "image_url",
                 "raw_json",
             ]:
                 value = payload.get(key)
@@ -133,6 +142,7 @@ class Storage:
             "first_seen_at",
             "last_seen_at",
             "raw_json",
+            "image_url",
         ]
         values = [payload.get(column) for column in columns]
         placeholders = ", ".join(["?"] * len(columns))
@@ -161,6 +171,7 @@ class Storage:
             "section_allowed",
             "last_seen_at",
             "raw_json",
+            "image_url",
         ]
         assignments = ", ".join([f"{column} = ?" for column in columns])
         values = [paper.get(column) for column in columns]
@@ -343,6 +354,13 @@ class Storage:
             WHERE paper_id = ?
             """,
             (publisher_section, _bool_to_int(section_allowed), paper_id),
+        )
+        self.conn.commit()
+
+    def update_image_url(self, paper_id: str, image_url: str) -> None:
+        self.conn.execute(
+            "UPDATE papers SET image_url = ? WHERE paper_id = ?",
+            (image_url, paper_id),
         )
         self.conn.commit()
 

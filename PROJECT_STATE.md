@@ -41,11 +41,16 @@
 
 6. Report UI improvements
    - Journal Settings add/remove now refreshes UI state immediately.
+   - Journal Settings only removes a journal from the explicit `Remove` button.
    - If adding a journal with no ISSN, the server attempts OpenAlex source lookup; otherwise it asks for ISSN.
-   - Field Filter is split into `Physics`, `Materials`, `Chemistry`, `All Fields`, and `Other Fields`.
+   - Validated journals are remembered in a Journal Settings history dropdown.
+   - Field Filter is multi-select across `Physics`, `Materials`, `Chemistry`, `All Fields`, and `Other Fields`.
    - Each report/library item shows first three and last three authors when metadata has authors.
    - Journal names in paper meta rows are bold.
-   - Report view is grouped by journal; papers within a journal are sorted by date then title.
+   - Report view now uses horizontal journal tabs with journal logos where available.
+   - Report items can show first figures; the toolbar toggle shows/hides figures and the item layout adapts.
+   - No-match dates get a red diagonal mark on the calendar cell.
+   - Report item `Open` now opens inside the app via a local proxied internal page with a `Back` button, instead of launching Safari.
 
 ## Useful commits
 
@@ -60,7 +65,8 @@
 
 - Ran Python compile check:
   `PYTHONPYCACHEPREFIX=/private/tmp/paper-monitor-pycache .venv/bin/python -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Ran frontend JavaScript syntax check by extracting the embedded script and using `node --check`.
+- Ran frontend JavaScript syntax check by extracting the embedded script and using `new Function(...)`.
+- Smoke-tested `http://127.0.0.1:8766/`, `/api/report?date=2026-05-15`, and `/api/page-proxy?url=https%3A%2F%2Fwww.nature.com%2Fnphys%2F`.
 - Verified in the native `.app`:
   - live fetch progress appears and updates,
   - fetching calendar cell uses a dot only,
@@ -73,11 +79,10 @@
 - Field classification is keyword/journal-hint based, not a learned classifier. Some interdisciplinary papers may appear in multiple fields or the closest heuristic field.
 - Fetch progress percentage is by journal completion, not elapsed time or individual paper count.
 - New-journal auto-detection depends on network access to OpenAlex; if unavailable, users must provide ISSNs manually.
+- Article figure and journal logo enrichment depends on publisher page/network availability; known Nature/Science logos are pinned to full wordmark URLs.
 
 ## Good next steps
 
 1. Ask the user what they want to do with the uncommitted `config/journals.json` change: keep, commit as config, or restore.
 2. Test adding a real new journal from the UI, both with only a name and with explicit ISSNs.
-3. Consider improving field classification if the split Physics/Materials/Chemistry filter feels inaccurate.
-4. Consider adding visible feedback after successful journal add/remove, e.g. a small status message in Journal Settings.
-5. If the UI keeps growing, consider moving embedded CSS/JS out of `paper_monitor/ui_server.py` into static files.
+3. If the UI keeps growing, consider moving embedded CSS/JS out of `paper_monitor/ui_server.py` into static files.

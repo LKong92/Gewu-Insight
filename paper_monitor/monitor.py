@@ -7,7 +7,7 @@ from typing import Any, Callable
 from .config import AppConfig, JournalConfig
 from .sources.crossref import fetch_crossref_journal
 from .sources.openalex import fetch_openalex_journal
-from .sources.publisher import enrich_from_landing_page
+from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text
 from .time_utils import now_iso
@@ -115,6 +115,8 @@ def fetch_one_journal(
             )
         elif paper.get("section_allowed") is None:
             paper["section_allowed"] = config.keep_unknown_sections
+        if enrich and journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
+            paper = enrich_image_from_landing_page(paper)
 
         if paper.get("section_allowed") is False:
             blocked += 1
