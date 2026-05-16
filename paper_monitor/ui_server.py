@@ -24,6 +24,10 @@ from .text import safe_slug
 from .time_utils import today_jst
 
 
+FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
+FETCH_PROGRESS_LOCK = threading.Lock()
+
+
 def run_ui_server(
     *,
     host: str = "127.0.0.1",
@@ -63,6 +67,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/report":
                 self.handle_report(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/fetch-progress":
+                self.handle_fetch_progress(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/paper":
                 self.handle_paper(parse_qs(parsed.query))
@@ -168,6 +175,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 config = load_config()
                 fetch_config = config_for_journals(config, missing_journals)
                 fetch_storage = Storage(self.configured_db_path)
+                start_fetch_progress(selected, missing_journals)
                 try:
                     run_journal_monitor(
                         config=fetch_config,
@@ -175,9 +183,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                         start_date=selected_date,
                         end_date=selected_date,
                         enrich=True,
+                        progress_callback=lambda journal, completed, total: update_fetch_progress(
+                            selected,
+                            journal=journal,
+                            completed=completed,
+                            total=total,
+                        ),
                     )
                     fetched = True
                 finally:
+                    finish_fetch_progress(selected)
                     fetch_storage.close()
                 storage = Storage(self.configured_db_path)
                 self.configured_journals = [journal.name for journal in config.journals]
@@ -200,6 +215,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "missingJournals": missing_journals,
             }
         )
+
+    def handle_fetch_progress(self, query: dict[str, list[str]]) -> None:
+        selected = first(query, "date") or today_jst().isoformat()
+        self.send_json({"date": selected, "progress": get_fetch_progress(selected)})
 
     def handle_paper(self, query: dict[str, list[str]]) -> None:
         paper_id = first(query, "paper_id")
@@ -569,6 +588,51 @@ def list_library_papers(
         params,
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def start_fetch_progress(selected: str, journals: list[str]) -> None:
+    with FETCH_PROGRESS_LOCK:
+        FETCH_PROGRESS[selected] = {
+            "active": True,
+            "completed": 0,
+            "total": len(journals),
+            "percent": 0,
+            "currentJournal": "",
+        }
+
+
+def update_fetch_progress(selected: str, *, journal: str, completed: int, total: int) -> None:
+    percent = round((completed / total) * 100) if total else 100
+    with FETCH_PROGRESS_LOCK:
+        FETCH_PROGRESS[selected] = {
+            "active": True,
+            "completed": completed,
+            "total": total,
+            "percent": percent,
+            "currentJournal": journal,
+        }
+
+
+def finish_fetch_progress(selected: str) -> None:
+    with FETCH_PROGRESS_LOCK:
+        progress = FETCH_PROGRESS.get(selected)
+        if not progress:
+            return
+        total = int(progress.get("total") or 0)
+        progress.update(
+            {
+                "active": False,
+                "completed": total,
+                "percent": 100,
+                "currentJournal": progress.get("currentJournal") or "",
+            }
+        )
+
+
+def get_fetch_progress(selected: str) -> dict[str, Any] | None:
+    with FETCH_PROGRESS_LOCK:
+        progress = FETCH_PROGRESS.get(selected)
+        return dict(progress) if progress else None
 
 
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
@@ -954,20 +1018,37 @@ INDEX_HTML = """<!doctype html>
     .day.fetching { border-color: rgba(23, 100, 59, 0.42); background: #f7fbf8; }
     .daynum { font-weight: 650; font-size: 14px; }
     .count { color: var(--muted); font-size: 11px; }
-    .fetching-mark {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      color: var(--accent);
-      font-size: 11px;
-      line-height: 1;
-    }
     .fetching-dot {
       width: 7px;
       height: 7px;
       border-radius: 999px;
-      background: currentColor;
+      background: var(--accent);
       animation: fetchingPulse 1s ease-in-out infinite;
+    }
+    .fetch-progress {
+      display: grid;
+      gap: 10px;
+      text-align: left;
+    }
+    .fetch-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+    }
+    .fetch-progress strong { color: var(--ink); font-weight: 600; }
+    .fetch-progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(23, 100, 59, 0.12);
+      overflow: hidden;
+    }
+    .fetch-progress-bar {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width 180ms ease;
     }
     @keyframes fetchingPulse {
       0%, 100% { opacity: 0.35; transform: scale(0.86); }
@@ -1329,7 +1410,9 @@ INDEX_HTML = """<!doctype html>
       query: "",
       reportSequence: 0,
       reportCache: {},
-      fetchingDates: new Set()
+      fetchingDates: new Set(),
+      fetchProgress: {},
+      progressPollers: {}
     };
 
     const $ = (id) => document.getElementById(id);
@@ -1405,7 +1488,10 @@ INDEX_HTML = """<!doctype html>
     async function refreshMissingDateInBackground(selectedDate) {
       if (state.fetchingDates.has(selectedDate)) return;
       state.fetchingDates.add(selectedDate);
+      state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
+      startProgressPolling(selectedDate);
       renderCalendar();
+      if (selectedDate === state.selectedDate) renderReport();
       try {
         const res = await fetch(`/api/report?date=${selectedDate}`);
         const data = await res.json();
@@ -1421,7 +1507,36 @@ INDEX_HTML = """<!doctype html>
         }
       } finally {
         state.fetchingDates.delete(selectedDate);
+        await refreshFetchProgress(selectedDate);
+        stopProgressPolling(selectedDate);
         renderCalendar();
+        if (selectedDate === state.selectedDate) renderReport();
+      }
+    }
+
+    async function startProgressPolling(selectedDate) {
+      if (state.progressPollers[selectedDate]) return;
+      await refreshFetchProgress(selectedDate);
+      state.progressPollers[selectedDate] = window.setInterval(() => refreshFetchProgress(selectedDate), 350);
+    }
+
+    function stopProgressPolling(selectedDate) {
+      const poller = state.progressPollers[selectedDate];
+      if (!poller) return;
+      window.clearInterval(poller);
+      delete state.progressPollers[selectedDate];
+    }
+
+    async function refreshFetchProgress(selectedDate) {
+      try {
+        const res = await fetch(`/api/fetch-progress?date=${selectedDate}`);
+        const data = await res.json();
+        if (data.progress) {
+          state.fetchProgress[selectedDate] = data.progress;
+          if (selectedDate === state.selectedDate && state.fetchingDates.has(selectedDate)) renderReport();
+        }
+      } catch (error) {
+        return;
       }
     }
 
@@ -1473,7 +1588,7 @@ INDEX_HTML = """<!doctype html>
         button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}`;
         button.innerHTML = `<span class="daynum">${day}</span>${
           isFetching
-            ? `<span class="fetching-mark"><span class="fetching-dot"></span>Fetching</span>`
+            ? `<span class="fetching-dot" title="Fetching"></span>`
             : `<span class="count">${total || ""}</span>`
         }`;
         button.addEventListener("click", async () => {
@@ -1656,11 +1771,34 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Field: ${subjectText}`;
       const root = $("papers");
       root.innerHTML = "";
+      if (state.fetchingDates.has(state.selectedDate)) {
+        root.innerHTML = fetchProgressMarkup(state.selectedDate);
+      }
       if (!filtered.length) {
-        root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
+        if (!state.fetchingDates.has(state.selectedDate)) {
+          root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
+        }
         return;
       }
       filtered.forEach((paper) => root.appendChild(renderPaper(paper)));
+    }
+
+    function fetchProgressMarkup(selectedDate) {
+      const progress = state.fetchProgress[selectedDate] || {};
+      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+      const completed = Number(progress.completed || 0);
+      const total = Number(progress.total || 0);
+      const detail = total ? `${completed} / ${total} journals completed` : "Preparing fetch";
+      return `
+        <div class="empty fetch-progress">
+          <div class="fetch-progress-head">
+            <strong>Fetching papers for this date in the background. You can keep browsing other dates.</strong>
+            <span>${percent}%</span>
+          </div>
+          <div class="fetch-progress-track"><div class="fetch-progress-bar" style="width:${percent}%"></div></div>
+          <div>${detail}</div>
+        </div>
+      `;
     }
 
     function renderLibrary() {
