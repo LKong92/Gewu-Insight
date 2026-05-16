@@ -72,7 +72,7 @@ class Storage:
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA busy_timeout=1000")
+        self.conn.execute("PRAGMA busy_timeout=15000")
         self.conn.executescript(SCHEMA)
         self._ensure_schema_columns()
 

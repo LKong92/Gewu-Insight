@@ -891,7 +891,7 @@ def start_fetch_progress(selected: str, journals: list[str]) -> None:
 
 def try_start_fetch(selected: str) -> bool:
     with FETCH_PROGRESS_LOCK:
-        if ACTIVE_FETCH_DATES:
+        if selected in ACTIVE_FETCH_DATES:
             return False
         ACTIVE_FETCH_DATES.add(selected)
         return True
@@ -2155,8 +2155,6 @@ INDEX_HTML = """<!doctype html>
       activeFigureHydrations: 0,
       maxFigureHydrations: 2,
       figureFailures: new Set(),
-      backgroundFetchDate: "",
-      pendingFetchDate: "",
       internalBrowserUrl: "",
       showFigures: true,
       arxivCountdownTimer: null
@@ -2325,21 +2323,12 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") loadLibrary();
       else renderReport();
       if ((data.missingJournals || []).length && !state.papers.length) {
-        const message = state.backgroundFetchDate && state.backgroundFetchDate !== selectedDate
-          ? "No local papers yet. Background fetching is finishing another date first."
-          : "Fetching papers for this date in the background. You can keep browsing other dates.";
-        $("papers").innerHTML = `<div class="empty">${message}</div>`;
+        $("papers").innerHTML = `<div class="empty">Fetching papers for this date in the background. You can keep browsing other dates.</div>`;
       }
     }
 
     async function refreshMissingDateInBackground(selectedDate) {
       if (state.fetchingDates.has(selectedDate)) return;
-      if (state.backgroundFetchDate && state.backgroundFetchDate !== selectedDate) {
-        state.pendingFetchDate = selectedDate;
-        setPendingFetchDate(selectedDate, true);
-        return;
-      }
-      state.backgroundFetchDate = selectedDate;
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
@@ -2362,14 +2351,10 @@ INDEX_HTML = """<!doctype html>
         }
       } finally {
         state.fetchingDates.delete(selectedDate);
-        state.backgroundFetchDate = "";
         await refreshFetchProgress(selectedDate);
         stopProgressPolling(selectedDate);
         renderCalendar();
         if (selectedDate === state.selectedDate) renderReport();
-        const pendingDate = state.pendingFetchDate;
-        state.pendingFetchDate = "";
-        if (pendingDate && pendingDate === state.selectedDate) refreshMissingDateInBackground(pendingDate);
       }
     }
 
