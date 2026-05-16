@@ -1882,6 +1882,7 @@ INDEX_HTML = """<!doctype html>
       display: block;
     }
     .paper-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+    .paper-head > div:first-child { min-width: 0; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
     .journal-group {
       margin: 10px 0 4px;
@@ -1901,6 +1902,28 @@ INDEX_HTML = """<!doctype html>
       border: 1px solid currentColor;
       border-radius: 7px;
       padding: 2px 8px;
+      font-size: 12px;
+      white-space: nowrap;
+      flex: none;
+    }
+    .paper-badges {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      align-items: flex-start;
+      gap: 6px;
+      max-width: 260px;
+    }
+    .field-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      padding: 2px 8px;
+      background: #f8fafc;
+      color: #475569;
       font-size: 12px;
       white-space: nowrap;
       flex: none;
@@ -2026,6 +2049,8 @@ INDEX_HTML = """<!doctype html>
       .report-column, .analysis-panel { height: auto; overflow: visible; }
       .workspace.report-collapsed .report-column { display: block; }
       .paper.with-figure .paper-layout { grid-template-columns: 1fr; }
+      .paper-head { flex-direction: column; }
+      .paper-badges { justify-content: flex-start; max-width: 100%; }
     }
   </style>
 </head>
@@ -2127,6 +2152,14 @@ INDEX_HTML = """<!doctype html>
       ["cond-mat.supr-con", "Superconductivity"]
     ];
     const DEFAULT_ARXIV_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"];
+    const FIELD_LABELS = {
+      "physics": "Physics",
+      "quantum_information": "Quantum Information",
+      "materials": "Materials",
+      "chemistry": "Chemistry",
+      "all": "All Fields",
+      "other": "Other Fields"
+    };
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -2136,7 +2169,7 @@ INDEX_HTML = """<!doctype html>
       journalHistory: [],
       selectedJournals: new Set(),
       selectedPreprintCategories: new Set(DEFAULT_ARXIV_CATEGORIES),
-      selectedFields: new Set(["physics"]),
+      selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
       papers: [],
       libraryPapers: [],
@@ -2669,12 +2702,12 @@ INDEX_HTML = """<!doctype html>
 
     function renderSubjectFilters() {
       const options = [
-        ["physics", "Physics"],
-        ["quantum_information", "Quantum Information"],
-        ["materials", "Materials"],
-        ["chemistry", "Chemistry"],
-        ["all", "All Fields"],
-        ["other", "Other Fields"]
+        ["physics", FIELD_LABELS.physics],
+        ["quantum_information", FIELD_LABELS.quantum_information],
+        ["materials", FIELD_LABELS.materials],
+        ["chemistry", FIELD_LABELS.chemistry],
+        ["all", FIELD_LABELS.all],
+        ["other", FIELD_LABELS.other]
       ];
       const root = $("subjectFilters");
       root.innerHTML = "";
@@ -2828,6 +2861,11 @@ INDEX_HTML = """<!doctype html>
       return fields.includes(value);
     }
 
+    function paperFieldValues(paper) {
+      const fields = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : [paper.discipline || "other"];
+      return [...new Set(fields.filter((field) => field && field !== "all"))];
+    }
+
     function renderReport() {
       state.mode = "report";
       stopArxivUpdateCountdown();
@@ -2839,16 +2877,8 @@ INDEX_HTML = """<!doctype html>
         const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
         return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && (!query || haystack.includes(query));
       });
-      const subjectText = {
-        "physics": "Physics",
-        "quantum_information": "Quantum Information",
-        "materials": "Materials",
-        "chemistry": "Chemistry",
-        "all": "All Fields",
-        "other": "Other Fields"
-      };
       const selectedFieldText = [...state.selectedFields]
-        .map((field) => subjectText[field] || field)
+        .map((field) => FIELD_LABELS[field] || field)
         .join(", ");
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
@@ -3080,6 +3110,9 @@ INDEX_HTML = """<!doctype html>
       const authorText = authorLine(paper);
       const identifierText = paper.doi || paper.preprint_id || "no DOI";
       const preprintCategoryText = paper.preprint_category || "";
+      const fieldBadges = paperFieldValues(paper)
+        .map((field) => `<span class="field-badge">${escapeHtml(FIELD_LABELS[field] || field)}</span>`)
+        .join("");
       article.innerHTML = `
         <div class="paper-layout">
           ${showFigure ? `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>` : ""}
@@ -3095,7 +3128,10 @@ INDEX_HTML = """<!doctype html>
                   <span class="authors">${escapeHtml(authorText)}</span>
                 </div>
               </div>
-              <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
+              <div class="paper-badges">
+                <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
+                ${fieldBadges}
+              </div>
             </div>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
