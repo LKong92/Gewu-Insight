@@ -11,8 +11,7 @@ MAX_RETRIES = 3
 RETRY_SLEEP = 2.0
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/123.0 Safari/537.36 paper-monitor/0.1"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
 )
 
 
@@ -48,6 +47,10 @@ def request_with_retries(
             return response
         except requests.RequestException as exc:
             last_error = exc
+            if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                status = exc.response.status_code
+                if status != 429 and status < 500:
+                    raise
             if attempt == MAX_RETRIES:
                 raise
             time.sleep(RETRY_SLEEP * attempt)
