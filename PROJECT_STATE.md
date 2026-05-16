@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD: `eaf2cc7 Improve report grouping and field filters`
+- Current Git HEAD noted before this turn: `31803ce Improve report media and internal article viewing`
 - Working tree is not fully clean: `config/journals.json` has an uncommitted user/config change. Do not commit, revert, or overwrite it without asking.
 
 ## Completed work
@@ -51,6 +51,9 @@
    - Report items can show first figures; the toolbar toggle shows/hides figures and the item layout adapts.
    - No-match dates get a red diagonal mark on the calendar cell.
    - Report item `Open` now opens inside the app via a local proxied internal page with a `Back` button, instead of launching Safari.
+   - Date switching is kept responsive by limiting background journal fetches to one date at a time.
+   - Report figure hydration is queued with low concurrency so publisher image lookups do not flood the local UI server.
+   - The internal publisher page has an `External Browser` button that opens the current article URL with the system default browser.
 
 ## Useful commits
 
@@ -60,6 +63,7 @@
 - `8e6e7a7` Show calendar progress while a date is fetching
 - `5d77520` Show live fetch progress in report view
 - `eaf2cc7` Improve report grouping and field filters
+- `31803ce` Improve report media and internal article viewing
 
 ## Verification already done
 
@@ -67,6 +71,8 @@
   `PYTHONPYCACHEPREFIX=/private/tmp/paper-monitor-pycache .venv/bin/python -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
 - Ran frontend JavaScript syntax check by extracting the embedded script and using `new Function(...)`.
 - Smoke-tested `http://127.0.0.1:8766/`, `/api/report?date=2026-05-15`, and `/api/page-proxy?url=https%3A%2F%2Fwww.nature.com%2Fnphys%2F`.
+- Smoke-tested `http://127.0.0.1:8767/`; `/api/report?date=2026-05-15&auto_fetch=0` returned in about 0.013s.
+- Verified `/api/open-url` rejects invalid URLs without launching a browser.
 - Verified in the native `.app`:
   - live fetch progress appears and updates,
   - fetching calendar cell uses a dot only,

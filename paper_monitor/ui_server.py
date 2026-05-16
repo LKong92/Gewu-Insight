@@ -31,6 +31,7 @@ from .time_utils import today_jst
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
+ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 
 
@@ -127,6 +128,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/open-pdf":
                 self.handle_open_pdf(payload)
                 return
+            if parsed.path == "/api/open-url":
+                self.handle_open_url(payload)
+                return
             if parsed.path == "/api/journals/add":
                 self.handle_add_journal(payload)
                 return
@@ -185,13 +189,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             selected_date = date.fromisoformat(selected)
             missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
-            if auto_fetch and selected_date <= today_jst() and missing_journals:
+            if auto_fetch and selected_date <= today_jst() and missing_journals and try_start_fetch(selected):
                 storage.close()
-                config = load_config()
-                fetch_config = config_for_journals(config, missing_journals)
-                fetch_storage = Storage(self.configured_db_path)
-                start_fetch_progress(selected, missing_journals)
+                fetch_storage = None
                 try:
+                    config = load_config()
+                    fetch_config = config_for_journals(config, missing_journals)
+                    fetch_storage = Storage(self.configured_db_path)
+                    start_fetch_progress(selected, missing_journals)
                     run_journal_monitor(
                         config=fetch_config,
                         storage=fetch_storage,
@@ -208,7 +213,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     fetched = True
                 finally:
                     finish_fetch_progress(selected)
-                    fetch_storage.close()
+                    finish_active_fetch(selected)
+                    if fetch_storage:
+                        fetch_storage.close()
                 storage = Storage(self.configured_db_path)
                 self.configured_journals = [journal.name for journal in config.journals]
                 missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
@@ -414,6 +421,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
         self.send_json({"status": "opened", "path": str(requested)})
+
+    def handle_open_url(self, payload: dict[str, Any]) -> None:
+        url = str(payload.get("url") or "")
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid http(s) URL is required")
+            return
+        webbrowser.open(url)
+        self.send_json({"status": "opened", "url": url})
 
     def handle_journals(self) -> None:
         raw = read_config_json()
@@ -800,6 +816,19 @@ def start_fetch_progress(selected: str, journals: list[str]) -> None:
             "percent": 0,
             "currentJournal": "",
         }
+
+
+def try_start_fetch(selected: str) -> bool:
+    with FETCH_PROGRESS_LOCK:
+        if ACTIVE_FETCH_DATES:
+            return False
+        ACTIVE_FETCH_DATES.add(selected)
+        return True
+
+
+def finish_active_fetch(selected: str) -> None:
+    with FETCH_PROGRESS_LOCK:
+        ACTIVE_FETCH_DATES.discard(selected)
 
 
 def update_fetch_progress(selected: str, *, journal: str, completed: int, total: int) -> None:
@@ -1547,7 +1576,7 @@ INDEX_HTML = """<!doctype html>
     .internal-browser.open { display: grid; }
     .internal-browser-bar {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-columns: auto auto minmax(0, 1fr);
       gap: 12px;
       align-items: center;
       min-height: 58px;
@@ -1953,6 +1982,7 @@ INDEX_HTML = """<!doctype html>
       <div class="internal-browser" id="internalBrowser" aria-hidden="true">
         <div class="internal-browser-bar">
           <button class="smallbtn" id="closeInternalBrowser" type="button">Back</button>
+          <button class="smallbtn" id="openExternalBrowser" type="button">External Browser</button>
           <div class="internal-browser-title"><strong id="internalBrowserTitle">Publisher page</strong><span id="internalBrowserUrl"></span></div>
         </div>
         <iframe id="internalBrowserFrame" title="Publisher page" sandbox="allow-scripts allow-forms allow-modals allow-downloads"></iframe>
@@ -1989,7 +2019,14 @@ INDEX_HTML = """<!doctype html>
       progressPollers: {},
       logoRequests: {},
       figureRequests: {},
+      figureQueue: [],
+      queuedFigureIds: new Set(),
+      activeFigureHydrations: 0,
+      maxFigureHydrations: 2,
       figureFailures: new Set(),
+      backgroundFetchDate: "",
+      pendingFetchDate: "",
+      internalBrowserUrl: "",
       showFigures: true
     };
 
@@ -2010,9 +2047,24 @@ INDEX_HTML = """<!doctype html>
       return "";
     }
 
+    async function fetchJson(url, timeoutMs = 12000) {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, {signal: controller.signal});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText || "Request failed");
+        return data;
+      } catch (error) {
+        if (error.name === "AbortError") throw new Error("Local data is busy. Try this date again in a moment.");
+        throw error;
+      } finally {
+        window.clearTimeout(timer);
+      }
+    }
+
     async function loadMonth() {
-      const res = await fetch(`/api/month?year=${state.viewYear}&month=${state.viewMonth}`);
-      const data = await res.json();
+      const data = await fetchJson(`/api/month?year=${state.viewYear}&month=${state.viewMonth}`);
       state.journals = data.journals;
       syncSelectedJournals();
       state.counts = data.counts;
@@ -2032,12 +2084,17 @@ INDEX_HTML = """<!doctype html>
       } else {
         showReportLoading(selectedDate);
       }
-      const res = await fetch(`/api/report?date=${selectedDate}&auto_fetch=0`);
-      const data = await res.json();
-      state.reportCache[selectedDate] = data;
-      applyReportData(selectedDate, data, sequence);
-      if ((data.missingJournals || []).length) {
-        refreshMissingDateInBackground(selectedDate);
+      try {
+        const data = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+        state.reportCache[selectedDate] = data;
+        applyReportData(selectedDate, data, sequence);
+        if ((data.missingJournals || []).length) {
+          refreshMissingDateInBackground(selectedDate);
+        }
+      } catch (error) {
+        if (selectedDate !== state.selectedDate || sequence !== state.reportSequence) return;
+        $("summary").textContent = "Local data is busy";
+        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       }
     }
 
@@ -2061,20 +2118,27 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") loadLibrary();
       else renderReport();
       if ((data.missingJournals || []).length && !state.papers.length) {
-        $("papers").innerHTML = `<div class="empty">Fetching papers for this date in the background. You can keep browsing other dates.</div>`;
+        const message = state.backgroundFetchDate && state.backgroundFetchDate !== selectedDate
+          ? "No local papers yet. Background fetching is finishing another date first."
+          : "Fetching papers for this date in the background. You can keep browsing other dates.";
+        $("papers").innerHTML = `<div class="empty">${message}</div>`;
       }
     }
 
     async function refreshMissingDateInBackground(selectedDate) {
       if (state.fetchingDates.has(selectedDate)) return;
+      if (state.backgroundFetchDate && state.backgroundFetchDate !== selectedDate) {
+        state.pendingFetchDate = selectedDate;
+        return;
+      }
+      state.backgroundFetchDate = selectedDate;
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
       startProgressPolling(selectedDate);
       renderCalendar();
       if (selectedDate === state.selectedDate) renderReport();
       try {
-        const res = await fetch(`/api/report?date=${selectedDate}`);
-        const data = await res.json();
+        const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
         state.reportCache[selectedDate] = data;
         if (data.fetched) await loadMonth();
         if (selectedDate === state.selectedDate) {
@@ -2087,10 +2151,14 @@ INDEX_HTML = """<!doctype html>
         }
       } finally {
         state.fetchingDates.delete(selectedDate);
+        state.backgroundFetchDate = "";
         await refreshFetchProgress(selectedDate);
         stopProgressPolling(selectedDate);
         renderCalendar();
         if (selectedDate === state.selectedDate) renderReport();
+        const pendingDate = state.pendingFetchDate;
+        state.pendingFetchDate = "";
+        if (pendingDate && pendingDate === state.selectedDate) refreshMissingDateInBackground(pendingDate);
       }
     }
 
@@ -2637,14 +2705,30 @@ INDEX_HTML = """<!doctype html>
           article.querySelector(".paper-figure")?.remove();
         }, {once: true});
       } else if (state.showFigures && paper.paper_id && !state.figureFailures.has(paper.paper_id)) {
-        hydratePaperFigure(paper.paper_id);
+        queuePaperFigureHydration(paper.paper_id);
       }
       return article;
+    }
+
+    function queuePaperFigureHydration(paperId) {
+      if (!paperId || state.figureFailures.has(paperId) || state.figureRequests[paperId] || state.queuedFigureIds.has(paperId)) return;
+      state.queuedFigureIds.add(paperId);
+      state.figureQueue.push(paperId);
+      drainFigureQueue();
+    }
+
+    function drainFigureQueue() {
+      while (state.showFigures && state.activeFigureHydrations < state.maxFigureHydrations && state.figureQueue.length) {
+        const paperId = state.figureQueue.shift();
+        state.queuedFigureIds.delete(paperId);
+        hydratePaperFigure(paperId);
+      }
     }
 
     async function hydratePaperFigure(paperId) {
       if (state.figureRequests[paperId]) return;
       state.figureRequests[paperId] = true;
+      state.activeFigureHydrations += 1;
       try {
         const res = await fetch(`/api/paper-figure?paper_id=${encodeURIComponent(paperId)}`);
         const data = await res.json();
@@ -2659,11 +2743,14 @@ INDEX_HTML = """<!doctype html>
         state.figureFailures.add(paperId);
       } finally {
         delete state.figureRequests[paperId];
+        state.activeFigureHydrations = Math.max(0, state.activeFigureHydrations - 1);
+        drainFigureQueue();
       }
     }
 
     function openInternalBrowser(url, title) {
       if (!url) return;
+      state.internalBrowserUrl = url;
       $("internalBrowserTitle").textContent = title || "Publisher page";
       $("internalBrowserUrl").textContent = url;
       $("internalBrowserFrame").src = `/api/page-proxy?url=${encodeURIComponent(url)}`;
@@ -2672,9 +2759,19 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeInternalBrowser() {
+      state.internalBrowserUrl = "";
       $("internalBrowser").classList.remove("open");
       $("internalBrowser").setAttribute("aria-hidden", "true");
       $("internalBrowserFrame").src = "about:blank";
+    }
+
+    async function openExternalBrowser() {
+      if (!state.internalBrowserUrl) return;
+      await fetch("/api/open-url", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({url: state.internalBrowserUrl})
+      });
     }
 
     function authorLine(paper) {
@@ -2995,6 +3092,10 @@ INDEX_HTML = """<!doctype html>
     });
     $("figureToggle").addEventListener("change", (event) => {
       state.showFigures = event.target.checked;
+      if (!state.showFigures) {
+        state.figureQueue = [];
+        state.queuedFigureIds.clear();
+      }
       if (state.mode === "library") renderLibrary();
       else renderReport();
     });
@@ -3007,6 +3108,7 @@ INDEX_HTML = """<!doctype html>
     $("closeAnalysis").addEventListener("click", closeAnalysis);
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
+    $("openExternalBrowser").addEventListener("click", openExternalBrowser);
     window.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       if ($("internalBrowser").classList.contains("open")) {
