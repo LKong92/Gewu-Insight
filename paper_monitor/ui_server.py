@@ -1982,11 +1982,31 @@ INDEX_HTML = """<!doctype html>
     }
     .library-shell {
       display: grid;
-      grid-template-columns: minmax(180px, 240px) minmax(280px, 1fr) minmax(260px, 340px);
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
       gap: 12px;
       min-height: 560px;
       outline: none;
     }
+    .library-columns {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      display: flex;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .library-column {
+      flex: 0 0 260px;
+      min-width: 260px;
+      max-width: 260px;
+      min-height: 560px;
+      border-right: 1px solid var(--line);
+      overflow-y: auto;
+      background: #fff;
+    }
+    .library-column:last-child { border-right: 0; }
     .library-pane {
       min-width: 0;
       min-height: 0;
@@ -2009,7 +2029,7 @@ INDEX_HTML = """<!doctype html>
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
-    .library-tree, .library-list { padding: 8px; }
+    .library-column-body { padding: 8px; }
     .library-row {
       width: 100%;
       min-height: 32px;
@@ -2028,11 +2048,9 @@ INDEX_HTML = """<!doctype html>
     }
     .library-row:hover { background: #f8fafc; }
     .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
-    .library-row.current-folder { font-weight: 750; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-meta { color: var(--muted); font-size: 12px; }
-    .library-indent { display: inline-block; }
     .library-detail {
       padding: 14px;
       color: #344054;
@@ -2412,7 +2430,10 @@ INDEX_HTML = """<!doctype html>
       libraryItems: [],
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
+      libraryActiveFolderId: 1,
       librarySelection: {type: "folder", id: 1},
+      libraryColumnSelections: {},
+      libraryColumnsScrollLeft: 0,
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -2816,9 +2837,16 @@ INDEX_HTML = """<!doctype html>
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
       if (!libraryFolderById(state.libraryCurrentFolderId)) state.libraryCurrentFolderId = state.libraryRootId;
+      if (!libraryFolderById(state.libraryActiveFolderId)) state.libraryActiveFolderId = state.libraryRootId;
       if (!librarySelectionExists(state.librarySelection)) {
         state.librarySelection = {type: "folder", id: state.libraryCurrentFolderId};
       }
+      Object.keys(state.libraryColumnSelections).forEach((folderId) => {
+        if (!libraryFolderById(folderId) || !librarySelectionExists(state.libraryColumnSelections[folderId])) {
+          delete state.libraryColumnSelections[folderId];
+        }
+      });
+      ensureLibraryColumnSelection(state.libraryRootId);
     }
 
     function libraryFolderById(id) {
@@ -2855,27 +2883,67 @@ INDEX_HTML = """<!doctype html>
         .sort((a, b) => (a.paper?.citation_label || "").localeCompare(b.paper?.citation_label || ""));
     }
 
-    function libraryVisibleEntries() {
+    function libraryEntriesForFolder(folderId) {
       const query = state.query.trim().toLowerCase();
-      const folders = libraryChildFolders(state.libraryCurrentFolderId)
+      const folders = libraryChildFolders(folderId)
         .filter((folder) => !query || (folder.name || "").toLowerCase().includes(query))
         .map((folder) => ({type: "folder", id: Number(folder.id)}));
-      const items = libraryFolderItems(state.libraryCurrentFolderId)
+      const items = libraryFolderItems(folderId)
         .map((item) => ({type: "item", id: Number(item.id)}));
       return folders.concat(items);
+    }
+
+    function libraryVisibleEntries() {
+      return libraryEntriesForFolder(state.libraryActiveFolderId || state.libraryRootId);
+    }
+
+    function libraryEntryKey(entry) {
+      return entry ? `${entry.type}:${Number(entry.id)}` : "";
+    }
+
+    function ensureLibraryColumnSelection(folderId) {
+      const id = Number(folderId || state.libraryRootId);
+      const selection = state.libraryColumnSelections[id];
+      const entries = libraryEntriesForFolder(id);
+      if (selection && entries.some((entry) => libraryEntryKey(entry) === libraryEntryKey(selection))) return selection;
+      delete state.libraryColumnSelections[id];
+      return null;
+    }
+
+    function setLibraryColumnSelection(folderId, entry) {
+      const parentId = Number(folderId || state.libraryRootId);
+      const selection = {type: entry.type, id: Number(entry.id)};
+      state.libraryColumnSelections[parentId] = selection;
+      state.libraryActiveFolderId = parentId;
+      state.librarySelection = selection;
+      if (selection.type === "folder") {
+        state.libraryCurrentFolderId = selection.id;
+      } else {
+        const item = libraryItemById(selection.id);
+        state.libraryCurrentFolderId = Number(item?.folder_id || parentId);
+      }
+    }
+
+    function parentFolderId(folderId) {
+      const folder = libraryFolderById(folderId);
+      return Number(folder?.parent_id || state.libraryRootId);
+    }
+
+    function selectedEntryInFolder(folderId) {
+      return ensureLibraryColumnSelection(folderId);
     }
 
     async function createLibraryFolder(parentId) {
       const res = await fetch("/api/library/folders", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({parent_id: parentId || state.libraryCurrentFolderId, name: "New Folder"})
+        body: JSON.stringify({parent_id: parentId || state.libraryActiveFolderId || state.libraryRootId, name: "New Folder"})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not create folder");
       applyLibrarySnapshot(data);
-      state.libraryCurrentFolderId = Number(data.folder?.parent_id || parentId || state.libraryCurrentFolderId);
-      if (data.folder?.id) state.librarySelection = {type: "folder", id: Number(data.folder.id)};
+      const targetParentId = Number(data.folder?.parent_id || parentId || state.libraryActiveFolderId || state.libraryRootId);
+      if (data.folder?.id) setLibraryColumnSelection(targetParentId, {type: "folder", id: Number(data.folder.id)});
       renderLibrary();
     }
 
@@ -2917,8 +2985,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not move library entry");
       applyLibrarySnapshot(data);
-      state.libraryCurrentFolderId = Number(targetFolderId || state.libraryRootId);
-      state.librarySelection = {type, id: Number(id)};
+      setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(id)});
       renderLibrary();
     }
 
@@ -3409,19 +3476,13 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = "Library";
       const root = $("papers");
-      const folder = libraryFolderById(state.libraryCurrentFolderId) || libraryFolderById(state.libraryRootId) || {name: "Library"};
+      const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
+      const activeFolder = libraryFolderById(state.libraryActiveFolderId) || libraryFolderById(state.libraryRootId) || {name: "Library"};
       const visible = libraryVisibleEntries();
-      $("summary").textContent = `${state.libraryItems.length} shortcuts · ${visible.length} shown · Current folder: ${folder.name}`;
+      $("summary").textContent = `${state.libraryItems.length} shortcuts · ${visible.length} shown · Active column: ${activeFolder.name}`;
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
-          <section class="library-pane" data-library-drop-folder="${state.libraryRootId}">
-            <div class="library-pane-header">Folders</div>
-            <div class="library-tree" id="libraryTree"></div>
-          </section>
-          <section class="library-pane" data-library-drop-folder="${state.libraryCurrentFolderId}">
-            <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
-            <div class="library-list" id="libraryList"></div>
-          </section>
+          <div class="library-columns" id="libraryColumns"></div>
           <aside class="library-pane">
             <div class="library-pane-header">Details</div>
             <div class="library-detail" id="libraryDetail"></div>
@@ -3431,56 +3492,69 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="new-folder">New Folder</button>
         </div>
       `;
-      renderLibraryTree();
-      renderLibraryList();
+      renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
+      const columns = $("libraryColumns");
+      if (columns) columns.scrollLeft = previousColumnsScrollLeft;
     }
 
-    function renderLibraryTree() {
-      const root = $("libraryTree");
+    function renderLibraryColumns() {
+      const root = $("libraryColumns");
       if (!root) return;
-      root.innerHTML = renderLibraryFolderRows(state.libraryRootId, 0, true);
+      const folderIds = libraryColumnFolderIds();
+      root.innerHTML = folderIds.map((folderId) => libraryColumnMarkup(folderId)).join("");
     }
 
-    function renderLibraryFolderRows(folderId, depth, includeSelf) {
-      const folder = libraryFolderById(folderId);
-      let html = "";
-      if (folder && includeSelf) html += libraryRowMarkup("folder", folder, depth, true);
-      libraryChildFolders(folderId).forEach((child) => {
-        html += libraryRowMarkup("folder", child, depth + (includeSelf ? 1 : 0), true);
-        html += renderLibraryFolderRows(child.id, depth + (includeSelf ? 2 : 1), false);
-      });
-      return html;
+    function libraryColumnFolderIds() {
+      const folderIds = [Number(state.libraryRootId || 1)];
+      let folderId = folderIds[0];
+      const seen = new Set(folderIds);
+      for (let depth = 0; depth < 24; depth += 1) {
+        const selection = selectedEntryInFolder(folderId);
+        if (!selection || selection.type !== "folder") break;
+        const nextFolderId = Number(selection.id);
+        if (seen.has(nextFolderId) || !libraryFolderById(nextFolderId)) break;
+        folderIds.push(nextFolderId);
+        seen.add(nextFolderId);
+        folderId = nextFolderId;
+      }
+      return folderIds;
     }
 
-    function renderLibraryList() {
-      const root = $("libraryList");
-      if (!root) return;
-      const folders = libraryChildFolders(state.libraryCurrentFolderId);
-      const items = libraryFolderItems(state.libraryCurrentFolderId);
-      const rows = folders.map((folder) => libraryRowMarkup("folder", folder, 0, false))
-        .concat(items.map((item) => libraryRowMarkup("item", item, 0, false)));
-      root.innerHTML = rows.join("") || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`;
+    function libraryColumnMarkup(folderId) {
+      const folder = libraryFolderById(folderId) || {name: "Library"};
+      const entries = libraryEntriesForFolder(folderId);
+      const rows = entries.map((entry) => {
+        const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+        return data ? libraryRowMarkup(entry.type, data, folderId) : "";
+      }).join("");
+      return `
+        <section class="library-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
+          <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
+          <div class="library-column-body">
+            ${rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`}
+          </div>
+        </section>
+      `;
     }
 
-    function libraryRowMarkup(type, entry, depth, treeRow) {
+    function libraryRowMarkup(type, entry, parentFolderId) {
       const id = Number(entry.id);
-      const selected = state.librarySelection?.type === type && Number(state.librarySelection.id) === id;
-      const current = type === "folder" && Number(state.libraryCurrentFolderId) === id;
+      const selected = libraryEntryKey(state.libraryColumnSelections[Number(parentFolderId)]) === libraryEntryKey({type, id});
       const paper = entry.paper || {};
       const name = type === "folder" ? entry.name : (paper.citation_label || paper.title || "Untitled paper");
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
-      const icon = type === "folder" ? "▸" : "○";
-      const indent = treeRow ? `<span class="library-indent" style="width:${depth * 14}px"></span>` : "";
+      const icon = type === "folder" ? "›" : "○";
       return `
-        <button class="library-row${selected ? " active" : ""}${current ? " current-folder" : ""}"
+        <button class="library-row${selected ? " active" : ""}"
           type="button"
           draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"
           data-library-type="${type}"
           data-library-id="${id}"
+          data-library-parent-folder="${parentFolderId}"
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}>
-          <span>${indent}${icon}</span>
+          <span>${icon}</span>
           <span class="library-name">${escapeHtml(name)}</span>
           <span class="library-meta">${escapeHtml(String(meta || ""))}</span>
         </button>
@@ -3535,15 +3609,15 @@ INDEX_HTML = """<!doctype html>
     function wireLibraryInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
-      shell.focus();
       shell.querySelectorAll(".library-row").forEach((row) => {
         row.addEventListener("click", () => {
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
-          selectLibraryEntry(type, id);
+          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+          selectLibraryEntry(parentFolderId, type, id);
         });
         row.addEventListener("dblclick", () => {
-          if (row.dataset.libraryType === "folder") openLibraryFolder(Number(row.dataset.libraryId));
+          if (row.dataset.libraryType === "folder") focusLibraryFolder(Number(row.dataset.libraryId));
         });
         row.addEventListener("dragstart", (event) => {
           event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify({
@@ -3554,7 +3628,7 @@ INDEX_HTML = """<!doctype html>
         });
         row.addEventListener("contextmenu", (event) => {
           event.stopPropagation();
-          showLibraryContextMenu(event, row.dataset.libraryDropFolder || state.libraryCurrentFolderId);
+          showLibraryContextMenu(event, row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId);
         });
       });
       shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
@@ -3569,20 +3643,31 @@ INDEX_HTML = """<!doctype html>
           event.preventDefault();
           target.classList.remove("drag-over");
           const payload = JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "{}");
-          const folderId = Number(target.dataset.libraryDropFolder || state.libraryCurrentFolderId);
+          const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
           if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
         });
       });
-      shell.addEventListener("contextmenu", (event) => showLibraryContextMenu(event, state.libraryCurrentFolderId));
+      shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
+        column.addEventListener("click", (event) => {
+          if (event.target.closest(".library-row")) return;
+          state.libraryActiveFolderId = Number(column.dataset.libraryColumnFolder || state.libraryRootId);
+          renderLibrary();
+        });
+      });
+      $("libraryColumns")?.addEventListener("scroll", (event) => {
+        state.libraryColumnsScrollLeft = event.currentTarget.scrollLeft;
+      });
+      shell.addEventListener("contextmenu", (event) => showLibraryContextMenu(event, state.libraryActiveFolderId || state.libraryRootId));
     }
 
-    function selectLibraryEntry(type, id) {
-      state.librarySelection = {type, id: Number(id)};
+    function selectLibraryEntry(parentFolderId, type, id) {
+      setLibraryColumnSelection(parentFolderId, {type, id: Number(id)});
       renderLibrary();
     }
 
-    function openLibraryFolder(folderId) {
+    function focusLibraryFolder(folderId) {
       if (!libraryFolderById(folderId)) return;
+      state.libraryActiveFolderId = Number(folderId);
       state.libraryCurrentFolderId = Number(folderId);
       state.librarySelection = {type: "folder", id: Number(folderId)};
       renderLibrary();
@@ -3624,13 +3709,13 @@ INDEX_HTML = """<!doctype html>
       event.preventDefault();
       const menu = $("libraryContextMenu");
       if (!menu) return;
-      menu.dataset.parentId = parentId || state.libraryCurrentFolderId;
+      menu.dataset.parentId = parentId || state.libraryActiveFolderId || state.libraryRootId;
       menu.style.left = `${event.clientX}px`;
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
       menu.querySelector('[data-action="new-folder"]').onclick = async () => {
         hideLibraryContextMenu();
-        await createLibraryFolder(Number(menu.dataset.parentId || state.libraryCurrentFolderId));
+        await createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId));
       };
     }
 
@@ -3641,31 +3726,56 @@ INDEX_HTML = """<!doctype html>
     function handleLibraryKeydown(event) {
       if (state.mode !== "library") return false;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
-      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key);
+      const keyAliases = {
+        "Up": "ArrowUp",
+        "Down": "ArrowDown",
+        "Left": "ArrowLeft",
+        "Right": "ArrowRight",
+        "Spacebar": " "
+      };
+      const key = keyAliases[event.key] || event.key;
+      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key);
       if (!handled) return false;
       event.preventDefault();
-      if (event.key === " ") {
+      if (key === " ") {
         const paper = selectedLibraryPaper();
         if (paper?.merged_pdf_path) openLibraryPdfInPreview(paper);
         return true;
       }
-      if (event.key === "ArrowLeft") {
-        const current = libraryFolderById(state.libraryCurrentFolderId);
-        if (current?.parent_id) openLibraryFolder(Number(current.parent_id));
+      if (key === "ArrowLeft") {
+        const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+        if (activeFolderId !== Number(state.libraryRootId)) {
+          const parentId = parentFolderId(activeFolderId);
+          state.libraryActiveFolderId = parentId;
+          state.libraryCurrentFolderId = activeFolderId;
+          state.librarySelection = {type: "folder", id: activeFolderId};
+        }
+        renderLibrary();
         return true;
       }
-      if (event.key === "ArrowRight") {
-        if (state.librarySelection?.type === "folder") openLibraryFolder(Number(state.librarySelection.id));
+      if (key === "ArrowRight") {
+        const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+        const selection = selectedEntryInFolder(activeFolderId);
+        if (selection?.type === "folder") {
+          state.libraryActiveFolderId = Number(selection.id);
+          state.libraryCurrentFolderId = Number(selection.id);
+          const existing = selectedEntryInFolder(selection.id);
+          if (existing) state.librarySelection = existing;
+          else state.librarySelection = {type: "folder", id: Number(selection.id)};
+          renderLibrary();
+        }
         return true;
       }
-      const entries = libraryVisibleEntries();
+      const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+      const entries = libraryEntriesForFolder(activeFolderId);
       if (!entries.length) return true;
-      const currentIndex = entries.findIndex((entry) => entry.type === state.librarySelection?.type && Number(entry.id) === Number(state.librarySelection?.id));
-      const fallback = event.key === "ArrowDown" ? 0 : entries.length - 1;
+      const currentSelection = selectedEntryInFolder(activeFolderId);
+      const currentIndex = entries.findIndex((entry) => libraryEntryKey(entry) === libraryEntryKey(currentSelection));
+      const fallback = key === "ArrowDown" ? 0 : entries.length - 1;
       const nextIndex = currentIndex < 0
         ? fallback
-        : Math.max(0, Math.min(entries.length - 1, currentIndex + (event.key === "ArrowDown" ? 1 : -1)));
-      state.librarySelection = entries[nextIndex];
+        : Math.max(0, Math.min(entries.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+      setLibraryColumnSelection(activeFolderId, entries[nextIndex]);
       renderLibrary();
       return true;
     }
@@ -4104,7 +4214,7 @@ INDEX_HTML = """<!doctype html>
     $("reportMode").addEventListener("click", renderReport);
     $("libraryMode").addEventListener("click", loadLibrary);
     $("refreshLibrary").addEventListener("click", loadLibrary);
-    $("newLibraryFolder").addEventListener("click", () => createLibraryFolder(state.libraryCurrentFolderId));
+    $("newLibraryFolder").addEventListener("click", () => createLibraryFolder(state.libraryActiveFolderId || state.libraryRootId));
     $("toggleSidebar").addEventListener("click", () => {
       document.querySelector(".app").classList.toggle("sidebar-collapsed");
       updateSidebarToggle();
@@ -4146,7 +4256,7 @@ INDEX_HTML = """<!doctype html>
       }
       hideLibraryContextMenu();
       closeAnalysis();
-    });
+    }, true);
     window.addEventListener("click", hideLibraryContextMenu);
     window.addEventListener("dragover", (event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
