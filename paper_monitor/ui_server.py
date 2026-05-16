@@ -1632,6 +1632,21 @@ INDEX_HTML = """<!doctype html>
       background: var(--accent);
       transition: width 180ms ease;
     }
+    .arxiv-countdown {
+      border: 1px solid rgba(15, 107, 110, 0.24);
+      border-radius: 7px;
+      background: #f5fbfa;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      color: var(--muted);
+    }
+    .arxiv-countdown-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    .arxiv-countdown-main span { font-size: 13px; }
+    .arxiv-countdown-main strong { color: var(--accent); font-size: 20px; font-weight: 760; white-space: nowrap; }
+    .arxiv-countdown-detail { font-size: 12px; text-align: right; }
     @keyframes fetchingPulse {
       0%, 100% { opacity: 0.35; transform: scale(0.86); }
       50% { opacity: 1; transform: scale(1); }
@@ -2140,7 +2155,8 @@ INDEX_HTML = """<!doctype html>
       backgroundFetchDate: "",
       pendingFetchDate: "",
       internalBrowserUrl: "",
-      showFigures: true
+      showFigures: true,
+      arxivCountdownTimer: null
     };
 
     const $ = (id) => document.getElementById(id);
@@ -2151,6 +2167,63 @@ INDEX_HTML = """<!doctype html>
       const month = String(value.getMonth() + 1).padStart(2, "0");
       const day = String(value.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
+    }
+
+    function timeZoneParts(value, timeZone) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      }).formatToParts(value);
+      return Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, Number(part.value)]));
+    }
+
+    function timeZoneOffsetMs(value, timeZone) {
+      const parts = timeZoneParts(value, timeZone);
+      const localAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+      return localAsUtc - value.getTime();
+    }
+
+    function zonedTimeToDate(year, month, day, hour, minute, timeZone) {
+      const localAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+      let instant = localAsUtc;
+      for (let i = 0; i < 3; i += 1) {
+        instant = localAsUtc - timeZoneOffsetMs(new Date(instant), timeZone);
+      }
+      return new Date(instant);
+    }
+
+    function addUtcDays(year, month, day, offset) {
+      const value = new Date(Date.UTC(year, month - 1, day + offset, 12, 0, 0));
+      return {year: value.getUTCFullYear(), month: value.getUTCMonth() + 1, day: value.getUTCDate()};
+    }
+
+    function nextArxivUpdateDate(now = new Date()) {
+      const timeZone = "America/New_York";
+      const today = timeZoneParts(now, timeZone);
+      for (let offset = 0; offset < 8; offset += 1) {
+        const candidateDay = addUtcDays(today.year, today.month, today.day, offset);
+        const weekday = new Date(Date.UTC(candidateDay.year, candidateDay.month - 1, candidateDay.day)).getUTCDay();
+        if (![0, 1, 2, 3, 4].includes(weekday)) continue;
+        const candidate = zonedTimeToDate(candidateDay.year, candidateDay.month, candidateDay.day, 20, 0, timeZone);
+        if (candidate.getTime() > now.getTime()) return candidate;
+      }
+      return zonedTimeToDate(today.year, today.month, today.day + 1, 20, 0, timeZone);
+    }
+
+    function formatArxivCountdown(minutes) {
+      const safeMinutes = Math.max(0, Math.ceil(minutes));
+      const days = Math.floor(safeMinutes / 1440);
+      const hours = Math.floor((safeMinutes % 1440) / 60);
+      const mins = safeMinutes % 60;
+      if (days) return `${days} d ${hours} h ${String(mins).padStart(2, "0")} min`;
+      if (hours) return `${hours} h ${String(mins).padStart(2, "0")} min`;
+      return `${mins} min`;
     }
 
     function statusClass(status) {
@@ -2213,6 +2286,7 @@ INDEX_HTML = """<!doctype html>
 
     function showReportLoading(selectedDate) {
       if (selectedDate !== state.selectedDate) return;
+      stopArxivUpdateCountdown();
       $("reportTitle").textContent = `${selectedDate} Report`;
       $("summary").textContent = "Loading local data...";
       $("reportTabs").classList.remove("open");
@@ -2595,6 +2669,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderReport() {
       state.mode = "report";
+      stopArxivUpdateCountdown();
       $("libraryControls").classList.remove("open");
       $("reportTitle").textContent = `${state.selectedDate} Report`;
       const query = state.query.trim().toLowerCase();
@@ -2636,6 +2711,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
+      renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       (activeGroup?.papers || []).forEach((paper) => root.appendChild(renderPaper(paper)));
     }
 
@@ -2671,6 +2747,41 @@ INDEX_HTML = """<!doctype html>
         });
         root.appendChild(button);
       });
+    }
+
+    function renderArxivUpdateCountdown(root, journal) {
+      if (journal !== "arXiv") return;
+      const banner = document.createElement("div");
+      banner.className = "arxiv-countdown";
+      banner.innerHTML = `
+        <div class="arxiv-countdown-main">
+          <span>Next arXiv update in</span>
+          <strong data-role="arxiv-countdown-time">-- min</strong>
+        </div>
+        <div class="arxiv-countdown-detail" data-role="arxiv-countdown-detail"></div>
+      `;
+      root.appendChild(banner);
+      const refresh = () => {
+        const nextUpdate = nextArxivUpdateDate(new Date());
+        const minutes = Math.max(0, Math.ceil((nextUpdate.getTime() - Date.now()) / 60000));
+        const detail = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short"
+        }).format(nextUpdate);
+        banner.querySelector('[data-role="arxiv-countdown-time"]').textContent = formatArxivCountdown(minutes);
+        banner.querySelector('[data-role="arxiv-countdown-detail"]').textContent = `Next announcement: ${detail}`;
+      };
+      refresh();
+      state.arxivCountdownTimer = window.setInterval(refresh, 1000);
+    }
+
+    function stopArxivUpdateCountdown() {
+      if (!state.arxivCountdownTimer) return;
+      window.clearInterval(state.arxivCountdownTimer);
+      state.arxivCountdownTimer = null;
     }
 
     function markNoMatchDate(iso, value) {
@@ -2749,6 +2860,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderLibrary() {
       state.mode = "library";
+      stopArxivUpdateCountdown();
       $("libraryControls").classList.add("open");
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
