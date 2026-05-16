@@ -2720,17 +2720,24 @@ INDEX_HTML = """<!doctype html>
       if (fetchPending) {
         root.innerHTML = fetchProgressMarkup(state.selectedDate);
       }
-      const groups = groupedReportPapers(filtered);
-      if (!groups.length) {
-        if (!fetchPending) {
-          markNoMatchDate(state.selectedDate, true);
-          root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
-        }
+      const realGroups = groupedReportPapers(filtered, {includeEmptyArxiv: false});
+      if (!realGroups.length && fetchPending) {
         return;
       }
-      markNoMatchDate(state.selectedDate, !filtered.length);
-      if (!groups.some((group) => group.journal === state.activeReportJournal)) {
-        state.activeReportJournal = groups[0]?.journal || "";
+      const groups = groupedReportPapers(filtered, {includeEmptyArxiv: true});
+      if (!realGroups.length) {
+        markNoMatchDate(state.selectedDate, true);
+        if (!groups.length) {
+          root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
+          return;
+        }
+      } else {
+        markNoMatchDate(state.selectedDate, false);
+      }
+      const currentGroup = groups.find((group) => group.journal === state.activeReportJournal);
+      const firstNonEmptyGroup = groups.find((group) => group.papers.length);
+      if (!currentGroup || (!currentGroup.papers.length && firstNonEmptyGroup)) {
+        state.activeReportJournal = firstNonEmptyGroup?.journal || groups[0]?.journal || "";
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
@@ -2859,7 +2866,8 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function groupedReportPapers(papers) {
+    function groupedReportPapers(papers, options = {}) {
+      const includeEmptyArxiv = options.includeEmptyArxiv !== false;
       const order = new Map(state.journals.map((journal, index) => [journal, index]));
       const groups = new Map();
       [...papers]
@@ -2875,7 +2883,7 @@ INDEX_HTML = """<!doctype html>
           if (!groups.has(journal)) groups.set(journal, []);
           groups.get(journal).push(paper);
         });
-      if (state.selectedJournals.has("arXiv") && !groups.has("arXiv")) {
+      if (includeEmptyArxiv && state.selectedJournals.has("arXiv") && !groups.has("arXiv")) {
         groups.set("arXiv", []);
       }
       return [...groups].map(([journal, groupPapers]) => ({journal, papers: groupPapers}));
