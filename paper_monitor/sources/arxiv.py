@@ -23,6 +23,7 @@ ARXIV_CONDENSED_MATTER_CATEGORIES = [
     {"code": "cond-mat.supr-con", "label": "Superconductivity"},
 ]
 ARXIV_CONDENSED_MATTER_CODES = [item["code"] for item in ARXIV_CONDENSED_MATTER_CATEGORIES]
+ARXIV_DEFAULT_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"]
 
 ATOM_NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -39,8 +40,8 @@ def fetch_arxiv_condensed_matter(
     max_pages: int = 3,
 ) -> list[dict[str, Any]]:
     papers: list[dict[str, Any]] = []
-    selected_categories = [code for code in (categories or ARXIV_CONDENSED_MATTER_CODES) if code in ARXIV_CONDENSED_MATTER_CODES]
-    query = arxiv_query(selected_categories or ARXIV_CONDENSED_MATTER_CODES, start_date, end_date)
+    selected_categories = [code for code in (categories or ARXIV_DEFAULT_CATEGORIES) if code in ARXIV_CONDENSED_MATTER_CODES]
+    query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
 
     for page in range(max_pages):
         response = request_with_retries(

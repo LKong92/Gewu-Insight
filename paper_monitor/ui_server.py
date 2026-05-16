@@ -23,7 +23,7 @@ from .download import download_paper
 from .http import request_with_retries
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
-from .sources.arxiv import ARXIV_CONDENSED_MATTER_CODES, ARXIV_JOURNAL_NAME
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
 from .sources.publisher import enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
@@ -667,7 +667,7 @@ def fetch_missing_sources_for_date(
             storage=storage,
             start_date=selected_date,
             end_date=selected_date,
-            categories=ARXIV_CONDENSED_MATTER_CODES,
+            categories=ARXIV_DEFAULT_CATEGORIES,
         )
         completed += 1
         update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
@@ -947,6 +947,7 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
         WHERE monitor_type = 'journal'
           AND window_start <= ?
           AND window_end >= ?
+          AND status IN ('success', 'empty')
           AND journal IN ({placeholders})
         """,
         (selected, selected, *journals),

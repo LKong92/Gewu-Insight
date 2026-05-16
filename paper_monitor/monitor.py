@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from typing import Any, Callable
 
 from .config import AppConfig, JournalConfig
-from .sources.arxiv import ARXIV_CONDENSED_MATTER_CODES, ARXIV_JOURNAL_NAME, fetch_arxiv_condensed_matter
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_condensed_matter
 from .sources.crossref import fetch_crossref_journal
 from .sources.openalex import fetch_openalex_journal
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
@@ -142,7 +142,7 @@ def fetch_one_arxiv_preprint_source(
     end_date: date,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    selected_categories = categories or ARXIV_CONDENSED_MATTER_CODES
+    selected_categories = categories or ARXIV_DEFAULT_CATEGORIES
     arxiv_result = _run_source(
         storage=storage,
         source="arxiv",
