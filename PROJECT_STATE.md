@@ -6,8 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before PDF fix work: `162f31c Keep report loading responsive`
-- Working tree is not fully clean: `config/journals.json` has an uncommitted user/config change. Do not commit, revert, or overwrite it without asking.
+- Current Git HEAD before Library rewrite work: `7129490 Show field badges on paper items`
 
 ## Completed work
 
@@ -24,8 +23,7 @@
 3. Native macOS app behavior
    - Replaced Safari-tab launch behavior with a native macOS wrapper.
    - `.app` now opens a real app window and keeps its Dock icon.
-   - Backup zip was created before this work:
-     `backups/PaperMonitor-20260516-backup-before-native-window-20260516-183542.zip`
+   - Backup zip before this work: `backups/PaperMonitor-20260516-backup-before-native-window-20260516-183542.zip`
 
 4. Calendar/report loading correctness
    - Fixed stale async report responses overwriting the currently selected date.
@@ -61,6 +59,12 @@
    - Physical Review candidates include direct APS `journals.aps.org/{journal}/pdf/{doi}` and `link.aps.org/pdf/{doi}` URLs.
    - Publisher Cloudflare/anti-bot 403 failures are reported clearly and no longer waste retry time.
 
+8. Library rewrite
+   - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
+   - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
+   - Report items can be added to Library as shortcuts.
+   - Library supports multi-level folders, right-click folder creation, drag/drop moving, keyboard navigation, PDF preview with Space, and a Zotero-like detail panel with BibTeX.
+
 ## Useful commits
 
 - `ab9566a` Initial local snapshot before native app window work
@@ -70,6 +74,7 @@
 - `5d77520` Show live fetch progress in report view
 - `eaf2cc7` Improve report grouping and field filters
 - `31803ce` Improve report media and internal article viewing
+- `7129490` Show field badges on paper items
 
 ## Verification already done
 
@@ -87,7 +92,6 @@
 
 ## Current caveats
 
-- `config/journals.json` is modified outside the latest committed code changes. It currently appears to reflect a user/config journal-list change. Treat it as intentional unless the user says otherwise.
 - Field classification is keyword/journal-hint based, not a learned classifier. Some interdisciplinary papers may appear in multiple fields or the closest heuristic field.
 - Fetch progress percentage is by journal completion, not elapsed time or individual paper count.
 - New-journal auto-detection depends on network access to OpenAlex; if unavailable, users must provide ISSNs manually.
