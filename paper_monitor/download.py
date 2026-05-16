@@ -5,7 +5,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -112,18 +112,21 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
 
     if paper.get("pdf_url"):
         main.append(paper["pdf_url"])
+    main.extend(journal_pdf_candidates(paper))
     main.extend(doi_pdf_candidates(paper.get("doi") or ""))
+    main.extend(crossref_pdf_candidates(paper.get("doi") or ""))
 
     landing_url = paper.get("landing_url") or paper.get("url")
     if landing_url:
         try:
             response = request_with_retries("GET", landing_url)
+            page_url = response.url or landing_url
             soup = BeautifulSoup(response.text, "html.parser")
             for tag in soup.find_all("meta", attrs={"name": "citation_pdf_url"}):
                 if tag.get("content"):
-                    main.append(_absolute(landing_url, tag["content"]))
+                    main.append(_absolute(page_url, tag["content"]))
             for link in soup.find_all("a", href=True):
-                href = _absolute(landing_url, link["href"])
+                href = _absolute(page_url, link["href"])
                 label = (link.get_text(" ", strip=True) or "").lower()
                 marker = f"{href} {label}".lower()
                 if is_probable_supplement(marker):
@@ -151,14 +154,76 @@ def doi_pdf_candidates(doi: str) -> list[str]:
         candidates.append(f"https://www.nature.com/articles/{article_id}.pdf")
     if doi.startswith("10.1126/"):
         candidates.append(f"https://www.science.org/doi/pdf/{doi}")
+        candidates.append(f"https://www.science.org/doi/pdf/{doi}?download=true")
         candidates.append(f"https://www.science.org/doi/epdf/{doi}")
     candidates.append(f"https://doi.org/{doi}")
     return candidates
 
 
+def journal_pdf_candidates(paper: dict[str, Any]) -> list[str]:
+    doi = str(paper.get("doi") or "").replace("https://doi.org/", "").strip()
+    journal = str(paper.get("journal") or "").lower()
+    if not doi:
+        return []
+    if doi.startswith("10.1103/"):
+        aps_slug = aps_journal_slug(journal)
+        candidates = [f"https://link.aps.org/pdf/{doi}"]
+        if aps_slug:
+            candidates.insert(0, f"https://journals.aps.org/{aps_slug}/pdf/{doi}")
+        return candidates
+    return []
+
+
+def aps_journal_slug(journal: str) -> str:
+    if "physical review letters" in journal:
+        return "prl"
+    if "physical review x" in journal:
+        return "prx"
+    if "physical review a" in journal:
+        return "pra"
+    if "physical review b" in journal:
+        return "prb"
+    if "physical review c" in journal:
+        return "prc"
+    if "physical review d" in journal:
+        return "prd"
+    if "physical review e" in journal:
+        return "pre"
+    if "reviews of modern physics" in journal:
+        return "rmp"
+    return ""
+
+
+def crossref_pdf_candidates(doi: str) -> list[str]:
+    doi = doi.replace("https://doi.org/", "").strip()
+    if not doi:
+        return []
+    try:
+        response = request_with_retries(
+            "GET",
+            f"https://api.crossref.org/works/{quote(doi, safe='')}",
+            headers={"Accept": "application/json"},
+            timeout=12,
+        )
+        payload = response.json()
+    except Exception:
+        return []
+    message = payload.get("message") or {}
+    candidates: list[str] = []
+    for link in message.get("link") or []:
+        url = str(link.get("URL") or "")
+        content_type = str(link.get("content-type") or "").lower()
+        if url and ("pdf" in content_type or "/pdf/" in url.lower() or url.lower().endswith(".pdf")):
+            candidates.append(url)
+    primary = ((message.get("resource") or {}).get("primary") or {}).get("URL") or ""
+    if primary:
+        candidates.append(str(primary))
+    return candidates
+
+
 def try_download_pdf(url: str, path: Path, messages: list[str]) -> bool:
     try:
-        response = request_with_retries("GET", url, stream=True)
+        response = request_with_retries("GET", url, headers=pdf_request_headers(url), stream=True)
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
@@ -180,12 +245,55 @@ def try_download_pdf(url: str, path: Path, messages: list[str]) -> bool:
             return False
         return True
     except Exception as exc:
-        messages.append(f"{url}: {exc}")
+        messages.append(f"{url}: {download_error_message(exc)}")
         return False
 
 
+def download_error_message(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 403:
+        headers = {key.lower(): value for key, value in response.headers.items()}
+        if headers.get("cf-mitigated") == "challenge" or "cloudflare" in headers.get("server", "").lower():
+            return "blocked by publisher anti-bot challenge (HTTP 403)"
+        return "access forbidden by publisher (HTTP 403)"
+    return str(exc)
+
+
+def pdf_request_headers(url: str) -> dict[str, str]:
+    headers = {
+        "Accept": "application/pdf,application/octet-stream;q=0.9,text/html;q=0.8,*/*;q=0.5",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path
+    if "science.org" in host and "/doi/" in path:
+        doi = path.split("/doi/", 1)[1]
+        doi = re.sub(r"^(pdf|epdf|full|reader)/", "", doi)
+        doi = doi.lstrip("/")
+        if doi:
+            headers["Referer"] = f"https://www.science.org/doi/{doi}"
+    elif "aps.org" in host and "10.1103/" in url:
+        doi = url.split("10.1103/", 1)[1].split("?", 1)[0]
+        headers["Referer"] = f"https://link.aps.org/doi/10.1103/{doi}"
+    elif "nature.com" in host and path.endswith(".pdf"):
+        headers["Referer"] = f"https://www.nature.com{path[:-4]}"
+    return headers
+
+
 def is_probable_supplement(marker: str) -> bool:
-    if not any(token in marker for token in ["supplement", "supplementary", "appendix", "additional"]):
+    if not any(
+        token in marker
+        for token in [
+            "supplement",
+            "supplementary",
+            "appendix",
+            "additional",
+            "peer review file",
+            "peer-review file",
+            "reporting summary",
+        ]
+    ):
         return False
     return marker.endswith(".pdf") or ".pdf" in marker or re.search(r"\bpdf\b", marker) is not None
 

@@ -132,7 +132,18 @@ def extract_supplement_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
         href = clean_text(link.get("href"))
         label = clean_text(link.get_text(" ", strip=True)).lower()
         marker = f"{href} {label}".lower()
-        if not any(token in marker for token in ["supplement", "supplementary", "appendix", "additional file"]):
+        if not any(
+            token in marker
+            for token in [
+                "supplement",
+                "supplementary",
+                "appendix",
+                "additional file",
+                "peer review file",
+                "peer-review file",
+                "reporting summary",
+            ]
+        ):
             continue
         absolute = urljoin(base_url, href)
         if absolute not in seen:

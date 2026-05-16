@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD noted before this turn: `31803ce Improve report media and internal article viewing`
+- Current Git HEAD before PDF fix work: `162f31c Keep report loading responsive`
 - Working tree is not fully clean: `config/journals.json` has an uncommitted user/config change. Do not commit, revert, or overwrite it without asking.
 
 ## Completed work
@@ -55,6 +55,12 @@
    - Report figure hydration is queued with low concurrency so publisher image lookups do not flood the local UI server.
    - The internal publisher page has an `External Browser` button that opens the current article URL with the system default browser.
 
+7. PDF download fixes
+   - Nature/Springer supplementary detection includes Peer Review File and Reporting Summary as supplements, while keeping them out of main-PDF candidates.
+   - Science PDF candidates are augmented from Crossref `link` metadata and Science PDF/EPDF variants.
+   - Physical Review candidates include direct APS `journals.aps.org/{journal}/pdf/{doi}` and `link.aps.org/pdf/{doi}` URLs.
+   - Publisher Cloudflare/anti-bot 403 failures are reported clearly and no longer waste retry time.
+
 ## Useful commits
 
 - `ab9566a` Initial local snapshot before native app window work
@@ -85,10 +91,5 @@
 - Field classification is keyword/journal-hint based, not a learned classifier. Some interdisciplinary papers may appear in multiple fields or the closest heuristic field.
 - Fetch progress percentage is by journal completion, not elapsed time or individual paper count.
 - New-journal auto-detection depends on network access to OpenAlex; if unavailable, users must provide ISSNs manually.
-- Article figure and journal logo enrichment depends on publisher page/network availability; known Nature/Science logos are pinned to full wordmark URLs.
-
-## Good next steps
-
-1. Ask the user what they want to do with the uncommitted `config/journals.json` change: keep, commit as config, or restore.
-2. Test adding a real new journal from the UI, both with only a name and with explicit ISSNs.
-3. If the UI keeps growing, consider moving embedded CSS/JS out of `paper_monitor/ui_server.py` into static files.
+- Article figure, journal logo enrichment, and publisher PDF downloads depend on publisher page/network availability; known Nature/Science logos are pinned to full wordmark URLs.
+- Science.org and APS may still block server-side automated PDF downloads with Cloudflare challenges; candidates are correct, but those cases may require browser/manual PDF attachment.
