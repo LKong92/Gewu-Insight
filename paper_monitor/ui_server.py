@@ -2119,6 +2119,7 @@ INDEX_HTML = """<!doctype html>
       ["cond-mat.str-el", "Strongly Correlated Electrons"],
       ["cond-mat.supr-con", "Superconductivity"]
     ];
+    const DEFAULT_ARXIV_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"];
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -2127,7 +2128,7 @@ INDEX_HTML = """<!doctype html>
       journalsConfig: [],
       journalHistory: [],
       selectedJournals: new Set(),
-      selectedPreprintCategories: new Set(ARXIV_CATEGORIES.map(([code]) => code)),
+      selectedPreprintCategories: new Set(DEFAULT_ARXIV_CATEGORIES),
       selectedFields: new Set(["physics"]),
       counts: {},
       papers: [],
@@ -2214,6 +2215,22 @@ INDEX_HTML = """<!doctype html>
         if (candidate.getTime() > now.getTime()) return candidate;
       }
       return zonedTimeToDate(today.year, today.month, today.day + 1, 20, 0, timeZone);
+    }
+
+    function nextArxivSubmissionCycleDate(now = new Date()) {
+      const timeZone = "America/New_York";
+      const today = timeZoneParts(now, timeZone);
+      for (let offset = 0; offset < 8; offset += 1) {
+        const candidateDay = addUtcDays(today.year, today.month, today.day, offset);
+        const weekday = new Date(Date.UTC(candidateDay.year, candidateDay.month - 1, candidateDay.day)).getUTCDay();
+        if (![1, 2, 3, 4, 5].includes(weekday)) continue;
+        const candidate = zonedTimeToDate(candidateDay.year, candidateDay.month, candidateDay.day, 14, 0, timeZone);
+        candidate.setSeconds(1, 0);
+        if (candidate.getTime() > now.getTime()) return candidate;
+      }
+      const fallback = zonedTimeToDate(today.year, today.month, today.day + 1, 14, 0, timeZone);
+      fallback.setSeconds(1, 0);
+      return fallback;
     }
 
     function formatArxivCountdown(minutes) {
@@ -2697,22 +2714,26 @@ INDEX_HTML = """<!doctype html>
       if (state.fetchingDates.has(state.selectedDate)) {
         root.innerHTML = fetchProgressMarkup(state.selectedDate);
       }
-      if (!filtered.length) {
+      const groups = groupedReportPapers(filtered);
+      if (!groups.length) {
         if (!state.fetchingDates.has(state.selectedDate)) {
           markNoMatchDate(state.selectedDate, true);
           root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
         }
         return;
       }
-      markNoMatchDate(state.selectedDate, false);
-      const groups = groupedReportPapers(filtered);
+      markNoMatchDate(state.selectedDate, !filtered.length);
       if (!groups.some((group) => group.journal === state.activeReportJournal)) {
         state.activeReportJournal = groups[0]?.journal || "";
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
-      (activeGroup?.papers || []).forEach((paper) => root.appendChild(renderPaper(paper)));
+      const activePapers = activeGroup?.papers || [];
+      activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      if (!activePapers.length) {
+        root.insertAdjacentHTML("beforeend", `<div class="empty">No papers in this source for this date.</div>`);
+      }
     }
 
     function renderReportTabs(groups) {
@@ -2758,11 +2779,15 @@ INDEX_HTML = """<!doctype html>
           <span>Next arXiv update in</span>
           <strong data-role="arxiv-countdown-time">-- min</strong>
         </div>
-        <div class="arxiv-countdown-detail" data-role="arxiv-countdown-detail"></div>
+        <div class="arxiv-countdown-detail">
+          <div data-role="arxiv-countdown-detail"></div>
+          <div data-role="arxiv-submit-detail"></div>
+        </div>
       `;
       root.appendChild(banner);
       const refresh = () => {
         const nextUpdate = nextArxivUpdateDate(new Date());
+        const nextSubmit = nextArxivSubmissionCycleDate(new Date());
         const minutes = Math.max(0, Math.ceil((nextUpdate.getTime() - Date.now()) / 60000));
         const detail = new Intl.DateTimeFormat("en-US", {
           weekday: "short",
@@ -2770,8 +2795,16 @@ INDEX_HTML = """<!doctype html>
           minute: "2-digit",
           timeZoneName: "short"
         }).format(nextUpdate);
+        const submitDetail = new Intl.DateTimeFormat("en-US", {
+          weekday: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          timeZoneName: "short"
+        }).format(nextSubmit);
         banner.querySelector('[data-role="arxiv-countdown-time"]').textContent = formatArxivCountdown(minutes);
         banner.querySelector('[data-role="arxiv-countdown-detail"]').textContent = `Next announcement: ${detail}`;
+        banner.querySelector('[data-role="arxiv-submit-detail"]').textContent = `Best submit: ${submitDetail}`;
       };
       refresh();
       state.arxivCountdownTimer = window.setInterval(refresh, 1000);
@@ -2836,6 +2869,9 @@ INDEX_HTML = """<!doctype html>
           if (!groups.has(journal)) groups.set(journal, []);
           groups.get(journal).push(paper);
         });
+      if (state.selectedJournals.has("arXiv") && !groups.has("arXiv")) {
+        groups.set("arXiv", []);
+      }
       return [...groups].map(([journal, groupPapers]) => ({journal, papers: groupPapers}));
     }
 
