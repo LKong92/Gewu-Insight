@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library Preview fix: `df30f7a Rewrite library as folder workspace`
+- Current Git HEAD before folder-create fix: `c4809f2 Open library PDFs in Preview`
 
 ## Completed work
 
@@ -40,8 +40,7 @@
 6. Report UI improvements
    - Journal Settings add/remove now refreshes UI state immediately.
    - Journal Settings only removes a journal from the explicit `Remove` button.
-   - If adding a journal with no ISSN, the server attempts OpenAlex source lookup; otherwise it asks for ISSN.
-   - Validated journals are remembered in a Journal Settings history dropdown.
+   - Journal add supports OpenAlex lookup for missing ISSN and remembers validated journals in history.
    - Field Filter is multi-select across `Physics`, `Materials`, `Chemistry`, `All Fields`, and `Other Fields`.
    - Each report/library item shows first three and last three authors when metadata has authors.
    - Journal names in paper meta rows are bold.
@@ -63,7 +62,7 @@
    - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
-   - Library supports six-plus-level folders, right-click folder creation, drag/drop moving, keyboard navigation, Space-to-Preview PDF opening, and a Zotero-like detail panel with BibTeX.
+   - Library supports six-plus-level folders, right-click/direct folder creation, drag/drop moving, keyboard navigation, Space-to-Preview PDF opening, and a Zotero-like detail panel with BibTeX.
 
 ## Useful commits
 
@@ -75,6 +74,7 @@
 - `eaf2cc7` Improve report grouping and field filters
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
+- `c4809f2` Open library PDFs in Preview
 
 ## Verification already done
 
