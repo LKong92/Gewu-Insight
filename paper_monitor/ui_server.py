@@ -2720,17 +2720,14 @@ INDEX_HTML = """<!doctype html>
       if (fetchPending) {
         root.innerHTML = fetchProgressMarkup(state.selectedDate);
       }
-      const realGroups = groupedReportPapers(filtered, {includeEmptyArxiv: false});
-      if (!realGroups.length && fetchPending) {
+      const groups = groupedReportPapers(filtered);
+      if (!groups.length && fetchPending) {
         return;
       }
-      const groups = groupedReportPapers(filtered, {includeEmptyArxiv: true});
-      if (!realGroups.length) {
+      if (!groups.length) {
         markNoMatchDate(state.selectedDate, true);
-        if (!groups.length) {
-          root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
-          return;
-        }
+        root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
+        return;
       } else {
         markNoMatchDate(state.selectedDate, false);
       }
@@ -2866,8 +2863,7 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function groupedReportPapers(papers, options = {}) {
-      const includeEmptyArxiv = options.includeEmptyArxiv !== false;
+    function groupedReportPapers(papers) {
       const order = new Map(state.journals.map((journal, index) => [journal, index]));
       const groups = new Map();
       [...papers]
@@ -2883,9 +2879,6 @@ INDEX_HTML = """<!doctype html>
           if (!groups.has(journal)) groups.set(journal, []);
           groups.get(journal).push(paper);
         });
-      if (includeEmptyArxiv && state.selectedJournals.has("arXiv") && !groups.has("arXiv")) {
-        groups.set("arXiv", []);
-      }
       return [...groups].map(([journal, groupPapers]) => ({journal, papers: groupPapers}));
     }
 
