@@ -951,8 +951,28 @@ INDEX_HTML = """<!doctype html>
     .day:hover { border-color: var(--accent); }
     .day.out { color: #a7adba; background: #f0f2f6; cursor: default; }
     .day.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .day.fetching { border-color: rgba(23, 100, 59, 0.42); background: #f7fbf8; }
     .daynum { font-weight: 650; font-size: 14px; }
     .count { color: var(--muted); font-size: 11px; }
+    .fetching-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--accent);
+      font-size: 11px;
+      line-height: 1;
+    }
+    .fetching-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+      animation: fetchingPulse 1s ease-in-out infinite;
+    }
+    @keyframes fetchingPulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.86); }
+      50% { opacity: 1; transform: scale(1); }
+    }
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .filter-title { font-size: 13px; color: var(--muted); }
     .journal-toggle, .section-toggle {
@@ -1385,6 +1405,7 @@ INDEX_HTML = """<!doctype html>
     async function refreshMissingDateInBackground(selectedDate) {
       if (state.fetchingDates.has(selectedDate)) return;
       state.fetchingDates.add(selectedDate);
+      renderCalendar();
       try {
         const res = await fetch(`/api/report?date=${selectedDate}`);
         const data = await res.json();
@@ -1400,6 +1421,7 @@ INDEX_HTML = """<!doctype html>
         }
       } finally {
         state.fetchingDates.delete(selectedDate);
+        renderCalendar();
       }
     }
 
@@ -1446,9 +1468,14 @@ INDEX_HTML = """<!doctype html>
       for (let day = 1; day <= days; day++) {
         const iso = `${fmtMonth(state.viewYear, state.viewMonth)}-${String(day).padStart(2, "0")}`;
         const total = Object.values(state.counts[iso] || {}).reduce((sum, value) => sum + value, 0);
+        const isFetching = state.fetchingDates.has(iso);
         const button = document.createElement("button");
-        button.className = `day${iso === state.selectedDate ? " active" : ""}`;
-        button.innerHTML = `<span class="daynum">${day}</span><span class="count">${total || ""}</span>`;
+        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}`;
+        button.innerHTML = `<span class="daynum">${day}</span>${
+          isFetching
+            ? `<span class="fetching-mark"><span class="fetching-dot"></span>Fetching</span>`
+            : `<span class="count">${total || ""}</span>`
+        }`;
         button.addEventListener("click", async () => {
           state.selectedDate = iso;
           renderCalendar();
