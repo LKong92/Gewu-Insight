@@ -1,0 +1,105 @@
+{
+  "fetch_lookback_days": 14,
+  "report_days": 14,
+  "keep_unknown_sections": true,
+  "journals": [
+    {
+      "name": "Nature",
+      "issns": [
+        "1476-4687",
+        "0028-0836"
+      ],
+      "openalex_source_id": null,
+      "section_policy": "nature",
+      "skip_landing_enrichment": false
+    },
+    {
+      "name": "Science",
+      "issns": [
+        "1095-9203",
+        "0036-8075"
+      ],
+      "openalex_source_id": "S3880285",
+      "section_policy": "science",
+      "skip_landing_enrichment": true
+    },
+    {
+      "name": "Nature Physics",
+      "issns": [
+        "1745-2481",
+        "1745-2473"
+      ],
+      "openalex_source_id": "S156274416",
+      "section_policy": "nature",
+      "skip_landing_enrichment": false
+    },
+    {
+      "name": "Nature Photonics",
+      "issns": [
+        "1749-4893",
+        "1749-4885"
+      ],
+      "openalex_source_id": "S120392215",
+      "section_policy": "nature",
+      "skip_landing_enrichment": false
+    },
+    {
+      "name": "Physical Review Letters",
+      "issns": [
+        "1079-7114",
+        "0031-9007"
+      ],
+      "openalex_source_id": "S24807848",
+      "section_policy": "science",
+      "skip_landing_enrichment": true
+    }
+  ],
+  "section_policies": {
+    "nature": {
+      "allowed": [
+        "article",
+        "research article",
+        "review",
+        "review article",
+        "analysis",
+        "perspective",
+        "letter"
+      ],
+      "blocked": [
+        "editorial",
+        "news",
+        "news & views",
+        "research briefing",
+        "correspondence",
+        "comment",
+        "career column",
+        "book review",
+        "world view",
+        "technology feature",
+        "features",
+        "opinion",
+        "correction",
+        "erratum"
+      ]
+    },
+    "science": {
+      "allowed": [
+        "research",
+        "research article",
+        "report",
+        "review",
+        "perspective"
+      ],
+      "blocked": [
+        "editorial",
+        "news",
+        "policy forum",
+        "book review",
+        "science careers",
+        "podcast",
+        "correction",
+        "erratum"
+      ]
+    }
+  }
+}
