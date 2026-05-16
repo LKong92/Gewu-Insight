@@ -38,6 +38,7 @@ def enrich_from_landing_page(paper: dict[str, Any], section_policy: dict[str, li
     abstract = extract_abstract(soup)
     pdf_url = extract_pdf_url(soup, url)
     supplement_urls = extract_supplement_urls(soup, url)
+    image_url = extract_first_image_url(soup, url)
 
     if section:
         paper["publisher_section"] = section
@@ -53,6 +54,31 @@ def enrich_from_landing_page(paper: dict[str, Any], section_policy: dict[str, li
         paper["pdf_url"] = pdf_url
     if supplement_urls:
         paper["supplement_urls"] = supplement_urls
+    if image_url:
+        paper["image_url"] = image_url
+    return paper
+
+
+def enrich_image_from_landing_page(paper: dict[str, Any]) -> dict[str, Any]:
+    if paper.get("image_url"):
+        return paper
+    url = paper.get("landing_url") or paper.get("url")
+    if not url:
+        return paper
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=8,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        paper["landing_fetch_error"] = str(exc)
+        return paper
+    image_url = extract_first_image_url(BeautifulSoup(response.text, "html.parser"), url)
+    if image_url:
+        paper["image_url"] = image_url
     return paper
 
 
@@ -113,6 +139,62 @@ def extract_supplement_urls(soup: BeautifulSoup, base_url: str) -> list[str]:
             seen.add(absolute)
             urls.append(absolute)
     return urls
+
+
+def extract_first_image_url(soup: BeautifulSoup, base_url: str) -> str:
+    for selector in [
+        "figure img",
+        "article img",
+        "[class*=figure] img",
+        "[id*=figure] img",
+    ]:
+        for image in soup.select(selector):
+            url = image_candidate_url(image)
+            if url and not is_probable_non_figure_image(url, image):
+                return urljoin(base_url, url)
+
+    meta_url = first_meta(
+        soup,
+        [
+            {"name": "citation_figure"},
+            {"property": "og:image"},
+            {"name": "twitter:image"},
+            {"name": "twitter:image:src"},
+        ],
+    )
+    return urljoin(base_url, meta_url) if meta_url else ""
+
+
+def image_candidate_url(image: Any) -> str:
+    for attr in ["src", "data-src", "data-original", "data-highres", "data-download-url"]:
+        value = clean_text(image.get(attr))
+        if value:
+            return value
+    srcset = clean_text(image.get("srcset") or image.get("data-srcset"))
+    if srcset:
+        candidates = [part.strip().split(" ", 1)[0] for part in srcset.split(",") if part.strip()]
+        if candidates:
+            return candidates[-1]
+    return ""
+
+
+def is_probable_non_figure_image(url: str, image: Any) -> bool:
+    marker = " ".join(
+        [
+            url,
+            clean_text(image.get("alt")),
+            clean_text(image.get("class")),
+            clean_text(image.get("id")),
+        ]
+    ).lower()
+    if any(token in marker for token in ["logo", "icon", "avatar", "ad-", "advert", "spinner", "tracking", "pixel"]):
+        return True
+    try:
+        width = int(str(image.get("width") or "0").strip() or 0)
+        height = int(str(image.get("height") or "0").strip() or 0)
+    except ValueError:
+        width = height = 0
+    return bool(width and height and (width < 120 or height < 90))
 
 
 def first_meta(soup: BeautifulSoup, attrs_list: list[dict[str, str]]) -> str:

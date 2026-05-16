@@ -4,6 +4,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 import json
 import mimetypes
+import re
 import subprocess
 import threading
 import webbrowser
@@ -12,7 +13,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+
+from bs4 import BeautifulSoup
 
 from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
@@ -20,6 +23,7 @@ from .download import download_paper
 from .http import request_with_retries
 from .monitor import run_journal_monitor
 from .reporting import section_badge_background, section_color
+from .sources.publisher import enrich_image_from_landing_page
 from .storage import Storage
 from .text import safe_slug
 from .time_utils import today_jst
@@ -27,6 +31,7 @@ from .time_utils import today_jst
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
+JOURNAL_LOGO_CACHE: dict[str, str] = {}
 
 
 def run_ui_server(
@@ -80,6 +85,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/journals":
                 self.handle_journals()
+                return
+            if parsed.path == "/api/journal-logo":
+                self.handle_journal_logo(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/paper-figure":
+                self.handle_paper_figure(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/page-proxy":
+                self.handle_page_proxy(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/library":
                 self.handle_library(parse_qs(parsed.query))
@@ -403,7 +417,63 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_journals(self) -> None:
         raw = read_config_json()
-        self.send_json({"journals": raw.get("journals", [])})
+        self.send_json({"journals": raw.get("journals", []), "history": journal_history(raw)})
+
+    def handle_journal_logo(self, query: dict[str, list[str]]) -> None:
+        name = clean_journal_name(first(query, "name") or "")
+        if not name:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
+            return
+        cache_key = name.lower()
+        if cache_key not in JOURNAL_LOGO_CACHE:
+            raw = read_config_json()
+            configured = next((item for item in raw.get("journals", []) if item.get("name", "").lower() == cache_key), {})
+            configured_logo = str(configured.get("logo_url") or "")
+            if is_icon_logo_candidate(configured_logo, configured_logo):
+                configured_logo = ""
+            JOURNAL_LOGO_CACHE[cache_key] = resolve_journal_logo_url(name) or configured_logo
+        self.send_json({"name": name, "logo_url": JOURNAL_LOGO_CACHE.get(cache_key, "")})
+
+    def handle_paper_figure(self, query: dict[str, list[str]]) -> None:
+        paper_id = first(query, "paper_id")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+            if not paper:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            if not paper.get("image_url"):
+                enriched = enrich_image_from_landing_page(dict(paper))
+                image_url = enriched.get("image_url") or ""
+                if image_url:
+                    storage.update_image_url(paper_id, image_url)
+                    paper = storage.get_paper(paper_id) or enriched
+        finally:
+            storage.close()
+        self.send_json({"paper": paper_to_api(paper)})
+
+    def handle_page_proxy(self, query: dict[str, list[str]]) -> None:
+        url = first(query, "url") or ""
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid http(s) URL is required")
+            return
+        response = request_with_retries(
+            "GET",
+            url,
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+            timeout=20,
+        )
+        content_type = response.headers.get("Content-Type", "text/html; charset=utf-8")
+        if "text/html" in content_type.lower():
+            data = prepare_internal_page_html(response.text, response.url).encode("utf-8")
+            content_type = "text/html; charset=utf-8"
+        else:
+            data = response.content
+        self.send_bytes(data, content_type=content_type)
 
     def handle_add_journal(self, payload: dict[str, Any]) -> None:
         name = clean_journal_name(str(payload.get("name") or ""))
@@ -423,6 +493,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             resolved = resolve_journal_metadata(name)
             issns = list(resolved.get("issns") or [])
             openalex_source_id = resolved.get("openalex_source_id")
+        elif not resolved:
+            resolved = resolve_journal_metadata(name)
+            if not openalex_source_id:
+                openalex_source_id = resolved.get("openalex_source_id")
         if not issns:
             self.send_error_json(
                 HTTPStatus.BAD_REQUEST,
@@ -440,17 +514,19 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
             return
         journals.append(
-            {
+            journal_entry := {
                 "name": resolved_name,
                 "issns": issns,
                 "openalex_source_id": openalex_source_id,
                 "section_policy": str(payload.get("section_policy") or preset.get("section_policy") or "science"),
                 "skip_landing_enrichment": bool(payload.get("skip_landing_enrichment", preset.get("skip_landing_enrichment", True))),
+                "logo_url": preset.get("logo_url") or resolved.get("logo_url") or resolve_journal_logo_url(resolved_name),
             }
         )
+        remember_journal_history(raw, journal_entry)
         write_config_json(raw)
         self.refresh_journals()
-        self.send_json({"journals": journals})
+        self.send_json({"journals": journals, "history": journal_history(raw)})
 
     def handle_remove_journal(self, payload: dict[str, Any]) -> None:
         name = clean_journal_name(str(payload.get("name") or ""))
@@ -462,7 +538,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         raw["journals"] = [item for item in journals if item.get("name", "").lower() != name.lower()]
         write_config_json(raw)
         self.refresh_journals()
-        self.send_json({"journals": raw["journals"]})
+        self.send_json({"journals": raw["journals"], "history": journal_history(raw)})
 
     def handle_file(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -514,6 +590,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def send_text(self, text: str, *, content_type: str) -> None:
         data = text.encode("utf-8")
+        self.send_bytes(data, content_type=content_type)
+
+    def send_bytes(self, data: bytes, *, content_type: str) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
@@ -534,6 +613,52 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def refresh_journals(self) -> None:
         config = load_config()
         self.configured_journals = [journal.name for journal in config.journals]
+
+
+def prepare_internal_page_html(html: str, base_url: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for meta in soup.select("meta[http-equiv]"):
+        http_equiv = str(meta.get("http-equiv") or "").lower()
+        if http_equiv in {"content-security-policy", "x-frame-options"}:
+            meta.decompose()
+    if not soup.head:
+        head = soup.new_tag("head")
+        if soup.html:
+            soup.html.insert(0, head)
+        else:
+            soup.insert(0, head)
+    if soup.head and not soup.head.find("base"):
+        base = soup.new_tag("base", href=base_url)
+        soup.head.insert(0, base)
+    if soup.body:
+        script = soup.new_tag("script")
+        script.string = """
+(() => {
+  const proxied = (url) => {
+    const target = new URL("/api/page-proxy", window.location.href);
+    target.searchParams.set("url", url);
+    return target.href;
+  };
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest?.("a[href]");
+    if (!link) return;
+    const href = link.href || "";
+    if (!href || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+    event.preventDefault();
+    window.location.href = proxied(href);
+  }, true);
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!form || String(form.method || "get").toLowerCase() !== "get") return;
+    event.preventDefault();
+    const target = new URL(form.action || window.location.href, window.location.href);
+    new FormData(form).forEach((value, key) => target.searchParams.append(key, value));
+    window.location.href = proxied(target.href);
+  }, true);
+})();
+"""
+        soup.body.append(script)
+    return str(soup)
 
 
 def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
@@ -562,6 +687,7 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "authors": author_summary(paper),
         "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
+        "image_url": paper.get("image_url") or "",
     }
 
 
@@ -775,7 +901,146 @@ def resolve_journal_metadata(name: str) -> dict[str, Any]:
         "name": clean_journal_name(str(source.get("display_name") or name)),
         "issns": issns,
         "openalex_source_id": source_id or None,
+        "logo_url": resolve_journal_logo_url(
+            clean_journal_name(str(source.get("display_name") or name)),
+            clean_journal_name(str(source.get("homepage_url") or "")),
+        ),
     }
+
+
+def resolve_journal_logo_url(name: str, homepage_url: str = "") -> str:
+    known = KNOWN_JOURNAL_LOGOS.get(name.lower().strip())
+    if known:
+        return known
+    for url in [homepage_url, journal_homepage_guess(name)]:
+        if not url:
+            continue
+        try:
+            response = request_with_retries("GET", url, timeout=12)
+            soup = BeautifulSoup(response.text, "html.parser")
+        except Exception:
+            continue
+        logo = extract_logo_url(soup, response.url, name)
+        if logo:
+            return logo
+    return ""
+
+
+def extract_logo_url(soup: BeautifulSoup, base_url: str, name: str) -> str:
+    name_key = re.sub(r"[^a-z0-9]+", "", name.lower())
+    selectors = [
+        ".c-header__logo source",
+        ".c-header__logo img",
+        "picture[class*=logo i] source",
+        "picture[class*=logo i] img",
+        "img[alt*=logo i]",
+        "img[class*=logo i]",
+        "img[id*=logo i]",
+        "svg[aria-label*=logo i]",
+    ]
+    for selector in selectors:
+        for tag in soup.select(selector):
+            value = (
+                tag.get("srcset")
+                or tag.get("src")
+                or tag.get("href")
+                or tag.get("content")
+                or tag.get("data-src")
+                or ""
+            )
+            if value and "," in str(value):
+                value = str(value).split(",", 1)[0].strip().split(" ", 1)[0]
+            marker = " ".join(
+                [
+                    str(value),
+                    str(tag.get("alt") or ""),
+                    str(tag.get("aria-label") or ""),
+                    str(tag.get("class") or ""),
+                    str(tag.get("id") or ""),
+                ]
+            ).lower()
+            if is_icon_logo_candidate(str(value), marker):
+                continue
+            normalized_marker = re.sub(r"[^a-z0-9]+", "", marker)
+            if value and ("logo" in marker or (name_key and name_key in normalized_marker)):
+                return urljoin(base_url, str(value))
+    return ""
+
+
+def is_icon_logo_candidate(value: str, marker: str) -> bool:
+    value = value.lower()
+    marker = marker.lower()
+    return any(token in value or token in marker for token in ["favicon", "apple-touch-icon", "mask-icon", "browserconfig", "og:image"])
+
+
+def journal_homepage_guess(name: str) -> str:
+    value = name.lower().strip()
+    if value in KNOWN_JOURNAL_HOME_PAGES:
+        return KNOWN_JOURNAL_HOME_PAGES[value]
+    slug = re.sub(r"[^a-z0-9]+", "-", value).strip("-")
+    if value == "nature":
+        return "https://www.nature.com/nature/"
+    if value.startswith("nature "):
+        return f"https://www.nature.com/{slug.replace('-', '')}/"
+    if value == "science":
+        return "https://www.science.org/journal/science"
+    if value.startswith("physical review"):
+        return f"https://journals.aps.org/{slug.replace('-', '')}/"
+    return ""
+
+
+KNOWN_JOURNAL_HOME_PAGES = {
+    "nature": "https://www.nature.com/nature/",
+    "science": "https://www.science.org/journal/science",
+    "nature physics": "https://www.nature.com/nphys/",
+    "nature materials": "https://www.nature.com/nmat/",
+    "nature nanotechnology": "https://www.nature.com/nnano/",
+    "physical review letters": "https://journals.aps.org/prl/",
+    "physical review x": "https://journals.aps.org/prx/",
+}
+
+
+KNOWN_JOURNAL_LOGOS = {
+    "nature": "https://media.springernature.com/full/nature-cms/uploads/product/nature/header-86f1267ea01eccd46b530284be10585e.svg",
+    "science": "https://upload.wikimedia.org/wikipedia/commons/f/f9/Science_AAAS_logo.svg",
+    "nature physics": "https://media.springernature.com/full/nature-cms/uploads/product/nphys/header-de20aedc63fc84540c5d069575af4aa2.svg",
+    "nature materials": "https://media.springernature.com/full/nature-cms/uploads/product/nmat/header-80d384455b83ea3c6394c62ec2bf3e14.svg",
+    "nature nanotechnology": "https://media.springernature.com/full/nature-cms/uploads/product/nnano/header-71cc5bc5501b853a90ee887ea8307d67.svg",
+}
+
+
+def journal_history(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    history: list[dict[str, Any]] = []
+    for item in [*raw.get("journals", []), *raw.get("journal_history", [])]:
+        name = clean_journal_name(str(item.get("name") or ""))
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        history.append(
+            {
+                "name": name,
+                "issns": list(item.get("issns") or []),
+                "openalex_source_id": item.get("openalex_source_id"),
+                "logo_url": item.get("logo_url") or "",
+            }
+        )
+    return history
+
+
+def remember_journal_history(raw: dict[str, Any], journal: dict[str, Any]) -> None:
+    history = [item for item in raw.get("journal_history", []) if item.get("name", "").lower() != journal.get("name", "").lower()]
+    history.insert(
+        0,
+        {
+            "name": journal.get("name") or "",
+            "issns": list(journal.get("issns") or []),
+            "openalex_source_id": journal.get("openalex_source_id"),
+            "logo_url": journal.get("logo_url") or "",
+        },
+    )
+    raw["journal_history"] = history[:50]
 
 
 def clean_openalex_source_id(value: str) -> str:
@@ -1113,7 +1378,7 @@ INDEX_HTML = """<!doctype html>
     }
     * { box-sizing: border-box; }
     body { margin: 0; height: 100vh; overflow: hidden; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .app {
@@ -1178,6 +1443,7 @@ INDEX_HTML = """<!doctype html>
     .calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
     .weekday { text-align: center; color: var(--muted); font-size: 12px; padding: 4px 0; }
     .day {
+      position: relative;
       min-height: 48px;
       border: 1px solid var(--line);
       background: #fff;
@@ -1194,6 +1460,17 @@ INDEX_HTML = """<!doctype html>
     .day.out { color: #a7adba; background: #f0f2f6; cursor: default; }
     .day.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
     .day.fetching { border-color: rgba(23, 100, 59, 0.42); background: #f7fbf8; }
+    .day.no-match::after {
+      content: "";
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      top: 50%;
+      border-top: 2px solid rgba(192, 57, 43, 0.86);
+      transform: rotate(-35deg);
+      transform-origin: center;
+      pointer-events: none;
+    }
     .daynum { font-weight: 650; font-size: 14px; }
     .count { color: var(--muted); font-size: 11px; }
     .fetching-dot {
@@ -1247,7 +1524,40 @@ INDEX_HTML = """<!doctype html>
     .journal-toggle input, .section-toggle input { width: 16px; height: 16px; }
     .journal-toggle span, .section-toggle span { font-size: 14px; min-width: 0; }
     .journal-toggle b, .section-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .journal-setting-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 8px 10px;
+      background: #fff;
+    }
+    .journal-setting-name { font-size: 14px; min-width: 0; }
     .main { padding: 24px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
+    .internal-browser {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      grid-template-rows: auto minmax(0, 1fr);
+      background: #fff;
+    }
+    .internal-browser.open { display: grid; }
+    .internal-browser-bar {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+      padding: 10px 14px;
+      background: #fff;
+    }
+    .internal-browser-title { min-width: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .internal-browser-title strong { display: block; color: var(--ink); font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .internal-browser iframe { width: 100%; height: 100%; border: 0; background: #fff; }
     .workspace {
       --note-width: 460px;
       display: grid;
@@ -1315,6 +1625,19 @@ INDEX_HTML = """<!doctype html>
     }
     .toolbar h2 { margin: 0; font-size: 24px; letter-spacing: 0; }
     .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar-toggle {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      color: var(--ink);
+    }
+    .toolbar-toggle input { width: 15px; height: 15px; }
     .search {
       width: min(360px, 70vw);
       min-height: 38px;
@@ -1324,6 +1647,36 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
     }
     .summary { color: var(--muted); font-size: 14px; margin: -8px 0 18px; }
+    .report-tabs {
+      display: none;
+      gap: 8px;
+      align-items: stretch;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      margin: -8px 0 14px;
+    }
+    .report-tabs.open { display: flex; }
+    .journal-tab {
+      flex: 0 0 auto;
+      min-width: 132px;
+      max-width: 260px;
+      min-height: 46px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      text-align: left;
+    }
+    .journal-tab.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .journal-tab img { max-width: 180px; max-height: 24px; object-fit: contain; display: block; }
+    .journal-tab-label { min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .journal-tab-count { color: var(--muted); font-size: 12px; font-weight: 500; }
     .library-controls {
       display: none;
       gap: 8px;
@@ -1360,14 +1713,35 @@ INDEX_HTML = """<!doctype html>
       box-shadow: var(--shadow);
       padding: 16px;
     }
+    .paper-layout { display: grid; gap: 14px; }
+    .paper.with-figure .paper-layout { grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); align-items: start; }
+    .paper-figure {
+      margin: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #f8fafc;
+      aspect-ratio: 4 / 3;
+    }
+    .paper-figure img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
     .paper-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
     .journal-group {
-      margin: 8px 0 4px;
+      margin: 10px 0 4px;
       color: var(--ink);
       font-size: 18px;
       font-weight: 750;
+      display: flex;
+      align-items: center;
+      min-height: 34px;
     }
+    .journal-group img { max-width: 240px; max-height: 34px; object-fit: contain; display: block; }
+    .journal-group-text { font-size: 18px; font-weight: 750; }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -1499,6 +1873,7 @@ INDEX_HTML = """<!doctype html>
       .workspace-toggle, .workspace-resizer { display: none !important; }
       .report-column, .analysis-panel { height: auto; overflow: visible; }
       .workspace.report-collapsed .report-column { display: block; }
+      .paper.with-figure .paper-layout { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1533,6 +1908,7 @@ INDEX_HTML = """<!doctype html>
         <div id="journalSettings"></div>
         <input class="search" id="journalName" placeholder="Journal name">
         <input class="search" id="journalIssns" placeholder="ISSNs, comma separated">
+        <select class="search" id="journalHistory" title="Previously added journals"></select>
         <button class="smallbtn" id="addJournal">Add Journal</button>
       </div>
     </aside>
@@ -1546,10 +1922,12 @@ INDEX_HTML = """<!doctype html>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <button class="smallbtn" id="reportMode">Report</button>
               <button class="smallbtn" id="libraryMode">Library</button>
+              <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
               <button class="smallbtn" id="selectAll">All Journals</button>
             </div>
           </div>
           <div class="summary" id="summary"></div>
+          <div class="report-tabs" id="reportTabs"></div>
           <div class="library-controls" id="libraryControls">
             <input type="date" id="libraryFrom" title="From date">
             <input type="date" id="libraryUntil" title="Until date">
@@ -1572,6 +1950,13 @@ INDEX_HTML = """<!doctype html>
           <div class="analysis-body" id="analysisBody"></div>
         </aside>
         </div>
+      <div class="internal-browser" id="internalBrowser" aria-hidden="true">
+        <div class="internal-browser-bar">
+          <button class="smallbtn" id="closeInternalBrowser" type="button">Back</button>
+          <div class="internal-browser-title"><strong id="internalBrowserTitle">Publisher page</strong><span id="internalBrowserUrl"></span></div>
+        </div>
+        <iframe id="internalBrowserFrame" title="Publisher page" sandbox="allow-scripts allow-forms allow-modals allow-downloads"></iframe>
+      </div>
     </main>
   </div>
   <script>
@@ -1582,13 +1967,15 @@ INDEX_HTML = """<!doctype html>
       viewMonth: Number(initialToday.slice(5, 7)),
       journals: [],
       journalsConfig: [],
+      journalHistory: [],
       selectedJournals: new Set(),
-      subjectFilter: "physics",
+      selectedFields: new Set(["physics"]),
       selectedSections: new Set(),
       counts: {},
       papers: [],
       libraryPapers: [],
       mode: "report",
+      activeReportJournal: "",
       libraryFrom: "",
       libraryUntil: "",
       libraryJournal: "",
@@ -1597,8 +1984,13 @@ INDEX_HTML = """<!doctype html>
       reportSequence: 0,
       reportCache: {},
       fetchingDates: new Set(),
+      noMatchDates: new Set(),
       fetchProgress: {},
-      progressPollers: {}
+      progressPollers: {},
+      logoRequests: {},
+      figureRequests: {},
+      figureFailures: new Set(),
+      showFigures: true
     };
 
     const $ = (id) => document.getElementById(id);
@@ -1653,6 +2045,8 @@ INDEX_HTML = """<!doctype html>
       if (selectedDate !== state.selectedDate) return;
       $("reportTitle").textContent = `${selectedDate} Report`;
       $("summary").textContent = "Loading local data...";
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
       $("papers").innerHTML = `<div class="empty">Loading papers for this date...</div>`;
     }
 
@@ -1770,8 +2164,9 @@ INDEX_HTML = """<!doctype html>
         const iso = `${fmtMonth(state.viewYear, state.viewMonth)}-${String(day).padStart(2, "0")}`;
         const total = Object.values(state.counts[iso] || {}).reduce((sum, value) => sum + value, 0);
         const isFetching = state.fetchingDates.has(iso);
+        const hasNoMatch = state.noMatchDates.has(iso);
         const button = document.createElement("button");
-        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}`;
+        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${hasNoMatch ? " no-match" : ""}`;
         button.innerHTML = `<span class="daynum">${day}</span>${
           isFetching
             ? `<span class="fetching-dot" title="Fetching"></span>`
@@ -1801,6 +2196,7 @@ INDEX_HTML = """<!doctype html>
         label.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedJournals.add(journal);
           else state.selectedJournals.delete(journal);
+          state.noMatchDates = new Set();
           renderSectionFilters();
           renderReport();
         });
@@ -1821,10 +2217,11 @@ INDEX_HTML = """<!doctype html>
       options.forEach(([value, label]) => {
         const count = state.papers.filter((paper) => paperMatchesField(paper, value)).length;
         const button = document.createElement("button");
-        button.className = `subject-option${state.subjectFilter === value ? " active" : ""}`;
+        button.className = `subject-option${fieldIsActive(value) ? " active" : ""}`;
         button.textContent = `${label} (${count})`;
         button.addEventListener("click", () => {
-          state.subjectFilter = value;
+          toggleFieldFilter(value);
+          state.noMatchDates = new Set();
           renderSubjectFilters();
           renderFilters();
           renderSectionFilters();
@@ -1832,6 +2229,21 @@ INDEX_HTML = """<!doctype html>
         });
         root.appendChild(button);
       });
+    }
+
+    function fieldIsActive(value) {
+      return state.selectedFields.has(value);
+    }
+
+    function toggleFieldFilter(value) {
+      if (value === "all") {
+        state.selectedFields = new Set(["all"]);
+        return;
+      }
+      const next = new Set([...state.selectedFields].filter((field) => field !== "all"));
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      state.selectedFields = next.size ? next : new Set(["all"]);
     }
 
     function renderLibraryJournalOptions() {
@@ -1848,19 +2260,32 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/journals");
       const data = await res.json();
       state.journalsConfig = data.journals || [];
+      state.journalHistory = data.history || [];
       renderJournalSettings();
+      renderJournalHistory();
     }
 
     function renderJournalSettings() {
       const root = $("journalSettings");
       root.innerHTML = "";
       state.journalsConfig.forEach((journal) => {
-        const row = document.createElement("label");
-        row.className = "journal-toggle";
-        row.innerHTML = `<span></span><span>${escapeHtml(journal.name)}</span><button class="action" type="button">Remove</button>`;
-        row.querySelector("button").addEventListener("click", () => removeJournal(journal.name));
+        const row = document.createElement("div");
+        row.className = "journal-setting-row";
+        row.innerHTML = `<span class="journal-setting-name">${escapeHtml(journal.name)}</span><button class="action" type="button">Remove</button>`;
+        row.querySelector("button").addEventListener("click", (event) => {
+          event.stopPropagation();
+          removeJournal(journal.name);
+        });
         root.appendChild(row);
       });
+    }
+
+    function renderJournalHistory() {
+      const select = $("journalHistory");
+      if (!select) return;
+      select.innerHTML = `<option value="">Previously added journals</option>` + state.journalHistory
+        .map((journal) => `<option value="${escapeAttr(journal.name)}">${escapeHtml(journal.name)}</option>`)
+        .join("");
     }
 
     async function addJournal() {
@@ -1881,9 +2306,11 @@ INDEX_HTML = """<!doctype html>
       $("journalIssns").value = "";
       state.reportCache = {};
       state.journalsConfig = data.journals || state.journalsConfig;
+      state.journalHistory = data.history || state.journalHistory;
       state.journals = (data.journals || []).map((journal) => journal.name);
       syncSelectedJournals();
       renderJournalSettings();
+      renderJournalHistory();
       await loadMonth();
       await loadReport();
     }
@@ -1901,15 +2328,18 @@ INDEX_HTML = """<!doctype html>
       }
       state.reportCache = {};
       state.journalsConfig = data.journals || state.journalsConfig;
+      state.journalHistory = data.history || state.journalHistory;
       state.journals = (data.journals || []).map((journal) => journal.name);
       syncSelectedJournals();
       renderJournalSettings();
+      renderJournalHistory();
       await loadMonth();
       await loadReport();
     }
 
     function subjectMatches(paper) {
-      return paperMatchesField(paper, state.subjectFilter);
+      if (state.selectedFields.has("all")) return true;
+      return [...state.selectedFields].some((field) => paperMatchesField(paper, field));
     }
 
     function paperMatchesField(paper, value) {
@@ -1941,6 +2371,7 @@ INDEX_HTML = """<!doctype html>
         label.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedSections.add(section);
           else state.selectedSections.delete(section);
+          state.noMatchDates = new Set();
           renderReport();
         });
         root.appendChild(label);
@@ -1977,26 +2408,104 @@ INDEX_HTML = """<!doctype html>
         "chemistry": "Chemistry",
         "all": "All Fields",
         "other": "Other Fields"
-      }[state.subjectFilter] || "All Fields";
-      $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Field: ${subjectText}`;
+      };
+      const selectedFieldText = [...state.selectedFields]
+        .map((field) => subjectText[field] || field)
+        .join(", ");
+      $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
       root.innerHTML = "";
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
       if (state.fetchingDates.has(state.selectedDate)) {
         root.innerHTML = fetchProgressMarkup(state.selectedDate);
       }
       if (!filtered.length) {
         if (!state.fetchingDates.has(state.selectedDate)) {
+          markNoMatchDate(state.selectedDate, true);
           root.innerHTML = `<div class="empty">No matching papers for this date.</div>`;
         }
         return;
       }
-      groupedReportPapers(filtered).forEach((group) => {
-        const heading = document.createElement("h3");
-        heading.className = "journal-group";
-        heading.textContent = group.journal;
-        root.appendChild(heading);
-        group.papers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      markNoMatchDate(state.selectedDate, false);
+      const groups = groupedReportPapers(filtered);
+      if (!groups.some((group) => group.journal === state.activeReportJournal)) {
+        state.activeReportJournal = groups[0]?.journal || "";
+      }
+      renderReportTabs(groups);
+      const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
+      (activeGroup?.papers || []).forEach((paper) => root.appendChild(renderPaper(paper)));
+    }
+
+    function renderReportTabs(groups) {
+      const root = $("reportTabs");
+      root.innerHTML = "";
+      if (!groups.length) {
+        root.classList.remove("open");
+        return;
+      }
+      root.classList.add("open");
+      groups.forEach((group) => {
+        const button = document.createElement("button");
+        button.className = `journal-tab${group.journal === state.activeReportJournal ? " active" : ""}`;
+        button.type = "button";
+        button.title = group.journal;
+        const logoUrl = journalLogoUrl(group.journal);
+        button.innerHTML = `
+          <span class="journal-tab-label">${logoUrl ? `<img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(group.journal)} logo">` : escapeHtml(group.journal)}</span>
+          <span class="journal-tab-count">${group.papers.length}</span>
+        `;
+        const logo = button.querySelector("img");
+        if (logo) {
+          logo.addEventListener("error", () => {
+            button.querySelector(".journal-tab-label").textContent = group.journal;
+          }, {once: true});
+        } else {
+          hydrateJournalLogo(group.journal, button.querySelector(".journal-tab-label"), "");
+        }
+        button.addEventListener("click", () => {
+          state.activeReportJournal = group.journal;
+          renderReport();
+        });
+        root.appendChild(button);
       });
+    }
+
+    function markNoMatchDate(iso, value) {
+      const before = state.noMatchDates.has(iso);
+      if (value) state.noMatchDates.add(iso);
+      else state.noMatchDates.delete(iso);
+      if (before !== state.noMatchDates.has(iso)) renderCalendar();
+    }
+
+    function journalLogoUrl(name) {
+      const needle = String(name || "").toLowerCase();
+      const journal = state.journalsConfig.find((item) => String(item.name || "").toLowerCase() === needle);
+      return journal?.logo_url || "";
+    }
+
+    async function hydrateJournalLogo(name, target, fallbackClass = "journal-group-text") {
+      if (!name || state.logoRequests[name]) return;
+      state.logoRequests[name] = true;
+      try {
+        const res = await fetch(`/api/journal-logo?name=${encodeURIComponent(name)}`);
+        const data = await res.json();
+        if (!res.ok || !data.logo_url) return;
+        const journal = state.journalsConfig.find((item) => String(item.name || "").toLowerCase() === String(name).toLowerCase());
+        if (journal) journal.logo_url = data.logo_url;
+        if (!document.body.contains(target)) return;
+        target.innerHTML = `<img src="${escapeAttr(data.logo_url)}" alt="${escapeAttr(name)} logo">`;
+        const logo = target.querySelector("img");
+        if (logo) {
+          logo.addEventListener("error", () => {
+            target.innerHTML = fallbackClass
+              ? `<span class="${fallbackClass}">${escapeHtml(name)}</span>`
+              : escapeHtml(name);
+          }, {once: true});
+        }
+      } finally {
+        delete state.logoRequests[name];
+      }
     }
 
     function groupedReportPapers(papers) {
@@ -2039,6 +2548,8 @@ INDEX_HTML = """<!doctype html>
     function renderLibrary() {
       state.mode = "library";
       $("libraryControls").classList.add("open");
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = "Library";
       const root = $("papers");
       root.innerHTML = "";
@@ -2068,37 +2579,45 @@ INDEX_HTML = """<!doctype html>
 
     function renderPaper(paper) {
       const article = document.createElement("article");
-      article.className = "paper";
+      const showFigure = state.showFigures && paper.image_url;
+      article.className = `paper${showFigure ? " with-figure" : ""}`;
       article.dataset.paperId = paper.paper_id;
       const authorText = authorLine(paper);
       article.innerHTML = `
-        <div class="paper-head">
-          <div>
-            <h3 style="color:${paper.section_color}">${escapeHtml(paper.title || "(Untitled)")}</h3>
-            <div class="meta">
-              <span class="journal-name">${escapeHtml(paper.journal)}</span>
-              <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
-              <span>${escapeHtml(paper.doi || "no DOI")}</span>
-              <span class="authors">${escapeHtml(authorText)}</span>
+        <div class="paper-layout">
+          ${showFigure ? `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>` : ""}
+          <div class="paper-main">
+            <div class="paper-head">
+              <div>
+                <h3 style="color:${paper.section_color}">${escapeHtml(paper.title || "(Untitled)")}</h3>
+                <div class="meta">
+                  <span class="journal-name">${escapeHtml(paper.journal)}</span>
+                  <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
+                  <span>${escapeHtml(paper.doi || "no DOI")}</span>
+                  <span class="authors">${escapeHtml(authorText)}</span>
+                </div>
+              </div>
+              <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
+            </div>
+            <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
+            <div class="actions">
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page inside Paper Monitor">↗ Open</button>` : ""}
+              <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
+              <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>
+              ${paper.merged_pdf_path ? `<button class="action" data-action="open-pdf" title="Open merged PDF in Preview">PDF</button>` : ""}
+              ${paper.merged_pdf_path ? `<button class="action danger" data-action="delete-pdf" title="Delete local PDF and reset download status">Delete PDF</button>` : ""}
+              ${!paper.merged_pdf_path ? `<label class="manual-drop" data-role="manual-drop" title="Attach a local PDF"><input type="file" accept="application/pdf,.pdf">Drop PDF</label>` : ""}
+              ${paper.analysis_path ? `<button class="action" data-action="view-analysis" title="Show analysis">Note</button>` : ""}
+              ${paper.analysis_path ? `<button class="action danger" data-action="delete-analysis" title="Delete analysis note and reset analysis status">Delete Note</button>` : ""}
+              <span class="status ${statusClass(paper.download_status)}" data-role="status">
+                Download: ${escapeHtml(paper.download_status)}${paper.analysis_status ? ` · Analysis: ${escapeHtml(paper.analysis_status)}` : ""}
+              </span>
             </div>
           </div>
-          <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
-        </div>
-        <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
-        <div class="actions">
-          ${paper.url ? `<a class="action" href="${escapeAttr(paper.url)}" target="_blank" rel="noreferrer" title="Open publisher page">↗ Open</a>` : ""}
-          <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
-          <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>
-          ${paper.merged_pdf_path ? `<button class="action" data-action="open-pdf" title="Open merged PDF in Preview">PDF</button>` : ""}
-          ${paper.merged_pdf_path ? `<button class="action danger" data-action="delete-pdf" title="Delete local PDF and reset download status">Delete PDF</button>` : ""}
-          ${!paper.merged_pdf_path ? `<label class="manual-drop" data-role="manual-drop" title="Attach a local PDF"><input type="file" accept="application/pdf,.pdf">Drop PDF</label>` : ""}
-          ${paper.analysis_path ? `<button class="action" data-action="view-analysis" title="Show analysis">Note</button>` : ""}
-          ${paper.analysis_path ? `<button class="action danger" data-action="delete-analysis" title="Delete analysis note and reset analysis status">Delete Note</button>` : ""}
-          <span class="status ${statusClass(paper.download_status)}" data-role="status">
-            Download: ${escapeHtml(paper.download_status)}${paper.analysis_status ? ` · Analysis: ${escapeHtml(paper.analysis_status)}` : ""}
-          </span>
         </div>
       `;
+      const openPageButton = article.querySelector('[data-action="open-page"]');
+      if (openPageButton) openPageButton.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
       article.querySelector('[data-action="analyze"]').addEventListener("click", () => runAction(article, paper.paper_id, "analyze"));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
@@ -2111,7 +2630,51 @@ INDEX_HTML = """<!doctype html>
       if (deleteAnalysisButton) deleteAnalysisButton.addEventListener("click", () => deletePaperAsset(article, paper.paper_id, "delete-analysis"));
       const dropZone = article.querySelector('[data-role="manual-drop"]');
       if (dropZone) wireManualPdfDrop(article, dropZone, paper.paper_id);
+      const figureImage = article.querySelector(".paper-figure img");
+      if (figureImage) {
+        figureImage.addEventListener("error", () => {
+          article.classList.remove("with-figure");
+          article.querySelector(".paper-figure")?.remove();
+        }, {once: true});
+      } else if (state.showFigures && paper.paper_id && !state.figureFailures.has(paper.paper_id)) {
+        hydratePaperFigure(paper.paper_id);
+      }
       return article;
+    }
+
+    async function hydratePaperFigure(paperId) {
+      if (state.figureRequests[paperId]) return;
+      state.figureRequests[paperId] = true;
+      try {
+        const res = await fetch(`/api/paper-figure?paper_id=${encodeURIComponent(paperId)}`);
+        const data = await res.json();
+        if (!res.ok || !data.paper?.image_url) {
+          state.figureFailures.add(paperId);
+          return;
+        }
+        updatePaperState(paperId, data.paper);
+        if (state.mode === "library") renderLibrary();
+        else renderReport();
+      } catch (error) {
+        state.figureFailures.add(paperId);
+      } finally {
+        delete state.figureRequests[paperId];
+      }
+    }
+
+    function openInternalBrowser(url, title) {
+      if (!url) return;
+      $("internalBrowserTitle").textContent = title || "Publisher page";
+      $("internalBrowserUrl").textContent = url;
+      $("internalBrowserFrame").src = `/api/page-proxy?url=${encodeURIComponent(url)}`;
+      $("internalBrowser").classList.add("open");
+      $("internalBrowser").setAttribute("aria-hidden", "false");
+    }
+
+    function closeInternalBrowser() {
+      $("internalBrowser").classList.remove("open");
+      $("internalBrowser").setAttribute("aria-hidden", "true");
+      $("internalBrowserFrame").src = "about:blank";
     }
 
     function authorLine(paper) {
@@ -2395,6 +2958,7 @@ INDEX_HTML = """<!doctype html>
     $("selectAll").addEventListener("click", () => {
       const allSelected = state.journals.every((journal) => state.selectedJournals.has(journal));
       state.selectedJournals = new Set(allSelected ? [] : state.journals);
+      state.noMatchDates = new Set();
       renderFilters();
       renderSectionFilters();
       if (state.mode === "library") renderLibrary();
@@ -2423,15 +2987,33 @@ INDEX_HTML = """<!doctype html>
     $("toggleReportPanel").addEventListener("click", toggleReportPanel);
     $("workspaceResizer").addEventListener("pointerdown", startWorkspaceResize);
     $("addJournal").addEventListener("click", addJournal);
+    $("journalHistory").addEventListener("change", (event) => {
+      const journal = state.journalHistory.find((item) => item.name === event.target.value);
+      if (!journal) return;
+      $("journalName").value = journal.name || "";
+      $("journalIssns").value = (journal.issns || []).join(", ");
+    });
+    $("figureToggle").addEventListener("change", (event) => {
+      state.showFigures = event.target.checked;
+      if (state.mode === "library") renderLibrary();
+      else renderReport();
+    });
     $("searchBox").addEventListener("input", (event) => {
       state.query = event.target.value;
+      state.noMatchDates = new Set();
       if (state.mode === "library") renderLibrary();
       else renderReport();
     });
     $("closeAnalysis").addEventListener("click", closeAnalysis);
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
+    $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
     window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeAnalysis();
+      if (event.key !== "Escape") return;
+      if ($("internalBrowser").classList.contains("open")) {
+        closeInternalBrowser();
+        return;
+      }
+      closeAnalysis();
     });
     window.addEventListener("dragover", (event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
