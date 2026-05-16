@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library rewrite work: `7129490 Show field badges on paper items`
+- Current Git HEAD before Library Preview fix: `df30f7a Rewrite library as folder workspace`
 
 ## Completed work
 
@@ -63,7 +63,7 @@
    - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
-   - Library supports multi-level folders, right-click folder creation, drag/drop moving, keyboard navigation, PDF preview with Space, and a Zotero-like detail panel with BibTeX.
+   - Library supports six-plus-level folders, right-click folder creation, drag/drop moving, keyboard navigation, Space-to-Preview PDF opening, and a Zotero-like detail panel with BibTeX.
 
 ## Useful commits
 
@@ -74,7 +74,7 @@
 - `5d77520` Show live fetch progress in report view
 - `eaf2cc7` Improve report grouping and field filters
 - `31803ce` Improve report media and internal article viewing
-- `7129490` Show field badges on paper items
+- `df30f7a` Rewrite library as folder workspace
 
 ## Verification already done
 
