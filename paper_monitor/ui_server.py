@@ -2054,6 +2054,9 @@ INDEX_HTML = """<!doctype html>
       white-space: pre-wrap;
       overflow: auto;
     }
+    .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
+    .library-detail-status.ok { color: #137333; }
+    .library-detail-status.err { color: #b42318; }
     .library-context-menu {
       position: fixed;
       z-index: 50;
@@ -3512,9 +3515,10 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
         <div class="actions">
-          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Preview PDF</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
         </div>
+        <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
@@ -3526,7 +3530,7 @@ INDEX_HTML = """<!doctype html>
         <strong>BibTeX</strong>
         <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
       `;
-      root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => previewLibraryPdf(paper));
+      root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
     }
 
@@ -3591,14 +3595,31 @@ INDEX_HTML = """<!doctype html>
       return libraryItemById(state.librarySelection.id)?.paper || null;
     }
 
-    function previewLibraryPdf(paper) {
-      if (!paper?.merged_pdf_url) return;
-      state.internalBrowserUrl = paper.url || "";
-      $("internalBrowserTitle").textContent = paper.citation_label || paper.title || "PDF Preview";
-      $("internalBrowserUrl").textContent = paper.merged_pdf_path || "";
-      $("internalBrowserFrame").src = paper.merged_pdf_url;
-      $("internalBrowser").classList.add("open");
-      $("internalBrowser").setAttribute("aria-hidden", "false");
+    async function openLibraryPdfInPreview(paper) {
+      if (!paper?.merged_pdf_path) return;
+      const status = $("libraryDetailStatus");
+      if (status) {
+        status.textContent = "Opening PDF in Preview...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/open-pdf", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({path: paper.merged_pdf_path})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "open failed");
+        if (status) {
+          status.textContent = "PDF opened in Preview";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message;
+          status.className = "library-detail-status err";
+        }
+      }
     }
 
     function showLibraryContextMenu(event, parentId) {
@@ -3627,7 +3648,7 @@ INDEX_HTML = """<!doctype html>
       event.preventDefault();
       if (event.key === " ") {
         const paper = selectedLibraryPaper();
-        if (paper?.merged_pdf_url) previewLibraryPdf(paper);
+        if (paper?.merged_pdf_path) openLibraryPdfInPreview(paper);
         return true;
       }
       if (event.key === "ArrowLeft") {
