@@ -59,6 +59,31 @@ def fetch_one_journal(
     end_date: date,
     enrich: bool,
 ) -> dict[str, Any]:
+    papers, summary = collect_one_journal_papers(
+        config=config,
+        storage=storage,
+        journal=journal,
+        start_date=start_date,
+        end_date=end_date,
+        enrich=enrich,
+    )
+    saved = 0
+    for paper in papers:
+        storage.upsert_paper(paper)
+        saved += 1
+    summary["saved"] = saved
+    return summary
+
+
+def collect_one_journal_papers(
+    *,
+    config: AppConfig,
+    storage: Storage,
+    journal: JournalConfig,
+    start_date: date,
+    end_date: date,
+    enrich: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     collected: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
 
@@ -104,6 +129,7 @@ def fetch_one_journal(
         source_attempts += 1
 
     policy = config.section_policies.get(journal.section_policy, {})
+    papers: list[dict[str, Any]] = []
     saved = 0
     blocked = 0
     for paper in dedup_by_id(collected):
@@ -122,10 +148,10 @@ def fetch_one_journal(
         if paper.get("section_allowed") is False:
             blocked += 1
 
-        storage.upsert_paper(paper)
+        papers.append(paper)
         saved += 1
 
-    return {
+    return papers, {
         "source_counts": source_counts,
         "source_statuses": source_statuses,
         "source_attempts": source_attempts,
@@ -142,6 +168,27 @@ def fetch_one_arxiv_preprint_source(
     end_date: date,
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
+    papers, summary = collect_arxiv_preprint_papers(
+        storage=storage,
+        start_date=start_date,
+        end_date=end_date,
+        categories=categories,
+    )
+    saved = 0
+    for paper in papers:
+        storage.upsert_paper(paper)
+        saved += 1
+    summary["saved"] = saved
+    return summary
+
+
+def collect_arxiv_preprint_papers(
+    *,
+    storage: Storage,
+    start_date: date,
+    end_date: date,
+    categories: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     selected_categories = categories or ARXIV_DEFAULT_CATEGORIES
     arxiv_result = _run_source(
         storage=storage,
@@ -155,19 +202,18 @@ def fetch_one_arxiv_preprint_source(
             categories=selected_categories,
         ),
     )
-    saved = 0
+    papers: list[dict[str, Any]] = []
     for paper in dedup_by_id(arxiv_result["papers"]):
         paper["publisher_section"] = paper.get("publisher_section") or "preprint"
         paper["section_allowed"] = True
-        storage.upsert_paper(paper)
-        saved += 1
+        papers.append(paper)
 
-    return {
+    return papers, {
         "source_counts": {"arxiv": len(arxiv_result["papers"])},
         "source_statuses": {"arxiv": arxiv_result["status"]},
         "source_attempts": 1,
         "source_errors": 1 if arxiv_result["status"] == "error" else 0,
-        "saved": saved,
+        "saved": len(papers),
         "blocked_by_section": 0,
     }
 

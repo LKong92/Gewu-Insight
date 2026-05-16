@@ -21,7 +21,7 @@ from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
 from .download import download_paper
 from .http import request_with_retries
-from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
+from .monitor import collect_arxiv_preprint_papers, collect_one_journal_papers, fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
 from .sources.publisher import enrich_image_from_landing_page
@@ -132,6 +132,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/open-url":
                 self.handle_open_url(payload)
+                return
+            if parsed.path == "/api/refetch-source":
+                self.handle_refetch_source(payload)
                 return
             if parsed.path == "/api/journals/add":
                 self.handle_add_journal(payload)
@@ -425,6 +428,78 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         webbrowser.open(url)
         self.send_json({"status": "opened", "url": url})
+
+    def handle_refetch_source(self, payload: dict[str, Any]) -> None:
+        self.refresh_journals()
+        selected = clean_journal_name(str(payload.get("date") or ""))
+        journal_name = clean_journal_name(str(payload.get("journal") or ""))
+        if not selected:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "date is required")
+            return
+        if not journal_name:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "journal is required")
+            return
+        selected_date = date.fromisoformat(selected)
+        config = load_config()
+        storage = Storage(self.configured_db_path)
+        try:
+            old_papers = storage.list_papers(start_date=selected, end_date=selected, journals=[journal_name])
+            analysis_index = analysis_snapshot_index(old_papers)
+            if journal_name == ARXIV_JOURNAL_NAME:
+                papers, summary = collect_arxiv_preprint_papers(
+                    storage=storage,
+                    start_date=selected_date,
+                    end_date=selected_date,
+                    categories=ARXIV_DEFAULT_CATEGORIES,
+                )
+            else:
+                journal = next((item for item in config.journals if item.name == journal_name), None)
+                if not journal:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Journal is not configured")
+                    return
+                papers, summary = collect_one_journal_papers(
+                    config=config,
+                    storage=storage,
+                    journal=journal,
+                    start_date=selected_date,
+                    end_date=selected_date,
+                    enrich=True,
+                )
+
+            statuses = list((summary.get("source_statuses") or {}).values())
+            if statuses and all(status == "error" for status in statuses):
+                self.send_error_json(HTTPStatus.BAD_GATEWAY, "Refetch failed; old papers were kept")
+                return
+
+            deleted = storage.delete_papers_for_journal_date(journal=journal_name, publication_date=selected)
+            inherited = 0
+            for paper in papers:
+                storage.upsert_paper(paper)
+                snapshot = matching_analysis_snapshot(paper, analysis_index)
+                if snapshot:
+                    storage.restore_analysis_fields(
+                        paper["paper_id"],
+                        analysis_status=snapshot["analysis_status"],
+                        analysis_path=snapshot["analysis_path"],
+                        analyzed_at=snapshot["analyzed_at"],
+                    )
+                    inherited += 1
+            refreshed = storage.list_papers(start_date=selected, end_date=selected, journals=self.configured_journals)
+        finally:
+            storage.close()
+        refreshed = [paper for paper in refreshed if paper.get("section_allowed") != 0]
+        self.send_json(
+            {
+                "date": selected,
+                "journal": journal_name,
+                "deleted": deleted,
+                "saved": len(papers),
+                "inheritedAnalysis": inherited,
+                "summary": summary,
+                "papers": [paper_to_api(paper) for paper in refreshed],
+                "journalCounts": count_by_journal(refreshed),
+            }
+        )
 
     def handle_journals(self) -> None:
         raw = read_config_json()
@@ -750,6 +825,55 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "preprint_category": preprint_primary_category(paper),
         "preprint_categories": preprint_categories(paper),
     }
+
+
+def analysis_snapshot_index(papers: list[dict[str, Any]]) -> dict[str, dict[str, str | None]]:
+    index: dict[str, dict[str, str | None]] = {}
+    for paper in papers:
+        status = str(paper.get("analysis_status") or "")
+        if not status or status == "not_started":
+            continue
+        snapshot = {
+            "analysis_status": status,
+            "analysis_path": paper.get("analysis_path") or None,
+            "analyzed_at": paper.get("analyzed_at") or None,
+        }
+        for key in paper_match_keys(paper):
+            index.setdefault(key, snapshot)
+    return index
+
+
+def matching_analysis_snapshot(paper: dict[str, Any], index: dict[str, dict[str, str | None]]) -> dict[str, str | None] | None:
+    for key in paper_match_keys(paper):
+        if key in index:
+            return index[key]
+    return None
+
+
+def paper_match_keys(paper: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    paper_id = clean_text(paper.get("paper_id") or "")
+    if paper_id:
+        keys.append(f"id:{paper_id}")
+    doi = clean_text(paper.get("doi") or "").lower().removeprefix("https://doi.org/").removeprefix("http://doi.org/")
+    if doi:
+        keys.append(f"doi:{doi}")
+    raw = raw_metadata(paper)
+    arxiv_id = clean_text(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
+    if arxiv_id:
+        arxiv_base_id = re.sub(r"v\d+$", "", arxiv_id)
+        keys.append(f"arxiv:{arxiv_base_id}")
+    title = clean_text(paper.get("title") or "").lower()
+    if title:
+        keys.append(f"title:{title}")
+    return keys
+
+
+def raw_metadata(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = paper.get("raw")
+    if isinstance(raw, dict):
+        return raw
+    return parse_raw_json(paper)
 
 
 def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
@@ -1823,6 +1947,16 @@ INDEX_HTML = """<!doctype html>
     .journal-tab img { max-width: 180px; max-height: 24px; object-fit: contain; display: block; }
     .journal-tab-label { min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .journal-tab-count { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .refetch-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: flex-start;
+      margin: -4px 0 2px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .refetch-bar .status { margin-left: 0; }
     .library-controls {
       display: none;
       gap: 8px;
@@ -2158,7 +2292,8 @@ INDEX_HTML = """<!doctype html>
       pendingFetchDate: "",
       internalBrowserUrl: "",
       showFigures: true,
-      arxivCountdownTimer: null
+      arxivCountdownTimer: null,
+      refetchingSource: ""
     };
 
     const $ = (id) => document.getElementById(id);
@@ -2729,6 +2864,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
+      renderRefetchControls(root, activeGroup?.journal || "");
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
       activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
@@ -2769,6 +2905,61 @@ INDEX_HTML = """<!doctype html>
         });
         root.appendChild(button);
       });
+    }
+
+    function renderRefetchControls(root, journal) {
+      if (!journal) return;
+      const bar = document.createElement("div");
+      bar.className = "refetch-bar";
+      bar.innerHTML = `
+        <button class="action" type="button">Refetch ${escapeHtml(journal)}</button>
+        <span class="status" data-role="refetch-status"></span>
+      `;
+      const button = bar.querySelector("button");
+      const status = bar.querySelector('[data-role="refetch-status"]');
+      const busy = state.refetchingSource === journal;
+      button.disabled = Boolean(state.refetchingSource);
+      status.textContent = busy ? "Refetching..." : "";
+      button.addEventListener("click", () => refetchActiveSource(journal, button, status));
+      root.appendChild(bar);
+    }
+
+    async function refetchActiveSource(journal, button, status) {
+      if (!journal || state.refetchingSource) return;
+      state.refetchingSource = journal;
+      button.disabled = true;
+      status.textContent = "Refetching...";
+      status.className = "status";
+      try {
+        const res = await fetch("/api/refetch-source", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({date: state.selectedDate, journal})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Refetch failed");
+        state.reportCache[state.selectedDate] = {
+          date: state.selectedDate,
+          journals: state.journals,
+          papers: data.papers || [],
+          journalCounts: data.journalCounts || {},
+          fetched: true,
+          missingJournals: []
+        };
+        state.papers = data.papers || [];
+        state.noMatchDates = new Set();
+        await loadMonth();
+        state.refetchingSource = "";
+        renderSubjectFilters();
+        renderFilters();
+        renderReport();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status err";
+      } finally {
+        if (state.refetchingSource === journal) state.refetchingSource = "";
+        button.disabled = false;
+      }
     }
 
     function renderArxivUpdateCountdown(root, journal) {
