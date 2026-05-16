@@ -1638,7 +1638,7 @@ INDEX_HTML = """<!doctype html>
     }
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .filter-title { font-size: 13px; color: var(--muted); }
-    .journal-toggle, .section-toggle, .preprint-category-toggle {
+    .journal-toggle, .preprint-category-toggle {
       display: grid;
       grid-template-columns: 18px 1fr auto;
       gap: 8px;
@@ -1650,10 +1650,10 @@ INDEX_HTML = """<!doctype html>
     }
     .preprint-category-list { display: flex; flex-direction: column; gap: 6px; padding-left: 14px; }
     .preprint-category-toggle { padding: 7px 8px; }
-    .journal-toggle input, .section-toggle input, .preprint-category-toggle input { width: 16px; height: 16px; }
-    .journal-toggle span, .section-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
+    .journal-toggle input, .preprint-category-toggle input { width: 16px; height: 16px; }
+    .journal-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
     .preprint-category-toggle span { font-size: 12px; line-height: 1.2; }
-    .journal-toggle b, .section-toggle b, .preprint-category-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .journal-toggle b, .preprint-category-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
     .journal-setting-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -2031,10 +2031,6 @@ INDEX_HTML = """<!doctype html>
         <div class="preprint-category-list" id="preprintCategoryFilters"></div>
       </div>
       <div class="filters">
-        <div class="filter-title">Section Filter</div>
-        <div id="sectionFilters"></div>
-      </div>
-      <div class="filters">
         <div class="filter-title">Field Filter</div>
         <div class="subject-controls" id="subjectFilters"></div>
       </div>
@@ -2118,7 +2114,6 @@ INDEX_HTML = """<!doctype html>
       selectedJournals: new Set(),
       selectedPreprintCategories: new Set(ARXIV_CATEGORIES.map(([code]) => code)),
       selectedFields: new Set(["physics"]),
-      selectedSections: new Set(),
       counts: {},
       papers: [],
       libraryPapers: [],
@@ -2231,7 +2226,6 @@ INDEX_HTML = """<!doctype html>
       syncSelectedJournals();
       state.papers = data.papers || [];
       renderSubjectFilters();
-      renderSectionFilters();
       renderFilters();
       if (state.mode === "library") loadLibrary();
       else renderReport();
@@ -2378,7 +2372,7 @@ INDEX_HTML = """<!doctype html>
     function renderFilters() {
       const counts = {};
       state.papers
-        .filter((paper) => !isPreprintPaper(paper) && subjectMatches(paper) && sectionMatches(paper))
+        .filter((paper) => !isPreprintPaper(paper) && subjectMatches(paper))
         .forEach((paper) => counts[paper.journal] = (counts[paper.journal] || 0) + 1);
       const root = $("journalFilters");
       root.innerHTML = "";
@@ -2391,7 +2385,6 @@ INDEX_HTML = """<!doctype html>
           if (event.target.checked) state.selectedJournals.add(journal);
           else state.selectedJournals.delete(journal);
           state.noMatchDates = new Set();
-          renderSectionFilters();
           renderReport();
         });
         root.appendChild(label);
@@ -2403,7 +2396,7 @@ INDEX_HTML = """<!doctype html>
       const root = $("preprintFilters");
       const categoryRoot = $("preprintCategoryFilters");
       if (!root || !categoryRoot) return;
-      const arxivPapers = state.papers.filter((paper) => isPreprintPaper(paper) && subjectMatches(paper) && sectionMatches(paper));
+      const arxivPapers = state.papers.filter((paper) => isPreprintPaper(paper) && subjectMatches(paper));
       root.innerHTML = "";
       const label = document.createElement("label");
       label.className = "journal-toggle";
@@ -2413,7 +2406,6 @@ INDEX_HTML = """<!doctype html>
         if (event.target.checked) state.selectedJournals.add("arXiv");
         else state.selectedJournals.delete("arXiv");
         state.noMatchDates = new Set();
-        renderSectionFilters();
         renderFilters();
         renderReport();
       });
@@ -2433,7 +2425,6 @@ INDEX_HTML = """<!doctype html>
           if (event.target.checked) state.selectedPreprintCategories.add(code);
           else state.selectedPreprintCategories.delete(code);
           state.noMatchDates = new Set();
-          renderSectionFilters();
           renderFilters();
           renderReport();
         });
@@ -2462,7 +2453,6 @@ INDEX_HTML = """<!doctype html>
           state.noMatchDates = new Set();
           renderSubjectFilters();
           renderFilters();
-          renderSectionFilters();
           renderReport();
         });
         root.appendChild(button);
@@ -2603,51 +2593,6 @@ INDEX_HTML = """<!doctype html>
       return fields.includes(value);
     }
 
-    function renderSectionFilters() {
-      const counts = {};
-      state.papers
-        .filter((paper) => subjectMatches(paper) && state.selectedJournals.has(paper.journal) && preprintCategoryMatches(paper))
-        .forEach((paper) => {
-          const section = normalizedSection(paper.section);
-          counts[section] = (counts[section] || 0) + 1;
-        });
-      const sections = Object.keys(counts).sort();
-      if (!state.selectedSections.size) sections.forEach((section) => state.selectedSections.add(section));
-      state.selectedSections = new Set([...state.selectedSections].filter((section) => sections.includes(section)));
-      if (!state.selectedSections.size) sections.forEach((section) => state.selectedSections.add(section));
-
-      const root = $("sectionFilters");
-      root.innerHTML = "";
-      sections.forEach((section) => {
-        const label = document.createElement("label");
-        label.className = "section-toggle";
-        label.innerHTML = `<input type="checkbox" ${state.selectedSections.has(section) ? "checked" : ""}>
-          <span>${escapeHtml(section)}</span><b>${counts[section] || 0}</b>`;
-        label.querySelector("input").addEventListener("change", (event) => {
-          if (event.target.checked) state.selectedSections.add(section);
-          else state.selectedSections.delete(section);
-          state.noMatchDates = new Set();
-          renderFilters();
-          renderReport();
-        });
-        root.appendChild(label);
-      });
-    }
-
-    function sectionMatches(paper) {
-      return !state.selectedSections.size || state.selectedSections.has(normalizedSection(paper.section));
-    }
-
-    function normalizedSection(section) {
-      const value = String(section || "unknown").trim().toLowerCase();
-      if (value.includes("perspective")) return "perspective";
-      if (value.includes("review")) return "review";
-      if (value.includes("article") || value === "research" || value === "report") return "article";
-      if (value.includes("analysis")) return "analysis";
-      if (value.includes("letter")) return "letter";
-      return value || "unknown";
-    }
-
     function renderReport() {
       state.mode = "report";
       $("libraryControls").classList.remove("open");
@@ -2656,7 +2601,7 @@ INDEX_HTML = """<!doctype html>
       const filtered = state.papers.filter((paper) => {
         const inJournal = state.selectedJournals.has(paper.journal);
         const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
-        return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && sectionMatches(paper) && (!query || haystack.includes(query));
+        return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && (!query || haystack.includes(query));
       });
       const subjectText = {
         "physics": "Physics",
