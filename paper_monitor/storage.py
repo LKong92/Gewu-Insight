@@ -115,6 +115,9 @@ class Storage:
                 "raw_json",
             ]:
                 value = payload.get(key)
+                if key == "publication_date" and payload.get("source") == "arxiv" and value not in (None, ""):
+                    merged[key] = value
+                    continue
                 if key == "section_allowed" and value is not None:
                     merged[key] = value
                     continue

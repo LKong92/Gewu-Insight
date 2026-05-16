@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import date
+from datetime import date, datetime, time as datetime_time, timezone, tzinfo
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -68,8 +68,20 @@ def fetch_arxiv_condensed_matter(
 
 def arxiv_query(categories: list[str], start_date: date, end_date: date) -> str:
     category_query = " OR ".join(f"cat:{code}" for code in categories)
-    submitted_range = f"submittedDate:[{start_date:%Y%m%d}0000 TO {end_date:%Y%m%d}2359]"
+    start_utc, end_utc = local_date_range_as_utc(start_date, end_date)
+    submitted_range = f"submittedDate:[{start_utc:%Y%m%d%H%M} TO {end_utc:%Y%m%d%H%M}]"
     return f"({category_query}) AND {submitted_range}"
+
+
+def local_date_range_as_utc(start_date: date, end_date: date) -> tuple[datetime, datetime]:
+    tz = local_timezone()
+    start_local = datetime.combine(start_date, datetime_time.min, tzinfo=tz)
+    end_local = datetime.combine(end_date, datetime_time(hour=23, minute=59), tzinfo=tz)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def local_timezone() -> tzinfo:
+    return datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def normalize_arxiv_entry(entry: ET.Element) -> dict[str, Any]:
@@ -97,7 +109,7 @@ def normalize_arxiv_entry(entry: ET.Element) -> dict[str, Any]:
         "doi": doi,
         "title": title,
         "journal": ARXIV_JOURNAL_NAME,
-        "publication_date": date_part(published or updated),
+        "publication_date": local_date_part(published or updated),
         "abstract": atom_text(entry, "summary"),
         "abstract_source": "arxiv",
         "url": abstract_url,
@@ -137,8 +149,17 @@ def strip_arxiv_version(arxiv_id: str) -> str:
     return re.sub(r"v\d+$", "", clean_text(arxiv_id))
 
 
-def date_part(value: str) -> str:
-    return clean_text(value)[:10]
+def local_date_part(value: str) -> str:
+    value = clean_text(value)
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value[:10]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(local_timezone()).date().isoformat()
 
 
 def arxiv_pdf_url(entry: ET.Element, arxiv_id: str) -> str:
