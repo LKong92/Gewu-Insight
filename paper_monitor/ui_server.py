@@ -2359,6 +2359,18 @@ INDEX_HTML = """<!doctype html>
           }
           return;
         }
+        if ((data.missingJournals || []).length) {
+          const retryData = await retryMissingSources(selectedDate, data);
+          if (retryData) {
+            updateCalendarCountFromReport(selectedDate, retryData);
+            state.reportCache[selectedDate] = retryData;
+            if (selectedDate === state.selectedDate) {
+              const sequence = ++state.reportSequence;
+              applyReportData(selectedDate, retryData, sequence);
+            }
+          }
+          return;
+        }
         setPendingFetchDate(selectedDate, false);
         if (data.fetched) await loadMonth();
         if (selectedDate === state.selectedDate) {
@@ -2405,6 +2417,36 @@ INDEX_HTML = """<!doctype html>
 
     function sleep(ms) {
       return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    async function retryMissingSources(selectedDate, initialData) {
+      let current = initialData;
+      for (let attempt = 0; attempt < 2 && (current.missingJournals || []).length; attempt += 1) {
+        setPendingFetchDate(selectedDate, true);
+        state.fetchingDates.add(selectedDate);
+        state.fetchProgress[selectedDate] = {
+          active: true,
+          completed: 0,
+          total: (current.missingJournals || []).length,
+          percent: 0,
+          currentJournal: (current.missingJournals || [])[0] || ""
+        };
+        await startProgressPolling(selectedDate);
+        if (selectedDate === state.selectedDate) renderReport();
+        current = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
+        updateCalendarCountFromReport(selectedDate, current);
+        state.reportCache[selectedDate] = current;
+        if (current.fetchActive && (current.missingJournals || []).length) {
+          await waitForDateFetchToFinish(selectedDate);
+          current = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+        }
+      }
+      setPendingFetchDate(selectedDate, false);
+      state.fetchingDates.delete(selectedDate);
+      await refreshFetchProgress(selectedDate);
+      stopProgressPolling(selectedDate);
+      renderCalendar();
+      return current;
     }
 
     function updateCalendarCountFromReport(selectedDate, data) {
