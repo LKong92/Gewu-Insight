@@ -2454,6 +2454,7 @@ INDEX_HTML = """<!doctype html>
         }`;
         button.addEventListener("click", async () => {
           state.selectedDate = iso;
+          state.activeReportJournal = "";
           renderCalendar();
           await loadReport();
         });
@@ -3332,6 +3333,7 @@ INDEX_HTML = """<!doctype html>
     $("jumpToday").addEventListener("click", async () => {
       const now = new Date();
       state.selectedDate = localIsoDate(now);
+      state.activeReportJournal = "";
       state.viewYear = Number(state.selectedDate.slice(0, 4));
       state.viewMonth = Number(state.selectedDate.slice(5, 7));
       await loadMonth();
