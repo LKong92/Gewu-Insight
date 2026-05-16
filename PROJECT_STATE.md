@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before folder-create fix: `c4809f2 Open library PDFs in Preview`
+- Current Git HEAD before Finder-column Library fix: `9cd07e6 Fix library folder creation`
 
 ## Completed work
 
@@ -62,7 +62,7 @@
    - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
-   - Library supports six-plus-level folders, right-click/direct folder creation, drag/drop moving, keyboard navigation, Space-to-Preview PDF opening, and a Zotero-like detail panel with BibTeX.
+   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, keyboard navigation, Space-to-Preview PDF opening, and a Zotero-like detail panel with BibTeX.
 
 ## Useful commits
 
@@ -75,6 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
+- `9cd07e6` Fix library folder creation
 
 ## Verification already done
 
@@ -95,5 +96,4 @@
 - Field classification is keyword/journal-hint based, not a learned classifier. Some interdisciplinary papers may appear in multiple fields or the closest heuristic field.
 - Fetch progress percentage is by journal completion, not elapsed time or individual paper count.
 - New-journal auto-detection depends on network access to OpenAlex; if unavailable, users must provide ISSNs manually.
-- Article figure, journal logo enrichment, and publisher PDF downloads depend on publisher page/network availability; known Nature/Science logos are pinned to full wordmark URLs.
-- Science.org and APS may still block server-side automated PDF downloads with Cloudflare challenges; candidates are correct, but those cases may require browser/manual PDF attachment.
+- Article figure, journal logo enrichment, and publisher PDF downloads depend on publisher page/network availability; Science.org and APS may still require browser/manual PDF attachment.
