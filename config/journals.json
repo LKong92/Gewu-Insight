@@ -26,22 +26,32 @@
     {
       "name": "Nature Physics",
       "issns": [
-        "1745-2481",
-        "1745-2473"
+        "1745-2473",
+        "1745-2481"
       ],
       "openalex_source_id": "S156274416",
-      "section_policy": "nature",
-      "skip_landing_enrichment": false
+      "section_policy": "science",
+      "skip_landing_enrichment": true
     },
     {
-      "name": "Nature Photonics",
+      "name": "Nature Materials",
       "issns": [
-        "1749-4893",
-        "1749-4885"
+        "1476-1122",
+        "1476-4660"
       ],
-      "openalex_source_id": "S120392215",
-      "section_policy": "nature",
-      "skip_landing_enrichment": false
+      "openalex_source_id": "S103895331",
+      "section_policy": "science",
+      "skip_landing_enrichment": true
+    },
+    {
+      "name": "Nature Nanotechnology",
+      "issns": [
+        "1748-3387",
+        "1748-3395"
+      ],
+      "openalex_source_id": "S7822423",
+      "section_policy": "science",
+      "skip_landing_enrichment": true
     },
     {
       "name": "Physical Review Letters",
@@ -49,7 +59,16 @@
         "1079-7114",
         "0031-9007"
       ],
-      "openalex_source_id": "S24807848",
+      "openalex_source_id": null,
+      "section_policy": "science",
+      "skip_landing_enrichment": true
+    },
+    {
+      "name": "Physical Review X",
+      "issns": [
+        "2160-3308"
+      ],
+      "openalex_source_id": "S137042341",
       "section_policy": "science",
       "skip_landing_enrichment": true
     }
@@ -101,5 +120,16 @@
         "erratum"
       ]
     }
-  }
+  },
+  "journal_history": [
+    {
+      "name": "Advanced Materials",
+      "issns": [
+        "0935-9648",
+        "1521-4095"
+      ],
+      "openalex_source_id": "S99352657",
+      "logo_url": ""
+    }
+  ]
 }
