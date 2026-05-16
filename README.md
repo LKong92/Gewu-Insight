@@ -18,7 +18,7 @@ On first launch the app will:
 - install `requirements.txt`
 - create local `data/` and `reports/` folders if needed
 - start the UI server
-- open `http://127.0.0.1:8765`
+- open the interface in its own native macOS window instead of a Safari tab
 
 The first launch may take a minute while Python dependencies install. If it
 fails, check:
@@ -178,7 +178,7 @@ after each note is written.
 
 ## Local UI
 
-Start the local browser interface:
+Start the local interface manually in a browser if needed:
 
 ```bash
 python -m paper_monitor ui
@@ -209,8 +209,9 @@ The Queue Codex Analysis button creates a job file under
 `reports/analysis_jobs/queued/`. Codex can then process queued jobs and write
 Chinese broad-reading notes under `reports/analyses/`.
 
-A clickable macOS app launcher is available in the project folder and is the
-recommended way for non-developer users to start the app:
+A clickable macOS app is available in the project folder and is the recommended
+way for non-developer users to start the app. It opens a native app window and keeps
+the Paper Monitor icon in the Dock while the app is running:
 
 ```text
 Paper Monitor.app
