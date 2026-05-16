@@ -2765,7 +2765,6 @@ INDEX_HTML = """<!doctype html>
         const nextUpdate = nextArxivUpdateDate(new Date());
         const minutes = Math.max(0, Math.ceil((nextUpdate.getTime() - Date.now()) / 60000));
         const detail = new Intl.DateTimeFormat("en-US", {
-          timeZone: "America/New_York",
           weekday: "short",
           hour: "2-digit",
           minute: "2-digit",

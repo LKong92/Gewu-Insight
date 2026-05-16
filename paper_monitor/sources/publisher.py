@@ -76,10 +76,43 @@ def enrich_image_from_landing_page(paper: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         paper["landing_fetch_error"] = str(exc)
         return paper
-    image_url = extract_first_image_url(BeautifulSoup(response.text, "html.parser"), url)
+    soup = BeautifulSoup(response.text, "html.parser")
+    image_url = ""
+    if (paper.get("journal") or "").lower() == "arxiv":
+        image_url = extract_arxiv_html_first_figure_url(soup, response.url or url)
+    if not image_url:
+        image_url = extract_first_image_url(soup, url)
     if image_url:
         paper["image_url"] = image_url
     return paper
+
+
+def extract_arxiv_html_first_figure_url(abs_soup: BeautifulSoup, abs_url: str) -> str:
+    html_url = extract_arxiv_html_url(abs_soup, abs_url)
+    if not html_url:
+        return ""
+    try:
+        response = requests.get(
+            html_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=12,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+    except Exception:
+        return ""
+    return extract_first_image_url(BeautifulSoup(response.text, "html.parser"), response.url or html_url)
+
+
+def extract_arxiv_html_url(soup: BeautifulSoup, base_url: str) -> str:
+    for link in soup.find_all("a", href=True):
+        label = clean_text(link.get_text(" ", strip=True)).lower()
+        title = clean_text(link.get("title")).lower()
+        marker = f"{label} {title}"
+        href = clean_text(link.get("href"))
+        if href and "html" in marker and "experimental" in marker:
+            return urljoin(base_url, href)
+    return ""
 
 
 def extract_section(soup: BeautifulSoup) -> str:
