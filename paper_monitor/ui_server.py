@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
 from .download import download_paper
+from .http import request_with_retries
 from .monitor import run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .storage import Storage
@@ -408,6 +409,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         name = clean_journal_name(str(payload.get("name") or ""))
         issns = [clean_journal_name(str(value)) for value in payload.get("issns") or []]
         issns = [value for value in issns if value]
+        resolved: dict[str, Any] = {}
         if not name:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
             return
@@ -415,8 +417,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             preset = JOURNAL_PRESETS.get(name.lower())
             if preset:
                 issns = list(preset["issns"])
+        preset = JOURNAL_PRESETS.get(name.lower(), {})
+        openalex_source_id = preset.get("openalex_source_id")
+        if not issns and not openalex_source_id:
+            resolved = resolve_journal_metadata(name)
+            issns = list(resolved.get("issns") or [])
+            openalex_source_id = resolved.get("openalex_source_id")
         if not issns:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "At least one ISSN is required")
+            self.send_error_json(
+                HTTPStatus.BAD_REQUEST,
+                "Could not resolve this journal automatically. Please enter at least one ISSN.",
+            )
             return
 
         raw = read_config_json()
@@ -424,12 +435,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if any(item.get("name", "").lower() == name.lower() for item in journals):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
             return
-        preset = JOURNAL_PRESETS.get(name.lower(), {})
+        resolved_name = clean_journal_name(str(resolved.get("name") or name))
+        if resolved_name.lower() != name.lower() and any(item.get("name", "").lower() == resolved_name.lower() for item in journals):
+            self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
+            return
         journals.append(
             {
-                "name": name,
+                "name": resolved_name,
                 "issns": issns,
-                "openalex_source_id": preset.get("openalex_source_id"),
+                "openalex_source_id": openalex_source_id,
                 "section_policy": str(payload.get("section_policy") or preset.get("section_policy") or "science"),
                 "skip_landing_enrichment": bool(payload.get("skip_landing_enrichment", preset.get("skip_landing_enrichment", True))),
             }
@@ -545,6 +559,8 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "analysis_status": paper.get("analysis_status") or "not_started",
         "analysis_path": analysis_path,
         "analysis_url": file_url(analysis_path),
+        "authors": author_summary(paper),
+        "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
     }
 
@@ -555,6 +571,65 @@ def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
         journal = paper.get("journal") or "Unknown"
         counts[journal] = counts.get(journal, 0) + 1
     return counts
+
+
+def author_summary(paper: dict[str, Any]) -> list[str]:
+    raw = parse_raw_json(paper)
+    names = authors_from_openalex(raw) or authors_from_crossref(raw)
+    if len(names) <= 6:
+        return names
+    return names[:3] + ["…"] + names[-3:]
+
+
+def authors_from_openalex(raw: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for item in raw.get("authorships") or []:
+        if not isinstance(item, dict):
+            continue
+        author = item.get("author") or {}
+        name = clean_author_name(str(author.get("display_name") or item.get("raw_author_name") or ""))
+        if name:
+            names.append(name)
+    return dedup_names(names)
+
+
+def authors_from_crossref(raw: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for item in raw.get("author") or []:
+        if not isinstance(item, dict):
+            continue
+        literal = clean_author_name(str(item.get("name") or ""))
+        given = clean_author_name(str(item.get("given") or ""))
+        family = clean_author_name(str(item.get("family") or ""))
+        name = literal or clean_author_name(" ".join(part for part in [given, family] if part))
+        if name:
+            names.append(name)
+    return dedup_names(names)
+
+
+def parse_raw_json(paper: dict[str, Any]) -> dict[str, Any]:
+    try:
+        raw = json.loads(paper.get("raw_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def clean_author_name(value: str) -> str:
+    value = " ".join(value.strip().split())
+    return "" if value.lower() in {"none", "null"} else value
+
+
+def dedup_names(names: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for name in names:
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(name)
+    return result
 
 
 def list_library_papers(
@@ -675,6 +750,39 @@ def write_config_json(raw: dict[str, Any]) -> None:
 
 def clean_journal_name(value: str) -> str:
     return " ".join(value.strip().split())
+
+
+def resolve_journal_metadata(name: str) -> dict[str, Any]:
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/sources",
+            params={"search": name, "per-page": 1},
+            timeout=12,
+        )
+        results = response.json().get("results") or []
+    except Exception:
+        return {}
+    if not results:
+        return {}
+    source = results[0]
+    source_id = clean_openalex_source_id(str(source.get("id") or ""))
+    issns = [clean_journal_name(str(value)) for value in (source.get("issn") or []) if value]
+    issn_l = clean_journal_name(str(source.get("issn_l") or ""))
+    if issn_l and issn_l not in issns:
+        issns.insert(0, issn_l)
+    return {
+        "name": clean_journal_name(str(source.get("display_name") or name)),
+        "issns": issns,
+        "openalex_source_id": source_id or None,
+    }
+
+
+def clean_openalex_source_id(value: str) -> str:
+    value = value.rstrip("/")
+    if not value:
+        return ""
+    return value.rsplit("/", 1)[-1]
 
 
 JOURNAL_PRESETS = {
@@ -879,23 +987,93 @@ NON_PHYSICAL_TITLE_KEYWORDS = [
 ]
 
 
-def classify_discipline(paper: dict[str, Any]) -> str:
+FIELD_KEYWORDS = {
+    "physics": [
+        "physics",
+        "quantum",
+        "photon",
+        "photonic",
+        "optical",
+        "optics",
+        "laser",
+        "polariton",
+        "plasmon",
+        "superconduct",
+        "electron",
+        "spin",
+        "valley",
+        "topological",
+        "phonon",
+        "magnon",
+        "magnetic",
+        "josephson",
+        "frequency comb",
+        "spectroscopy",
+    ],
+    "materials": [
+        "material",
+        "materials",
+        "crystal",
+        "lattice",
+        "thin film",
+        "semiconductor",
+        "perovskite",
+        "metasurface",
+        "nanostructure",
+        "nanophotonic",
+        "polymer",
+        "device",
+        "electrode",
+        "dielectric",
+        "alloy",
+    ],
+    "chemistry": [
+        "chemical",
+        "chemistry",
+        "molecule",
+        "molecular",
+        "ligand",
+        "polymer",
+        "catalyst",
+        "catalysis",
+        "reaction",
+        "synthesis",
+        "electrochemical",
+        "battery",
+    ],
+}
+
+
+JOURNAL_FIELD_HINTS = {
+    "nature physics": ["physics"],
+    "physical review letters": ["physics"],
+    "nature photonics": ["physics"],
+    "nature materials": ["materials"],
+    "nature chemistry": ["chemistry"],
+}
+
+
+def classify_fields(paper: dict[str, Any]) -> list[str]:
     journal = (paper.get("journal") or "").lower()
-    if journal in {"nature materials", "nature physics", "nature photonics"}:
-        return "physical"
+    hinted = JOURNAL_FIELD_HINTS.get(journal)
+    if hinted:
+        return hinted
     title = (paper.get("title") or "").lower()
     if any(keyword in title for keyword in NON_PHYSICAL_TITLE_KEYWORDS):
-        return "other"
+        return ["other"]
     text = f"{title}\n{paper.get('abstract') or ''}\n{paper.get('publisher_section') or ''}".lower()
-    include_hits = sum(1 for keyword in PHYSICAL_INCLUDE_KEYWORDS if keyword in text)
-    exclude_hits = sum(1 for keyword in NON_PHYSICAL_KEYWORDS if keyword in text)
-    if exclude_hits >= 2:
-        return "other"
-    if include_hits >= 2:
-        return "physical"
-    if include_hits >= 1 and exclude_hits == 0:
-        return "physical"
-    return "other"
+    if sum(1 for keyword in NON_PHYSICAL_KEYWORDS if keyword in text) >= 2:
+        return ["other"]
+    fields = [
+        field
+        for field, keywords in FIELD_KEYWORDS.items()
+        if any(keyword in text for keyword in keywords)
+    ]
+    return fields or ["other"]
+
+
+def classify_discipline(paper: dict[str, Any]) -> str:
+    return "other" if classify_fields(paper) == ["other"] else "physical"
 
 
 def first(query: dict[str, list[str]], key: str) -> str | None:
@@ -1184,6 +1362,12 @@ INDEX_HTML = """<!doctype html>
     }
     .paper-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
+    .journal-group {
+      margin: 8px 0 4px;
+      color: var(--ink);
+      font-size: 18px;
+      font-weight: 750;
+    }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -1196,6 +1380,8 @@ INDEX_HTML = """<!doctype html>
       flex: none;
     }
     .meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 8px; }
+    .journal-name { color: var(--ink); font-weight: 750; }
+    .authors { color: #526071; }
     .abstract { color: #344054; line-height: 1.55; margin: 12px 0 0; font-size: 14px; }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
     .action {
@@ -1397,7 +1583,7 @@ INDEX_HTML = """<!doctype html>
       journals: [],
       journalsConfig: [],
       selectedJournals: new Set(),
-      subjectFilter: "physical",
+      subjectFilter: "physics",
       selectedSections: new Set(),
       counts: {},
       papers: [],
@@ -1624,14 +1810,16 @@ INDEX_HTML = """<!doctype html>
 
     function renderSubjectFilters() {
       const options = [
-        ["physical", "Physics / Materials / Chemistry"],
+        ["physics", "Physics"],
+        ["materials", "Materials"],
+        ["chemistry", "Chemistry"],
         ["all", "All Fields"],
         ["other", "Other Fields"]
       ];
       const root = $("subjectFilters");
       root.innerHTML = "";
       options.forEach(([value, label]) => {
-        const count = state.papers.filter((paper) => value === "all" || paper.discipline === value).length;
+        const count = state.papers.filter((paper) => paperMatchesField(paper, value)).length;
         const button = document.createElement("button");
         button.className = `subject-option${state.subjectFilter === value ? " active" : ""}`;
         button.textContent = `${label} (${count})`;
@@ -1691,6 +1879,11 @@ INDEX_HTML = """<!doctype html>
       }
       $("journalName").value = "";
       $("journalIssns").value = "";
+      state.reportCache = {};
+      state.journalsConfig = data.journals || state.journalsConfig;
+      state.journals = (data.journals || []).map((journal) => journal.name);
+      syncSelectedJournals();
+      renderJournalSettings();
       await loadMonth();
       await loadReport();
     }
@@ -1706,12 +1899,23 @@ INDEX_HTML = """<!doctype html>
         $("papers").innerHTML = `<div class="empty">${escapeHtml(data.error || "Could not remove journal.")}</div>` + $("papers").innerHTML;
         return;
       }
+      state.reportCache = {};
+      state.journalsConfig = data.journals || state.journalsConfig;
+      state.journals = (data.journals || []).map((journal) => journal.name);
+      syncSelectedJournals();
+      renderJournalSettings();
       await loadMonth();
       await loadReport();
     }
 
     function subjectMatches(paper) {
-      return state.subjectFilter === "all" || paper.discipline === state.subjectFilter;
+      return paperMatchesField(paper, state.subjectFilter);
+    }
+
+    function paperMatchesField(paper, value) {
+      if (value === "all") return true;
+      const fields = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : [paper.discipline || "other"];
+      return fields.includes(value);
     }
 
     function renderSectionFilters() {
@@ -1764,10 +1968,16 @@ INDEX_HTML = """<!doctype html>
       const query = state.query.trim().toLowerCase();
       const filtered = state.papers.filter((paper) => {
         const inJournal = state.selectedJournals.has(paper.journal);
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi}`.toLowerCase();
+        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
         return inJournal && subjectMatches(paper) && sectionMatches(paper) && (!query || haystack.includes(query));
       });
-      const subjectText = {"physical": "Physics / Materials / Chemistry", "all": "All Fields", "other": "Other Fields"}[state.subjectFilter];
+      const subjectText = {
+        "physics": "Physics",
+        "materials": "Materials",
+        "chemistry": "Chemistry",
+        "all": "All Fields",
+        "other": "Other Fields"
+      }[state.subjectFilter] || "All Fields";
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Field: ${subjectText}`;
       const root = $("papers");
       root.innerHTML = "";
@@ -1780,7 +1990,32 @@ INDEX_HTML = """<!doctype html>
         }
         return;
       }
-      filtered.forEach((paper) => root.appendChild(renderPaper(paper)));
+      groupedReportPapers(filtered).forEach((group) => {
+        const heading = document.createElement("h3");
+        heading.className = "journal-group";
+        heading.textContent = group.journal;
+        root.appendChild(heading);
+        group.papers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      });
+    }
+
+    function groupedReportPapers(papers) {
+      const order = new Map(state.journals.map((journal, index) => [journal, index]));
+      const groups = new Map();
+      [...papers]
+        .sort((a, b) => {
+          const journalDelta = (order.get(a.journal) ?? 9999) - (order.get(b.journal) ?? 9999)
+            || String(a.journal || "").localeCompare(String(b.journal || ""));
+          if (journalDelta) return journalDelta;
+          return String(a.publication_date || "").localeCompare(String(b.publication_date || ""))
+            || String(a.title || "").localeCompare(String(b.title || ""));
+        })
+        .forEach((paper) => {
+          const journal = paper.journal || "Unknown Journal";
+          if (!groups.has(journal)) groups.set(journal, []);
+          groups.get(journal).push(paper);
+        });
+      return [...groups].map(([journal, groupPapers]) => ({journal, papers: groupPapers}));
     }
 
     function fetchProgressMarkup(selectedDate) {
@@ -1809,7 +2044,7 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       const query = state.query.trim().toLowerCase();
       const filtered = state.libraryPapers.filter((paper) => {
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.journal}`.toLowerCase();
+        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
         return !query || haystack.includes(query);
       });
       $("summary").textContent = `${state.libraryPapers.length} downloaded/analyzed · ${filtered.length} shown`;
@@ -1835,14 +2070,16 @@ INDEX_HTML = """<!doctype html>
       const article = document.createElement("article");
       article.className = "paper";
       article.dataset.paperId = paper.paper_id;
+      const authorText = authorLine(paper);
       article.innerHTML = `
         <div class="paper-head">
           <div>
             <h3 style="color:${paper.section_color}">${escapeHtml(paper.title || "(Untitled)")}</h3>
             <div class="meta">
-              <span>${escapeHtml(paper.journal)}</span>
+              <span class="journal-name">${escapeHtml(paper.journal)}</span>
               <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
               <span>${escapeHtml(paper.doi || "no DOI")}</span>
+              <span class="authors">${escapeHtml(authorText)}</span>
             </div>
           </div>
           <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
@@ -1875,6 +2112,12 @@ INDEX_HTML = """<!doctype html>
       const dropZone = article.querySelector('[data-role="manual-drop"]');
       if (dropZone) wireManualPdfDrop(article, dropZone, paper.paper_id);
       return article;
+    }
+
+    function authorLine(paper) {
+      const authors = Array.isArray(paper.authors) ? paper.authors : [];
+      if (!authors.length) return "Authors unavailable";
+      return `Authors: ${authors.join(", ")}`;
     }
 
     function wireManualPdfDrop(article, dropZone, paperId) {
