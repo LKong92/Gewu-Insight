@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from .config import AppConfig, JournalConfig
 from .sources.crossref import fetch_crossref_journal
@@ -20,6 +20,7 @@ def run_journal_monitor(
     start_date: date,
     end_date: date,
     enrich: bool = True,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "window_start": start_date.isoformat(),
@@ -29,7 +30,8 @@ def run_journal_monitor(
         "source_errors": 0,
     }
 
-    for journal in config.journals:
+    total_journals = len(config.journals)
+    for completed_journals, journal in enumerate(config.journals, start=1):
         journal_summary = fetch_one_journal(
             config=config,
             storage=storage,
@@ -41,6 +43,8 @@ def run_journal_monitor(
         summary["journals"][journal.name] = journal_summary
         summary["source_attempts"] += journal_summary["source_attempts"]
         summary["source_errors"] += journal_summary["source_errors"]
+        if progress_callback:
+            progress_callback(journal.name, completed_journals, total_journals)
 
     return summary
 
