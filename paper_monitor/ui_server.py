@@ -158,6 +158,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         selected = first(query, "date") or today_jst().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
         fetched = False
+        missing_journals: list[str] = []
         storage = Storage(self.configured_db_path)
         try:
             selected_date = date.fromisoformat(selected)
@@ -180,6 +181,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     fetch_storage.close()
                 storage = Storage(self.configured_db_path)
                 self.configured_journals = [journal.name for journal in config.journals]
+                missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
             papers = storage.list_papers(
                 start_date=selected,
                 end_date=selected,
@@ -195,6 +197,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "papers": [paper_to_api(paper) for paper in papers],
                 "journalCounts": count_by_journal(papers),
                 "fetched": fetched,
+                "missingJournals": missing_journals,
             }
         )
 
@@ -1303,7 +1306,10 @@ INDEX_HTML = """<!doctype html>
       libraryUntil: "",
       libraryJournal: "",
       noteWidth: 460,
-      query: ""
+      query: "",
+      reportSequence: 0,
+      reportCache: {},
+      fetchingDates: new Set()
     };
 
     const $ = (id) => document.getElementById(id);
@@ -1337,18 +1343,64 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadReport() {
-      $("papers").innerHTML = `<div class="empty">Loading. If this date has not been fetched, the monitor will run now...</div>`;
-      const res = await fetch(`/api/report?date=${state.selectedDate}`);
+      const selectedDate = state.selectedDate;
+      const sequence = ++state.reportSequence;
+      const cached = state.reportCache[selectedDate];
+      if (cached) {
+        applyReportData(selectedDate, cached, sequence);
+      } else {
+        showReportLoading(selectedDate);
+      }
+      const res = await fetch(`/api/report?date=${selectedDate}&auto_fetch=0`);
       const data = await res.json();
+      state.reportCache[selectedDate] = data;
+      applyReportData(selectedDate, data, sequence);
+      if ((data.missingJournals || []).length) {
+        refreshMissingDateInBackground(selectedDate);
+      }
+    }
+
+    function showReportLoading(selectedDate) {
+      if (selectedDate !== state.selectedDate) return;
+      $("reportTitle").textContent = `${selectedDate} Report`;
+      $("summary").textContent = "Loading local data...";
+      $("papers").innerHTML = `<div class="empty">Loading papers for this date...</div>`;
+    }
+
+    function applyReportData(selectedDate, data, sequence) {
+      if (selectedDate !== state.selectedDate || sequence !== state.reportSequence) return;
       state.journals = data.journals || state.journals;
       syncSelectedJournals();
       state.papers = data.papers || [];
       renderSubjectFilters();
       renderSectionFilters();
       renderFilters();
-      if (state.mode === "library") await loadLibrary();
+      if (state.mode === "library") loadLibrary();
       else renderReport();
-      if (data.fetched) await loadMonth();
+      if ((data.missingJournals || []).length && !state.papers.length) {
+        $("papers").innerHTML = `<div class="empty">Fetching papers for this date in the background. You can keep browsing other dates.</div>`;
+      }
+    }
+
+    async function refreshMissingDateInBackground(selectedDate) {
+      if (state.fetchingDates.has(selectedDate)) return;
+      state.fetchingDates.add(selectedDate);
+      try {
+        const res = await fetch(`/api/report?date=${selectedDate}`);
+        const data = await res.json();
+        state.reportCache[selectedDate] = data;
+        if (data.fetched) await loadMonth();
+        if (selectedDate === state.selectedDate) {
+          const sequence = ++state.reportSequence;
+          applyReportData(selectedDate, data, sequence);
+        }
+      } catch (error) {
+        if (selectedDate === state.selectedDate) {
+          $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        }
+      } finally {
+        state.fetchingDates.delete(selectedDate);
+      }
     }
 
     async function loadLibrary() {
@@ -1607,6 +1659,9 @@ INDEX_HTML = """<!doctype html>
       if (!paper) return;
       const reportIndex = state.papers.findIndex((item) => item.paper_id === paperId);
       if (reportIndex >= 0) state.papers[reportIndex] = paper;
+      const cachedReport = state.reportCache[paper.publication_date];
+      const cachedIndex = (cachedReport?.papers || []).findIndex((item) => item.paper_id === paperId);
+      if (cachedIndex >= 0) cachedReport.papers[cachedIndex] = paper;
       const libraryIndex = state.libraryPapers.findIndex((item) => item.paper_id === paperId);
       if (libraryIndex >= 0) state.libraryPapers[libraryIndex] = paper;
     }
