@@ -366,6 +366,34 @@ class Storage:
         )
         self.conn.commit()
 
+    def restore_analysis_fields(
+        self,
+        paper_id: str,
+        *,
+        analysis_status: str,
+        analysis_path: str | None,
+        analyzed_at: str | None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE papers
+            SET analysis_status = ?,
+                analysis_path = ?,
+                analyzed_at = ?
+            WHERE paper_id = ?
+            """,
+            (analysis_status, analysis_path, analyzed_at, paper_id),
+        )
+        self.conn.commit()
+
+    def delete_papers_for_journal_date(self, *, journal: str, publication_date: str) -> int:
+        cursor = self.conn.execute(
+            "DELETE FROM papers WHERE journal = ? AND publication_date = ?",
+            (journal, publication_date),
+        )
+        self.conn.commit()
+        return int(cursor.rowcount or 0)
+
 
 def _bool_to_int(value: Any) -> int | None:
     if value is None:
