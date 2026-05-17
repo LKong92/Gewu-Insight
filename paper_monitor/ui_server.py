@@ -36,6 +36,8 @@ ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
+QUICK_LOOK_LOCK = threading.Lock()
+QUICK_LOOK_PROCESS: Any = None
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -50,6 +52,18 @@ def activate_native_app_later(delay: float = 0.25) -> None:
             return
 
     threading.Timer(delay, activate).start()
+
+
+def open_single_quick_look(path: Path) -> None:
+    global QUICK_LOOK_PROCESS
+    with QUICK_LOOK_LOCK:
+        if QUICK_LOOK_PROCESS and QUICK_LOOK_PROCESS.poll() is None:
+            QUICK_LOOK_PROCESS.terminate()
+        QUICK_LOOK_PROCESS = subprocess.Popen(
+            ["qlmanage", "-p", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def run_ui_server(
@@ -522,11 +536,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not requested.exists() or requested.suffix.lower() != ".pdf":
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
             return
-        subprocess.Popen(
-            ["qlmanage", "-p", str(requested)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        open_single_quick_look(requested)
         activate_native_app_later()
         self.send_json({"status": "opened", "path": str(requested)})
 
@@ -3862,7 +3872,6 @@ INDEX_HTML = """<!doctype html>
     function selectLibraryEntry(parentFolderId, type, id) {
       setLibraryColumnSelection(parentFolderId, {type, id: Number(id)});
       renderLibrary();
-      refreshLibraryQuickLookForSelection();
     }
 
     function focusLibraryFolder(folderId) {
@@ -4052,7 +4061,6 @@ INDEX_HTML = """<!doctype html>
           }
           requestLibraryColumnReveal(childFolderId);
           renderLibrary();
-          refreshLibraryQuickLookForSelection();
         }
         return true;
       }

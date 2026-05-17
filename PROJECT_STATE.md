@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library unsorted/Quick Look follow work: `f7a04a1 Refine library right-arrow navigation`
+- Current Git HEAD before Quick Look follow correction: `2bf06cc Improve library intake and Quick Look follow`
 
 ## Completed work
 
@@ -75,7 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
-- `f7a04a1` Refine library right-arrow navigation
+- `2bf06cc` Improve library intake and Quick Look follow
 
 ## Verification already done
 
