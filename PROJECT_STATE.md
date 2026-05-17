@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before in-app Library preview work: `6a2140e Fix Quick Look follow behavior`
+- Current Git HEAD before adjustable Library preview work: `b01ad2a Use in-app library PDF preview`
 
 ## Completed work
 
@@ -62,7 +62,7 @@
    - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
-   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, Space-to-in-app PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
+   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, adjustable Space-to-in-app PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
 
 ## Useful commits
 
@@ -75,7 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
-- `6a2140e` Fix Quick Look follow behavior
+- `b01ad2a` Use in-app library PDF preview
 
 ## Verification already done
 

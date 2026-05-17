@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
 from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
@@ -111,6 +112,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/paper":
                 self.handle_paper(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/pdf-info":
+                self.handle_pdf_info(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/analysis":
                 self.handle_analysis(parse_qs(parsed.query))
@@ -693,6 +697,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def handle_pdf_info(self, query: dict[str, list[str]]) -> None:
+        raw_path = first(query, "path")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(unquote(raw_path)).expanduser().resolve()
+        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+            self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
+            return
+        if not requested.exists() or requested.suffix.lower() != ".pdf":
+            self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
+            return
+        try:
+            page_count = len(PdfReader(str(requested)).pages)
+        except Exception:
+            page_count = 0
+        self.send_json({"path": str(requested), "page_count": page_count})
 
     def read_json_body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -1922,38 +1944,101 @@ INDEX_HTML = """<!doctype html>
     .internal-browser iframe { width: 100%; height: 100%; border: 0; background: #fff; }
     .library-quicklook {
       position: fixed;
-      top: 58px;
-      left: 50%;
+      top: 80px;
+      left: 40px;
       z-index: 90;
       display: none;
-      width: min(980px, 74vw);
-      height: min(760px, 78vh);
-      transform: translateX(-50%);
+      width: 760px;
+      height: 640px;
       border: 1px solid rgba(16, 24, 40, 0.18);
       border-radius: 12px;
       overflow: hidden;
       background: #fff;
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
-      pointer-events: none;
+      pointer-events: auto;
     }
     .library-quicklook.open { display: grid; grid-template-rows: auto minmax(0, 1fr); }
     .library-quicklook-title {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
       min-height: 34px;
       padding: 8px 12px;
       border-bottom: 1px solid var(--line);
       color: var(--muted);
       font-size: 12px;
+      cursor: move;
+      user-select: none;
+      background: rgba(255, 255, 255, 0.92);
+    }
+    .library-quicklook-title span {
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      background: rgba(255, 255, 255, 0.92);
+    }
+    .library-quicklook-title button {
+      width: 24px;
+      min-height: 24px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .library-quicklook-title button:hover { background: #eef2f7; color: var(--ink); }
+    .library-quicklook-body {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      min-height: 0;
+      background: #eef1f5;
+    }
+    .library-quicklook-thumbs {
+      min-height: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--line);
+      padding: 10px 8px;
+      background: #f8fafc;
+    }
+    .library-page-thumb {
+      width: 76px;
+      min-height: 98px;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 5px;
+      margin: 0 auto 10px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 5px;
+      text-align: center;
+      font-size: 11px;
+    }
+    .library-page-thumb:hover { background: #eef2f7; }
+    .library-page-thumb.active { border-color: var(--accent); background: #e8f3f4; color: var(--ink); }
+    .library-page-thumb-preview {
+      border: 1px solid #d0d5dd;
+      border-radius: 4px;
+      background: linear-gradient(180deg, #fff 0%, #fff 72%, #f3f4f6 72%, #f3f4f6 100%);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     }
     .library-quicklook iframe {
       width: 100%;
       height: 100%;
       border: 0;
       background: #fff;
-      pointer-events: none;
+    }
+    .library-quicklook-resize {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 0 45%, rgba(102, 112, 133, 0.5) 46% 52%, transparent 53% 100%);
     }
     .workspace {
       --note-width: 460px;
@@ -2427,7 +2512,9 @@ INDEX_HTML = """<!doctype html>
       .paper-head { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
-      .library-quicklook { top: 24px; width: 92vw; height: 70vh; }
+      .library-quicklook { top: 24px; left: 4vw; width: 92vw; height: 70vh; }
+      .library-quicklook-body { grid-template-columns: 78px minmax(0, 1fr); }
+      .library-page-thumb { width: 58px; min-height: 78px; }
     }
   </style>
 </head>
@@ -2511,8 +2598,15 @@ INDEX_HTML = """<!doctype html>
         <iframe id="internalBrowserFrame" title="Publisher page" sandbox="allow-scripts allow-forms allow-modals allow-downloads"></iframe>
       </div>
       <div class="library-quicklook" id="libraryQuickLook" aria-hidden="true">
-        <div class="library-quicklook-title" id="libraryQuickLookTitle"></div>
-        <iframe id="libraryQuickLookFrame" title="Library PDF Quick Look" tabindex="-1"></iframe>
+        <div class="library-quicklook-title" id="libraryQuickLookDragHandle">
+          <span id="libraryQuickLookTitle"></span>
+          <button id="closeLibraryQuickLook" type="button" title="Close preview">×</button>
+        </div>
+        <div class="library-quicklook-body">
+          <div class="library-quicklook-thumbs" id="libraryQuickLookThumbs"></div>
+          <iframe id="libraryQuickLookFrame" title="Library PDF Quick Look" tabindex="-1"></iframe>
+        </div>
+        <div class="library-quicklook-resize" id="libraryQuickLookResize" title="Resize preview"></div>
       </div>
     </main>
   </div>
@@ -2564,6 +2658,10 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookOpen: false,
       libraryQuickLookPath: "",
       libraryQuickLookUrl: "",
+      libraryQuickLookPage: 1,
+      libraryQuickLookPageCount: 0,
+      libraryQuickLookManualFrame: false,
+      libraryQuickLookFrameRect: null,
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -3992,6 +4090,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookOpen = false;
       state.libraryQuickLookPath = "";
       state.libraryQuickLookUrl = "";
+      state.libraryQuickLookPage = 1;
+      state.libraryQuickLookPageCount = 0;
       const overlay = $("libraryQuickLook");
       const frame = $("libraryQuickLookFrame");
       if (overlay) {
@@ -3999,6 +4099,88 @@ INDEX_HTML = """<!doctype html>
         overlay.setAttribute("aria-hidden", "true");
       }
       if (frame) frame.src = "about:blank";
+      renderLibraryQuickLookThumbs(0);
+    }
+
+    function defaultLibraryQuickLookFrame() {
+      const columns = $("libraryColumns");
+      const rect = columns?.getBoundingClientRect();
+      const fallback = {left: 32, top: 76, width: Math.min(780, window.innerWidth - 64), height: Math.min(680, window.innerHeight - 104)};
+      if (!rect) return fallback;
+      const width = Math.max(360, Math.min(820, rect.width - 24));
+      const height = Math.max(360, Math.min(700, rect.height - 24, window.innerHeight - rect.top - 24));
+      return {
+        left: Math.round(rect.left + 12),
+        top: Math.round(rect.top + 12),
+        width: Math.round(width),
+        height: Math.round(height)
+      };
+    }
+
+    function applyLibraryQuickLookFrame(frameRect = null) {
+      const overlay = $("libraryQuickLook");
+      if (!overlay) return;
+      const rect = frameRect || state.libraryQuickLookFrameRect || defaultLibraryQuickLookFrame();
+      const width = Math.max(320, Math.min(rect.width, window.innerWidth - 24));
+      const height = Math.max(300, Math.min(rect.height, window.innerHeight - 24));
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      const top = Math.max(8, Math.min(rect.top, window.innerHeight - height - 8));
+      state.libraryQuickLookFrameRect = {left, top, width, height};
+      overlay.style.left = `${left}px`;
+      overlay.style.top = `${top}px`;
+      overlay.style.width = `${width}px`;
+      overlay.style.height = `${height}px`;
+    }
+
+    function libraryQuickLookPageUrl(page = state.libraryQuickLookPage) {
+      if (!state.libraryQuickLookUrl) return "";
+      return `${state.libraryQuickLookUrl}#page=${Math.max(1, Number(page || 1))}`;
+    }
+
+    function setLibraryQuickLookPage(page) {
+      const nextPage = Math.max(1, Math.min(Number(page || 1), state.libraryQuickLookPageCount || Number(page || 1)));
+      state.libraryQuickLookPage = nextPage;
+      const frame = $("libraryQuickLookFrame");
+      const url = libraryQuickLookPageUrl(nextPage);
+      if (frame && url) frame.src = url;
+      renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
+      $("libraryShell")?.focus({preventScroll: true});
+    }
+
+    function renderLibraryQuickLookThumbs(pageCount) {
+      const root = $("libraryQuickLookThumbs");
+      if (!root) return;
+      const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
+      if (!count) {
+        root.innerHTML = `<div class="empty">Pages</div>`;
+        return;
+      }
+      root.innerHTML = Array.from({length: count}, (_, index) => {
+        const page = index + 1;
+        return `
+          <button class="library-page-thumb${page === state.libraryQuickLookPage ? " active" : ""}" type="button" data-page="${page}">
+            <span class="library-page-thumb-preview"></span>
+            <span>${page}</span>
+          </button>
+        `;
+      }).join("");
+      root.querySelectorAll("[data-page]").forEach((button) => {
+        button.addEventListener("click", () => setLibraryQuickLookPage(Number(button.dataset.page || 1)));
+      });
+      root.querySelector(".library-page-thumb.active")?.scrollIntoView({block: "nearest"});
+    }
+
+    async function loadLibraryQuickLookInfo(path) {
+      try {
+        const res = await fetch(`/api/pdf-info?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        if (!res.ok || path !== state.libraryQuickLookPath) return;
+        state.libraryQuickLookPageCount = Number(data.page_count || 0);
+        renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
+      } catch (error) {
+        state.libraryQuickLookPageCount = 0;
+        renderLibraryQuickLookThumbs(0);
+      }
     }
 
     function quickLookLibraryPdf(paper, options = {}) {
@@ -4017,18 +4199,84 @@ INDEX_HTML = """<!doctype html>
       const frame = $("libraryQuickLookFrame");
       if (!overlay || !frame) return;
       const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
+      const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath;
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookPath = paper.merged_pdf_path;
       state.libraryQuickLookUrl = pdfUrl;
+      if (isNewPdf) {
+        state.libraryQuickLookPage = 1;
+        state.libraryQuickLookPageCount = 0;
+        renderLibraryQuickLookThumbs(0);
+        loadLibraryQuickLookInfo(paper.merged_pdf_path);
+      }
       if (title) title.textContent = paper.citation_label || paper.title || "PDF Preview";
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
-      if (frame.src !== new URL(pdfUrl, window.location.href).href) frame.src = pdfUrl;
+      if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
+        applyLibraryQuickLookFrame(defaultLibraryQuickLookFrame());
+      } else {
+        applyLibraryQuickLookFrame();
+      }
+      const nextUrl = new URL(libraryQuickLookPageUrl(), window.location.href).href;
+      if (frame.src !== nextUrl) frame.src = libraryQuickLookPageUrl();
       $("libraryShell")?.focus({preventScroll: true});
       if (status && !options.silent) {
         status.textContent = "PDF preview open";
         status.className = "library-detail-status ok";
       }
+    }
+
+    function startLibraryQuickLookDrag(event) {
+      const overlay = $("libraryQuickLook");
+      if (!overlay || event.target.closest("button")) return;
+      event.preventDefault();
+      state.libraryQuickLookManualFrame = true;
+      const rect = overlay.getBoundingClientRect();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const startLeft = rect.left;
+      const startTop = rect.top;
+      const move = (moveEvent) => {
+        applyLibraryQuickLookFrame({
+          left: startLeft + moveEvent.clientX - startX,
+          top: startTop + moveEvent.clientY - startY,
+          width: rect.width,
+          height: rect.height
+        });
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        $("libraryShell")?.focus({preventScroll: true});
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+    }
+
+    function startLibraryQuickLookResize(event) {
+      const overlay = $("libraryQuickLook");
+      if (!overlay) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.libraryQuickLookManualFrame = true;
+      const rect = overlay.getBoundingClientRect();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const move = (moveEvent) => {
+        applyLibraryQuickLookFrame({
+          left: rect.left,
+          top: rect.top,
+          width: rect.width + moveEvent.clientX - startX,
+          height: rect.height + moveEvent.clientY - startY
+        });
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        $("libraryShell")?.focus({preventScroll: true});
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
     }
 
     function refreshLibraryQuickLookForSelection() {
@@ -4610,6 +4858,12 @@ INDEX_HTML = """<!doctype html>
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
     $("openExternalBrowser").addEventListener("click", openExternalBrowser);
+    $("closeLibraryQuickLook").addEventListener("click", () => {
+      closeLibraryQuickLook();
+      $("libraryShell")?.focus({preventScroll: true});
+    });
+    $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
+    $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
