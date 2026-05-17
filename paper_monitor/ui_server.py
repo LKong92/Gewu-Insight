@@ -2020,10 +2020,31 @@ INDEX_HTML = """<!doctype html>
     .library-page-thumb:hover { background: #eef2f7; }
     .library-page-thumb.active { border-color: var(--accent); background: #e8f3f4; color: var(--ink); }
     .library-page-thumb-preview {
+      position: relative;
+      overflow: hidden;
       border: 1px solid #d0d5dd;
       border-radius: 4px;
-      background: linear-gradient(180deg, #fff 0%, #fff 72%, #f3f4f6 72%, #f3f4f6 100%);
+      background: #fff;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    }
+    .library-page-thumb-preview iframe {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 420px;
+      height: 560px;
+      border: 0;
+      transform: scale(0.16);
+      transform-origin: top left;
+      pointer-events: none;
+      background: #fff;
+    }
+    .library-page-thumb-placeholder {
+      display: grid;
+      place-items: center;
+      color: #98a2b3;
+      font-size: 10px;
+      background: linear-gradient(180deg, #fff 0%, #fff 72%, #f3f4f6 72%, #f3f4f6 100%);
     }
     .library-quicklook iframe {
       width: 100%;
@@ -4121,10 +4142,10 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       if (!overlay) return;
       const rect = frameRect || state.libraryQuickLookFrameRect || defaultLibraryQuickLookFrame();
-      const width = Math.max(320, Math.min(rect.width, window.innerWidth - 24));
-      const height = Math.max(300, Math.min(rect.height, window.innerHeight - 24));
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-      const top = Math.max(8, Math.min(rect.top, window.innerHeight - height - 8));
+      const width = Math.max(320, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
+      const height = Math.max(300, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
+      const left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
+      const top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
       state.libraryQuickLookFrameRect = {left, top, width, height};
       overlay.style.left = `${left}px`;
       overlay.style.top = `${top}px`;
@@ -4134,7 +4155,16 @@ INDEX_HTML = """<!doctype html>
 
     function libraryQuickLookPageUrl(page = state.libraryQuickLookPage) {
       if (!state.libraryQuickLookUrl) return "";
-      return `${state.libraryQuickLookUrl}#page=${Math.max(1, Number(page || 1))}`;
+      const safePage = Math.max(1, Number(page || 1));
+      const separator = state.libraryQuickLookUrl.includes("?") ? "&" : "?";
+      return `${state.libraryQuickLookUrl}${separator}preview_page=${safePage}#page=${safePage}&zoom=page-width`;
+    }
+
+    function libraryQuickLookThumbUrl(page) {
+      if (!state.libraryQuickLookUrl) return "";
+      const safePage = Math.max(1, Number(page || 1));
+      const separator = state.libraryQuickLookUrl.includes("?") ? "&" : "?";
+      return `${state.libraryQuickLookUrl}${separator}thumb_page=${safePage}#page=${safePage}&toolbar=0&navpanes=0&scrollbar=0&view=Fit`;
     }
 
     function setLibraryQuickLookPage(page) {
@@ -4142,7 +4172,12 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPage = nextPage;
       const frame = $("libraryQuickLookFrame");
       const url = libraryQuickLookPageUrl(nextPage);
-      if (frame && url) frame.src = url;
+      if (frame && url) {
+        frame.src = "about:blank";
+        window.requestAnimationFrame(() => {
+          frame.src = url;
+        });
+      }
       renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
       $("libraryShell")?.focus({preventScroll: true});
     }
@@ -4157,9 +4192,12 @@ INDEX_HTML = """<!doctype html>
       }
       root.innerHTML = Array.from({length: count}, (_, index) => {
         const page = index + 1;
+        const preview = page <= 80
+          ? `<iframe src="${escapeAttr(libraryQuickLookThumbUrl(page))}" tabindex="-1" loading="lazy"></iframe>`
+          : `<span class="library-page-thumb-placeholder">PDF</span>`;
         return `
           <button class="library-page-thumb${page === state.libraryQuickLookPage ? " active" : ""}" type="button" data-page="${page}">
-            <span class="library-page-thumb-preview"></span>
+            <span class="library-page-thumb-preview">${preview}</span>
             <span>${page}</span>
           </button>
         `;
@@ -4218,7 +4256,9 @@ INDEX_HTML = """<!doctype html>
         applyLibraryQuickLookFrame();
       }
       const nextUrl = new URL(libraryQuickLookPageUrl(), window.location.href).href;
-      if (frame.src !== nextUrl) frame.src = libraryQuickLookPageUrl();
+      if (frame.src !== nextUrl) {
+        frame.src = libraryQuickLookPageUrl();
+      }
       $("libraryShell")?.focus({preventScroll: true});
       if (status && !options.silent) {
         status.textContent = "PDF preview open";
