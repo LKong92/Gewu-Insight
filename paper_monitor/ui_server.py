@@ -35,6 +35,21 @@ FETCH_PROGRESS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
+LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
+
+
+def activate_native_app_later(delay: float = 0.25) -> None:
+    def activate() -> None:
+        try:
+            subprocess.Popen(
+                ["osascript", "-e", 'tell application id "local.paper-monitor" to activate'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return
+
+    threading.Timer(delay, activate).start()
 
 
 def run_ui_server(
@@ -380,6 +395,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            target_folder = None
+            if payload.get("unsorted"):
+                target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
+                folder_id = int(target_folder.get("id") or 1)
             paper = storage.get_paper(paper_id)
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -388,7 +407,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             snapshot = library_snapshot(storage)
         finally:
             storage.close()
-        self.send_json({"item": library_item_to_api(item, paper) if item else {}, **snapshot})
+        self.send_json({
+            "item": library_item_to_api(item, paper) if item else {},
+            "folder": library_folder_to_api(target_folder) if target_folder else None,
+            **snapshot,
+        })
 
     def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -504,6 +527,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        activate_native_app_later()
         self.send_json({"status": "opened", "path": str(requested)})
 
     def handle_open_url(self, payload: dict[str, Any]) -> None:
@@ -832,6 +856,7 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "analysis_path": analysis_path,
         "analysis_url": file_url(analysis_path),
         "authors": author_summary(paper),
+        "full_authors": full_author_names(paper),
         "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
@@ -2486,6 +2511,8 @@ INDEX_HTML = """<!doctype html>
       libraryColumnsScrollLeft: 0,
       libraryRevealColumnFolderId: 0,
       libraryRenamingFolderId: 0,
+      libraryQuickLookOpen: false,
+      libraryQuickLookPath: "",
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -3045,7 +3072,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/items", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paperId, folder_id: state.libraryRootId || 1})
+          body: JSON.stringify({paper_id: paperId, unsorted: true})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
@@ -3713,15 +3740,20 @@ INDEX_HTML = """<!doctype html>
       }
       const item = libraryItemById(selection.id);
       const paper = item?.paper || {};
+      const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
+        ? paper.full_authors
+        : (Array.isArray(paper.authors) ? paper.authors : []);
       root.innerHTML = `
         <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
+          ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
+          <dt>Authors</dt><dd>${escapeHtml(authors.length ? authors.join(", ") : "Authors unavailable")}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
@@ -3732,6 +3764,7 @@ INDEX_HTML = """<!doctype html>
         <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
+      root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
     }
 
@@ -3829,6 +3862,7 @@ INDEX_HTML = """<!doctype html>
     function selectLibraryEntry(parentFolderId, type, id) {
       setLibraryColumnSelection(parentFolderId, {type, id: Number(id)});
       renderLibrary();
+      refreshLibraryQuickLookForSelection();
     }
 
     function focusLibraryFolder(folderId) {
@@ -3871,10 +3905,42 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function quickLookLibraryPdf(paper) {
+    async function downloadLibraryPdf(paper) {
+      if (!paper?.paper_id) return;
+      const status = $("libraryDetailStatus");
+      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      buttons.forEach((button) => button.disabled = true);
+      if (status) {
+        status.textContent = "Downloading PDF...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/download", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "download failed");
+        updatePaperState(paper.paper_id, data.paper);
+        if (status) {
+          status.textContent = "PDF downloaded";
+          status.className = "library-detail-status ok";
+        }
+        renderLibrary();
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message;
+          status.className = "library-detail-status err";
+        }
+        buttons.forEach((button) => button.disabled = false);
+      }
+    }
+
+    async function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
       const status = $("libraryDetailStatus");
-      if (status) {
+      if (status && !options.silent) {
         status.textContent = "Opening PDF in Quick Look...";
         status.className = "library-detail-status";
       }
@@ -3886,16 +3952,25 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "open failed");
-        if (status) {
+        state.libraryQuickLookOpen = true;
+        state.libraryQuickLookPath = paper.merged_pdf_path;
+        if (status && !options.silent) {
           status.textContent = "PDF opened in Quick Look";
           status.className = "library-detail-status ok";
         }
       } catch (error) {
-        if (status) {
+        if (status && !options.silent) {
           status.textContent = error.message;
           status.className = "library-detail-status err";
         }
       }
+    }
+
+    function refreshLibraryQuickLookForSelection() {
+      if (!state.libraryQuickLookOpen) return;
+      const paper = selectedLibraryPaper();
+      if (!paper?.merged_pdf_path || paper.merged_pdf_path === state.libraryQuickLookPath) return;
+      quickLookLibraryPdf(paper, {silent: true});
     }
 
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
@@ -3977,6 +4052,7 @@ INDEX_HTML = """<!doctype html>
           }
           requestLibraryColumnReveal(childFolderId);
           renderLibrary();
+          refreshLibraryQuickLookForSelection();
         }
         return true;
       }
@@ -3991,6 +4067,7 @@ INDEX_HTML = """<!doctype html>
         : Math.max(0, Math.min(entries.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
       setLibraryColumnSelection(activeFolderId, entries[nextIndex]);
       renderLibrary();
+      refreshLibraryQuickLookForSelection();
       return true;
     }
 

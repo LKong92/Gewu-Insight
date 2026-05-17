@@ -450,6 +450,23 @@ class Storage:
         row = self.conn.execute("SELECT * FROM library_folders WHERE id = ?", (int(folder_id),)).fetchone()
         return dict(row) if row else None
 
+    def ensure_library_folder(self, *, parent_id: int = 1, name: str) -> dict[str, Any]:
+        parent_id = int(parent_id or 1)
+        clean_name = " ".join(name.strip().split()) or "New Folder"
+        row = self.conn.execute(
+            """
+            SELECT *
+            FROM library_folders
+            WHERE parent_id = ? AND lower(name) = lower(?)
+            ORDER BY sort_order, id
+            LIMIT 1
+            """,
+            (parent_id, clean_name),
+        ).fetchone()
+        if row:
+            return dict(row)
+        return self.create_library_folder(parent_id=parent_id, name=clean_name)
+
     def rename_library_folder(self, *, folder_id: int, name: str) -> dict[str, Any]:
         folder_id = int(folder_id)
         if folder_id == 1:

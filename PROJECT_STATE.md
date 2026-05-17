@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library right-arrow navigation fix: `44b2631 Polish library column navigation`
+- Current Git HEAD before Library unsorted/Quick Look follow work: `f7a04a1 Refine library right-arrow navigation`
 
 ## Completed work
 
@@ -62,7 +62,7 @@
    - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
-   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, Space-to-Quick-Look PDF preview, and a Zotero-like detail panel with BibTeX.
+   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, Space-to-Quick-Look PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
 
 ## Useful commits
 
@@ -75,7 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
-- `44b2631` Polish library column navigation
+- `f7a04a1` Refine library right-arrow navigation
 
 ## Verification already done
 
