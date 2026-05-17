@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from .analysis import mark_job_done, pending_analysis_jobs, queue_codex_analysis, read_job
 from .config import DEFAULT_DB_PATH, load_config
 from .download import download_paper
+from .importers.inventory import import_library_inventory
 from .monitor import apply_fast_section_hints, default_windows, run_journal_monitor
 from .reporting import export_json, write_journal_markdown_report
 from .storage import Storage
@@ -56,6 +58,14 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("output", type=Path)
     export.add_argument("--from-date", type=str)
     export.add_argument("--until-date", type=str)
+
+    importer = subparsers.add_parser("import-inventory", help="Dry-run an external library_inventory.json import.")
+    importer.add_argument("inventory_path", type=Path)
+    importer.add_argument("--copy-mode", choices=["copy", "link", "move"], default="copy")
+    importer.add_argument("--preserve-folders", action="store_true")
+    importer.add_argument("--dedupe-by", default="doi,arxiv,path", help="Comma-separated keys: doi, arxiv, path.")
+    importer.add_argument("--dry-run", action="store_true", help="Inspect only; do not copy files or write papers.")
+    importer.add_argument("--report-output", type=Path, help="Write the import report JSON to this path.")
 
     ui = subparsers.add_parser("ui", help="Start the local browser UI.")
     ui.add_argument("--host", default="127.0.0.1", help="Host for the local UI server.")
@@ -116,6 +126,18 @@ def main(argv: list[str] | None = None) -> int:
             path = export_json(storage, args.output, args.from_date, args.until_date)
             print(f"Exported: {path}")
             return 0
+        if args.command == "import-inventory":
+            result = import_library_inventory(
+                args.inventory_path,
+                copy_mode=args.copy_mode,
+                preserve_folders=args.preserve_folders,
+                dedupe_by=args.dedupe_by.split(","),
+                dry_run=args.dry_run,
+                storage=storage,
+                report_path=args.report_output,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if not result.get("errors") else 1
         if args.command == "refresh-sections":
             return handle_refresh_sections(config, storage)
         if args.command == "ui":

@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Space filesystem rewrite: `9fc850b Fix library space input focus`
+- Current Git HEAD before inventory-import work: `66c7a84 Build app for macOS 14 compatibility`
 
 ## Completed work
 
@@ -79,6 +79,7 @@
    - Native launcher opens the app window at the current screen's full visible size by default.
    - Space rename/DOI inputs keep focus instead of being stolen by the library keyboard shell.
    - Green Spaces are independent Library-style filesystem roots; DOI adds papers into the active Space root as normal shortcuts.
+   - Inventory importer has CLI/API/tests for `library_inventory.json`; real copy import batch `inventory_20260517_224119` imported 5942 papers and 8423 resource rows.
 
 ## Verification already done
 

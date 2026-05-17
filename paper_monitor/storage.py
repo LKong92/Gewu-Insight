@@ -40,6 +40,19 @@ CREATE TABLE IF NOT EXISTS papers (
   supplement_pdf_paths TEXT,
   merged_pdf_path TEXT,
   downloaded_at TEXT,
+  source_path TEXT,
+  original_relative_path TEXT,
+  original_parent_relative_path TEXT,
+  original_filename TEXT,
+  import_batch_id TEXT,
+  import_kind TEXT,
+  import_as TEXT,
+  doi_source TEXT,
+  parse_status TEXT,
+  parse_error TEXT,
+  size_bytes INTEGER,
+  modified_at TEXT,
+  page_count INTEGER,
   analysis_status TEXT NOT NULL DEFAULT 'not_started',
   analysis_path TEXT,
   analyzed_at TEXT
@@ -108,6 +121,53 @@ CREATE TABLE IF NOT EXISTS my_publications (
 );
 
 CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starred, id);
+
+CREATE TABLE IF NOT EXISTS inventory_import_batches (
+  id TEXT PRIMARY KEY,
+  inventory_path TEXT NOT NULL,
+  source_root TEXT,
+  copy_mode TEXT NOT NULL,
+  preserve_folders INTEGER NOT NULL DEFAULT 0,
+  dedupe_by TEXT,
+  dry_run INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  report_path TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  created_papers INTEGER NOT NULL DEFAULT 0,
+  updated_papers INTEGER NOT NULL DEFAULT 0,
+  created_resources INTEGER NOT NULL DEFAULT 0,
+  skipped INTEGER NOT NULL DEFAULT 0,
+  errors_json TEXT,
+  warnings_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS resources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT REFERENCES papers(paper_id) ON DELETE CASCADE,
+  source_path TEXT,
+  stored_path TEXT,
+  original_relative_path TEXT,
+  original_parent_relative_path TEXT,
+  original_filename TEXT,
+  kind TEXT,
+  mime_type TEXT,
+  import_as TEXT,
+  import_batch_id TEXT,
+  size_bytes INTEGER,
+  modified_at TEXT,
+  parse_status TEXT,
+  parse_error TEXT,
+  page_count INTEGER,
+  status TEXT NOT NULL DEFAULT 'imported',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(source_path, size_bytes, kind)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resources_paper ON resources(paper_id);
+CREATE INDEX IF NOT EXISTS idx_resources_batch ON resources(import_batch_id);
+CREATE INDEX IF NOT EXISTS idx_resources_source ON resources(source_path, size_bytes);
 """
 
 
@@ -130,6 +190,27 @@ class Storage:
         if "image_url" not in columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
             self.conn.commit()
+        for column, column_type in {
+            "source_path": "TEXT",
+            "original_relative_path": "TEXT",
+            "original_parent_relative_path": "TEXT",
+            "original_filename": "TEXT",
+            "import_batch_id": "TEXT",
+            "import_kind": "TEXT",
+            "import_as": "TEXT",
+            "doi_source": "TEXT",
+            "parse_status": "TEXT",
+            "parse_error": "TEXT",
+            "size_bytes": "INTEGER",
+            "modified_at": "TEXT",
+            "page_count": "INTEGER",
+        }.items():
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE papers ADD COLUMN {column} {column_type}")
+                self.conn.commit()
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_source_path ON papers(source_path, size_bytes)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_import_batch ON papers(import_batch_id)")
+        self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
             self.conn.execute("ALTER TABLE library_items ADD COLUMN display_name TEXT")
