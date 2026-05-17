@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library external page open fix: `89b192f Follow library preview on selection`
+- Current Git HEAD before citation-detail work: `257e9d1 Open library pages externally`
 
 ## Completed work
 
@@ -63,6 +63,7 @@
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
    - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, adjustable Space-to-in-app PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
+   - Library detail panel now includes BibTeX copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box.
 
 ## Useful commits
 
@@ -74,8 +75,8 @@
 - `eaf2cc7` Improve report grouping and field filters
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
-- `c4809f2` Open library PDFs in Preview
 - `89b192f` Follow library preview on selection
+- `257e9d1` Open library pages externally
 
 ## Verification already done
 

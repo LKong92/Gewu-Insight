@@ -949,7 +949,10 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "preprint_category": preprint_primary_category(paper),
         "preprint_categories": preprint_categories(paper),
         "citation_label": citation_label(paper),
+        "citation_metrics": citation_metrics(paper),
+        "google_scholar_url": google_scholar_url(paper),
         "bibtex": bibtex_entry(paper),
+        "nature_reference": nature_reference(paper),
     }
 
 
@@ -995,6 +998,35 @@ def citation_label(paper: dict[str, Any]) -> str:
     return f"{lead} {source} ({year})" if year else f"{lead} {source}"
 
 
+def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    metrics: dict[str, Any] = {"source": "", "count": None, "by_year": []}
+    if "cited_by_count" in raw or raw.get("counts_by_year"):
+        metrics["source"] = "OpenAlex"
+        metrics["count"] = int_or_none(raw.get("cited_by_count"))
+        by_year = []
+        for item in raw.get("counts_by_year") or []:
+            if not isinstance(item, dict):
+                continue
+            year = int_or_none(item.get("year"))
+            count = int_or_none(item.get("cited_by_count", item.get("works_count")))
+            if year is None or count is None:
+                continue
+            by_year.append({"year": year, "count": count})
+        metrics["by_year"] = sorted(by_year, key=lambda entry: entry["year"])
+        return metrics
+    crossref_count = int_or_none(raw.get("is-referenced-by-count"))
+    if crossref_count is not None:
+        metrics["source"] = "Crossref"
+        metrics["count"] = crossref_count
+    return metrics
+
+
+def google_scholar_url(paper: dict[str, Any]) -> str:
+    query = paper.get("doi") or paper.get("title") or ""
+    return f"https://scholar.google.com/scholar?q={quote(query)}" if query else ""
+
+
 def bibtex_entry(paper: dict[str, Any]) -> str:
     entry_type = "misc" if (paper.get("journal") or "").lower() == ARXIV_JOURNAL_NAME.lower() else "article"
     fields = {
@@ -1018,6 +1050,54 @@ def bibtex_entry(paper: dict[str, Any]) -> str:
         if value
     )
     return f"@{entry_type}{{{bibtex_key(paper)},\n{body}\n}}"
+
+
+def nature_reference(paper: dict[str, Any]) -> dict[str, str]:
+    title = clean_text(paper.get("title") or "")
+    journal = clean_text(paper.get("journal") or "")
+    return {
+        "authors": nature_author_text(paper),
+        "title": title,
+        "journal": journal,
+        "volume": paper_volume(paper),
+        "pages": paper_page(paper),
+        "year": publication_year(paper),
+        "doi": clean_text(paper.get("doi") or ""),
+    }
+
+
+def nature_author_text(paper: dict[str, Any]) -> str:
+    authors = full_author_names(paper)
+    if not authors:
+        return ""
+    lead = nature_author_name(authors[0])
+    if len(authors) > 1:
+        return f"{lead} et al."
+    return lead
+
+
+def nature_author_name(name: str) -> str:
+    clean = clean_author_name(name)
+    if not clean:
+        return ""
+    if "," in clean:
+        family, given = [part.strip() for part in clean.split(",", 1)]
+        return f"{family}, {initials_from_given_names(given)}".strip()
+    parts = clean.split()
+    if len(parts) == 1:
+        return parts[0]
+    family = parts[-1]
+    given = " ".join(parts[:-1])
+    return f"{family}, {initials_from_given_names(given)}".strip()
+
+
+def initials_from_given_names(value: str) -> str:
+    initials: list[str] = []
+    for token in re.split(r"[\s.-]+", value):
+        token = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ]", "", token)
+        if token:
+            initials.append(f"{token[0].upper()}.")
+    return " ".join(initials)
 
 
 def full_author_names(paper: dict[str, Any]) -> list[str]:
@@ -1069,6 +1149,13 @@ def bibtex_key(paper: dict[str, Any]) -> str:
 
 def bibtex_escape(value: str) -> str:
     return str(value).replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+
+
+def int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
@@ -2418,6 +2505,62 @@ INDEX_HTML = """<!doctype html>
       white-space: pre-wrap;
       overflow: auto;
     }
+    .library-reference-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .library-reference-head strong { color: var(--ink); }
+    .nature-reference-box { white-space: normal; }
+    .citation-panel {
+      margin: 12px 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .citation-summary {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+    }
+    .citation-summary strong { color: var(--ink); }
+    .citation-count {
+      color: var(--accent-strong);
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .citation-bars {
+      display: flex;
+      align-items: end;
+      gap: 5px;
+      height: 82px;
+      margin-top: 10px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .citation-bar-wrap {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      justify-items: center;
+      gap: 4px;
+      min-width: 22px;
+      height: 80px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .citation-bar {
+      align-self: end;
+      width: 13px;
+      min-height: 2px;
+      border-radius: 3px 3px 0 0;
+      background: var(--accent);
+    }
+    .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
@@ -4040,6 +4183,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
+          ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
@@ -4051,12 +4195,72 @@ INDEX_HTML = """<!doctype html>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
         </dl>
-        <strong>BibTeX</strong>
+        ${citationMetricsMarkup(paper)}
+        <div class="library-reference-head">
+          <strong>BibTeX</strong>
+          <button class="action" data-action="copy-bibtex">Copy Code</button>
+        </div>
         <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
+        <div class="library-reference-head"><strong>Nature Reference</strong></div>
+        <div class="bibtex-box nature-reference-box">${natureReferenceMarkup(paper)}</div>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", () => copyLibraryBibtex(paper));
+    }
+
+    function citationMetricsMarkup(paper) {
+      const metrics = paper.citation_metrics || {};
+      const source = metrics.source || "Citation data";
+      const rawCount = metrics.count;
+      const count = rawCount === null || rawCount === undefined || rawCount === ""
+        ? null
+        : (Number.isFinite(Number(rawCount)) ? Number(rawCount) : null);
+      const years = Array.isArray(metrics.by_year) ? metrics.by_year.filter((entry) => Number.isFinite(Number(entry.year)) && Number.isFinite(Number(entry.count))) : [];
+      const max = Math.max(1, ...years.map((entry) => Number(entry.count)));
+      const bars = years.length
+        ? `<div class="citation-bars" aria-label="Yearly citation histogram">
+            ${years.map((entry) => {
+              const year = Number(entry.year);
+              const value = Number(entry.count);
+              const height = Math.max(2, Math.round((value / max) * 62));
+              return `<div class="citation-bar-wrap" title="${escapeAttr(`${year}: ${value}`)}">
+                <span class="citation-bar" style="height:${height}px"></span>
+                <span>${escapeHtml(String(year).slice(-2))}</span>
+              </div>`;
+            }).join("")}
+          </div>`
+        : `<div class="citation-empty">Yearly citation histogram unavailable.</div>`;
+      return `
+        <section class="citation-panel">
+          <div class="citation-summary">
+            <strong>${escapeHtml(source)} Citations</strong>
+            <span class="citation-count">${count === null ? "--" : escapeHtml(count)}</span>
+          </div>
+          ${bars}
+        </section>
+      `;
+    }
+
+    function natureReferenceMarkup(paper) {
+      const ref = paper.nature_reference || {};
+      const authors = ref.authors || "";
+      const title = ref.title || "";
+      const journal = ref.journal || "";
+      const volume = ref.volume || "";
+      const pages = ref.pages || "";
+      const year = ref.year || "";
+      const parts = [];
+      if (authors) parts.push(`${escapeHtml(authors)}.`);
+      if (title) parts.push(`${escapeHtml(title)}.`);
+      if (journal) parts.push(`<em>${escapeHtml(journal)}</em>`);
+      if (volume) parts.push(`<strong>${escapeHtml(volume)}</strong>${pages ? `, ${escapeHtml(pages)}` : ""}`);
+      else if (pages) parts.push(escapeHtml(pages));
+      const body = parts.join(" ");
+      const suffix = year ? ` (${escapeHtml(year)}).` : ".";
+      return body ? `${body}${suffix}` : escapeHtml(paper.citation_label || "");
     }
 
     function wireLibraryInteractions() {
@@ -4726,21 +4930,26 @@ INDEX_HTML = """<!doctype html>
 
     async function openLibraryPageExternally(paper) {
       if (!paper?.url) return;
+      await openLibraryExternalUrl(paper.url, "Opening in external browser...", "Opened in external browser");
+    }
+
+    async function openLibraryExternalUrl(url, pendingText, successText) {
+      if (!url) return;
       const status = $("libraryDetailStatus");
       if (status) {
-        status.textContent = "Opening in external browser...";
+        status.textContent = pendingText || "Opening in external browser...";
         status.className = "library-detail-status";
       }
       try {
         const res = await fetch("/api/open-url", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({url: paper.url})
+          body: JSON.stringify({url})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "open failed");
         if (status) {
-          status.textContent = "Opened in external browser";
+          status.textContent = successText || "Opened in external browser";
           status.className = "library-detail-status ok";
         }
       } catch (error) {
@@ -4749,6 +4958,39 @@ INDEX_HTML = """<!doctype html>
           status.className = "library-detail-status err";
         }
       }
+    }
+
+    async function copyLibraryBibtex(paper) {
+      const status = $("libraryDetailStatus");
+      try {
+        await copyTextToClipboard(paper?.bibtex || "");
+        if (status) {
+          status.textContent = "BibTeX copied";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Copy failed";
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      textarea.remove();
+      if (!ok) throw new Error("Copy failed");
     }
 
     function authorLine(paper) {
