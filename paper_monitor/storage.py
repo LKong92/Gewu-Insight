@@ -450,6 +450,27 @@ class Storage:
         row = self.conn.execute("SELECT * FROM library_folders WHERE id = ?", (int(folder_id),)).fetchone()
         return dict(row) if row else None
 
+    def rename_library_folder(self, *, folder_id: int, name: str) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        if folder_id == 1:
+            raise ValueError("Root folder cannot be renamed")
+        folder = self.get_library_folder(folder_id)
+        if not folder:
+            raise ValueError("Folder not found")
+        parent_id = int(folder.get("parent_id") or 1)
+        clean_name = " ".join(name.strip().split()) or str(folder.get("name") or "New Folder")
+        clean_name = self._unique_library_folder_name(parent_id, clean_name, exclude_id=folder_id)
+        self.conn.execute(
+            """
+            UPDATE library_folders
+            SET name = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (clean_name, now_iso(), folder_id),
+        )
+        self.conn.commit()
+        return self.get_library_folder(folder_id) or {}
+
     def add_library_item(self, *, paper_id: str, folder_id: int = 1) -> dict[str, Any]:
         folder_id = int(folder_id or 1)
         sort_order = self._next_library_sort_order("library_items", folder_id)
@@ -532,12 +553,12 @@ class Storage:
         ).fetchone()
         return int(row["next_order"] or 1)
 
-    def _unique_library_folder_name(self, parent_id: int, base_name: str) -> str:
+    def _unique_library_folder_name(self, parent_id: int, base_name: str, *, exclude_id: int | None = None) -> str:
         rows = self.conn.execute(
-            "SELECT name FROM library_folders WHERE parent_id = ?",
+            "SELECT id, name FROM library_folders WHERE parent_id = ?",
             (int(parent_id),),
         ).fetchall()
-        existing = {str(row["name"]) for row in rows}
+        existing = {str(row["name"]) for row in rows if int(row["id"]) != int(exclude_id or 0)}
         if base_name not in existing:
             return base_name
         index = 2
