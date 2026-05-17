@@ -5990,8 +5990,6 @@ INDEX_HTML = """<!doctype html>
         renderLibraryLoader();
         return;
       }
-      const confirmed = dryRun || window.confirm("Import will copy/link files into Paper Monitor and will not modify the source folder. Continue?");
-      if (!confirmed) return;
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportPath = path;
