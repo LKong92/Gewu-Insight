@@ -4326,6 +4326,8 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
       root.classList.remove("library-view");
+      root.style.height = "";
+      root.style.minHeight = "";
       root.innerHTML = "";
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
@@ -4546,6 +4548,7 @@ INDEX_HTML = """<!doctype html>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
       `;
+      resizeLibraryViewport();
       renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
@@ -4563,6 +4566,23 @@ INDEX_HTML = """<!doctype html>
         }
       }
       window.requestAnimationFrame(() => revealLibrarySelectionInColumn(state.libraryActiveFolderId));
+    }
+
+    function resizeLibraryViewport() {
+      if (state.mode !== "library") return;
+      const root = $("papers");
+      const reportColumn = root?.closest(".report-column");
+      if (!root || !reportColumn) return;
+      const columnRect = reportColumn.getBoundingClientRect();
+      const rootRect = root.getBoundingClientRect();
+      const availableHeight = Math.max(280, Math.floor(columnRect.bottom - rootRect.top));
+      root.style.height = `${availableHeight}px`;
+      root.style.minHeight = `${availableHeight}px`;
+      const shell = $("libraryShell");
+      if (shell) {
+        shell.style.height = `${availableHeight}px`;
+        shell.style.minHeight = `${availableHeight}px`;
+      }
     }
 
     function captureLibraryColumnScrollTops() {
@@ -6233,6 +6253,9 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
     }, true);
     window.addEventListener("click", hideLibraryContextMenu);
+    window.addEventListener("resize", () => {
+      if (state.mode === "library") resizeLibraryViewport();
+    });
     window.addEventListener("dragover", (event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     });
