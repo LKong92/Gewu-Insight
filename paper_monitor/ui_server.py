@@ -2373,8 +2373,12 @@ INDEX_HTML = """<!doctype html>
       background: var(--paper);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; height: 100vh; overflow: hidden; }
+    body { margin: 0; height: 100vh; overflow: hidden; -webkit-user-select: text; user-select: text; }
     button, input, select { font: inherit; }
+    button, input, select, textarea, .paper, .calendar, .sidebar, .library-view, .library-detail, .analysis-body {
+      -webkit-user-select: text;
+      user-select: text;
+    }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .app {
@@ -7057,6 +7061,70 @@ INDEX_HTML = """<!doctype html>
       if (!ok) throw new Error("Copy failed");
     }
 
+    function editableClipboardTarget(target) {
+      const element = target?.closest?.("input, textarea, [contenteditable='true']");
+      if (!element) return null;
+      if (element.matches?.("input")) {
+        const type = String(element.type || "text").toLowerCase();
+        if (["button", "checkbox", "color", "file", "radio", "range", "submit"].includes(type)) return null;
+      }
+      if (element.disabled || element.readOnly) return null;
+      return element;
+    }
+
+    function selectedTextForCopy() {
+      return String(window.getSelection?.()?.toString() || "");
+    }
+
+    function handleTextClipboardShortcut(event) {
+      if (event.altKey || event.shiftKey) return false;
+      const key = String(event.key || "").toLowerCase();
+      const isCommandLike = event.metaKey || event.ctrlKey;
+      if (!isCommandLike) return false;
+      if (key === "c") {
+        const selected = selectedTextForCopy();
+        if (!selected) return false;
+        event.preventDefault();
+        copyTextToClipboard(selected).catch(() => {});
+        return true;
+      }
+      if (key === "v") {
+        const target = editableClipboardTarget(event.target);
+        if (!target || !event.ctrlKey) return false;
+        event.preventDefault();
+        pasteClipboardTextInto(target).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+
+    async function pasteClipboardTextInto(target) {
+      if (!target) return;
+      let text = "";
+      if (navigator.clipboard?.readText) {
+        text = await navigator.clipboard.readText();
+      }
+      if (!text) return;
+      insertTextIntoEditable(target, text);
+    }
+
+    function insertTextIntoEditable(target, text) {
+      target.focus?.({preventScroll: true});
+      if (target.isContentEditable) {
+        document.execCommand("insertText", false, text);
+        target.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertText", data: text}));
+        return;
+      }
+      const start = Number.isFinite(target.selectionStart) ? target.selectionStart : String(target.value || "").length;
+      const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+      const value = String(target.value || "");
+      target.value = `${value.slice(0, start)}${text}${value.slice(end)}`;
+      const cursor = start + text.length;
+      target.setSelectionRange?.(cursor, cursor);
+      target.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertFromPaste", data: text}));
+      target.dispatchEvent(new Event("change", {bubbles: true}));
+    }
+
     function authorLine(paper) {
       const authors = Array.isArray(paper.authors) ? paper.authors : [];
       if (!authors.length) return "Authors unavailable";
@@ -7421,6 +7489,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
+      if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
       if (state.libraryQuickLookOpen) {
