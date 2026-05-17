@@ -4056,7 +4056,7 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
-      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
+      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
     }
 
     function wireLibraryInteractions() {
@@ -4722,6 +4722,33 @@ INDEX_HTML = """<!doctype html>
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({url: state.internalBrowserUrl})
       });
+    }
+
+    async function openLibraryPageExternally(paper) {
+      if (!paper?.url) return;
+      const status = $("libraryDetailStatus");
+      if (status) {
+        status.textContent = "Opening in external browser...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/open-url", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url: paper.url})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "open failed");
+        if (status) {
+          status.textContent = "Opened in external browser";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message;
+          status.className = "library-detail-status err";
+        }
+      }
     }
 
     function authorLine(paper) {

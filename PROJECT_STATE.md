@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library preview follow-on-selection fix: `3363eb0 Use continuous library preview pages`
+- Current Git HEAD before Library external page open fix: `89b192f Follow library preview on selection`
 
 ## Completed work
 
@@ -75,7 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
-- `3363eb0` Use continuous library preview pages
+- `89b192f` Follow library preview on selection
 
 ## Verification already done
 
