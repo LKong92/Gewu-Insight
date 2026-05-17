@@ -660,6 +660,10 @@ class Storage:
         ).fetchone()
         return dict(row) if row else {}
 
+    def delete_my_publication(self, *, publication_id: int) -> None:
+        self.conn.execute("DELETE FROM my_publications WHERE id = ?", (int(publication_id),))
+        self.conn.commit()
+
     def list_my_publications(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """

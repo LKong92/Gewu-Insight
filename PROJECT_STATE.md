@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before clipboard shortcut fix: `c30ce5d Add all literatures library tab`
+- Current Git HEAD before My Publications shortcut-tab work: `ce7a696 Enable app text copy and paste`
 
 ## Completed work
 
@@ -73,13 +73,13 @@
    - Library/My Publications details now include abstracts and first-figure previews; My Publications uses internal Crossref author/title/DOI lookup, with a horizontally scrollable/resizable publication table.
    - Library now has a third `All Literatures` tab that derives one unified shortcut list from Library shortcuts and My Publications without duplicating PDFs; My Publications ID cells use italic journal and bold volume formatting.
    - App text selection/copy-paste now works better via selectable UI text, JS Ctrl/Cmd copy fallback, and a native macOS Edit menu in the wrapper.
+   - My Publications rows can be deleted, Details bolds the saved author name including initial variants, and Library has five folder shortcut tabs plus three reserved independent spaces.
 
 ## Useful commits
 
-- `c12e3b4` Add my publications library tab
-- `edcf173` Improve publication search and library details
 - `513ce8d` Tune my publications table
 - `c30ce5d` Add all literatures library tab
+- `ce7a696` Enable app text copy and paste
 
 ## Verification already done
 
