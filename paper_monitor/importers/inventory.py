@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+
+from pypdf import PdfReader
 
 from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_IMPORT_DIR, ROOT
 from ..storage import Storage
@@ -17,6 +20,37 @@ PAPER_CANDIDATE_KIND = "pdf"
 PAPER_CANDIDATE_IMPORT_AS = "paper_candidate"
 REPORT_DIR = ROOT / "reports" / "imports"
 LIBRARY_IMPORT_DIR = DEFAULT_LIBRARY_IMPORT_DIR
+SYSTEM_METADATA_FILENAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+DOCUMENT_EXTENSIONS = {".doc", ".docx", ".rtf", ".txt", ".md", ".tex"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp", ".heic", ".webp"}
+VIDEO_EXTENSIONS = {".mov", ".mp4", ".avi", ".m4v", ".mkv"}
+PRESENTATION_EXTENSIONS = {".ppt", ".pptx", ".key"}
+SPREADSHEET_EXTENSIONS = {".xls", ".xlsx", ".csv", ".tsv", ".numbers"}
+ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".bz2", ".7z", ".rar"}
+DOI_PATTERN = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.I)
+ARXIV_PATTERN = re.compile(r"(?:arxiv[:_\s-]*)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
+
+
+def build_inventory_from_folder(folder_path: str | Path, *, output_path: str | Path | None = None) -> dict[str, Any]:
+    root = Path(folder_path).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Folder does not exist: {root}")
+    directories: list[dict[str, str]] = []
+    files: list[dict[str, Any]] = []
+    for current, dirnames, filenames in os_walk_sorted(root):
+        current_path = Path(current)
+        relative_dir = "" if current_path == root else current_path.relative_to(root).as_posix()
+        directories.append({"path": str(current_path), "relative_path": relative_dir})
+        for filename in filenames:
+            path = current_path / filename
+            files.append(scan_inventory_file(path, root))
+    summary = inventory_summary(root, directories, files)
+    inventory = {"summary": summary, "directories": directories, "files": files}
+    if output_path:
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
+    return inventory
 
 
 def import_library_inventory(
@@ -30,12 +64,9 @@ def import_library_inventory(
     db_path: str | Path = DEFAULT_DB_PATH,
     report_path: str | Path | None = None,
     target_root: str | Path = LIBRARY_IMPORT_DIR,
+    library_item_name: str = "default",
 ) -> dict[str, Any]:
-    """Inspect an external inventory and report what Paper Monitor would import.
-
-    Real imports are intentionally disabled for the first implementation pass.
-    The dry-run path is side-effect free except for the optional JSON report.
-    """
+    """Inspect or import an external inventory into Paper Monitor storage."""
 
     inventory_file = Path(inventory_path)
     dedupe_keys = normalize_dedupe_keys(dedupe_by)
@@ -75,6 +106,7 @@ def import_library_inventory(
     result["real_import_supported"] = True
     library_target_root = Path(target_root)
     result["copy_target_root"] = str(library_target_root)
+    result["library_item_name"] = library_item_name
 
     owns_storage = storage is None
     active_storage = storage or Storage(Path(db_path))
@@ -83,7 +115,7 @@ def import_library_inventory(
         if dry_run:
             evaluate_files(files, result, existing, dedupe_keys)
         else:
-            execute_import(files, result, active_storage, existing, dedupe_keys, inventory_file, library_target_root)
+            execute_import(files, result, active_storage, existing, dedupe_keys, inventory_file, library_target_root, library_item_name)
     finally:
         if owns_storage:
             active_storage.close()
@@ -255,6 +287,7 @@ def execute_import(
     dedupe_keys: list[str],
     inventory_file: Path,
     library_target_root: Path,
+    library_item_name: str,
 ) -> None:
     batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     target_root = library_target_root / batch_id
@@ -326,7 +359,9 @@ def execute_import(
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+                    item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+                    if library_item_name == "filename" and item and record["filename"]:
+                        storage.rename_library_item(item_id=int(item["id"]), name=record["filename"])
                 continue
 
             if import_as == "resource":
@@ -416,6 +451,191 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "page_count": int_or_none(raw.get("page_count")),
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
+    }
+
+
+def os_walk_sorted(root: Path):
+    for current, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(dirnames)
+        yield current, dirnames, sorted(filenames)
+
+
+def scan_inventory_file(path: Path, root: Path) -> dict[str, Any]:
+    stat = path.stat()
+    relative_path = path.relative_to(root).as_posix()
+    parent_relative_path = "" if path.parent == root else path.parent.relative_to(root).as_posix()
+    extension = path.suffix.lower()
+    kind = file_kind(path)
+    record: dict[str, Any] = {
+        "path": str(path),
+        "relative_path": relative_path,
+        "parent_relative_path": parent_relative_path,
+        "filename": path.name,
+        "extension": extension,
+        "kind": kind,
+        "mime_type": mime_type_for_kind(kind, extension),
+        "import_as": import_as_for_kind(kind),
+        "status": "recorded",
+        "size_bytes": int(stat.st_size),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
+    }
+    if kind == "pdf":
+        record.update(pdf_metadata(path))
+    return record
+
+
+def file_kind(path: Path) -> str:
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if name in SYSTEM_METADATA_FILENAMES or name.startswith("._"):
+        return "system_metadata"
+    if suffix == ".pdf":
+        return "pdf"
+    if is_probable_mac_alias(path):
+        return "mac_alias"
+    if suffix in DOCUMENT_EXTENSIONS:
+        return "document"
+    if suffix in IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+    if suffix in PRESENTATION_EXTENSIONS:
+        return "presentation"
+    if suffix in SPREADSHEET_EXTENSIONS:
+        return "spreadsheet"
+    if suffix in ARCHIVE_EXTENSIONS:
+        return "archive"
+    return "unknown"
+
+
+def import_as_for_kind(kind: str) -> str:
+    if kind == "pdf":
+        return "paper_candidate"
+    if kind == "system_metadata":
+        return "ignore_candidate"
+    if kind == "mac_alias":
+        return "alias_reference"
+    return "resource"
+
+
+def mime_type_for_kind(kind: str, extension: str) -> str | None:
+    if kind == "pdf":
+        return "application/pdf"
+    if kind == "system_metadata":
+        return None
+    return {
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+    }.get(extension)
+
+
+def is_probable_mac_alias(path: Path) -> bool:
+    try:
+        if path.is_symlink() or path.is_dir() or path.stat().st_size > 1024 * 1024:
+            return False
+        header = path.read_bytes()[:512]
+    except OSError:
+        return False
+    return b"book" in header[:16] or b"alis" in header[:128]
+
+
+def pdf_metadata(path: Path) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "doi": "",
+        "doi_source": None,
+        "arxiv_id": None,
+        "title": "",
+        "authors": [],
+        "page_count": None,
+        "parse_status": "parse_error",
+        "parse_error": "",
+    }
+    text = ""
+    try:
+        reader = PdfReader(str(path))
+        metadata["page_count"] = len(reader.pages)
+        info = reader.metadata or {}
+        title = clean_text(getattr(info, "title", "") or info.get("/Title", ""))
+        author = clean_text(getattr(info, "author", "") or info.get("/Author", ""))
+        metadata["title"] = title
+        metadata["authors"] = split_pdf_authors(author)
+        pieces = []
+        for page in reader.pages[:3]:
+            try:
+                pieces.append(page.extract_text() or "")
+            except Exception:
+                continue
+        text = "\n".join(pieces)
+        metadata["parse_status"] = "parsed" if clean_text(text) else "no_text_found"
+    except Exception as exc:
+        metadata["parse_error"] = str(exc)
+    doi = doi_from_text(text) or doi_from_filename(path.name)
+    if doi:
+        metadata["doi"] = doi
+        metadata["doi_source"] = "pdf_text_pypdf" if doi_from_text(text) else "filename_rule"
+    arxiv_id = normalize_arxiv_id(arxiv_from_text(text) or arxiv_from_text(path.name))
+    if arxiv_id:
+        metadata["arxiv_id"] = arxiv_id
+    if not metadata["title"]:
+        metadata["title"] = path.name
+    return metadata
+
+
+def split_pdf_authors(value: str) -> list[str]:
+    if not value:
+        return []
+    return [clean_text(part) for part in re.split(r"\s*(?:,|;|\band\b)\s*", value) if clean_text(part)]
+
+
+def doi_from_text(value: str) -> str:
+    match = DOI_PATTERN.search(value or "")
+    if not match:
+        return ""
+    return normalize_doi(match.group(0).rstrip(".,;)"))
+
+
+def doi_from_filename(filename: str) -> str:
+    text = filename.replace("_", "/")
+    doi = doi_from_text(text)
+    if doi:
+        return doi
+    normalized = filename.lower()
+    physrev = re.search(r"(revmodphys|physrev[a-z]*|prxquantum)\.?\s*(\d+)\.([0-9a-z]+)", normalized, flags=re.I)
+    if physrev:
+        journal = physrev.group(1).replace("physrevlett", "physrevlett")
+        return normalize_doi(f"10.1103/{journal}.{physrev.group(2)}.{physrev.group(3)}")
+    science = re.search(r"(science|sciadv)\.([a-z]?\d{4,}|[a-z]+\d+)", normalized, flags=re.I)
+    if science:
+        return normalize_doi(f"10.1126/{science.group(1)}.{science.group(2)}")
+    nature = re.search(r"(s\d{5}-\d{3}-\d{5}-\d)", normalized)
+    if nature:
+        return normalize_doi(f"10.1038/{nature.group(1)}")
+    return ""
+
+
+def arxiv_from_text(value: str) -> str:
+    match = ARXIV_PATTERN.search(value or "")
+    return match.group(1) if match else ""
+
+
+def inventory_summary(root: Path, directories: list[dict[str, str]], files: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "root": str(root),
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "directory_count": len(directories),
+        "file_count": len(files),
+        "pdf_count": sum(1 for item in files if item.get("kind") == "pdf"),
+        "doi_count": sum(1 for item in files if item.get("doi")),
+        "arxiv_count": sum(1 for item in files if item.get("arxiv_id")),
+        "alias_count": sum(1 for item in files if item.get("kind") == "mac_alias"),
+        "recorded_only_count": sum(1 for item in files if item.get("import_as") != "paper_candidate"),
     }
 
 

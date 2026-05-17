@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paper_monitor.importers.inventory import import_library_inventory
+from paper_monitor.importers.inventory import build_inventory_from_folder, import_library_inventory
 from paper_monitor.storage import Storage
 
 
@@ -236,6 +236,53 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertTrue(Path(paper["merged_pdf_path"]).exists())
         resource_count = self.storage.conn.execute("SELECT COUNT(*) AS c FROM resources WHERE kind = 'presentation'").fetchone()["c"]
         self.assertEqual(resource_count, 1)
+
+    def test_build_inventory_from_folder_scans_pdf_resource_and_metadata(self) -> None:
+        scan_root = self.root / "scan"
+        scan_root.mkdir()
+        pdf = scan_root / "topic/example.pdf"
+        pdf.parent.mkdir()
+        pdf.write_bytes(b"%PDF fixture")
+        ppt = scan_root / "topic/slides.pptx"
+        ppt.write_bytes(b"ppt")
+        ds_store = scan_root / ".DS_Store"
+        ds_store.write_bytes(b"meta")
+        inventory = build_inventory_from_folder(scan_root, output_path=self.root / "built.json")
+
+        records = {item["relative_path"]: item for item in inventory["files"]}
+        self.assertEqual(records[pdf.relative_to(scan_root).as_posix()]["kind"], "pdf")
+        self.assertEqual(records[pdf.relative_to(scan_root).as_posix()]["import_as"], "paper_candidate")
+        self.assertEqual(records[ppt.relative_to(scan_root).as_posix()]["kind"], "presentation")
+        self.assertEqual(records[ppt.relative_to(scan_root).as_posix()]["import_as"], "resource")
+        self.assertEqual(records[ds_store.relative_to(scan_root).as_posix()]["kind"], "system_metadata")
+        self.assertEqual(inventory["summary"]["file_count"], 3)
+
+    def test_folder_import_can_name_library_shortcut_by_filename(self) -> None:
+        pdf = self.touch("topic/original-name.pdf", b"%PDF fixture")
+        inventory_path = self.write_inventory([self.pdf_record(pdf, doi="10.8888/name", title="Named Paper")])
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "filename-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+        )
+
+        self.assertFalse(result["errors"])
+        row = self.storage.conn.execute(
+            """
+            SELECT library_items.display_name
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            WHERE papers.doi = ?
+            """,
+            ("10.8888/name",),
+        ).fetchone()
+        self.assertEqual(row["display_name"], "original-name.pdf")
 
 
 if __name__ == "__main__":

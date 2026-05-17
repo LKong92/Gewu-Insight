@@ -79,7 +79,7 @@
    - Native launcher opens the app window at the current screen's full visible size by default.
    - Space rename/DOI inputs keep focus instead of being stolen by the library keyboard shell.
    - Green Spaces are independent Library-style filesystem roots; DOI adds papers into the active Space root as normal shortcuts.
-   - Inventory importer has CLI/API/tests for `library_inventory.json`; real copy import batch `inventory_20260517_224119` imported 5942 papers and 8423 resource rows.
+   - Inventory importer has CLI/API/tests for `library_inventory.json`; UI can now import a user-selected folder via dry-run/import, preserving folder paths and filename shortcut labels.
 
 ## Verification already done
 

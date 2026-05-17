@@ -10,7 +10,7 @@ import re
 import subprocess
 import threading
 import webbrowser
-from datetime import date
+from datetime import date, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,10 +28,12 @@ from .config import (
     DEFAULT_DB_PATH,
     DEFAULT_LIBRARY_IMPORT_DIR,
     DEFAULT_PDF_DIR,
+    ROOT,
     load_config,
 )
 from .download import download_paper
 from .http import request_with_retries
+from .importers.inventory import build_inventory_from_folder, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
@@ -258,6 +260,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/workspace-tabs/add-doi":
                 self.handle_add_library_workspace_doi(payload)
+                return
+            if parsed.path == "/api/library/import-folder/choose":
+                self.handle_choose_library_import_folder()
+                return
+            if parsed.path == "/api/library/import-folder":
+                self.handle_library_import_folder(payload)
                 return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown route")
         except Exception as exc:
@@ -610,6 +618,70 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"paper_id": paper_id, **snapshot})
+
+    def handle_choose_library_import_folder(self) -> None:
+        try:
+            script = (
+                'POSIX path of (choose folder with prompt '
+                '"Choose a folder to import into Paper Monitor. The source folder will be read only.")'
+            )
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as exc:
+            message = (exc.stderr or "").strip() or "Folder selection was cancelled"
+            self.send_error_json(HTTPStatus.BAD_REQUEST, message)
+            return
+        folder_path = result.stdout.strip().rstrip("/")
+        self.send_json({"path": folder_path})
+
+    def handle_library_import_folder(self, payload: dict[str, Any]) -> None:
+        folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
+        if not str(folder_path):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is required")
+            return
+        try:
+            folder_path = folder_path.resolve()
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve folder path: {exc}")
+            return
+        if not folder_path.exists() or not folder_path.is_dir():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
+            return
+        copy_mode = str(payload.get("copy_mode") or "copy")
+        if copy_mode not in {"copy", "link"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
+            return
+        dry_run = bool(payload.get("dry_run"))
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        slug = safe_slug(folder_path.name or "library-folder", 60)
+        inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
+        report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-{'dry-run' if dry_run else 'import'}-{timestamp}.json"
+        try:
+            build_inventory_from_folder(folder_path, output_path=inventory_path)
+            storage = Storage(self.configured_db_path)
+            try:
+                result = import_library_inventory(
+                    inventory_path,
+                    copy_mode=copy_mode,
+                    preserve_folders=True,
+                    dedupe_by=("doi", "arxiv", "path"),
+                    dry_run=dry_run,
+                    storage=storage,
+                    report_path=report_path,
+                    library_item_name="filename",
+                )
+                snapshot = library_snapshot(storage)
+            finally:
+                storage.close()
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            return
+        self.send_json({"import_result": summarize_import_result(result), "inventory_path": str(inventory_path), **snapshot})
 
     def handle_create_library_folder(self, payload: dict[str, Any]) -> None:
         name = str(payload.get("name") or "New Folder")
@@ -1362,6 +1434,36 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
         "shortcut_tabs": library_shortcut_tabs(storage),
         "workspace_tabs": workspace_tabs,
     }
+
+
+def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "dry_run",
+        "copy_mode",
+        "source_root",
+        "total_files",
+        "paper_candidates_seen",
+        "created_papers",
+        "updated_papers",
+        "pdf_attachments_to_import",
+        "created_resources",
+        "resources_or_attachments_to_import",
+        "skipped",
+        "skipped_system_metadata",
+        "mac_aliases_found",
+        "missing_source_files",
+        "doi_duplicates",
+        "arxiv_duplicates",
+        "duplicate_paper_candidates",
+        "report_path",
+        "copy_target_root",
+        "import_batch_id",
+    ]
+    summary = {key: result.get(key) for key in keys if key in result}
+    summary["errors"] = result.get("errors") or []
+    summary["warnings"] = (result.get("warnings") or [])[:20]
+    summary["warning_count"] = len(result.get("warnings") or [])
+    return summary
 
 
 def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
@@ -3109,6 +3211,7 @@ INDEX_HTML = """<!doctype html>
       border-bottom: 1px solid var(--line);
       margin-bottom: 10px;
       flex-wrap: wrap;
+      grid-column: 1 / -1;
     }
     .workspace-tools input {
       min-height: 32px;
@@ -3117,6 +3220,34 @@ INDEX_HTML = """<!doctype html>
       padding: 0 10px;
       background: #fff;
     }
+    .library-import-tools {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto auto auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 10px;
+    }
+    .library-import-tools input,
+    .library-import-tools select {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .library-import-status {
+      grid-column: 1 / -1;
+      min-height: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .library-import-status.err { color: #b42318; }
+    .library-import-status.ok { color: #067647; }
     .library-tab.drag-over {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 1px var(--accent);
@@ -3262,6 +3393,7 @@ INDEX_HTML = """<!doctype html>
     .library-shell {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+      grid-template-rows: auto auto minmax(0, 1fr);
       gap: 12px;
       align-items: stretch;
       height: 100%;
@@ -3917,6 +4049,9 @@ INDEX_HTML = """<!doctype html>
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
+      libraryImportStatus: "",
+      libraryImportBusy: false,
+      libraryImportLastResult: null,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -5365,6 +5500,7 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
           ${workspaceToolsMarkup()}
+          ${libraryImportToolsMarkup()}
           <div class="library-columns" id="libraryColumns"></div>
           <aside class="library-pane">
             <div class="library-pane-header">Details</div>
@@ -5387,6 +5523,7 @@ INDEX_HTML = """<!doctype html>
       renderLibraryDetail();
       wireLibraryInteractions();
       wireWorkspaceTools();
+      wireLibraryImportTools();
       restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
       if (columns) {
@@ -5425,6 +5562,105 @@ INDEX_HTML = """<!doctype html>
           <span class="all-literatures-stats" id="workspaceStatus">${escapeHtml(state.workspaceStatus || "This space works like Library. Add papers by DOI into its root.")}</span>
         </div>
       `;
+    }
+
+    function libraryImportToolsMarkup() {
+      if (state.libraryTab !== "library") return "";
+      const result = state.libraryImportLastResult || null;
+      const summary = result ? [
+        `${result.created_papers || 0} create`,
+        `${result.updated_papers || 0} update`,
+        `${result.resources_or_attachments_to_import || 0} resources`,
+        `${result.skipped || 0} skipped`,
+        `${result.missing_source_files || 0} missing`,
+        result.report_path ? `Report: ${result.report_path}` : ""
+      ].filter(Boolean).join(" · ") : "";
+      const status = state.libraryImportStatus || summary || "Choose a folder or paste a path, then dry-run before importing.";
+      const statusClass = result?.errors?.length ? " err" : (result ? " ok" : "");
+      return `
+        <div class="library-import-tools" id="libraryImportTools">
+          <input id="libraryImportPath" type="text" placeholder="/path/to/folder" value="${escapeAttr(state.libraryImportPath || "")}">
+          <select id="libraryImportCopyMode" title="Import mode">
+            <option value="copy" ${state.libraryImportCopyMode === "link" ? "" : "selected"}>Copy</option>
+            <option value="link" ${state.libraryImportCopyMode === "link" ? "selected" : ""}>Link</option>
+          </select>
+          <button class="smallbtn" id="libraryChooseFolder" type="button">Choose Folder</button>
+          <button class="smallbtn" id="libraryDryRunImport" type="button" ${state.libraryImportBusy ? "disabled" : ""}>Dry Run</button>
+          <button class="smallbtn" id="libraryRunImport" type="button" ${state.libraryImportBusy ? "disabled" : ""}>Import</button>
+          <div class="library-import-status${statusClass}" id="libraryImportStatus">${escapeHtml(status)}</div>
+        </div>
+      `;
+    }
+
+    function wireLibraryImportTools() {
+      const tools = $("libraryImportTools");
+      if (!tools) return;
+      const pathInput = $("libraryImportPath");
+      const copyMode = $("libraryImportCopyMode");
+      [pathInput, copyMode].forEach((element) => {
+        element?.addEventListener("click", (event) => event.stopPropagation());
+        element?.addEventListener("keydown", (event) => event.stopPropagation());
+      });
+      pathInput?.addEventListener("input", () => {
+        state.libraryImportPath = pathInput.value;
+      });
+      copyMode?.addEventListener("change", () => {
+        state.libraryImportCopyMode = copyMode.value;
+      });
+      $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
+      $("libraryDryRunImport")?.addEventListener("click", () => runLibraryFolderImport(true));
+      $("libraryRunImport")?.addEventListener("click", () => runLibraryFolderImport(false));
+    }
+
+    async function chooseLibraryImportFolder() {
+      await runLibraryMenuAction(async () => {
+        state.libraryImportStatus = "Waiting for macOS folder permission...";
+        renderLibrary();
+        const res = await fetch("/api/library/import-folder/choose", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not choose folder");
+        state.libraryImportPath = data.path || "";
+        state.libraryImportStatus = "Folder selected. Run Dry Run before importing.";
+        state.libraryImportLastResult = null;
+        renderLibrary();
+      });
+    }
+
+    async function runLibraryFolderImport(dryRun) {
+      const path = ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
+      const copyMode = $("libraryImportCopyMode")?.value || state.libraryImportCopyMode || "copy";
+      if (!path) {
+        state.libraryImportStatus = "Folder path is required.";
+        state.libraryImportLastResult = {errors: ["Folder path is required"]};
+        renderLibrary();
+        return;
+      }
+      const confirmed = dryRun || window.confirm("Import will copy/link files into Paper Monitor and will not modify the source folder. Continue?");
+      if (!confirmed) return;
+      state.libraryImportBusy = true;
+      state.libraryImportPath = path;
+      state.libraryImportCopyMode = copyMode;
+      state.libraryImportStatus = dryRun ? "Scanning folder for dry-run..." : "Importing folder...";
+      state.libraryImportLastResult = null;
+      renderLibrary();
+      try {
+        const res = await fetch("/api/library/import-folder", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({folder_path: path, copy_mode: copyMode, dry_run: dryRun})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Import failed");
+        state.libraryImportLastResult = data.import_result || null;
+        state.libraryImportStatus = dryRun ? "Dry-run complete." : "Import complete.";
+        applyLibrarySnapshot(data);
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Import failed";
+        state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
+      } finally {
+        state.libraryImportBusy = false;
+        renderLibrary();
+      }
     }
 
     function renderLibraryTabs() {
