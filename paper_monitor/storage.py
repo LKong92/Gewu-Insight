@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS library_folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   parent_id INTEGER REFERENCES library_folders(id) ON DELETE CASCADE,
+  original_parent_id INTEGER,
+  trashed_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0
@@ -79,6 +81,8 @@ CREATE TABLE IF NOT EXISTS library_items (
   folder_id INTEGER NOT NULL REFERENCES library_folders(id) ON DELETE CASCADE,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
   display_name TEXT,
+  original_folder_id INTEGER,
+  trashed_at TEXT,
   created_at TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(folder_id, paper_id)
@@ -111,6 +115,19 @@ class Storage:
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
             self.conn.execute("ALTER TABLE library_items ADD COLUMN display_name TEXT")
+            self.conn.commit()
+        if "original_folder_id" not in library_item_columns:
+            self.conn.execute("ALTER TABLE library_items ADD COLUMN original_folder_id INTEGER")
+            self.conn.commit()
+        if "trashed_at" not in library_item_columns:
+            self.conn.execute("ALTER TABLE library_items ADD COLUMN trashed_at TEXT")
+            self.conn.commit()
+        library_folder_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_folders)").fetchall()}
+        if "original_parent_id" not in library_folder_columns:
+            self.conn.execute("ALTER TABLE library_folders ADD COLUMN original_parent_id INTEGER")
+            self.conn.commit()
+        if "trashed_at" not in library_folder_columns:
+            self.conn.execute("ALTER TABLE library_folders ADD COLUMN trashed_at TEXT")
             self.conn.commit()
 
     def _ensure_library_root(self) -> None:
@@ -544,6 +561,123 @@ class Storage:
         self.conn.execute("DELETE FROM library_folders WHERE id = ?", (folder_id,))
         self.conn.commit()
 
+    def remove_library_paper(self, *, paper_id: str) -> None:
+        self.conn.execute("DELETE FROM library_items WHERE paper_id = ?", (str(paper_id),))
+        self.conn.commit()
+
+    def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM library_items
+            WHERE paper_id = ?
+              AND folder_id != ?
+              AND trashed_at IS NULL
+            """,
+            (str(paper_id), int(recycle_folder_id)),
+        ).fetchone()
+        return int(row["count"] or 0)
+
+    def move_library_item_to_trash(self, *, item_id: int, recycle_folder_id: int) -> dict[str, Any]:
+        source = self.get_library_item(item_id)
+        if not source:
+            raise ValueError("Library item not found")
+        recycle_folder_id = int(recycle_folder_id)
+        existing = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ? AND paper_id = ? AND id != ?
+            """,
+            (recycle_folder_id, source["paper_id"], int(item_id)),
+        ).fetchone()
+        if existing:
+            self.delete_library_item(item_id=int(item_id))
+            return dict(existing)
+        sort_order = self._next_library_sort_order("library_items", recycle_folder_id)
+        self.conn.execute(
+            """
+            UPDATE library_items
+            SET folder_id = ?, original_folder_id = ?, trashed_at = ?, sort_order = ?
+            WHERE id = ?
+            """,
+            (recycle_folder_id, int(source.get("folder_id") or 1), now_iso(), sort_order, int(item_id)),
+        )
+        self.conn.commit()
+        return self.get_library_item(int(item_id)) or {}
+
+    def recover_library_item(self, *, item_id: int, fallback_folder_id: int) -> dict[str, Any]:
+        source = self.get_library_item(item_id)
+        if not source:
+            raise ValueError("Library item not found")
+        target_folder_id = int(source.get("original_folder_id") or fallback_folder_id or 1)
+        if not self.get_library_folder(target_folder_id):
+            target_folder_id = int(fallback_folder_id or 1)
+        existing = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ? AND paper_id = ? AND id != ?
+            """,
+            (target_folder_id, source["paper_id"], int(item_id)),
+        ).fetchone()
+        if existing:
+            self.delete_library_item(item_id=int(item_id))
+            return dict(existing)
+        sort_order = self._next_library_sort_order("library_items", target_folder_id)
+        self.conn.execute(
+            """
+            UPDATE library_items
+            SET folder_id = ?, original_folder_id = NULL, trashed_at = NULL, sort_order = ?
+            WHERE id = ?
+            """,
+            (target_folder_id, sort_order, int(item_id)),
+        )
+        self.conn.commit()
+        return self.get_library_item(int(item_id)) or {}
+
+    def move_library_folder_to_trash(self, *, folder_id: int, recycle_folder_id: int) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        recycle_folder_id = int(recycle_folder_id)
+        if folder_id == 1 or folder_id == recycle_folder_id:
+            raise ValueError("This folder cannot be deleted")
+        source = self.get_library_folder(folder_id)
+        if not source:
+            raise ValueError("Folder not found")
+        if self._folder_is_descendant(recycle_folder_id, folder_id):
+            raise ValueError("Folder cannot be moved inside itself")
+        sort_order = self._next_library_sort_order("library_folders", recycle_folder_id)
+        self.conn.execute(
+            """
+            UPDATE library_folders
+            SET parent_id = ?, original_parent_id = ?, trashed_at = ?, sort_order = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (recycle_folder_id, int(source.get("parent_id") or 1), now_iso(), sort_order, now_iso(), folder_id),
+        )
+        self.conn.commit()
+        return self.get_library_folder(folder_id) or {}
+
+    def recover_library_folder(self, *, folder_id: int, fallback_parent_id: int) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        source = self.get_library_folder(folder_id)
+        if not source:
+            raise ValueError("Folder not found")
+        parent_id = int(source.get("original_parent_id") or fallback_parent_id or 1)
+        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id) or not self.get_library_folder(parent_id):
+            parent_id = int(fallback_parent_id or 1)
+        sort_order = self._next_library_sort_order("library_folders", parent_id)
+        self.conn.execute(
+            """
+            UPDATE library_folders
+            SET parent_id = ?, original_parent_id = NULL, trashed_at = NULL, sort_order = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (parent_id, sort_order, now_iso(), folder_id),
+        )
+        self.conn.commit()
+        return self.get_library_folder(folder_id) or {}
+
     def copy_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
         source = self.get_library_item(item_id)
         if not source:
@@ -639,7 +773,7 @@ class Storage:
             return dict(existing)
         sort_order = self._next_library_sort_order("library_items", folder_id)
         self.conn.execute(
-            "UPDATE library_items SET folder_id = ?, sort_order = ? WHERE id = ?",
+            "UPDATE library_items SET folder_id = ?, original_folder_id = NULL, trashed_at = NULL, sort_order = ? WHERE id = ?",
             (folder_id, sort_order, item_id),
         )
         self.conn.commit()
@@ -657,7 +791,7 @@ class Storage:
         self.conn.execute(
             """
             UPDATE library_folders
-            SET parent_id = ?, sort_order = ?, updated_at = ?
+            SET parent_id = ?, original_parent_id = NULL, trashed_at = NULL, sort_order = ?, updated_at = ?
             WHERE id = ?
             """,
             (parent_id, sort_order, now_iso(), folder_id),
