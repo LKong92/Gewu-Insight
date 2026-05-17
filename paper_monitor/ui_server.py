@@ -9,6 +9,7 @@ import mimetypes
 import re
 import subprocess
 import threading
+import uuid
 import webbrowser
 from datetime import date, datetime
 from http import HTTPStatus
@@ -46,6 +47,8 @@ from .time_utils import today_jst
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
+LIBRARY_IMPORT_JOBS: dict[str, dict[str, Any]] = {}
+LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
@@ -126,6 +129,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/fetch-progress":
                 self.handle_fetch_progress(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/import-folder/progress":
+                self.handle_library_import_folder_progress(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/paper":
                 self.handle_paper(parse_qs(parsed.query))
@@ -263,6 +269,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/import-folder/choose":
                 self.handle_choose_library_import_folder()
+                return
+            if parsed.path == "/api/library/import-folder/start":
+                self.handle_start_library_import_folder(payload)
                 return
             if parsed.path == "/api/library/import-folder":
                 self.handle_library_import_folder(payload)
@@ -638,6 +647,47 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         folder_path = result.stdout.strip().rstrip("/")
         self.send_json({"path": folder_path})
+
+    def handle_start_library_import_folder(self, payload: dict[str, Any]) -> None:
+        folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
+        if not str(folder_path):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is required")
+            return
+        try:
+            folder_path = folder_path.resolve()
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve folder path: {exc}")
+            return
+        if not folder_path.exists() or not folder_path.is_dir():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
+            return
+        copy_mode = str(payload.get("copy_mode") or "copy")
+        if copy_mode not in {"copy", "link"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
+            return
+        dry_run = bool(payload.get("dry_run"))
+        job_id = create_library_import_job(folder_path=folder_path, copy_mode=copy_mode, dry_run=dry_run)
+        thread = threading.Thread(
+            target=run_library_import_job,
+            kwargs={
+                "job_id": job_id,
+                "folder_path": folder_path,
+                "copy_mode": copy_mode,
+                "dry_run": dry_run,
+                "db_path": self.configured_db_path,
+            },
+            daemon=True,
+        )
+        thread.start()
+        self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
+
+    def handle_library_import_folder_progress(self, query: dict[str, list[str]]) -> None:
+        job_id = first(query, "job_id") or first(query, "id")
+        job = get_library_import_job(job_id)
+        if not job:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
+            return
+        self.send_json({"job": job})
 
     def handle_library_import_folder(self, payload: dict[str, Any]) -> None:
         folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
@@ -2028,6 +2078,142 @@ def get_fetch_progress(selected: str) -> dict[str, Any] | None:
         return dict(progress) if progress else None
 
 
+def create_library_import_job(*, folder_path: Path, copy_mode: str, dry_run: bool) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        LIBRARY_IMPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "folder_path": str(folder_path),
+            "copy_mode": copy_mode,
+            "dry_run": dry_run,
+            "started_at": now,
+            "finished_at": "",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            "logs": [{"time": now, "level": "info", "message": "Queued loader job"}],
+            "result": None,
+            "inventory_path": "",
+            "error": "",
+        }
+    return job_id
+
+
+def get_library_import_job(job_id: str | None) -> dict[str, Any] | None:
+    if not job_id:
+        return None
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        job = LIBRARY_IMPORT_JOBS.get(job_id)
+        if not job:
+            return None
+        snapshot = dict(job)
+        snapshot["logs"] = list(job.get("logs") or [])[-300:]
+        return snapshot
+
+
+def update_library_import_job(job_id: str, **updates: Any) -> None:
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        job = LIBRARY_IMPORT_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+
+
+def log_library_import_job(job_id: str, message: str, *, level: str = "info") -> None:
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        job = LIBRARY_IMPORT_JOBS.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"time": stamp, "level": level, "message": message})
+        if len(logs) > 500:
+            del logs[:-500]
+
+
+def library_import_progress_callback(job_id: str):
+    def progress(event: dict[str, Any]) -> None:
+        current = event.get("current")
+        total = event.get("total")
+        percent = 0
+        if isinstance(current, int) and isinstance(total, int) and total > 0:
+            percent = max(0, min(100, round((current / total) * 100)))
+        update_library_import_job(
+            job_id,
+            stage=event.get("stage") or "running",
+            current=current or 0,
+            total=total or 0,
+            percent=percent,
+        )
+        message = clean_text(event.get("message"))
+        if message:
+            log_library_import_job(job_id, message)
+
+    return progress
+
+
+def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dry_run: bool, db_path: Path) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    slug = safe_slug(folder_path.name or "library-folder", 60)
+    inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
+    report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-{'dry-run' if dry_run else 'import'}-{timestamp}.json"
+    progress = library_import_progress_callback(job_id)
+    update_library_import_job(job_id, status="running", stage="scan", inventory_path=str(inventory_path))
+    log_library_import_job(job_id, f"Source folder: {folder_path}")
+    log_library_import_job(job_id, f"Mode: {'dry-run' if dry_run else 'import'} / {copy_mode}")
+    try:
+        build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=False, progress_callback=progress)
+        log_library_import_job(job_id, f"Inventory written: {inventory_path}")
+        storage = Storage(db_path)
+        try:
+            result = import_library_inventory(
+                inventory_path,
+                copy_mode=copy_mode,
+                preserve_folders=True,
+                dedupe_by=("doi", "arxiv", "path"),
+                dry_run=dry_run,
+                storage=storage,
+                report_path=report_path,
+                library_item_name="filename",
+                progress_callback=progress,
+            )
+        finally:
+            storage.close()
+        summary = summarize_import_result(result)
+        level = "error" if summary.get("errors") else "info"
+        log_library_import_job(job_id, f"Report written: {summary.get('report_path') or report_path}", level=level)
+        log_library_import_job(
+            job_id,
+            (
+                f"Done: {summary.get('created_papers', 0)} created, "
+                f"{summary.get('updated_papers', 0)} updated, "
+                f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
+                f"{summary.get('skipped', 0)} skipped"
+            ),
+            level=level,
+        )
+        update_library_import_job(
+            job_id,
+            status="failed" if summary.get("errors") else "completed",
+            stage="complete",
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            percent=100,
+            result=summary,
+        )
+    except Exception as exc:
+        log_library_import_job(job_id, f"Loader failed: {exc}", level="error")
+        update_library_import_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+
+
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
     if not journals:
         return []
@@ -3400,6 +3586,82 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
+    .loader-panel {
+      height: 100%;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      overflow: hidden;
+    }
+    .loader-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }
+    .loader-head strong { font-size: 16px; color: var(--ink); }
+    .loader-form {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) 90px auto auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .loader-form input,
+    .loader-form select {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #fff;
+    }
+    .loader-progress {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .loader-progress-track {
+      grid-column: 1 / -1;
+      height: 8px;
+      border-radius: 999px;
+      background: #edf1f5;
+      overflow: hidden;
+    }
+    .loader-progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.2s ease;
+    }
+    .loader-console {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      background: #111827;
+      color: #e5e7eb;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      padding: 12px;
+      white-space: pre-wrap;
+      user-select: text;
+    }
+    .loader-line.error { color: #fecaca; }
+    .loader-line.warn { color: #fde68a; }
+    .loader-result {
+      color: var(--muted);
+      font-size: 12px;
+    }
     .library-shell {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
@@ -3895,6 +4157,7 @@ INDEX_HTML = """<!doctype html>
       .paper-head { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
+      .loader-form { grid-template-columns: 1fr; }
       .library-quicklook { top: 24px; left: 4vw; width: 92vw; height: 70vh; }
       .library-quicklook-body { grid-template-columns: 78px minmax(0, 1fr); }
       .library-page-thumb { width: 58px; min-height: 78px; }
@@ -3944,17 +4207,6 @@ INDEX_HTML = """<!doctype html>
           <div class="toolbar">
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions">
-              <div class="toolbar-import" id="toolbarLibraryImport">
-                <input id="libraryImportPath" type="text" placeholder="/path/to/folder">
-                <select id="libraryImportCopyMode" title="Import mode">
-                  <option value="copy" selected>Copy</option>
-                  <option value="link">Link</option>
-                </select>
-                <button class="smallbtn" id="libraryChooseFolder" type="button">Choose</button>
-                <button class="smallbtn" id="libraryDryRunImport" type="button">Dry</button>
-                <button class="smallbtn" id="libraryRunImport" type="button">Import</button>
-                <div class="toolbar-import-status" id="libraryImportStatus"></div>
-              </div>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <button class="smallbtn" id="reportMode">Report</button>
               <button class="smallbtn" id="libraryMode">Library</button>
@@ -3967,6 +4219,7 @@ INDEX_HTML = """<!doctype html>
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
             <button class="library-tab" id="allLiteraturesTab" type="button">All Literatures</button>
+            <button class="library-tab" id="libraryLoaderTab" type="button">Loader</button>
             <span id="libraryShortcutTabs"></span>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
@@ -4069,9 +4322,14 @@ INDEX_HTML = """<!doctype html>
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
+      libraryImportPath: "",
+      libraryImportCopyMode: "copy",
       libraryImportStatus: "",
       libraryImportBusy: false,
       libraryImportLastResult: null,
+      libraryImportJobId: "",
+      libraryImportJob: null,
+      libraryImportPoller: null,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -4529,6 +4787,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderActiveLibraryTab() {
+      if (state.libraryTab === "loader") {
+        renderLibraryLoader();
+        return;
+      }
       if (state.libraryTab === "all-literatures") {
         renderAllLiteratures();
         return;
@@ -5502,6 +5764,76 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function renderLibraryLoader() {
+      state.mode = "library";
+      state.libraryTab = "loader";
+      stopArxivUpdateCountdown();
+      renderLibraryTabs();
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      $("reportTitle").textContent = "Library Loader";
+      $("summary").textContent = "Import a folder into Library with a live log. Source files are never moved or deleted.";
+      const root = $("papers");
+      root.classList.add("library-view");
+      const job = state.libraryImportJob || {};
+      const result = state.libraryImportLastResult || job.result || null;
+      const percent = Number(job.percent || 0);
+      const status = state.libraryImportStatus || (job.status ? `${job.status} · ${job.stage || ""}` : "Idle");
+      root.innerHTML = `
+        <div class="loader-panel">
+          <div class="loader-head">
+            <strong>Folder Loader</strong>
+            <button class="smallbtn" id="loaderBackToLibrary" type="button">Back to Library</button>
+          </div>
+          <div class="loader-form">
+            <input id="libraryImportPath" type="text" value="${escapeAttr(state.libraryImportPath || "")}" placeholder="/path/to/folder">
+            <select id="libraryImportCopyMode" title="Import mode">
+              <option value="copy"${(state.libraryImportCopyMode || "copy") === "copy" ? " selected" : ""}>Copy</option>
+              <option value="link"${state.libraryImportCopyMode === "link" ? " selected" : ""}>Link</option>
+            </select>
+            <button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>
+            <button class="smallbtn" id="libraryDryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Dry Run</button>
+            <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Import</button>
+          </div>
+          <div class="loader-progress">
+            <span id="libraryImportStatus">${escapeHtml(status)}</span>
+            <span>${percent ? `${percent}%` : ""}</span>
+            <div class="loader-progress-track"><div class="loader-progress-bar" style="width:${percent}%"></div></div>
+          </div>
+          ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
+          <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
+        </div>
+      `;
+      wireLibraryImportTools();
+      $("loaderBackToLibrary")?.addEventListener("click", async () => {
+        stopLibraryImportPolling();
+        await loadLibrary();
+      });
+      const consoleEl = $("libraryLoaderConsole");
+      if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function loaderResultSummary(result) {
+      return [
+        `${result.created_papers || 0} created`,
+        `${result.updated_papers || 0} updated`,
+        `${result.resources_or_attachments_to_import || 0} resources/attachments`,
+        `${result.skipped || 0} skipped`,
+        `${result.missing_source_files || 0} missing`,
+        result.report_path ? `Report: ${result.report_path}` : ""
+      ].filter(Boolean).join(" · ");
+    }
+
+    function loaderConsoleMarkup(job) {
+      const logs = Array.isArray(job.logs) ? job.logs : [];
+      if (!logs.length) return escapeHtml("Ready. Choose a folder, then run Dry Run before Import.");
+      return logs.map((entry) => {
+        const level = entry.level || "info";
+        const time = String(entry.time || "").split("T").pop() || "";
+        return `<div class="loader-line ${escapeAttr(level)}">[${escapeHtml(time)}] ${escapeHtml(entry.message || "")}</div>`;
+      }).join("");
+    }
+
     function renderLibrary() {
       state.mode = "library";
       if (!state.libraryTab?.startsWith("shortcut-") && !state.libraryTab?.startsWith("workspace-")) state.libraryTab = "library";
@@ -5638,14 +5970,14 @@ INDEX_HTML = """<!doctype html>
     async function chooseLibraryImportFolder() {
       await runLibraryMenuAction(async () => {
         state.libraryImportStatus = "Waiting for macOS folder permission...";
-        renderLibrary();
+        renderLibraryLoader();
         const res = await fetch("/api/library/import-folder/choose", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not choose folder");
         state.libraryImportPath = data.path || "";
         state.libraryImportStatus = "Folder selected. Run Dry Run before importing.";
         state.libraryImportLastResult = null;
-        updateToolbarLibraryImport();
+        renderLibraryLoader();
       });
     }
 
@@ -5655,34 +5987,78 @@ INDEX_HTML = """<!doctype html>
       if (!path) {
         state.libraryImportStatus = "Folder path is required.";
         state.libraryImportLastResult = {errors: ["Folder path is required"]};
-        updateToolbarLibraryImport();
+        renderLibraryLoader();
         return;
       }
       const confirmed = dryRun || window.confirm("Import will copy/link files into Paper Monitor and will not modify the source folder. Continue?");
       if (!confirmed) return;
+      stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportPath = path;
       state.libraryImportCopyMode = copyMode;
-      state.libraryImportStatus = dryRun ? "Scanning folder for dry-run..." : "Importing folder...";
+      state.libraryImportStatus = dryRun ? "Starting dry-run loader..." : "Starting import loader...";
       state.libraryImportLastResult = null;
-      updateToolbarLibraryImport();
+      state.libraryImportJob = {status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
+      renderLibraryLoader();
       try {
-        const res = await fetch("/api/library/import-folder", {
+        const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({folder_path: path, copy_mode: copyMode, dry_run: dryRun})
         });
         const data = await parseJsonResponse(res);
-        if (!res.ok) throw new Error(data.error || "Import failed");
-        state.libraryImportLastResult = data.import_result || null;
-        state.libraryImportStatus = dryRun ? "Dry-run complete." : "Import complete.";
-        applyLibrarySnapshot(data);
+        if (!res.ok) throw new Error(data.error || "Could not start loader");
+        state.libraryImportJobId = data.job_id || "";
+        state.libraryImportJob = data.job || null;
+        state.libraryImportStatus = "Loader running...";
+        renderLibraryLoader();
+        startLibraryImportPolling();
       } catch (error) {
         state.libraryImportStatus = error.message || "Import failed";
         state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
-      } finally {
         state.libraryImportBusy = false;
-        renderLibrary();
+        renderLibraryLoader();
+      }
+    }
+
+    function startLibraryImportPolling() {
+      stopLibraryImportPolling();
+      if (!state.libraryImportJobId) return;
+      state.libraryImportPoller = window.setInterval(refreshLibraryImportJob, 500);
+      refreshLibraryImportJob();
+    }
+
+    function stopLibraryImportPolling() {
+      if (!state.libraryImportPoller) return;
+      window.clearInterval(state.libraryImportPoller);
+      state.libraryImportPoller = null;
+    }
+
+    async function refreshLibraryImportJob() {
+      if (!state.libraryImportJobId) return;
+      try {
+        const res = await fetch(`/api/library/import-folder/progress?job_id=${encodeURIComponent(state.libraryImportJobId)}`);
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not read loader progress");
+        const job = data.job || {};
+        state.libraryImportJob = job;
+        state.libraryImportStatus = `${job.status || "running"}${job.stage ? ` · ${job.stage}` : ""}`;
+        if (job.result) state.libraryImportLastResult = job.result;
+        if (["completed", "failed"].includes(job.status)) {
+          state.libraryImportBusy = false;
+          stopLibraryImportPolling();
+          if (job.status === "completed" && !job.dry_run) {
+            const libraryRes = await fetch("/api/library");
+            const libraryData = await libraryRes.json();
+            if (libraryRes.ok) applyLibrarySnapshot(libraryData);
+          }
+        }
+        if (state.mode === "library" && state.libraryTab === "loader") renderLibraryLoader();
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Could not read loader progress";
+        state.libraryImportBusy = false;
+        stopLibraryImportPolling();
+        if (state.mode === "library" && state.libraryTab === "loader") renderLibraryLoader();
       }
     }
 
@@ -5701,6 +6077,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryTab")?.classList.toggle("active", state.libraryTab === "library");
       $("myPublicationsTab")?.classList.toggle("active", state.libraryTab === "my-publications");
       $("allLiteraturesTab")?.classList.toggle("active", state.libraryTab === "all-literatures");
+      $("libraryLoaderTab")?.classList.toggle("active", state.libraryTab === "loader");
       renderLibraryShortcutTabs();
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
@@ -8261,6 +8638,12 @@ INDEX_HTML = """<!doctype html>
       loadAllLiteratures().catch((error) => {
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
+    });
+    $("libraryLoaderTab").addEventListener("click", () => {
+      state.mode = "library";
+      state.libraryTab = "loader";
+      setSidebarCollapsed(true);
+      renderLibraryLoader();
     });
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));

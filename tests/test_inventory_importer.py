@@ -135,6 +135,35 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(result["updated_papers"], 1)
         self.assertEqual(result["papers_to_update"][0]["paper_id"], "arxiv_2301.00001")
 
+    def test_pdf_without_doi_or_arxiv_uses_source_path_identity(self) -> None:
+        path = self.touch("folder/plain-name.pdf", b"%PDF fixture")
+        inventory_path = self.write_inventory([self.pdf_record(path, title="", doi="", arxiv_id=None)])
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "path-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+        )
+
+        self.assertFalse(result["errors"])
+        self.assertEqual(result["created_papers"], 1)
+        row = self.storage.conn.execute(
+            """
+            SELECT papers.paper_id, library_items.display_name
+            FROM papers
+            JOIN library_items ON library_items.paper_id = papers.paper_id
+            WHERE papers.source_path = ?
+            """,
+            (str(path),),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["display_name"], "plain-name.pdf")
+
     def test_dry_run_counts_resource_import(self) -> None:
         resource = self.touch("slides/talk.pptx")
         result = self.run_dry(

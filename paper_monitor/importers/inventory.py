@@ -6,7 +6,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from pypdf import PdfReader
 
@@ -36,6 +36,7 @@ def build_inventory_from_folder(
     *,
     output_path: str | Path | None = None,
     parse_pdfs: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     root = Path(folder_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
@@ -43,10 +44,13 @@ def build_inventory_from_folder(
     directories: list[dict[str, str]] = []
     files: list[dict[str, Any]] = []
     scan_errors: list[dict[str, str]] = []
+    scanned = 0
+    emit_progress(progress_callback, stage="scan", message=f"Scanning folder: {root}", current=0, total=None)
     for current, dirnames, filenames in os_walk_sorted(root, scan_errors=scan_errors):
         current_path = Path(current)
         relative_dir = "" if current_path == root else current_path.relative_to(root).as_posix()
         directories.append({"path": str(current_path), "relative_path": relative_dir})
+        emit_progress(progress_callback, stage="scan", message=f"Entering {relative_dir or root.name}", current=scanned, total=None)
         for filename in filenames:
             path = current_path / filename
             try:
@@ -54,12 +58,16 @@ def build_inventory_from_folder(
             except Exception as exc:
                 files.append(scan_error_record(path, root, exc))
                 scan_errors.append({"path": str(path), "error": str(exc)})
+            scanned += 1
+            if scanned == 1 or scanned % 100 == 0:
+                emit_progress(progress_callback, stage="scan", message=f"Scanned {scanned} files", current=scanned, total=None)
     summary = inventory_summary(root, directories, files, scan_errors)
     inventory = {"summary": summary, "directories": directories, "files": files}
     if output_path:
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
+    emit_progress(progress_callback, stage="scan", message=f"Scan complete: {len(files)} files", current=len(files), total=len(files))
     return inventory
 
 
@@ -75,6 +83,7 @@ def import_library_inventory(
     report_path: str | Path | None = None,
     target_root: str | Path = LIBRARY_IMPORT_DIR,
     library_item_name: str = "default",
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Inspect or import an external inventory into Paper Monitor storage."""
 
@@ -123,9 +132,19 @@ def import_library_inventory(
     try:
         existing = build_existing_index(active_storage)
         if dry_run:
-            evaluate_files(files, result, existing, dedupe_keys)
+            evaluate_files(files, result, existing, dedupe_keys, progress_callback=progress_callback)
         else:
-            execute_import(files, result, active_storage, existing, dedupe_keys, inventory_file, library_target_root, library_item_name)
+            execute_import(
+                files,
+                result,
+                active_storage,
+                existing,
+                dedupe_keys,
+                inventory_file,
+                library_target_root,
+                library_item_name,
+                progress_callback=progress_callback,
+            )
     finally:
         if owns_storage:
             active_storage.close()
@@ -196,13 +215,25 @@ def evaluate_files(
     result: dict[str, Any],
     existing: dict[str, dict[str, str]],
     dedupe_keys: list[str],
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     seen_identities: set[tuple[str, str]] = set()
     seen_dois: set[str] = set()
     seen_arxiv_ids: set[str] = set()
     seen_paths: set[str] = set()
+    total = len(files)
+    emit_progress(progress_callback, stage="dry-run", message=f"Planning import for {total} records", current=0, total=total)
 
     for index, raw in enumerate(files):
+        if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
+            emit_progress(
+                progress_callback,
+                stage="dry-run",
+                message=f"Checked {index + 1} / {total} records",
+                current=index + 1,
+                total=total,
+            )
         if not isinstance(raw, dict):
             result["skipped"] += 1
             result["warnings"].append(f"Skipping non-object file record at index {index}.")
@@ -298,6 +329,8 @@ def execute_import(
     inventory_file: Path,
     library_target_root: Path,
     library_item_name: str,
+    *,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S")
     target_root = library_target_root / batch_id
@@ -310,9 +343,19 @@ def execute_import(
     seen_arxiv_ids: set[str] = set()
     seen_paths: set[str] = set()
     folder_cache: dict[str, int] = {"": 1}
+    total = len(files)
+    emit_progress(progress_callback, stage="import", message=f"Importing {total} records", current=0, total=total)
 
     try:
         for index, raw in enumerate(files):
+            if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
+                emit_progress(
+                    progress_callback,
+                    stage="import",
+                    message=f"Imported/checkpoint {index + 1} / {total} records",
+                    current=index + 1,
+                    total=total,
+                )
             if not isinstance(raw, dict):
                 result["skipped"] += 1
                 result["warnings"].append(f"Skipping non-object file record at index {index}.")
@@ -387,9 +430,11 @@ def execute_import(
             result["skipped"] += 1
             result["warnings"].append(f"Skipping unsupported record kind={kind or 'unknown'} import_as={import_as or 'unknown'}: {source_path}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="completed")
+        emit_progress(progress_callback, stage="import", message="Import complete", current=total, total=total)
     except Exception as exc:
         result["errors"].append(f"Import failed: {exc}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="failed")
+        emit_progress(progress_callback, stage="import", message=f"Import failed: {exc}", current=total, total=total)
 
 
 def is_duplicate_record(
@@ -556,6 +601,22 @@ def import_as_for_kind(kind: str) -> str:
     if kind == "mac_alias":
         return "alias_reference"
     return "resource"
+
+
+def emit_progress(
+    progress_callback: Callable[[dict[str, Any]], None] | None,
+    *,
+    stage: str,
+    message: str,
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    if not progress_callback:
+        return
+    try:
+        progress_callback({"stage": stage, "message": message, "current": current, "total": total})
+    except Exception:
+        return
 
 
 def mime_type_for_kind(kind: str, extension: str) -> str | None:
