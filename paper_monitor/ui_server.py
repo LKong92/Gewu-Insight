@@ -1920,6 +1920,41 @@ INDEX_HTML = """<!doctype html>
     .internal-browser-title { min-width: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .internal-browser-title strong { display: block; color: var(--ink); font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .internal-browser iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+    .library-quicklook {
+      position: fixed;
+      top: 58px;
+      left: 50%;
+      z-index: 90;
+      display: none;
+      width: min(980px, 74vw);
+      height: min(760px, 78vh);
+      transform: translateX(-50%);
+      border: 1px solid rgba(16, 24, 40, 0.18);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+      pointer-events: none;
+    }
+    .library-quicklook.open { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .library-quicklook-title {
+      min-height: 34px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: rgba(255, 255, 255, 0.92);
+    }
+    .library-quicklook iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+      pointer-events: none;
+    }
     .workspace {
       --note-width: 460px;
       display: grid;
@@ -2392,6 +2427,7 @@ INDEX_HTML = """<!doctype html>
       .paper-head { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
+      .library-quicklook { top: 24px; width: 92vw; height: 70vh; }
     }
   </style>
 </head>
@@ -2474,6 +2510,10 @@ INDEX_HTML = """<!doctype html>
         </div>
         <iframe id="internalBrowserFrame" title="Publisher page" sandbox="allow-scripts allow-forms allow-modals allow-downloads"></iframe>
       </div>
+      <div class="library-quicklook" id="libraryQuickLook" aria-hidden="true">
+        <div class="library-quicklook-title" id="libraryQuickLookTitle"></div>
+        <iframe id="libraryQuickLookFrame" title="Library PDF Quick Look" tabindex="-1"></iframe>
+      </div>
     </main>
   </div>
   <script>
@@ -2523,6 +2563,7 @@ INDEX_HTML = """<!doctype html>
       libraryRenamingFolderId: 0,
       libraryQuickLookOpen: false,
       libraryQuickLookPath: "",
+      libraryQuickLookUrl: "",
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -3392,6 +3433,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderReport() {
       state.mode = "report";
+      closeLibraryQuickLook();
       stopArxivUpdateCountdown();
       $("libraryControls").classList.remove("open");
       $("reportTitle").textContent = `${state.selectedDate} Report`;
@@ -3946,32 +3988,46 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function quickLookLibraryPdf(paper, options = {}) {
+    function closeLibraryQuickLook() {
+      state.libraryQuickLookOpen = false;
+      state.libraryQuickLookPath = "";
+      state.libraryQuickLookUrl = "";
+      const overlay = $("libraryQuickLook");
+      const frame = $("libraryQuickLookFrame");
+      if (overlay) {
+        overlay.classList.remove("open");
+        overlay.setAttribute("aria-hidden", "true");
+      }
+      if (frame) frame.src = "about:blank";
+    }
+
+    function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
+      if (options.toggle && state.libraryQuickLookOpen && paper.merged_pdf_path === state.libraryQuickLookPath) {
+        closeLibraryQuickLook();
+        return;
+      }
       const status = $("libraryDetailStatus");
       if (status && !options.silent) {
-        status.textContent = "Opening PDF in Quick Look...";
+        status.textContent = "Previewing PDF";
         status.className = "library-detail-status";
       }
-      try {
-        const res = await fetch("/api/quick-look", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({path: paper.merged_pdf_path})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "open failed");
-        state.libraryQuickLookOpen = true;
-        state.libraryQuickLookPath = paper.merged_pdf_path;
-        if (status && !options.silent) {
-          status.textContent = "PDF opened in Quick Look";
-          status.className = "library-detail-status ok";
-        }
-      } catch (error) {
-        if (status && !options.silent) {
-          status.textContent = error.message;
-          status.className = "library-detail-status err";
-        }
+      const overlay = $("libraryQuickLook");
+      const title = $("libraryQuickLookTitle");
+      const frame = $("libraryQuickLookFrame");
+      if (!overlay || !frame) return;
+      const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
+      state.libraryQuickLookOpen = true;
+      state.libraryQuickLookPath = paper.merged_pdf_path;
+      state.libraryQuickLookUrl = pdfUrl;
+      if (title) title.textContent = paper.citation_label || paper.title || "PDF Preview";
+      overlay.classList.add("open");
+      overlay.setAttribute("aria-hidden", "false");
+      if (frame.src !== new URL(pdfUrl, window.location.href).href) frame.src = pdfUrl;
+      $("libraryShell")?.focus({preventScroll: true});
+      if (status && !options.silent) {
+        status.textContent = "PDF preview open";
+        status.className = "library-detail-status ok";
       }
     }
 
@@ -4027,7 +4083,7 @@ INDEX_HTML = """<!doctype html>
       event.preventDefault();
       if (key === " ") {
         const paper = selectedLibraryPaper();
-        if (paper?.merged_pdf_path) quickLookLibraryPdf(paper);
+        if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
         return true;
       }
       if (key === "Enter") {
@@ -4557,6 +4613,10 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("keydown", (event) => {
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
+      if (state.libraryQuickLookOpen) {
+        closeLibraryQuickLook();
+        return;
+      }
       if ($("internalBrowser").classList.contains("open")) {
         closeInternalBrowser();
         return;
