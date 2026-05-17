@@ -2751,11 +2751,11 @@ INDEX_HTML = """<!doctype html>
     }
     .library-row:hover { background: #f8fafc; }
     .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
+    .library-row.path-parent { background: #f3f4f6; border-color: #e5e7eb; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
-    .library-row.special-folder { color: #667085; background: #f7f8fa; }
-    .library-row.special-folder.active { background: #e9edf2; border-color: #cbd5e1; }
+    .library-row.special-folder { color: #667085; }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-rename-input {
@@ -3791,6 +3791,26 @@ INDEX_HTML = """<!doctype html>
       return Number(folder?.parent_id || state.libraryRootId);
     }
 
+    function selectedLibraryPathFolderIds() {
+      const ids = new Set();
+      let currentFolderId = 0;
+      if (state.librarySelection?.type === "folder") {
+        currentFolderId = Number(state.librarySelection.id || 0);
+      } else if (state.librarySelection?.type === "item") {
+        currentFolderId = Number(libraryItemById(state.librarySelection.id)?.folder_id || 0);
+      }
+      const selectedFolderId = state.librarySelection?.type === "folder" ? Number(state.librarySelection.id || 0) : 0;
+      let guard = 0;
+      while (currentFolderId && guard < 64) {
+        guard += 1;
+        const parentId = parentFolderId(currentFolderId);
+        if (!parentId || parentId === currentFolderId) break;
+        if (currentFolderId !== selectedFolderId) ids.add(currentFolderId);
+        currentFolderId = parentId;
+      }
+      return ids;
+    }
+
     function selectedEntryInFolder(folderId) {
       return ensureLibraryColumnSelection(folderId);
     }
@@ -4682,7 +4702,8 @@ INDEX_HTML = """<!doctype html>
       const root = $("libraryColumns");
       if (!root) return;
       const folderIds = libraryColumnFolderIds();
-      root.innerHTML = folderIds.map((folderId) => libraryColumnMarkup(folderId)).join("");
+      const pathFolderIds = selectedLibraryPathFolderIds();
+      root.innerHTML = folderIds.map((folderId) => libraryColumnMarkup(folderId, pathFolderIds)).join("");
     }
 
     function libraryColumnFolderIds() {
@@ -4701,12 +4722,12 @@ INDEX_HTML = """<!doctype html>
       return folderIds;
     }
 
-    function libraryColumnMarkup(folderId) {
+    function libraryColumnMarkup(folderId, pathFolderIds = new Set()) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
       const entries = libraryEntriesForFolder(folderId);
       const rows = entries.map((entry) => {
         const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
-        return data ? libraryRowMarkup(entry.type, data, folderId) : "";
+        return data ? libraryRowMarkup(entry.type, data, folderId, pathFolderIds) : "";
       }).join("");
       const width = Number(state.libraryColumnWidths[folderId] || 260);
       return `
@@ -4720,7 +4741,7 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
-    function libraryRowMarkup(type, entry, parentFolderId) {
+    function libraryRowMarkup(type, entry, parentFolderId, pathFolderIds = new Set()) {
       const id = Number(entry.id);
       const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
         && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
@@ -4729,6 +4750,7 @@ INDEX_HTML = """<!doctype html>
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
       const icon = type === "folder" ? "›" : "○";
       const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
+      const isPathParent = type === "folder" && pathFolderIds.has(id) && !selected;
       const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
       const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
         || (type === "item" && Number(state.libraryRenamingItemId || 0) === id);
@@ -4741,7 +4763,7 @@ INDEX_HTML = """<!doctype html>
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
       return `
-        <${rowTag} class="library-row${selected ? " active" : ""}${isSpecialFolder ? " special-folder" : ""}"
+        <${rowTag} class="library-row${selected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
