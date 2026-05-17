@@ -1138,6 +1138,9 @@ def citation_label(paper: dict[str, Any]) -> str:
     if len(authors) > 1:
         lead = f"{lead} et al."
     journal = paper.get("journal") or "Unknown Journal"
+    preprint_id = preprint_identifier(paper)
+    if preprint_id:
+        journal = f"{journal}:{preprint_id}"
     volume = paper_volume(paper)
     page = paper_page(paper)
     year = publication_year(paper)
@@ -1223,7 +1226,7 @@ def nature_author_text(paper: dict[str, Any]) -> str:
         return ""
     lead = nature_author_name(authors[0])
     if len(authors) > 1:
-        return f"{lead} et al."
+        return f"{lead} et al"
     return lead
 
 
@@ -4681,7 +4684,7 @@ INDEX_HTML = """<!doctype html>
       const year = ref.year || "";
       const doi = ref.doi || "";
       const parts = [];
-      if (authors) parts.push(`${escapeHtml(authors)}.`);
+      if (authors) parts.push(referenceSentenceMarkup(authors));
       if (title) parts.push(`${escapeHtml(title)}.`);
       if (journal) parts.push(`<em>${escapeHtml(journal)}</em>`);
       if (volume) parts.push(`<strong>${escapeHtml(volume)}</strong>${pages ? `, ${escapeHtml(pages)}` : ""}`);
@@ -4690,6 +4693,12 @@ INDEX_HTML = """<!doctype html>
       const body = parts.join(" ");
       const suffix = year ? ` (${escapeHtml(year)}).` : ".";
       return body ? `${body}${suffix}` : escapeHtml(paper.citation_label || "");
+    }
+
+    function referenceSentenceMarkup(value) {
+      const clean = String(value || "").trim();
+      if (!clean) return "";
+      return `${escapeHtml(clean.replace(/[.。]+$/g, ""))}.`;
     }
 
     function natureReferenceText(paper) {
@@ -4702,7 +4711,7 @@ INDEX_HTML = """<!doctype html>
       const year = ref.year || "";
       const doi = ref.doi || "";
       const parts = [];
-      if (authors) parts.push(`${authors}.`);
+      if (authors) parts.push(referenceSentenceText(authors));
       if (title) parts.push(`${title}.`);
       if (journal) parts.push(journal);
       if (volume) parts.push(`${volume}${pages ? `, ${pages}` : ""}`);
@@ -4711,6 +4720,16 @@ INDEX_HTML = """<!doctype html>
       const body = parts.join(" ");
       const suffix = year ? ` (${year}).` : ".";
       return body ? `${body}${suffix}` : (paper.citation_label || "");
+    }
+
+    function natureReferenceHtml(paper) {
+      return natureReferenceMarkup(paper);
+    }
+
+    function referenceSentenceText(value) {
+      const clean = String(value || "").trim();
+      if (!clean) return "";
+      return `${clean.replace(/[.。]+$/g, "")}.`;
     }
 
     function wireLibraryInteractions() {
@@ -5541,7 +5560,7 @@ INDEX_HTML = """<!doctype html>
     async function copyLibraryNatureReference(paper, button = null) {
       const status = $("libraryDetailStatus");
       try {
-        await copyTextToClipboard(natureReferenceText(paper));
+        await copyHtmlToClipboard(natureReferenceHtml(paper), natureReferenceText(paper));
         markCopyButtonCopied(button);
         if (status) {
           status.textContent = "Reference copied";
@@ -5563,6 +5582,36 @@ INDEX_HTML = """<!doctype html>
       });
       button.textContent = "Copied";
       button.classList.add("copied");
+    }
+
+    async function copyHtmlToClipboard(html, plainText) {
+      if (navigator.clipboard?.write && window.ClipboardItem) {
+        const item = new ClipboardItem({
+          "text/html": new Blob([html], {type: "text/html"}),
+          "text/plain": new Blob([plainText || ""], {type: "text/plain"})
+        });
+        await navigator.clipboard.write([item]);
+        return;
+      }
+      if (document.queryCommandSupported?.("copy")) {
+        const container = document.createElement("div");
+        container.contentEditable = "true";
+        container.style.position = "fixed";
+        container.style.left = "-10000px";
+        container.style.top = "0";
+        container.innerHTML = html;
+        document.body.appendChild(container);
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(container);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const ok = document.execCommand("copy");
+        selection.removeAllRanges();
+        container.remove();
+        if (ok) return;
+      }
+      await copyTextToClipboard(plainText || "");
     }
 
     async function copyTextToClipboard(text) {
