@@ -2484,7 +2484,7 @@ INDEX_HTML = """<!doctype html>
       librarySelection: {type: "folder", id: 1},
       libraryColumnSelections: {},
       libraryColumnsScrollLeft: 0,
-      libraryCenterActiveColumn: false,
+      libraryRevealColumnFolderId: 0,
       libraryRenamingFolderId: 0,
       mode: "report",
       activeReportJournal: "",
@@ -2977,8 +2977,8 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function requestLibraryActiveColumnCenter() {
-      state.libraryCenterActiveColumn = true;
+    function requestLibraryColumnReveal(folderId) {
+      state.libraryRevealColumnFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
     }
 
     function parentFolderId(folderId) {
@@ -3586,29 +3586,38 @@ INDEX_HTML = """<!doctype html>
       wireLibraryInteractions();
       const columns = $("libraryColumns");
       if (columns) {
-        if (state.libraryCenterActiveColumn) {
-          state.libraryCenterActiveColumn = false;
-          centerLibraryActiveColumn();
+        if (state.libraryRevealColumnFolderId) {
+          const folderId = state.libraryRevealColumnFolderId;
+          state.libraryRevealColumnFolderId = 0;
+          revealLibraryColumns(folderId);
         } else {
           columns.scrollLeft = previousColumnsScrollLeft;
         }
       }
     }
 
-    function centerLibraryActiveColumn() {
+    function revealLibraryColumns(folderId) {
       const columns = $("libraryColumns");
       if (!columns) return;
-      const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
-      const column = [...columns.querySelectorAll("[data-library-column-folder]")]
-        .find((item) => Number(item.dataset.libraryColumnFolder) === activeFolderId);
+      const allColumns = [...columns.querySelectorAll("[data-library-column-folder]")];
+      const column = allColumns.find((item) => Number(item.dataset.libraryColumnFolder) === Number(folderId));
       if (!column) return;
+      const nextColumn = allColumns[allColumns.indexOf(column) + 1] || column;
+      const padding = 12;
+      const left = column.offsetLeft;
+      const right = nextColumn.offsetLeft + nextColumn.offsetWidth;
+      const pairWidth = right - left;
+      let target = columns.scrollLeft;
+      if (pairWidth + (padding * 2) <= columns.clientWidth) {
+        if (right + padding > target + columns.clientWidth) target = right + padding - columns.clientWidth;
+        if (left - padding < target) target = left - padding;
+      } else if (right + padding > target + columns.clientWidth) {
+        target = right + padding - columns.clientWidth;
+      }
       const maxScroll = Math.max(0, columns.scrollWidth - columns.clientWidth);
-      const target = Math.max(0, Math.min(
-        maxScroll,
-        column.offsetLeft - ((columns.clientWidth - column.offsetWidth) / 2)
-      ));
-      columns.scrollTo({left: target, behavior: "smooth"});
-      state.libraryColumnsScrollLeft = target;
+      const nextScrollLeft = Math.max(0, Math.min(maxScroll, target));
+      columns.scrollTo({left: nextScrollLeft, behavior: "smooth"});
+      state.libraryColumnsScrollLeft = nextScrollLeft;
     }
 
     function renderLibraryColumns() {
@@ -3937,7 +3946,6 @@ INDEX_HTML = """<!doctype html>
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper);
         return true;
       }
-      requestLibraryActiveColumnCenter();
       if (key === "Enter") {
         if (state.librarySelection?.type === "folder") beginLibraryFolderRename(state.librarySelection.id);
         return true;
@@ -3957,11 +3965,17 @@ INDEX_HTML = """<!doctype html>
         const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
         const selection = selectedEntryInFolder(activeFolderId);
         if (selection?.type === "folder") {
-          state.libraryActiveFolderId = Number(selection.id);
-          state.libraryCurrentFolderId = Number(selection.id);
-          const existing = selectedEntryInFolder(selection.id);
-          if (existing) state.librarySelection = existing;
-          else state.librarySelection = {type: "folder", id: Number(selection.id)};
+          const childFolderId = Number(selection.id);
+          const existing = selectedEntryInFolder(childFolderId);
+          const firstEntry = libraryEntriesForFolder(childFolderId)[0];
+          state.libraryActiveFolderId = childFolderId;
+          state.libraryCurrentFolderId = childFolderId;
+          if (existing || firstEntry) {
+            setLibraryColumnSelection(childFolderId, existing || firstEntry);
+          } else {
+            state.librarySelection = {type: "folder", id: childFolderId};
+          }
+          requestLibraryColumnReveal(childFolderId);
           renderLibrary();
         }
         return true;
