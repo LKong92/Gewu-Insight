@@ -130,6 +130,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/open-pdf":
                 self.handle_open_pdf(payload)
                 return
+            if parsed.path == "/api/quick-look":
+                self.handle_quick_look(payload)
+                return
             if parsed.path == "/api/open-url":
                 self.handle_open_url(payload)
                 return
@@ -141,6 +144,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/folders":
                 self.handle_create_library_folder(payload)
+                return
+            if parsed.path == "/api/library/folders/rename":
+                self.handle_rename_library_folder(payload)
                 return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
@@ -352,6 +358,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"folder": library_folder_to_api(folder), **snapshot})
 
+    def handle_rename_library_folder(self, payload: dict[str, Any]) -> None:
+        folder_id = int(payload.get("folder_id") or 0)
+        name = str(payload.get("name") or "")
+        storage = Storage(self.configured_db_path)
+        try:
+            folder = storage.rename_library_folder(folder_id=folder_id, name=name)
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"folder": library_folder_to_api(folder), **snapshot})
+
     def handle_add_library_item(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
         folder_id = int(payload.get("folder_id") or 1)
@@ -465,6 +485,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
             return
         subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
+        self.send_json({"status": "opened", "path": str(requested)})
+
+    def handle_quick_look(self, payload: dict[str, Any]) -> None:
+        raw_path = str(payload.get("path") or "")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(raw_path).expanduser().resolve()
+        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+            self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
+            return
+        if not requested.exists() or requested.suffix.lower() != ".pdf":
+            self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
+            return
+        subprocess.Popen(
+            ["qlmanage", "-p", str(requested)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.send_json({"status": "opened", "path": str(requested)})
 
     def handle_open_url(self, payload: dict[str, Any]) -> None:
@@ -2051,6 +2090,17 @@ INDEX_HTML = """<!doctype html>
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-meta { color: var(--muted); font-size: 12px; }
+    .library-rename-input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--accent);
+      border-radius: 5px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      padding: 3px 6px;
+      outline: 0;
+    }
     .library-detail {
       padding: 14px;
       color: #344054;
@@ -2434,6 +2484,7 @@ INDEX_HTML = """<!doctype html>
       librarySelection: {type: "folder", id: 1},
       libraryColumnSelections: {},
       libraryColumnsScrollLeft: 0,
+      libraryRenamingFolderId: 0,
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -2944,6 +2995,37 @@ INDEX_HTML = """<!doctype html>
       applyLibrarySnapshot(data);
       const targetParentId = Number(data.folder?.parent_id || parentId || state.libraryActiveFolderId || state.libraryRootId);
       if (data.folder?.id) setLibraryColumnSelection(targetParentId, {type: "folder", id: Number(data.folder.id)});
+      renderLibrary();
+    }
+
+    function beginLibraryFolderRename(folderId) {
+      const id = Number(folderId || 0);
+      if (!id || id === Number(state.libraryRootId) || !libraryFolderById(id)) return;
+      const parentId = parentFolderId(id);
+      setLibraryColumnSelection(parentId, {type: "folder", id});
+      state.libraryRenamingFolderId = id;
+      renderLibrary();
+    }
+
+    function cancelLibraryFolderRename() {
+      state.libraryRenamingFolderId = 0;
+      renderLibrary();
+    }
+
+    async function commitLibraryFolderRename(folderId, name) {
+      const id = Number(folderId || 0);
+      if (!id || id === Number(state.libraryRootId)) return;
+      const res = await fetch("/api/library/folders/rename", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({folder_id: id, name})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not rename folder");
+      state.libraryRenamingFolderId = 0;
+      applyLibrarySnapshot(data);
+      const targetParentId = Number(data.folder?.parent_id || parentFolderId(id));
+      setLibraryColumnSelection(targetParentId, {type: "folder", id});
       renderLibrary();
     }
 
@@ -3489,6 +3571,7 @@ INDEX_HTML = """<!doctype html>
           </aside>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
+          <button type="button" data-action="rename-folder">Rename</button>
           <button type="button" data-action="new-folder">New Folder</button>
         </div>
       `;
@@ -3546,18 +3629,25 @@ INDEX_HTML = """<!doctype html>
       const name = type === "folder" ? entry.name : (paper.citation_label || paper.title || "Untitled paper");
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
       const icon = type === "folder" ? "›" : "○";
+      const renaming = type === "folder" && Number(state.libraryRenamingFolderId || 0) === id;
+      const rowTag = renaming ? "div" : "button";
+      const rowAttrs = renaming
+        ? ""
+        : `type="button" draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"`;
+      const nameMarkup = renaming
+        ? `<input class="library-rename-input" data-library-rename-input data-folder-id="${id}" value="${escapeAttr(name)}">`
+        : escapeHtml(name);
       return `
-        <button class="library-row${selected ? " active" : ""}"
-          type="button"
-          draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"
+        <${rowTag} class="library-row${selected ? " active" : ""}"
+          ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
           data-library-parent-folder="${parentFolderId}"
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}>
           <span>${icon}</span>
-          <span class="library-name">${escapeHtml(name)}</span>
-          <span class="library-meta">${escapeHtml(String(meta || ""))}</span>
-        </button>
+          <span class="library-name">${nameMarkup}</span>
+          <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
+        </${rowTag}>
       `;
     }
 
@@ -3609,8 +3699,44 @@ INDEX_HTML = """<!doctype html>
     function wireLibraryInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
+      const renameInput = shell.querySelector("[data-library-rename-input]");
+      if (renameInput) {
+        window.setTimeout(() => {
+          renameInput.focus({preventScroll: true});
+          renameInput.select();
+        }, 0);
+        let finished = false;
+        const finish = async (save) => {
+          if (finished) return;
+          finished = true;
+          if (!save) {
+            cancelLibraryFolderRename();
+            return;
+          }
+          try {
+            await commitLibraryFolderRename(Number(renameInput.dataset.folderId), renameInput.value);
+          } catch (error) {
+            state.libraryRenamingFolderId = 0;
+            renderLibrary();
+          }
+        };
+        renameInput.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            finish(true);
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            finish(false);
+          }
+        });
+        renameInput.addEventListener("click", (event) => event.stopPropagation());
+        renameInput.addEventListener("blur", () => finish(true));
+      }
       shell.querySelectorAll(".library-row").forEach((row) => {
-        row.addEventListener("click", () => {
+        row.addEventListener("click", (event) => {
+          if (event.target.closest("[data-library-rename-input]")) return;
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
@@ -3628,7 +3754,8 @@ INDEX_HTML = """<!doctype html>
         });
         row.addEventListener("contextmenu", (event) => {
           event.stopPropagation();
-          showLibraryContextMenu(event, row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId);
+          const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
+          showLibraryContextMenu(event, parentId, row.dataset.libraryType, Number(row.dataset.libraryId || 0));
         });
       });
       shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
@@ -3705,14 +3832,52 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function showLibraryContextMenu(event, parentId) {
+    async function quickLookLibraryPdf(paper) {
+      if (!paper?.merged_pdf_path) return;
+      const status = $("libraryDetailStatus");
+      if (status) {
+        status.textContent = "Opening PDF in Quick Look...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/quick-look", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({path: paper.merged_pdf_path})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "open failed");
+        if (status) {
+          status.textContent = "PDF opened in Quick Look";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message;
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
       const menu = $("libraryContextMenu");
       if (!menu) return;
       menu.dataset.parentId = parentId || state.libraryActiveFolderId || state.libraryRootId;
+      menu.dataset.entryType = entryType || "";
+      menu.dataset.entryId = entryId || "";
       menu.style.left = `${event.clientX}px`;
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
+      const renameButton = menu.querySelector('[data-action="rename-folder"]');
+      if (renameButton) {
+        const canRename = entryType === "folder" && Number(entryId) !== Number(state.libraryRootId);
+        renameButton.style.display = canRename ? "" : "none";
+        renameButton.onclick = () => {
+          hideLibraryContextMenu();
+          beginLibraryFolderRename(Number(menu.dataset.entryId || 0));
+        };
+      }
       menu.querySelector('[data-action="new-folder"]').onclick = async () => {
         hideLibraryContextMenu();
         await createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId));
@@ -3734,12 +3899,16 @@ INDEX_HTML = """<!doctype html>
         "Spacebar": " "
       };
       const key = keyAliases[event.key] || event.key;
-      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key);
+      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter"].includes(key);
       if (!handled) return false;
       event.preventDefault();
       if (key === " ") {
         const paper = selectedLibraryPaper();
-        if (paper?.merged_pdf_path) openLibraryPdfInPreview(paper);
+        if (paper?.merged_pdf_path) quickLookLibraryPdf(paper);
+        return true;
+      }
+      if (key === "Enter") {
+        if (state.librarySelection?.type === "folder") beginLibraryFolderRename(state.librarySelection.id);
         return true;
       }
       if (key === "ArrowLeft") {
