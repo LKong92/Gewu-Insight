@@ -193,8 +193,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
                 return
+            if parsed.path == "/api/library/items/rename":
+                self.handle_rename_library_item(payload)
+                return
             if parsed.path == "/api/library/move":
                 self.handle_move_library_entry(payload)
+                return
+            if parsed.path == "/api/library/delete":
+                self.handle_delete_library_entry(payload)
+                return
+            if parsed.path == "/api/library/paste":
+                self.handle_paste_library_entry(payload)
                 return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown route")
         except Exception as exc:
@@ -440,15 +449,50 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             **snapshot,
         })
 
+    def handle_rename_library_item(self, payload: dict[str, Any]) -> None:
+        item_id = int(payload.get("item_id") or 0)
+        name = str(payload.get("name") or "")
+        storage = Storage(self.configured_db_path)
+        try:
+            item = storage.rename_library_item(item_id=item_id, name=name)
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"item_id": int(item.get("id") or item_id), **snapshot})
+
     def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         target_folder_id = int(payload.get("target_folder_id") or 1)
         storage = Storage(self.configured_db_path)
         try:
+            moved: dict[str, Any] | None = None
             if entry_type == "item":
-                storage.move_library_item(item_id=int(payload.get("id") or 0), folder_id=target_folder_id)
+                moved = storage.move_library_item(item_id=int(payload.get("id") or 0), folder_id=target_folder_id)
             elif entry_type == "folder":
-                storage.move_library_folder(folder_id=int(payload.get("id") or 0), parent_id=target_folder_id)
+                moved = storage.move_library_folder(folder_id=int(payload.get("id") or 0), parent_id=target_folder_id)
+            else:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
+                return
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"moved": dict(moved or {}), **snapshot})
+
+    def handle_delete_library_entry(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        entry_id = int(payload.get("id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            if entry_type == "item":
+                storage.delete_library_item(item_id=entry_id)
+            elif entry_type == "folder":
+                storage.delete_library_folder(folder_id=entry_id)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -459,6 +503,28 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_paste_library_entry(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        entry_id = int(payload.get("id") or 0)
+        target_folder_id = int(payload.get("target_folder_id") or 1)
+        storage = Storage(self.configured_db_path)
+        try:
+            pasted: dict[str, Any] | None = None
+            if entry_type == "item":
+                pasted = storage.copy_library_item(item_id=entry_id, folder_id=target_folder_id)
+            elif entry_type == "folder":
+                pasted = storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
+            else:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
+                return
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"pasted": dict(pasted or {}), **snapshot})
 
     def handle_delete_pdf(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -977,6 +1043,7 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "id": int(item.get("id") or 0),
         "folder_id": int(item.get("folder_id") or 1),
         "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
+        "display_name": item.get("display_name") or "",
         "paper": paper_to_api(paper),
     }
 
@@ -2441,17 +2508,39 @@ INDEX_HTML = """<!doctype html>
       overflow-y: hidden;
     }
     .library-column {
-      flex: 0 0 260px;
-      min-width: 260px;
-      max-width: 260px;
+      flex: 0 0 var(--library-column-width, 260px);
+      min-width: 180px;
       min-height: 0;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
-      border-right: 1px solid var(--line);
+      border-right: 1px solid #b9c1ce;
       overflow: hidden;
       background: #fff;
+      position: relative;
     }
     .library-column:last-child { border-right: 0; }
+    .library-column-resizer {
+      position: absolute;
+      top: 0;
+      right: -4px;
+      bottom: 0;
+      z-index: 3;
+      width: 8px;
+      cursor: col-resize;
+    }
+    .library-column-resizer::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 3px;
+      width: 2px;
+      background: #b9c1ce;
+    }
+    .library-column-resizer:hover::after,
+    .library-column.resizing .library-column-resizer::after {
+      background: var(--accent);
+    }
     .library-pane {
       min-width: 0;
       min-height: 0;
@@ -2619,6 +2708,8 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-context-menu button:hover { background: #eef2f7; }
+    .library-context-menu button[data-action="delete-entry"] { color: #b42318; }
+    .library-context-menu button[data-action="delete-entry"]:hover { background: #fff1f0; }
     .action.copied {
       border-color: rgba(29, 112, 68, 0.35);
       color: var(--ok);
@@ -2987,8 +3078,11 @@ INDEX_HTML = """<!doctype html>
       libraryColumnSelections: {},
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
+      libraryColumnWidths: {},
+      libraryClipboard: null,
       libraryRevealColumnFolderId: 0,
       libraryRenamingFolderId: 0,
+      libraryRenamingItemId: 0,
       libraryQuickLookOpen: false,
       libraryQuickLookPath: "",
       libraryQuickLookUrl: "",
@@ -3409,6 +3503,7 @@ INDEX_HTML = """<!doctype html>
           delete state.libraryColumnSelections[folderId];
         }
       });
+      if (state.libraryClipboard && !librarySelectionExists(state.libraryClipboard)) state.libraryClipboard = null;
       ensureLibraryColumnSelection(state.libraryRootId);
     }
 
@@ -3440,10 +3535,10 @@ INDEX_HTML = """<!doctype html>
         .filter((item) => {
           if (!query) return true;
           const paper = item.paper || {};
-          const haystack = `${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
+          const haystack = `${item.display_name || ""} ${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
           return haystack.includes(query);
         })
-        .sort((a, b) => (a.paper?.citation_label || "").localeCompare(b.paper?.citation_label || ""));
+        .sort((a, b) => (a.display_name || a.paper?.citation_label || "").localeCompare(b.display_name || b.paper?.citation_label || ""));
     }
 
     function libraryEntriesForFolder(folderId) {
@@ -3514,35 +3609,62 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
+    function beginLibraryEntryRename(type, id) {
+      const entryId = Number(id || 0);
+      if (!entryId) return;
+      if (type === "folder") {
+        if (entryId === Number(state.libraryRootId) || !libraryFolderById(entryId)) return;
+        setLibraryColumnSelection(parentFolderId(entryId), {type: "folder", id: entryId});
+        state.libraryRenamingFolderId = entryId;
+        state.libraryRenamingItemId = 0;
+      } else if (type === "item") {
+        const item = libraryItemById(entryId);
+        if (!item) return;
+        setLibraryColumnSelection(Number(item.folder_id || state.libraryRootId), {type: "item", id: entryId});
+        state.libraryRenamingFolderId = 0;
+        state.libraryRenamingItemId = entryId;
+      }
+      renderLibrary();
+    }
+
     function beginLibraryFolderRename(folderId) {
-      const id = Number(folderId || 0);
-      if (!id || id === Number(state.libraryRootId) || !libraryFolderById(id)) return;
-      const parentId = parentFolderId(id);
-      setLibraryColumnSelection(parentId, {type: "folder", id});
-      state.libraryRenamingFolderId = id;
+      beginLibraryEntryRename("folder", folderId);
+    }
+
+    function cancelLibraryEntryRename() {
+      state.libraryRenamingFolderId = 0;
+      state.libraryRenamingItemId = 0;
       renderLibrary();
     }
 
     function cancelLibraryFolderRename() {
+      cancelLibraryEntryRename();
+    }
+
+    async function commitLibraryEntryRename(type, id, name) {
+      const entryId = Number(id || 0);
+      if (!entryId) return;
+      if (type === "folder" && entryId === Number(state.libraryRootId)) return;
+      const res = await fetch(type === "item" ? "/api/library/items/rename" : "/api/library/folders/rename", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(type === "item" ? {item_id: entryId, name} : {folder_id: entryId, name})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not rename entry");
       state.libraryRenamingFolderId = 0;
+      state.libraryRenamingItemId = 0;
+      applyLibrarySnapshot(data);
+      const renamedItem = type === "item" ? libraryItemById(entryId) : null;
+      const targetParentId = type === "item"
+        ? Number(renamedItem?.folder_id || state.libraryRootId)
+        : Number(data.folder?.parent_id || parentFolderId(entryId));
+      setLibraryColumnSelection(targetParentId, {type, id: entryId});
       renderLibrary();
     }
 
     async function commitLibraryFolderRename(folderId, name) {
-      const id = Number(folderId || 0);
-      if (!id || id === Number(state.libraryRootId)) return;
-      const res = await fetch("/api/library/folders/rename", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({folder_id: id, name})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not rename folder");
-      state.libraryRenamingFolderId = 0;
-      applyLibrarySnapshot(data);
-      const targetParentId = Number(data.folder?.parent_id || parentFolderId(id));
-      setLibraryColumnSelection(targetParentId, {type: "folder", id});
-      renderLibrary();
+      await commitLibraryEntryRename("folder", folderId, name);
     }
 
     async function addPaperToLibrary(article, paperId) {
@@ -3583,7 +3705,46 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not move library entry");
       applyLibrarySnapshot(data);
-      setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(id)});
+      setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
+      renderLibrary();
+    }
+
+    async function deleteLibraryEntry(type, id) {
+      if (!type || !id) return;
+      const label = type === "folder" ? "folder and its contents" : "library shortcut";
+      if (!window.confirm(`Delete this ${label}?`)) return;
+      const parentId = type === "item"
+        ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
+        : parentFolderId(id);
+      const res = await fetch("/api/library/delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type, id})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+      applyLibrarySnapshot(data);
+      state.librarySelection = {type: "folder", id: parentId};
+      state.libraryActiveFolderId = parentId;
+      state.libraryCurrentFolderId = parentId;
+      renderLibrary();
+    }
+
+    async function pasteLibraryEntry(targetFolderId) {
+      if (!state.libraryClipboard) return;
+      const clipboard = state.libraryClipboard;
+      const res = await fetch("/api/library/paste", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type: clipboard.type, id: clipboard.id, target_folder_id: targetFolderId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not paste library entry");
+      applyLibrarySnapshot(data);
+      const pastedId = Number(data.pasted?.id || 0);
+      if (pastedId) {
+        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type: clipboard.type, id: pastedId});
+      }
       renderLibrary();
     }
 
@@ -4091,8 +4252,11 @@ INDEX_HTML = """<!doctype html>
           </aside>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
-          <button type="button" data-action="rename-folder">Rename</button>
           <button type="button" data-action="new-folder">New Folder</button>
+          <button type="button" data-action="rename-entry">Rename</button>
+          <button type="button" data-action="copy-entry">Copy</button>
+          <button type="button" data-action="paste-entry">Paste</button>
+          <button type="button" data-action="delete-entry">Delete</button>
         </div>
       `;
       renderLibraryColumns();
@@ -4169,6 +4333,31 @@ INDEX_HTML = """<!doctype html>
       state.libraryColumnScrollTops[Number(folderId)] = body.scrollTop;
     }
 
+    function startLibraryColumnResize(event, folderId) {
+      const column = event.currentTarget.closest(".library-column");
+      if (!column || !folderId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = column.getBoundingClientRect().width;
+      column.classList.add("resizing");
+      document.body.classList.add("resizing");
+      const move = (moveEvent) => {
+        const width = Math.max(180, Math.min(520, Math.round(startWidth + moveEvent.clientX - startX)));
+        state.libraryColumnWidths[folderId] = width;
+        column.style.setProperty("--library-column-width", `${width}px`);
+      };
+      const stop = () => {
+        column.classList.remove("resizing");
+        document.body.classList.remove("resizing");
+        $("libraryShell")?.focus({preventScroll: true});
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+    }
+
     function renderLibraryColumns() {
       const root = $("libraryColumns");
       if (!root) return;
@@ -4199,12 +4388,14 @@ INDEX_HTML = """<!doctype html>
         const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
         return data ? libraryRowMarkup(entry.type, data, folderId) : "";
       }).join("");
+      const width = Number(state.libraryColumnWidths[folderId] || 260);
       return `
-        <section class="library-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
+        <section class="library-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}" style="--library-column-width:${Math.max(180, Math.min(520, width))}px">
           <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
           <div class="library-column-body">
             ${rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`}
           </div>
+          <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
         </section>
       `;
     }
@@ -4214,16 +4405,17 @@ INDEX_HTML = """<!doctype html>
       const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
         && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
       const paper = entry.paper || {};
-      const name = type === "folder" ? entry.name : (paper.citation_label || paper.title || "Untitled paper");
+      const name = type === "folder" ? entry.name : (entry.display_name || paper.citation_label || paper.title || "Untitled paper");
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
       const icon = type === "folder" ? "›" : "○";
-      const renaming = type === "folder" && Number(state.libraryRenamingFolderId || 0) === id;
+      const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
+        || (type === "item" && Number(state.libraryRenamingItemId || 0) === id);
       const rowTag = renaming ? "div" : "button";
       const rowAttrs = renaming
         ? ""
         : `type="button" draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"`;
       const nameMarkup = renaming
-        ? `<input class="library-rename-input" data-library-rename-input data-folder-id="${id}" value="${escapeAttr(name)}">`
+        ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
       return `
         <${rowTag} class="library-row${selected ? " active" : ""}"
@@ -4392,13 +4584,14 @@ INDEX_HTML = """<!doctype html>
           if (finished) return;
           finished = true;
           if (!save) {
-            cancelLibraryFolderRename();
+            cancelLibraryEntryRename();
             return;
           }
           try {
-            await commitLibraryFolderRename(Number(renameInput.dataset.folderId), renameInput.value);
+            await commitLibraryEntryRename(renameInput.dataset.libraryRenameType, Number(renameInput.dataset.libraryRenameId), renameInput.value);
           } catch (error) {
             state.libraryRenamingFolderId = 0;
+            state.libraryRenamingItemId = 0;
             renderLibrary();
           }
         };
@@ -4436,8 +4629,13 @@ INDEX_HTML = """<!doctype html>
         });
         row.addEventListener("contextmenu", (event) => {
           event.stopPropagation();
+          const type = row.dataset.libraryType;
+          const id = Number(row.dataset.libraryId);
+          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+          setLibraryColumnSelection(parentFolderId, {type, id});
+          renderLibrary();
           const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
-          showLibraryContextMenu(event, parentId, row.dataset.libraryType, Number(row.dataset.libraryId || 0));
+          showLibraryContextMenu(event, parentId, type, id);
         });
       });
       shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
@@ -4471,7 +4669,15 @@ INDEX_HTML = """<!doctype html>
       $("libraryColumns")?.addEventListener("scroll", (event) => {
         state.libraryColumnsScrollLeft = event.currentTarget.scrollLeft;
       });
-      shell.addEventListener("contextmenu", (event) => showLibraryContextMenu(event, state.libraryActiveFolderId || state.libraryRootId));
+      shell.querySelectorAll("[data-library-resize-folder]").forEach((handle) => {
+        handle.addEventListener("pointerdown", (event) => startLibraryColumnResize(event, Number(handle.dataset.libraryResizeFolder || 0)));
+      });
+      shell.addEventListener("contextmenu", (event) => {
+        const column = event.target.closest?.("[data-library-column-folder]");
+        const folderId = Number(column?.dataset.libraryColumnFolder || state.libraryActiveFolderId || state.libraryRootId);
+        state.libraryActiveFolderId = folderId;
+        showLibraryContextMenu(event, folderId);
+      });
     }
 
     function selectLibraryEntry(parentFolderId, type, id) {
@@ -4808,13 +5014,38 @@ INDEX_HTML = """<!doctype html>
       menu.style.left = `${event.clientX}px`;
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
-      const renameButton = menu.querySelector('[data-action="rename-folder"]');
+      const hasEntry = Boolean(entryType && entryId);
+      const isRoot = entryType === "folder" && Number(entryId) === Number(state.libraryRootId);
+      const renameButton = menu.querySelector('[data-action="rename-entry"]');
+      const deleteButton = menu.querySelector('[data-action="delete-entry"]');
+      const copyButton = menu.querySelector('[data-action="copy-entry"]');
+      const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       if (renameButton) {
-        const canRename = entryType === "folder" && Number(entryId) !== Number(state.libraryRootId);
-        renameButton.style.display = canRename ? "" : "none";
+        renameButton.style.display = hasEntry && !isRoot ? "" : "none";
         renameButton.onclick = () => {
           hideLibraryContextMenu();
-          beginLibraryFolderRename(Number(menu.dataset.entryId || 0));
+          beginLibraryEntryRename(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
+        };
+      }
+      if (deleteButton) {
+        deleteButton.style.display = hasEntry && !isRoot ? "" : "none";
+        deleteButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await deleteLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
+        };
+      }
+      if (copyButton) {
+        copyButton.style.display = hasEntry && !isRoot ? "" : "none";
+        copyButton.onclick = () => {
+          state.libraryClipboard = {type: menu.dataset.entryType, id: Number(menu.dataset.entryId || 0)};
+          hideLibraryContextMenu();
+        };
+      }
+      if (pasteButton) {
+        pasteButton.style.display = state.libraryClipboard ? "" : "none";
+        pasteButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await pasteLibraryEntry(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId));
         };
       }
       menu.querySelector('[data-action="new-folder"]').onclick = async () => {
@@ -4847,7 +5078,7 @@ INDEX_HTML = """<!doctype html>
         return true;
       }
       if (key === "Enter") {
-        if (state.librarySelection?.type === "folder") beginLibraryFolderRename(state.librarySelection.id);
+        if (state.librarySelection?.type) beginLibraryEntryRename(state.librarySelection.type, state.librarySelection.id);
         return true;
       }
       if (key === "ArrowLeft") {
