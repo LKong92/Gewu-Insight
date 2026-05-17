@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from email.parser import BytesParser
 from email.policy import default as email_policy
+import hashlib
+from io import BytesIO
 import json
 import mimetypes
 import re
@@ -16,7 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 from .analysis import queue_codex_analysis
 from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
@@ -39,6 +41,7 @@ PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
+PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -115,6 +118,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/pdf-info":
                 self.handle_pdf_info(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/pdf-page":
+                self.handle_pdf_page(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/pdf-thumb":
+                self.handle_pdf_thumb(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/analysis":
                 self.handle_analysis(parse_qs(parsed.query))
@@ -715,6 +724,49 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except Exception:
             page_count = 0
         self.send_json({"path": str(requested), "page_count": page_count})
+
+    def handle_pdf_page(self, query: dict[str, list[str]]) -> None:
+        requested = self.validated_pdf_path(query)
+        if not requested:
+            return
+        page_number = max(1, int(first(query, "page") or 1))
+        data = single_page_pdf_bytes(requested, page_number)
+        if data is None:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "PDF page not found")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", "inline")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_pdf_thumb(self, query: dict[str, list[str]]) -> None:
+        requested = self.validated_pdf_path(query)
+        if not requested:
+            return
+        page_number = max(1, int(first(query, "page") or 1))
+        data, content_type = pdf_page_thumbnail(requested, page_number)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def validated_pdf_path(self, query: dict[str, list[str]]) -> Path | None:
+        raw_path = first(query, "path")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return None
+        requested = Path(unquote(raw_path)).expanduser().resolve()
+        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+            self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
+            return None
+        if not requested.exists() or requested.suffix.lower() != ".pdf":
+            self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
+            return None
+        return requested
 
     def read_json_body(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -1463,6 +1515,56 @@ def file_url(path: str) -> str:
     return "/files?path=" + quote(path)
 
 
+def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
+    try:
+        reader = PdfReader(str(path))
+        if not reader.pages:
+            return None
+        index = max(0, min(page_number - 1, len(reader.pages) - 1))
+        writer = PdfWriter()
+        writer.add_page(reader.pages[index])
+        buffer = BytesIO()
+        writer.write(buffer)
+        return buffer.getvalue()
+    except Exception:
+        return None
+
+
+def pdf_page_thumbnail(path: Path, page_number: int) -> tuple[bytes, str]:
+    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}".encode("utf-8")).hexdigest()
+    thumb_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
+    if thumb_path.exists():
+        return thumb_path.read_bytes(), "image/png"
+    data = single_page_pdf_bytes(path, page_number)
+    if data:
+        PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        page_pdf = PDF_THUMB_CACHE_DIR / f"{cache_key}.pdf"
+        page_pdf.write_bytes(data)
+        try:
+            subprocess.run(
+                ["qlmanage", "-t", "-s", "240", "-o", str(PDF_THUMB_CACHE_DIR), str(page_pdf)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=20,
+            )
+            generated = PDF_THUMB_CACHE_DIR / f"{page_pdf.name}.png"
+            if generated.exists():
+                generated.replace(thumb_path)
+                return thumb_path.read_bytes(), "image/png"
+        except Exception:
+            pass
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="156" viewBox="0 0 120 156">'
+        '<rect x="10" y="8" width="100" height="140" rx="7" fill="#fff" stroke="#d0d5dd"/>'
+        '<rect x="24" y="30" width="72" height="5" rx="2" fill="#e5e7eb"/>'
+        '<rect x="24" y="46" width="62" height="5" rx="2" fill="#e5e7eb"/>'
+        f'<text x="60" y="104" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="28" fill="#98a2b3">{page_number}</text>'
+        '</svg>'
+    )
+    return svg.encode("utf-8"), "image/svg+xml"
+
+
 def read_text_file(path: str) -> str:
     if not path:
         return ""
@@ -2027,16 +2129,12 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     }
-    .library-page-thumb-preview iframe {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 420px;
-      height: 560px;
-      border: 0;
-      transform: scale(0.16);
-      transform-origin: top left;
-      pointer-events: none;
+    .library-page-thumb-preview img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      object-position: top center;
       background: #fff;
     }
     .library-page-thumb-placeholder {
@@ -4156,15 +4254,13 @@ INDEX_HTML = """<!doctype html>
     function libraryQuickLookPageUrl(page = state.libraryQuickLookPage) {
       if (!state.libraryQuickLookUrl) return "";
       const safePage = Math.max(1, Number(page || 1));
-      const separator = state.libraryQuickLookUrl.includes("?") ? "&" : "?";
-      return `${state.libraryQuickLookUrl}${separator}preview_page=${safePage}#page=${safePage}&zoom=page-width`;
+      return `/api/pdf-page?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}`;
     }
 
     function libraryQuickLookThumbUrl(page) {
-      if (!state.libraryQuickLookUrl) return "";
+      if (!state.libraryQuickLookPath) return "";
       const safePage = Math.max(1, Number(page || 1));
-      const separator = state.libraryQuickLookUrl.includes("?") ? "&" : "?";
-      return `${state.libraryQuickLookUrl}${separator}thumb_page=${safePage}#page=${safePage}&toolbar=0&navpanes=0&scrollbar=0&view=Fit`;
+      return `/api/pdf-thumb?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}`;
     }
 
     function setLibraryQuickLookPage(page) {
@@ -4193,7 +4289,7 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = Array.from({length: count}, (_, index) => {
         const page = index + 1;
         const preview = page <= 80
-          ? `<iframe src="${escapeAttr(libraryQuickLookThumbUrl(page))}" tabindex="-1" loading="lazy"></iframe>`
+          ? `<img src="${escapeAttr(libraryQuickLookThumbUrl(page))}" alt="Page ${page}" loading="lazy">`
           : `<span class="library-page-thumb-placeholder">PDF</span>`;
         return `
           <button class="library-page-thumb${page === state.libraryQuickLookPage ? " active" : ""}" type="button" data-page="${page}">
