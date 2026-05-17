@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS library_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   folder_id INTEGER NOT NULL REFERENCES library_folders(id) ON DELETE CASCADE,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  display_name TEXT,
   created_at TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(folder_id, paper_id)
@@ -106,6 +107,10 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
         if "image_url" not in columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
+            self.conn.commit()
+        library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
+        if "display_name" not in library_item_columns:
+            self.conn.execute("ALTER TABLE library_items ADD COLUMN display_name TEXT")
             self.conn.commit()
 
     def _ensure_library_root(self) -> None:
@@ -510,9 +515,128 @@ class Storage:
         ).fetchone()
         return dict(row) if row else {}
 
+    def get_library_item(self, item_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM library_items WHERE id = ?", (int(item_id),)).fetchone()
+        return dict(row) if row else None
+
+    def rename_library_item(self, *, item_id: int, name: str) -> dict[str, Any]:
+        item_id = int(item_id)
+        if not self.get_library_item(item_id):
+            raise ValueError("Library item not found")
+        clean_name = " ".join(name.strip().split())
+        self.conn.execute(
+            "UPDATE library_items SET display_name = ? WHERE id = ?",
+            (clean_name or None, item_id),
+        )
+        self.conn.commit()
+        return self.get_library_item(item_id) or {}
+
+    def delete_library_item(self, *, item_id: int) -> None:
+        self.conn.execute("DELETE FROM library_items WHERE id = ?", (int(item_id),))
+        self.conn.commit()
+
+    def delete_library_folder(self, *, folder_id: int) -> None:
+        folder_id = int(folder_id)
+        if folder_id == 1:
+            raise ValueError("Root folder cannot be deleted")
+        if not self.get_library_folder(folder_id):
+            raise ValueError("Folder not found")
+        self.conn.execute("DELETE FROM library_folders WHERE id = ?", (folder_id,))
+        self.conn.commit()
+
+    def copy_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
+        source = self.get_library_item(item_id)
+        if not source:
+            raise ValueError("Library item not found")
+        folder_id = int(folder_id or 1)
+        sort_order = self._next_library_sort_order("library_items", folder_id)
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO library_items (folder_id, paper_id, display_name, created_at, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (folder_id, source["paper_id"], source.get("display_name"), timestamp, sort_order),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ? AND paper_id = ?
+            """,
+            (folder_id, source["paper_id"]),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def copy_library_folder(self, *, folder_id: int, parent_id: int) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        parent_id = int(parent_id or 1)
+        source = self.get_library_folder(folder_id)
+        if not source:
+            raise ValueError("Folder not found")
+        if folder_id == 1:
+            raise ValueError("Root folder cannot be copied")
+        if parent_id == folder_id or self._folder_is_descendant(parent_id, folder_id):
+            raise ValueError("Folder cannot be copied inside itself")
+        return self._copy_library_folder_tree(folder_id=folder_id, parent_id=parent_id)
+
+    def _copy_library_folder_tree(self, *, folder_id: int, parent_id: int) -> dict[str, Any]:
+        source = self.get_library_folder(folder_id)
+        if not source:
+            raise ValueError("Folder not found")
+        copied = self.create_library_folder(parent_id=parent_id, name=str(source.get("name") or "New Folder"))
+        copied_id = int(copied.get("id") or 0)
+        item_rows = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ?
+            ORDER BY sort_order, id
+            """,
+            (folder_id,),
+        ).fetchall()
+        for row in item_rows:
+            sort_order = self._next_library_sort_order("library_items", copied_id)
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO library_items (folder_id, paper_id, display_name, created_at, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (copied_id, row["paper_id"], row["display_name"], now_iso(), sort_order),
+            )
+        child_rows = self.conn.execute(
+            """
+            SELECT id
+            FROM library_folders
+            WHERE parent_id = ?
+            ORDER BY sort_order, name
+            """,
+            (folder_id,),
+        ).fetchall()
+        for row in child_rows:
+            self._copy_library_folder_tree(folder_id=int(row["id"]), parent_id=copied_id)
+        self.conn.commit()
+        return copied
+
     def move_library_item(self, *, item_id: int, folder_id: int) -> dict[str, Any]:
         folder_id = int(folder_id or 1)
         item_id = int(item_id)
+        source = self.get_library_item(item_id)
+        if not source:
+            raise ValueError("Library item not found")
+        existing = self.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE folder_id = ? AND paper_id = ? AND id != ?
+            """,
+            (folder_id, source["paper_id"], item_id),
+        ).fetchone()
+        if existing:
+            self.conn.execute("DELETE FROM library_items WHERE id = ?", (item_id,))
+            self.conn.commit()
+            return dict(existing)
         sort_order = self._next_library_sort_order("library_items", folder_id)
         self.conn.execute(
             "UPDATE library_items SET folder_id = ?, sort_order = ? WHERE id = ?",
