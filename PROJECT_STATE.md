@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before fixed-header scroll work: `bc6762e Enhance library citation details`
+- Current Git HEAD before citation copy/volume fallback work: `1c42259 Fix report and library scrolling`
 
 ## Completed work
 
@@ -63,12 +63,11 @@
    - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
    - Report items can be added to Library as shortcuts.
    - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, adjustable Space-to-in-app PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
-   - Library detail panel now includes BibTeX copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box.
+   - Library detail panel now includes BibTeX/reference copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box with volume/page fallbacks.
    - Report and Library keep their top controls fixed while only the content panes scroll.
 
 ## Useful commits
 
-- `1181036` Keep calendar navigation responsive during background fetches
 - `8e6e7a7` Show calendar progress while a date is fetching
 - `5d77520` Show live fetch progress in report view
 - `eaf2cc7` Improve report grouping and field filters
@@ -77,6 +76,7 @@
 - `89b192f` Follow library preview on selection
 - `257e9d1` Open library pages externally
 - `bc6762e` Enhance library citation details
+- `1c42259` Fix report and library scrolling
 
 ## Verification already done
 
