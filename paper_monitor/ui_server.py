@@ -3810,6 +3810,8 @@ INDEX_HTML = """<!doctype html>
       const parentId = type === "item"
         ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
         : parentFolderId(id);
+      const deletedEntry = {type, id: Number(id)};
+      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
       const res = await fetch("/api/library/delete", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -3818,10 +3820,28 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not delete library entry");
       applyLibrarySnapshot(data);
-      state.librarySelection = {type: "folder", id: parentId};
-      state.libraryActiveFolderId = parentId;
-      state.libraryCurrentFolderId = parentId;
+      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
       renderLibrary();
+    }
+
+    function selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete) {
+      const targetParentId = libraryFolderById(parentId) ? Number(parentId) : Number(state.libraryRootId);
+      const deletedIndex = entriesBeforeDelete.findIndex((entry) => libraryEntryKey(entry) === libraryEntryKey(deletedEntry));
+      const fallbackCandidates = [
+        entriesBeforeDelete[deletedIndex + 1],
+        entriesBeforeDelete[deletedIndex - 1]
+      ].filter(Boolean);
+      const nextSelection = fallbackCandidates.find((entry) => {
+        if (entry.type === "folder") return Number(parentFolderId(entry.id)) === targetParentId;
+        return Number(libraryItemById(entry.id)?.folder_id || 0) === targetParentId;
+      });
+      if (nextSelection) {
+        setLibraryColumnSelection(targetParentId, nextSelection);
+        return;
+      }
+      state.librarySelection = {type: "folder", id: targetParentId};
+      state.libraryActiveFolderId = targetParentId;
+      state.libraryCurrentFolderId = targetParentId;
     }
 
     async function recoverLibraryEntry(type, id) {
@@ -4539,7 +4559,7 @@ INDEX_HTML = """<!doctype html>
       const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
         && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
       const paper = entry.paper || {};
-      const name = type === "folder" ? entry.name : (entry.display_name || paper.citation_label || paper.title || "Untitled paper");
+      const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
       const icon = type === "folder" ? "›" : "○";
       const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
@@ -4563,6 +4583,11 @@ INDEX_HTML = """<!doctype html>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
+    }
+
+    function libraryPaperDisplayName(paper) {
+      const label = paper?.citation_label || paper?.title || "Untitled paper";
+      return String(label).replace(/^(.+?) et al\.(\s+)/, "$1$2");
     }
 
     function renderLibraryDetail() {
@@ -4723,7 +4748,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function natureReferenceHtml(paper) {
-      return natureReferenceMarkup(paper);
+      return `<span style="font-family:&quot;Times New Roman&quot;, Times, serif; font-size:12pt;">${natureReferenceMarkup(paper)}</span>`;
     }
 
     function referenceSentenceText(value) {
@@ -5317,6 +5342,7 @@ INDEX_HTML = """<!doctype html>
           state.libraryActiveFolderId = parentId;
           state.libraryCurrentFolderId = activeFolderId;
           state.librarySelection = {type: "folder", id: activeFolderId};
+          requestLibraryColumnReveal(parentId);
         }
         renderLibrary();
         return true;
