@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before My Publications table tuning: `edcf173 Improve publication search and library details`
+- Current Git HEAD before All Literatures tab: `513ce8d Tune my publications table`
 
 ## Completed work
 
@@ -71,15 +71,15 @@
    - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/path/Quick Look controls are closer to Finder.
    - Library top controls now use `Library` and `My Publications` tabs; `My Publications` stores user publications, star/highlight state, and saved author name in SQLite while reusing the shared paper metadata/PDF details pane.
    - Library/My Publications details now include abstracts and first-figure previews; My Publications uses internal Crossref author/title/DOI lookup, with a horizontally scrollable/resizable publication table.
+   - Library now has a third `All Literatures` tab that derives one unified shortcut list from Library shortcuts and My Publications without duplicating PDFs; My Publications ID cells use italic journal and bold volume formatting.
 
 ## Useful commits
 
-- `f7b6e1c` Highlight library path ancestors
-- `ad86c29` Lock library viewport height
 - `c56d855` Refine library quick look states
 - `6477937` Remove library refresh button
 - `c12e3b4` Add my publications library tab
 - `edcf173` Improve publication search and library details
+- `513ce8d` Tune my publications table
 
 ## Verification already done
 
