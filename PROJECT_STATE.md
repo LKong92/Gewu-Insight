@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library fixed-height column cleanup: `48e4eee Add library folder colors`
+- Current Git HEAD before Library viewport-height fix: `c70f9d4 Fix library column heights`
 
 ## Completed work
 
@@ -79,7 +79,7 @@
 - `1080e65` Reveal library child columns when needed
 - `48e4eee` Add library folder colors
 - `285aa45` Improve library drag and recycle semantics
-- `cadf54e` Prevent library column scroll jitter
+- `c70f9d4` Fix library column heights
 
 ## Verification already done
 
