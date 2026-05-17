@@ -1128,13 +1128,23 @@ def publication_year(paper: dict[str, Any]) -> str:
 
 def paper_volume(paper: dict[str, Any]) -> str:
     raw = parse_raw_json(paper)
-    value = raw.get("volume") or (raw.get("biblio") or {}).get("volume")
+    journal_issue = raw.get("journal-issue") or {}
+    journal_volume = journal_issue.get("journal-volume") if isinstance(journal_issue, dict) else {}
+    value = (
+        raw.get("volume")
+        or (raw.get("biblio") or {}).get("volume")
+        or (journal_volume or {}).get("volume")
+    )
     return clean_text(str(value or ""))
 
 
 def paper_page(paper: dict[str, Any]) -> str:
     raw = parse_raw_json(paper)
-    value = raw.get("page") or raw.get("article-number") or (raw.get("biblio") or {}).get("first_page")
+    biblio = raw.get("biblio") or {}
+    first_page = clean_text(str(biblio.get("first_page") or biblio.get("first-page") or ""))
+    last_page = clean_text(str(biblio.get("last_page") or biblio.get("last-page") or ""))
+    biblio_pages = f"{first_page}-{last_page}" if first_page and last_page and first_page != last_page else first_page
+    value = raw.get("page") or raw.get("article-number") or biblio_pages
     return clean_text(str(value or ""))
 
 
@@ -2609,6 +2619,11 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-context-menu button:hover { background: #eef2f7; }
+    .action.copied {
+      border-color: rgba(29, 112, 68, 0.35);
+      color: var(--ok);
+      background: #f0f8f3;
+    }
     .subject-controls { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .subject-option {
       border: 1px solid var(--line);
@@ -4274,14 +4289,18 @@ INDEX_HTML = """<!doctype html>
           <button class="action" data-action="copy-bibtex">Copy Code</button>
         </div>
         <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
-        <div class="library-reference-head"><strong>Nature Reference</strong></div>
+        <div class="library-reference-head">
+          <strong>Nature Reference</strong>
+          <button class="action" data-action="copy-nature-reference">Copy Reference</button>
+        </div>
         <div class="bibtex-box nature-reference-box">${natureReferenceMarkup(paper)}</div>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
-      root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", () => copyLibraryBibtex(paper));
+      root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
+      root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
     }
 
     function citationMetricsMarkup(paper) {
@@ -4325,15 +4344,38 @@ INDEX_HTML = """<!doctype html>
       const volume = ref.volume || "";
       const pages = ref.pages || "";
       const year = ref.year || "";
+      const doi = ref.doi || "";
       const parts = [];
       if (authors) parts.push(`${escapeHtml(authors)}.`);
       if (title) parts.push(`${escapeHtml(title)}.`);
       if (journal) parts.push(`<em>${escapeHtml(journal)}</em>`);
       if (volume) parts.push(`<strong>${escapeHtml(volume)}</strong>${pages ? `, ${escapeHtml(pages)}` : ""}`);
       else if (pages) parts.push(escapeHtml(pages));
+      else if (doi) parts.push(`https://doi.org/${escapeHtml(doi)}`);
       const body = parts.join(" ");
       const suffix = year ? ` (${escapeHtml(year)}).` : ".";
       return body ? `${body}${suffix}` : escapeHtml(paper.citation_label || "");
+    }
+
+    function natureReferenceText(paper) {
+      const ref = paper.nature_reference || {};
+      const authors = ref.authors || "";
+      const title = ref.title || "";
+      const journal = ref.journal || "";
+      const volume = ref.volume || "";
+      const pages = ref.pages || "";
+      const year = ref.year || "";
+      const doi = ref.doi || "";
+      const parts = [];
+      if (authors) parts.push(`${authors}.`);
+      if (title) parts.push(`${title}.`);
+      if (journal) parts.push(journal);
+      if (volume) parts.push(`${volume}${pages ? `, ${pages}` : ""}`);
+      else if (pages) parts.push(pages);
+      else if (doi) parts.push(`https://doi.org/${doi}`);
+      const body = parts.join(" ");
+      const suffix = year ? ` (${year}).` : ".";
+      return body ? `${body}${suffix}` : (paper.citation_label || "");
     }
 
     function wireLibraryInteractions() {
@@ -5038,10 +5080,11 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function copyLibraryBibtex(paper) {
+    async function copyLibraryBibtex(paper, button = null) {
       const status = $("libraryDetailStatus");
       try {
         await copyTextToClipboard(paper?.bibtex || "");
+        markCopyButtonCopied(button);
         if (status) {
           status.textContent = "BibTeX copied";
           status.className = "library-detail-status ok";
@@ -5052,6 +5095,29 @@ INDEX_HTML = """<!doctype html>
           status.className = "library-detail-status err";
         }
       }
+    }
+
+    async function copyLibraryNatureReference(paper, button = null) {
+      const status = $("libraryDetailStatus");
+      try {
+        await copyTextToClipboard(natureReferenceText(paper));
+        markCopyButtonCopied(button);
+        if (status) {
+          status.textContent = "Reference copied";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Copy failed";
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    function markCopyButtonCopied(button) {
+      if (!button) return;
+      button.textContent = "Copied";
+      button.classList.add("copied");
     }
 
     async function copyTextToClipboard(text) {
