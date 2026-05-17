@@ -2484,6 +2484,7 @@ INDEX_HTML = """<!doctype html>
       librarySelection: {type: "folder", id: 1},
       libraryColumnSelections: {},
       libraryColumnsScrollLeft: 0,
+      libraryCenterActiveColumn: false,
       libraryRenamingFolderId: 0,
       mode: "report",
       activeReportJournal: "",
@@ -2877,6 +2878,7 @@ INDEX_HTML = """<!doctype html>
 
     async function loadLibrary() {
       state.mode = "library";
+      setSidebarCollapsed(true);
       const res = await fetch("/api/library");
       const data = await res.json();
       applyLibrarySnapshot(data);
@@ -2973,6 +2975,10 @@ INDEX_HTML = """<!doctype html>
         const item = libraryItemById(selection.id);
         state.libraryCurrentFolderId = Number(item?.folder_id || parentId);
       }
+    }
+
+    function requestLibraryActiveColumnCenter() {
+      state.libraryCenterActiveColumn = true;
     }
 
     function parentFolderId(folderId) {
@@ -3579,7 +3585,30 @@ INDEX_HTML = """<!doctype html>
       renderLibraryDetail();
       wireLibraryInteractions();
       const columns = $("libraryColumns");
-      if (columns) columns.scrollLeft = previousColumnsScrollLeft;
+      if (columns) {
+        if (state.libraryCenterActiveColumn) {
+          state.libraryCenterActiveColumn = false;
+          centerLibraryActiveColumn();
+        } else {
+          columns.scrollLeft = previousColumnsScrollLeft;
+        }
+      }
+    }
+
+    function centerLibraryActiveColumn() {
+      const columns = $("libraryColumns");
+      if (!columns) return;
+      const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+      const column = [...columns.querySelectorAll("[data-library-column-folder]")]
+        .find((item) => Number(item.dataset.libraryColumnFolder) === activeFolderId);
+      if (!column) return;
+      const maxScroll = Math.max(0, columns.scrollWidth - columns.clientWidth);
+      const target = Math.max(0, Math.min(
+        maxScroll,
+        column.offsetLeft - ((columns.clientWidth - column.offsetWidth) / 2)
+      ));
+      columns.scrollTo({left: target, behavior: "smooth"});
+      state.libraryColumnsScrollLeft = target;
     }
 
     function renderLibraryColumns() {
@@ -3624,7 +3653,8 @@ INDEX_HTML = """<!doctype html>
 
     function libraryRowMarkup(type, entry, parentFolderId) {
       const id = Number(entry.id);
-      const selected = libraryEntryKey(state.libraryColumnSelections[Number(parentFolderId)]) === libraryEntryKey({type, id});
+      const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
+        && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
       const paper = entry.paper || {};
       const name = type === "folder" ? entry.name : (paper.citation_label || paper.title || "Untitled paper");
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
@@ -3907,6 +3937,7 @@ INDEX_HTML = """<!doctype html>
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper);
         return true;
       }
+      requestLibraryActiveColumnCenter();
       if (key === "Enter") {
         if (state.librarySelection?.type === "folder") beginLibraryFolderRename(state.librarySelection.id);
         return true;
@@ -4269,6 +4300,11 @@ INDEX_HTML = """<!doctype html>
       $("toggleSidebar").title = collapsed ? "Show filters" : "Hide filters";
     }
 
+    function setSidebarCollapsed(collapsed) {
+      document.querySelector(".app").classList.toggle("sidebar-collapsed", Boolean(collapsed));
+      updateSidebarToggle();
+    }
+
     function updateReportPanelToggle() {
       const workspace = $("workspace");
       const collapsed = workspace.classList.contains("report-collapsed");
@@ -4380,13 +4416,16 @@ INDEX_HTML = """<!doctype html>
       await loadMonth();
       await loadReport();
     });
-    $("reportMode").addEventListener("click", renderReport);
+    $("reportMode").addEventListener("click", () => {
+      setSidebarCollapsed(false);
+      renderReport();
+    });
     $("libraryMode").addEventListener("click", loadLibrary);
     $("refreshLibrary").addEventListener("click", loadLibrary);
     $("newLibraryFolder").addEventListener("click", () => createLibraryFolder(state.libraryActiveFolderId || state.libraryRootId));
     $("toggleSidebar").addEventListener("click", () => {
-      document.querySelector(".app").classList.toggle("sidebar-collapsed");
-      updateSidebarToggle();
+      const collapsed = document.querySelector(".app").classList.contains("sidebar-collapsed");
+      setSidebarCollapsed(!collapsed);
     });
     $("toggleReportPanel").addEventListener("click", toggleReportPanel);
     $("workspaceResizer").addEventListener("pointerdown", startWorkspaceResize);
