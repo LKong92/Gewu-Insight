@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Space input focus fix: `b1cbd3b Open app window at full visible screen size`
+- Current Git HEAD before Space filesystem rewrite: `9fc850b Fix library space input focus`
 
 ## Completed work
 
@@ -78,6 +78,7 @@
    - Shortcut/Space tabs use more available width; green Spaces can be renamed and can add DOI-based literature pointers.
    - Native launcher opens the app window at the current screen's full visible size by default.
    - Space rename/DOI inputs keep focus instead of being stolen by the library keyboard shell.
+   - Green Spaces are independent Library-style filesystem roots; DOI adds papers into the active Space root as normal shortcuts.
 
 ## Verification already done
 

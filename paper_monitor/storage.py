@@ -489,6 +489,24 @@ class Storage:
         self.conn.commit()
         return self.get_library_folder(int(cursor.lastrowid)) or {}
 
+    def create_library_root_folder(self, *, name: str) -> dict[str, Any]:
+        clean_name = " ".join(name.strip().split()) or "Space"
+        clean_name = self._unique_library_root_folder_name(clean_name)
+        timestamp = now_iso()
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM library_folders WHERE parent_id IS NULL"
+        ).fetchone()
+        sort_order = int(row["next_order"] or 1)
+        cursor = self.conn.execute(
+            """
+            INSERT INTO library_folders (name, parent_id, created_at, updated_at, sort_order)
+            VALUES (?, NULL, ?, ?, ?)
+            """,
+            (clean_name, timestamp, timestamp, sort_order),
+        )
+        self.conn.commit()
+        return self.get_library_folder(int(cursor.lastrowid)) or {}
+
     def get_library_folder(self, folder_id: int) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM library_folders WHERE id = ?", (int(folder_id),)).fetchone()
         return dict(row) if row else None
@@ -517,9 +535,11 @@ class Storage:
         folder = self.get_library_folder(folder_id)
         if not folder:
             raise ValueError("Folder not found")
-        parent_id = int(folder.get("parent_id") or 1)
         clean_name = " ".join(name.strip().split()) or str(folder.get("name") or "New Folder")
-        clean_name = self._unique_library_folder_name(parent_id, clean_name, exclude_id=folder_id)
+        if folder.get("parent_id") is None:
+            clean_name = self._unique_library_root_folder_name(clean_name, exclude_id=folder_id)
+        else:
+            clean_name = self._unique_library_folder_name(int(folder.get("parent_id") or 1), clean_name, exclude_id=folder_id)
         self.conn.execute(
             """
             UPDATE library_folders
@@ -1049,6 +1069,16 @@ class Storage:
             "SELECT id, name FROM library_folders WHERE parent_id = ?",
             (int(parent_id),),
         ).fetchall()
+        existing = {str(row["name"]) for row in rows if int(row["id"]) != int(exclude_id or 0)}
+        if base_name not in existing:
+            return base_name
+        index = 2
+        while f"{base_name} {index}" in existing:
+            index += 1
+        return f"{base_name} {index}"
+
+    def _unique_library_root_folder_name(self, base_name: str, *, exclude_id: int | None = None) -> str:
+        rows = self.conn.execute("SELECT id, name FROM library_folders WHERE parent_id IS NULL").fetchall()
         existing = {str(row["name"]) for row in rows if int(row["id"]) != int(exclude_id or 0)}
         if base_name not in existing:
             return base_name
