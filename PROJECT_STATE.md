@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before library recycle/keyboard-delete work: `7e9fef6 Expand library file operations`
+- Current Git HEAD before arXiv label/rich-reference-copy work: `2e74421 Improve library recycle operations`
 
 ## Completed work
 
@@ -68,11 +68,10 @@
    - Library detail panel now includes BibTeX/reference copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box with volume/page fallbacks.
    - Report and Library keep their top controls fixed while only the content panes scroll.
    - Library now has `unsorted` and `Recycle` special folders, recoverable deletes, keyboard copy/paste/delete, and a Details-side `Remove from Library` action; deleting the last organized shortcut preserves the paper in `unsorted`, then `Recycle`.
-   - BibTeX and Nature-reference copy buttons now reset each other so only the most recently copied format shows `Copied`.
+   - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, and arXiv labels include the arXiv identifier.
 
 ## Useful commits
 
-- `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `89b192f` Follow library preview on selection
 - `257e9d1` Open library pages externally
@@ -80,6 +79,7 @@
 - `1c42259` Fix report and library scrolling
 - `8b002a3` Improve library reference copying
 - `7e9fef6` Expand library file operations
+- `2e74421` Improve library recycle operations
 
 ## Verification already done
 
