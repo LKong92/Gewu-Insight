@@ -2644,9 +2644,11 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
       gap: 12px;
+      align-items: stretch;
       height: 100%;
       max-height: 100%;
       min-height: 0;
+      overflow: hidden;
       outline: none;
     }
     .library-columns {
@@ -2654,16 +2656,21 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       height: 100%;
       max-height: 100%;
+      align-self: stretch;
+      flex: 1 1 auto;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
       display: flex;
+      align-items: stretch;
       overflow-x: auto;
       overflow-y: hidden;
     }
     .library-column {
       flex: 0 0 var(--library-column-width, 260px);
       min-width: 180px;
+      height: 100%;
+      max-height: 100%;
       min-height: 0;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
@@ -2700,6 +2707,7 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       height: 100%;
       max-height: 100%;
+      align-self: stretch;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
