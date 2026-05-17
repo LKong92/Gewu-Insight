@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before next-column reveal tuning: `df76278 Tune library column reveal`
+- Current Git HEAD before column scroll jitter fix: `1080e65 Reveal library child columns when needed`
 
 ## Completed work
 
@@ -72,7 +72,6 @@
 
 ## Useful commits
 
-- `bc6762e` Enhance library citation details
 - `1c42259` Fix report and library scrolling
 - `8b002a3` Improve library reference copying
 - `7e9fef6` Expand library file operations
@@ -80,6 +79,7 @@
 - `b9b5862` Polish library citations
 - `6fd0e10` Refine library keyboard polish
 - `df76278` Tune library column reveal
+- `1080e65` Reveal library child columns when needed
 
 ## Verification already done
 

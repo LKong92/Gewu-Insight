@@ -4421,14 +4421,14 @@ INDEX_HTML = """<!doctype html>
       restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
       if (columns) {
+        columns.scrollLeft = Math.max(0, previousColumnsScrollLeft);
+        state.libraryColumnsScrollLeft = columns.scrollLeft;
         if (state.libraryRevealColumnFolderId) {
           const folderId = state.libraryRevealColumnFolderId;
           const direction = state.libraryRevealColumnDirection || "nearest";
           state.libraryRevealColumnFolderId = 0;
           state.libraryRevealColumnDirection = "";
           revealLibraryColumns(folderId, direction);
-        } else {
-          columns.scrollLeft = previousColumnsScrollLeft;
         }
       }
       window.requestAnimationFrame(() => revealLibrarySelectionInColumn(state.libraryActiveFolderId));
@@ -4482,7 +4482,7 @@ INDEX_HTML = """<!doctype html>
       const maxScroll = Math.max(0, columns.scrollWidth - columns.clientWidth);
       const nextScrollLeft = Math.max(0, Math.min(maxScroll, target));
       if (Math.abs(nextScrollLeft - columns.scrollLeft) < 1) return;
-      columns.scrollTo({left: nextScrollLeft, behavior: "smooth"});
+      columns.scrollLeft = nextScrollLeft;
       state.libraryColumnsScrollLeft = nextScrollLeft;
     }
 
