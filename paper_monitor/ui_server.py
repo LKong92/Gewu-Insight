@@ -207,6 +207,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/open-url":
                 self.handle_open_url(payload)
                 return
+            if parsed.path == "/api/reveal-path":
+                self.handle_reveal_path(payload)
+                return
             if parsed.path == "/api/journals/add":
                 self.handle_add_journal(payload)
                 return
@@ -1080,6 +1083,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         webbrowser.open(url)
         self.send_json({"status": "opened", "url": url})
 
+    def handle_reveal_path(self, payload: dict[str, Any]) -> None:
+        raw_path = str(payload.get("path") or "")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(raw_path).expanduser().resolve()
+        target = requested
+        revealed = "file"
+        if requested.exists():
+            subprocess.run(["open", "-R", str(requested)], check=True)
+        else:
+            revealed = "nearest_parent"
+            target = requested.parent
+            while target != target.parent and not target.exists():
+                target = target.parent
+            if not target.exists():
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No existing parent folder found")
+                return
+            subprocess.run(["open", str(target)], check=True)
+        self.send_json({"status": "opened", "path": str(requested), "opened_path": str(target), "revealed": revealed})
+
     def handle_journals(self) -> None:
         raw = read_config_json()
         self.send_json({"journals": raw.get("journals", []), "history": journal_history(raw)})
@@ -1513,6 +1537,10 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     summary["errors"] = result.get("errors") or []
     summary["warnings"] = (result.get("warnings") or [])[:20]
     summary["warning_count"] = len(result.get("warnings") or [])
+    summary["missing_sources"] = result.get("missing_sources") or []
+    summary["aliases"] = result.get("aliases") or []
+    summary["duplicate_dois"] = result.get("duplicate_dois") or []
+    summary["duplicate_arxiv_ids"] = result.get("duplicate_arxiv_ids") or []
     return summary
 
 
@@ -2109,6 +2137,11 @@ def get_library_import_job(job_id: str | None) -> dict[str, Any] | None:
         job = LIBRARY_IMPORT_JOBS.get(job_id)
         if not job:
             return None
+        result = job.get("result")
+        if isinstance(result, dict) and result.get("report_path") and "missing_sources" not in result:
+            report = load_import_report_summary(result.get("report_path"))
+            if report:
+                job["result"] = report
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs") or [])[-300:]
         return snapshot
@@ -2212,6 +2245,18 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
             error=str(exc),
             finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         )
+
+
+def load_import_report_summary(report_path: Any) -> dict[str, Any] | None:
+    try:
+        path = Path(str(report_path or "")).expanduser().resolve()
+        imports_root = (ROOT / "reports" / "imports").resolve()
+        if not is_allowed_file(path, [imports_root]) or not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return summarize_import_result(data) if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
@@ -3590,7 +3635,7 @@ INDEX_HTML = """<!doctype html>
       height: 100%;
       min-height: 0;
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-rows: auto auto auto minmax(0, 1fr);
       gap: 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -3642,6 +3687,12 @@ INDEX_HTML = """<!doctype html>
       background: var(--accent);
       transition: width 0.2s ease;
     }
+    .loader-main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+      gap: 12px;
+    }
     .loader-console {
       min-height: 0;
       overflow: auto;
@@ -3661,6 +3712,54 @@ INDEX_HTML = """<!doctype html>
     .loader-result {
       color: var(--muted);
       font-size: 12px;
+    }
+    .loader-side {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 12px;
+      color: #344054;
+      font-size: 12px;
+    }
+    .loader-side h3 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+    .loader-metric {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 8px;
+      padding: 6px 0;
+      border-bottom: 1px solid #edf0f5;
+    }
+    .loader-metric strong { color: var(--ink); }
+    .loader-missing-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .loader-missing-tools select {
+      min-width: 0;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 8px;
+    }
+    .loader-missing-path {
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 7px;
+      background: #fff;
+      border: 1px solid var(--line);
+      word-break: break-all;
+      user-select: text;
+      color: var(--muted);
     }
     .library-shell {
       display: grid;
@@ -4158,6 +4257,7 @@ INDEX_HTML = """<!doctype html>
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
       .loader-form { grid-template-columns: 1fr; }
+      .loader-main { grid-template-columns: 1fr; }
       .library-quicklook { top: 24px; left: 4vw; width: 92vw; height: 70vh; }
       .library-quicklook-body { grid-template-columns: 78px minmax(0, 1fr); }
       .library-page-thumb { width: 58px; min-height: 78px; }
@@ -4330,6 +4430,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportJobId: "",
       libraryImportJob: null,
       libraryImportPoller: null,
+      libraryImportMissingIndex: 0,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -5801,10 +5902,14 @@ INDEX_HTML = """<!doctype html>
             <div class="loader-progress-track"><div class="loader-progress-bar" style="width:${percent}%"></div></div>
           </div>
           ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
-          <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
+          <div class="loader-main">
+            <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
+            <aside class="loader-side" id="libraryLoaderSide">${loaderSideMarkup(result)}</aside>
+          </div>
         </div>
       `;
       wireLibraryImportTools();
+      wireLoaderSide();
       $("loaderBackToLibrary")?.addEventListener("click", async () => {
         stopLibraryImportPolling();
         await loadLibrary();
@@ -5832,6 +5937,69 @@ INDEX_HTML = """<!doctype html>
         const time = String(entry.time || "").split("T").pop() || "";
         return `<div class="loader-line ${escapeAttr(level)}">[${escapeHtml(time)}] ${escapeHtml(entry.message || "")}</div>`;
       }).join("");
+    }
+
+    function loaderSideMarkup(result) {
+      if (!result) {
+        return `
+          <h3>Result Guide</h3>
+          <p>Run Dry Run first. After a loader job finishes, this panel explains each number and lists missing files.</p>
+          <div class="loader-metric"><strong>Created</strong><span>new paper records.</span></div>
+          <div class="loader-metric"><strong>Updated</strong><span>existing paper records matched by DOI, arXiv, or source path.</span></div>
+          <div class="loader-metric"><strong>Resources</strong><span>PDF attachments plus non-PDF resource files.</span></div>
+          <div class="loader-metric"><strong>Skipped</strong><span>system metadata and macOS aliases; source files are not deleted.</span></div>
+          <div class="loader-metric"><strong>Missing</strong><span>paths recorded in the scan but not readable during import.</span></div>
+        `;
+      }
+      const missing = Array.isArray(result.missing_sources) ? result.missing_sources : [];
+      const selectedIndex = Math.max(0, Math.min(Number(state.libraryImportMissingIndex || 0), Math.max(0, missing.length - 1)));
+      const selected = missing[selectedIndex] || null;
+      return `
+        <h3>Result Guide</h3>
+        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Paper Monitor.</span></div>
+        <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known papers matched and refreshed instead of duplicated.</span></div>
+        <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
+        <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
+        <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
+        <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>
+        <h3 style="margin-top:12px;">Missing Files</h3>
+        ${missing.length ? `
+          <div class="loader-missing-tools">
+            <select id="loaderMissingSelect">
+              ${missing.map((item, index) => `<option value="${index}"${index === selectedIndex ? " selected" : ""}>${escapeHtml(`${index + 1}. ${item.filename || item.relative_path || item.source_path || "missing file"}`)}</option>`).join("")}
+            </select>
+            <button class="smallbtn" id="loaderRevealMissing" type="button">Show in Finder</button>
+          </div>
+          <div class="loader-missing-path">${escapeHtml(selected?.source_path || "")}</div>
+        ` : `<p>No missing files reported.</p>`}
+      `;
+    }
+
+    function wireLoaderSide() {
+      const select = $("loaderMissingSelect");
+      select?.addEventListener("change", () => {
+        state.libraryImportMissingIndex = Number(select.value || 0);
+        renderLibraryLoader();
+      });
+      $("loaderRevealMissing")?.addEventListener("click", () => revealSelectedMissingFile().catch((error) => {
+        state.libraryImportStatus = error.message || "Could not open Finder";
+        renderLibraryLoader();
+      }));
+    }
+
+    async function revealSelectedMissingFile() {
+      const result = state.libraryImportLastResult || state.libraryImportJob?.result || {};
+      const missing = Array.isArray(result.missing_sources) ? result.missing_sources : [];
+      const item = missing[Number(state.libraryImportMissingIndex || 0)];
+      const path = item?.source_path || "";
+      if (!path) throw new Error("No missing file selected");
+      const res = await fetch("/api/reveal-path", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path})
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || "Could not open Finder");
     }
 
     function renderLibrary() {
