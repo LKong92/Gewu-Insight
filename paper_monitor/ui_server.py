@@ -3090,6 +3090,44 @@ INDEX_HTML = """<!doctype html>
     }
     .toolbar h2 { margin: 0; font-size: 24px; letter-spacing: 0; }
     .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar-import {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: nowrap;
+      min-width: 0;
+    }
+    .toolbar-import.open { display: flex; }
+    .toolbar-import input {
+      width: clamp(180px, 20vw, 300px);
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #fff;
+    }
+    .toolbar-import select {
+      width: 64px;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+    }
+    .toolbar-import .smallbtn {
+      min-height: 36px;
+      padding: 0 8px;
+      white-space: nowrap;
+    }
+    .toolbar-import-status {
+      display: none;
+      flex-basis: 100%;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+    .toolbar-import-status.open { display: block; }
+    .toolbar-import-status.err { color: #b42318; }
+    .toolbar-import-status.ok { color: #067647; }
     .toolbar-toggle {
       min-height: 36px;
       border: 1px solid var(--line);
@@ -3220,34 +3258,6 @@ INDEX_HTML = """<!doctype html>
       padding: 0 10px;
       background: #fff;
     }
-    .library-import-tools {
-      grid-column: 1 / -1;
-      display: grid;
-      grid-template-columns: minmax(220px, 1fr) auto auto auto auto;
-      gap: 8px;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--line);
-      margin-bottom: 10px;
-    }
-    .library-import-tools input,
-    .library-import-tools select {
-      min-height: 32px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 0 10px;
-      background: #fff;
-      min-width: 0;
-    }
-    .library-import-status {
-      grid-column: 1 / -1;
-      min-height: 16px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .library-import-status.err { color: #b42318; }
-    .library-import-status.ok { color: #067647; }
     .library-tab.drag-over {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 1px var(--accent);
@@ -3393,7 +3403,6 @@ INDEX_HTML = """<!doctype html>
     .library-shell {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      grid-template-rows: auto auto minmax(0, 1fr);
       gap: 12px;
       align-items: stretch;
       height: 100%;
@@ -3935,6 +3944,17 @@ INDEX_HTML = """<!doctype html>
           <div class="toolbar">
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions">
+              <div class="toolbar-import" id="toolbarLibraryImport">
+                <input id="libraryImportPath" type="text" placeholder="/path/to/folder">
+                <select id="libraryImportCopyMode" title="Import mode">
+                  <option value="copy" selected>Copy</option>
+                  <option value="link">Link</option>
+                </select>
+                <button class="smallbtn" id="libraryChooseFolder" type="button">Choose</button>
+                <button class="smallbtn" id="libraryDryRunImport" type="button">Dry</button>
+                <button class="smallbtn" id="libraryRunImport" type="button">Import</button>
+                <div class="toolbar-import-status" id="libraryImportStatus"></div>
+              </div>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <button class="smallbtn" id="reportMode">Report</button>
               <button class="smallbtn" id="libraryMode">Library</button>
@@ -5278,6 +5298,7 @@ INDEX_HTML = """<!doctype html>
       state.mode = "report";
       closeLibraryQuickLook();
       stopArxivUpdateCountdown();
+      updateToolbarLibraryImport();
       $("libraryControls").classList.remove("open");
       $("reportTitle").textContent = `${state.selectedDate} Report`;
       const query = state.query.trim().toLowerCase();
@@ -5500,7 +5521,6 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
           ${workspaceToolsMarkup()}
-          ${libraryImportToolsMarkup()}
           <div class="library-columns" id="libraryColumns"></div>
           <aside class="library-pane">
             <div class="library-pane-header">Details</div>
@@ -5523,7 +5543,7 @@ INDEX_HTML = """<!doctype html>
       renderLibraryDetail();
       wireLibraryInteractions();
       wireWorkspaceTools();
-      wireLibraryImportTools();
+      updateToolbarLibraryImport();
       restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
       if (columns) {
@@ -5564,8 +5584,20 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
-    function libraryImportToolsMarkup() {
-      if (state.libraryTab !== "library") return "";
+    function updateToolbarLibraryImport() {
+      const tools = $("toolbarLibraryImport");
+      const statusEl = $("libraryImportStatus");
+      if (!tools || !statusEl) return;
+      const open = state.mode === "library" && state.libraryTab === "library";
+      tools.classList.toggle("open", open);
+      if (!open) {
+        statusEl.classList.remove("open", "ok", "err");
+        return;
+      }
+      const pathInput = $("libraryImportPath");
+      const copyMode = $("libraryImportCopyMode");
+      if (pathInput && document.activeElement !== pathInput) pathInput.value = state.libraryImportPath || "";
+      if (copyMode) copyMode.value = state.libraryImportCopyMode || "copy";
       const result = state.libraryImportLastResult || null;
       const summary = result ? [
         `${result.created_papers || 0} create`,
@@ -5575,26 +5607,17 @@ INDEX_HTML = """<!doctype html>
         `${result.missing_source_files || 0} missing`,
         result.report_path ? `Report: ${result.report_path}` : ""
       ].filter(Boolean).join(" · ") : "";
-      const status = state.libraryImportStatus || summary || "Choose a folder or paste a path, then dry-run before importing.";
+      const status = state.libraryImportStatus || summary || "";
       const statusClass = result?.errors?.length ? " err" : (result ? " ok" : "");
-      return `
-        <div class="library-import-tools" id="libraryImportTools">
-          <input id="libraryImportPath" type="text" placeholder="/path/to/folder" value="${escapeAttr(state.libraryImportPath || "")}">
-          <select id="libraryImportCopyMode" title="Import mode">
-            <option value="copy" ${state.libraryImportCopyMode === "link" ? "" : "selected"}>Copy</option>
-            <option value="link" ${state.libraryImportCopyMode === "link" ? "selected" : ""}>Link</option>
-          </select>
-          <button class="smallbtn" id="libraryChooseFolder" type="button">Choose Folder</button>
-          <button class="smallbtn" id="libraryDryRunImport" type="button" ${state.libraryImportBusy ? "disabled" : ""}>Dry Run</button>
-          <button class="smallbtn" id="libraryRunImport" type="button" ${state.libraryImportBusy ? "disabled" : ""}>Import</button>
-          <div class="library-import-status${statusClass}" id="libraryImportStatus">${escapeHtml(status)}</div>
-        </div>
-      `;
+      statusEl.textContent = status;
+      statusEl.className = `toolbar-import-status${status ? " open" : ""}${statusClass}`;
+      ["libraryDryRunImport", "libraryRunImport"].forEach((id) => {
+        const button = $(id);
+        if (button) button.disabled = state.libraryImportBusy;
+      });
     }
 
     function wireLibraryImportTools() {
-      const tools = $("libraryImportTools");
-      if (!tools) return;
       const pathInput = $("libraryImportPath");
       const copyMode = $("libraryImportCopyMode");
       [pathInput, copyMode].forEach((element) => {
@@ -5622,7 +5645,7 @@ INDEX_HTML = """<!doctype html>
         state.libraryImportPath = data.path || "";
         state.libraryImportStatus = "Folder selected. Run Dry Run before importing.";
         state.libraryImportLastResult = null;
-        renderLibrary();
+        updateToolbarLibraryImport();
       });
     }
 
@@ -5632,7 +5655,7 @@ INDEX_HTML = """<!doctype html>
       if (!path) {
         state.libraryImportStatus = "Folder path is required.";
         state.libraryImportLastResult = {errors: ["Folder path is required"]};
-        renderLibrary();
+        updateToolbarLibraryImport();
         return;
       }
       const confirmed = dryRun || window.confirm("Import will copy/link files into Paper Monitor and will not modify the source folder. Continue?");
@@ -5642,7 +5665,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryImportCopyMode = copyMode;
       state.libraryImportStatus = dryRun ? "Scanning folder for dry-run..." : "Importing folder...";
       state.libraryImportLastResult = null;
-      renderLibrary();
+      updateToolbarLibraryImport();
       try {
         const res = await fetch("/api/library/import-folder", {
           method: "POST",
@@ -5674,6 +5697,7 @@ INDEX_HTML = """<!doctype html>
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
       const sortSelect = $("myPublicationSort");
       if (sortSelect) sortSelect.value = state.myPublicationSort || "time";
+      updateToolbarLibraryImport();
     }
 
     function renderLibraryShortcutTabs() {
@@ -8228,6 +8252,7 @@ INDEX_HTML = """<!doctype html>
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
     });
+    wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
     $("publicationSearchBox").addEventListener("keydown", (event) => {
