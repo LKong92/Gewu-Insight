@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Google Scholar/detail figure update: `c12e3b4 Add my publications library tab`
+- Current Git HEAD before My Publications table tuning: `edcf173 Improve publication search and library details`
 
 ## Completed work
 
@@ -70,16 +70,16 @@
    - Library now has `unsorted` and `Recycle` special folders, recoverable deletes, keyboard copy/paste/delete, and a Details-side `Remove from Library` action; deleting the last organized shortcut preserves the paper in `unsorted`, then `Recycle`.
    - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/path/Quick Look controls are closer to Finder.
    - Library top controls now use `Library` and `My Publications` tabs; `My Publications` stores user publications, star/highlight state, and saved author name in SQLite while reusing the shared paper metadata/PDF details pane.
-   - Library/My Publications details now include abstracts and first-figure previews; My Publications has a Google Scholar author-search button next to Crossref name lookup.
+   - Library/My Publications details now include abstracts and first-figure previews; My Publications uses internal Crossref author/title/DOI lookup, with a horizontally scrollable/resizable publication table.
 
 ## Useful commits
 
-- `c70f9d4` Fix library column heights
 - `f7b6e1c` Highlight library path ancestors
 - `ad86c29` Lock library viewport height
 - `c56d855` Refine library quick look states
 - `6477937` Remove library refresh button
 - `c12e3b4` Add my publications library tab
+- `edcf173` Improve publication search and library details
 
 ## Verification already done
 

@@ -2917,7 +2917,8 @@ INDEX_HTML = """<!doctype html>
       overflow: auto;
     }
     .my-publications-table {
-      width: 100%;
+      width: var(--my-publications-table-width, 100%);
+      min-width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
       font-size: 13px;
@@ -2934,15 +2935,42 @@ INDEX_HTML = """<!doctype html>
       letter-spacing: 0.04em;
       text-align: left;
       padding: 9px 8px;
+      border-right: 1px solid #edf0f5;
     }
     .my-publications-table td {
       border-bottom: 1px solid #edf0f5;
+      border-right: 1px solid #edf0f5;
       padding: 9px 8px;
       color: #344054;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .my-publications-table th:last-child,
+    .my-publications-table td:last-child { border-right: 0; }
+    .my-publications-head-cell {
+      position: relative;
+      min-height: 16px;
+    }
+    .my-publications-col-resizer {
+      position: absolute;
+      top: -9px;
+      right: -8px;
+      bottom: -9px;
+      width: 9px;
+      cursor: col-resize;
+      z-index: 2;
+    }
+    .my-publications-col-resizer::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 4px;
+      width: 1px;
+      background: transparent;
+    }
+    .my-publications-col-resizer:hover::after { background: var(--accent); }
     .my-publications-row {
       cursor: default;
     }
@@ -3517,7 +3545,6 @@ INDEX_HTML = """<!doctype html>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
-              <button class="smallbtn" id="findMyPublicationsGoogle" type="button">Google Scholar</button>
               <input class="search" id="publicationSearchBox" placeholder="DOI or title">
               <button class="smallbtn" id="addMyPublication" type="button">Add</button>
               <select class="search" id="myPublicationSort" title="Sort publications">
@@ -3586,6 +3613,13 @@ INDEX_HTML = """<!doctype html>
       "all": "All Fields",
       "other": "Other Fields"
     };
+    const MY_PUBLICATION_COLUMNS = [
+      {key: "star", label: "", defaultWidth: 42, minWidth: 38, maxWidth: 90},
+      {key: "number", label: "No.", defaultWidth: 56, minWidth: 46, maxWidth: 120},
+      {key: "date", label: "Date", defaultWidth: 120, minWidth: 92, maxWidth: 180},
+      {key: "id", label: "ID", defaultWidth: 230, minWidth: 140, maxWidth: 520},
+      {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200}
+    ];
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -3627,6 +3661,7 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchResults: [],
       myPublicationSearchStatus: "",
       myPublicationName: "",
+      myPublicationColumnWidths: {},
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -5039,16 +5074,10 @@ INDEX_HTML = """<!doctype html>
               <div class="publication-search-results" id="publicationSearchResults">${myPublicationSearchResultsMarkup()}</div>
             </div>
             <div class="my-publications-table-wrap">
-              <table class="my-publications-table">
-                <colgroup>
-                  <col style="width:42px">
-                  <col style="width:56px">
-                  <col style="width:120px">
-                  <col style="width:230px">
-                  <col>
-                </colgroup>
+              <table class="my-publications-table" style="--my-publications-table-width:${myPublicationTableWidth()}px">
+                <colgroup>${myPublicationColgroupMarkup()}</colgroup>
                 <thead>
-                  <tr><th></th><th>No.</th><th>Date</th><th>ID</th><th>Title</th></tr>
+                  <tr>${myPublicationHeaderMarkup()}</tr>
                 </thead>
                 <tbody>
                   ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="5"><div class="empty">No publications yet.</div></td></tr>`}
@@ -5068,6 +5097,34 @@ INDEX_HTML = """<!doctype html>
       window.requestAnimationFrame(() => revealMyPublicationSelection());
     }
 
+    function myPublicationColumnWidth(key) {
+      const column = MY_PUBLICATION_COLUMNS.find((item) => item.key === key);
+      if (!column) return 120;
+      const width = Number(state.myPublicationColumnWidths[key] || column.defaultWidth);
+      return Math.max(column.minWidth, Math.min(column.maxWidth, width));
+    }
+
+    function myPublicationTableWidth() {
+      return MY_PUBLICATION_COLUMNS.reduce((total, column) => total + myPublicationColumnWidth(column.key), 0);
+    }
+
+    function myPublicationColgroupMarkup() {
+      return MY_PUBLICATION_COLUMNS
+        .map((column) => `<col style="width:${myPublicationColumnWidth(column.key)}px">`)
+        .join("");
+    }
+
+    function myPublicationHeaderMarkup() {
+      return MY_PUBLICATION_COLUMNS.map((column) => `
+        <th>
+          <div class="my-publications-head-cell">
+            ${escapeHtml(column.label)}
+            <span class="my-publications-col-resizer" data-publication-col="${escapeAttr(column.key)}"></span>
+          </div>
+        </th>
+      `).join("");
+    }
+
     function myPublicationRowMarkup(entry, index) {
       const paper = entry.paper || {};
       const active = Number(entry.id) === Number(state.myPublicationSelectionId);
@@ -5076,10 +5133,26 @@ INDEX_HTML = """<!doctype html>
           <td><button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button></td>
           <td>${index + 1}</td>
           <td>${escapeHtml(paper.publication_date || "")}</td>
-          <td>${escapeHtml(paper.citation_label || "")}</td>
+          <td>${escapeHtml(myPublicationIdLabel(paper))}</td>
           <td>${escapeHtml(paper.title || "Untitled paper")}</td>
         </tr>
       `;
+    }
+
+    function myPublicationIdLabel(paper) {
+      const ref = paper?.nature_reference || {};
+      const year = ref.year || String(paper?.publication_date || "").slice(0, 4);
+      if (paper?.preprint_id) {
+        const source = `${paper.journal || "arXiv"}:${paper.preprint_id}`;
+        return year ? `${source} (${year})` : source;
+      }
+      let source = ref.journal || paper?.journal || "";
+      const volume = ref.volume || "";
+      const pages = ref.pages || "";
+      if (volume) source = `${source}${source ? " " : ""}${volume}`;
+      if (pages) source = `${source}${source ? ", " : ""}${pages}`;
+      if (!source && paper?.doi) source = `doi:${paper.doi}`;
+      return year && source ? `${source} (${year})` : (source || paper?.citation_label || "");
     }
 
     function myPublicationSearchResultsMarkup() {
@@ -5574,7 +5647,37 @@ INDEX_HTML = """<!doctype html>
           if (candidate) await addMyPublicationCandidate(candidate);
         });
       });
+      shell.querySelectorAll("[data-publication-col]").forEach((handle) => {
+        handle.addEventListener("pointerdown", (event) => startMyPublicationColumnResize(event, handle.dataset.publicationCol));
+      });
       shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+    }
+
+    function startMyPublicationColumnResize(event, key) {
+      const column = MY_PUBLICATION_COLUMNS.find((item) => item.key === key);
+      if (!column) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = myPublicationColumnWidth(key);
+      document.body.classList.add("resizing");
+      const move = (moveEvent) => {
+        const nextWidth = Math.max(column.minWidth, Math.min(column.maxWidth, Math.round(startWidth + moveEvent.clientX - startX)));
+        state.myPublicationColumnWidths[key] = nextWidth;
+        const table = document.querySelector(".my-publications-table");
+        const colIndex = MY_PUBLICATION_COLUMNS.findIndex((item) => item.key === key) + 1;
+        const col = table?.querySelector(`colgroup col:nth-child(${colIndex})`);
+        if (col) col.style.width = `${nextWidth}px`;
+        if (table) table.style.setProperty("--my-publications-table-width", `${myPublicationTableWidth()}px`);
+      };
+      const stop = () => {
+        document.body.classList.remove("resizing");
+        $("libraryShell")?.focus({preventScroll: true});
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
     }
 
     function selectMyPublication(id) {
@@ -5633,28 +5736,6 @@ INDEX_HTML = """<!doctype html>
           : "No publication candidates found.";
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Search failed";
-      }
-      renderMyPublications();
-    }
-
-    async function openMyPublicationsGoogleScholar() {
-      const name = ($("myPublicationName")?.value || state.myPublicationName || "").trim();
-      if (!name) return;
-      await saveMyPublicationName();
-      const url = `https://scholar.google.com/scholar?q=${encodeURIComponent(`author:"${name}"`)}`;
-      state.myPublicationSearchStatus = "Opening Google Scholar author search...";
-      renderMyPublications();
-      try {
-        const res = await fetch("/api/open-url", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({url})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not open Google Scholar");
-        state.myPublicationSearchStatus = "Google Scholar opened. Paste a title or DOI here to add a selected publication.";
-      } catch (error) {
-        state.myPublicationSearchStatus = error.message || "Could not open Google Scholar";
       }
       renderMyPublications();
     }
@@ -7041,7 +7122,6 @@ INDEX_HTML = """<!doctype html>
     });
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
-    $("findMyPublicationsGoogle").addEventListener("click", () => openMyPublicationsGoogleScholar());
     $("publicationSearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
