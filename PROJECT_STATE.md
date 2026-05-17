@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before adjustable Library preview work: `b01ad2a Use in-app library PDF preview`
+- Current Git HEAD before Library preview page/position fix: `257be03 Make library preview adjustable`
 
 ## Completed work
 
@@ -75,7 +75,7 @@
 - `31803ce` Improve report media and internal article viewing
 - `df30f7a` Rewrite library as folder workspace
 - `c4809f2` Open library PDFs in Preview
-- `b01ad2a` Use in-app library PDF preview
+- `257be03` Make library preview adjustable
 
 ## Verification already done
 
