@@ -39,6 +39,7 @@ ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
+LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -201,6 +202,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/delete":
                 self.handle_delete_library_entry(payload)
+                return
+            if parsed.path == "/api/library/recover":
+                self.handle_recover_library_entry(payload)
+                return
+            if parsed.path == "/api/library/remove-paper":
+                self.handle_remove_paper_from_library(payload)
                 return
             if parsed.path == "/api/library/paste":
                 self.handle_paste_library_entry(payload)
@@ -489,10 +496,33 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         entry_id = int(payload.get("id") or 0)
         storage = Storage(self.configured_db_path)
         try:
+            special = ensure_library_special_folders(storage)
+            unsorted_id = int(special["unsorted"].get("id") or 1)
+            recycle_id = int(special["recycle"].get("id") or 1)
             if entry_type == "item":
-                storage.delete_library_item(item_id=entry_id)
+                item = storage.get_library_item(entry_id)
+                if not item:
+                    raise ValueError("Library item not found")
+                folder_id = int(item.get("folder_id") or 1)
+                paper_id = str(item.get("paper_id") or "")
+                if folder_id == recycle_id:
+                    storage.delete_library_item(item_id=entry_id)
+                elif folder_id == unsorted_id:
+                    storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
+                else:
+                    storage.delete_library_item(item_id=entry_id)
+                    if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
             elif entry_type == "folder":
-                storage.delete_library_folder(folder_id=entry_id)
+                folder = storage.get_library_folder(entry_id)
+                if not folder:
+                    raise ValueError("Folder not found")
+                if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id}:
+                    raise ValueError("This folder cannot be deleted")
+                if int(folder.get("parent_id") or 0) == recycle_id:
+                    storage.delete_library_folder(folder_id=entry_id)
+                else:
+                    storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -500,6 +530,41 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        entry_id = int(payload.get("id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            special = ensure_library_special_folders(storage)
+            unsorted_id = int(special["unsorted"].get("id") or 1)
+            if entry_type == "item":
+                recovered = storage.recover_library_item(item_id=entry_id, fallback_folder_id=unsorted_id)
+            elif entry_type == "folder":
+                recovered = storage.recover_library_folder(folder_id=entry_id, fallback_parent_id=1)
+            else:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
+                return
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"recovered": dict(recovered or {}), **snapshot})
+
+    def handle_remove_paper_from_library(self, payload: dict[str, Any]) -> None:
+        paper_id = str(payload.get("paper_id") or "")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.remove_library_paper(paper_id=paper_id)
+            snapshot = library_snapshot(storage)
         finally:
             storage.close()
         self.send_json(snapshot)
@@ -1023,6 +1088,7 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
 
 
 def library_snapshot(storage: Storage) -> dict[str, Any]:
+    ensure_library_special_folders(storage)
     return {
         "root_id": 1,
         "folders": [library_folder_to_api(folder) for folder in storage.list_library_folders()],
@@ -1030,11 +1096,27 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
     }
 
 
+def ensure_library_special_folders(storage: Storage) -> dict[str, dict[str, Any]]:
+    return {
+        "unsorted": storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME),
+        "recycle": storage.ensure_library_folder(parent_id=1, name=LIBRARY_RECYCLE_FOLDER_NAME),
+    }
+
+
 def library_folder_to_api(folder: dict[str, Any]) -> dict[str, Any]:
+    name = folder.get("name") or "New Folder"
+    parent_id = int(folder["parent_id"]) if folder.get("parent_id") is not None else None
+    is_recycle = parent_id == 1 and name == LIBRARY_RECYCLE_FOLDER_NAME
+    is_unsorted = parent_id == 1 and name == LIBRARY_UNSORTED_FOLDER_NAME
     return {
         "id": int(folder.get("id") or 0),
-        "name": folder.get("name") or "New Folder",
-        "parent_id": int(folder["parent_id"]) if folder.get("parent_id") is not None else None,
+        "name": name,
+        "parent_id": parent_id,
+        "original_parent_id": int(folder["original_parent_id"]) if folder.get("original_parent_id") is not None else None,
+        "trashed_at": folder.get("trashed_at") or "",
+        "is_recycle": is_recycle,
+        "is_unsorted": is_unsorted,
+        "protected": int(folder.get("id") or 0) == 1 or is_unsorted or is_recycle,
     }
 
 
@@ -1044,6 +1126,8 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "folder_id": int(item.get("folder_id") or 1),
         "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
         "display_name": item.get("display_name") or "",
+        "original_folder_id": int(item["original_folder_id"]) if item.get("original_folder_id") is not None else None,
+        "trashed_at": item.get("trashed_at") or "",
         "paper": paper_to_api(paper),
     }
 
@@ -3511,6 +3595,14 @@ INDEX_HTML = """<!doctype html>
       return state.libraryFolders.find((folder) => Number(folder.id) === Number(id));
     }
 
+    function libraryUnsortedFolderId() {
+      return Number(state.libraryFolders.find((folder) => folder.is_unsorted || folder.name === "unsorted")?.id || state.libraryRootId);
+    }
+
+    function libraryRecycleFolderId() {
+      return Number(state.libraryFolders.find((folder) => folder.is_recycle || folder.name === "Recycle")?.id || 0);
+    }
+
     function libraryItemById(id) {
       return state.libraryItems.find((item) => Number(item.id) === Number(id));
     }
@@ -3711,8 +3803,7 @@ INDEX_HTML = """<!doctype html>
 
     async function deleteLibraryEntry(type, id) {
       if (!type || !id) return;
-      const label = type === "folder" ? "folder and its contents" : "library shortcut";
-      if (!window.confirm(`Delete this ${label}?`)) return;
+      if (type === "folder" && libraryFolderById(id)?.protected) return;
       const parentId = type === "item"
         ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
         : parentFolderId(id);
@@ -3727,6 +3818,27 @@ INDEX_HTML = """<!doctype html>
       state.librarySelection = {type: "folder", id: parentId};
       state.libraryActiveFolderId = parentId;
       state.libraryCurrentFolderId = parentId;
+      renderLibrary();
+    }
+
+    async function recoverLibraryEntry(type, id) {
+      if (!type || !id) return;
+      const res = await fetch("/api/library/recover", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type, id})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not recover library entry");
+      applyLibrarySnapshot(data);
+      const recoveredId = Number(data.recovered?.id || id);
+      if (type === "item") {
+        const item = libraryItemById(recoveredId);
+        setLibraryColumnSelection(Number(item?.folder_id || libraryUnsortedFolderId()), {type: "item", id: recoveredId});
+      } else {
+        const folder = libraryFolderById(recoveredId);
+        setLibraryColumnSelection(Number(folder?.parent_id || state.libraryRootId), {type: "folder", id: recoveredId});
+      }
       renderLibrary();
     }
 
@@ -3745,6 +3857,24 @@ INDEX_HTML = """<!doctype html>
       if (pastedId) {
         setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type: clipboard.type, id: pastedId});
       }
+      renderLibrary();
+    }
+
+    async function removePaperFromLibrary(paper) {
+      const paperId = paper?.paper_id;
+      if (!paperId) return;
+      const res = await fetch("/api/library/remove-paper", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({paper_id: paperId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not remove paper from Library");
+      const fallbackFolderId = Number(state.libraryActiveFolderId || libraryUnsortedFolderId() || state.libraryRootId);
+      applyLibrarySnapshot(data);
+      state.librarySelection = {type: "folder", id: libraryFolderById(fallbackFolderId) ? fallbackFolderId : state.libraryRootId};
+      state.libraryActiveFolderId = state.librarySelection.id;
+      state.libraryCurrentFolderId = state.librarySelection.id;
       renderLibrary();
     }
 
@@ -4256,6 +4386,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="rename-entry">Rename</button>
           <button type="button" data-action="copy-entry">Copy</button>
           <button type="button" data-action="paste-entry">Paste</button>
+          <button type="button" data-action="recover-entry">Recover</button>
           <button type="button" data-action="delete-entry">Delete</button>
         </div>
       `;
@@ -4464,6 +4595,7 @@ INDEX_HTML = """<!doctype html>
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
+          <button class="action danger" data-action="remove-library-paper">Remove from Library</button>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
@@ -4478,12 +4610,12 @@ INDEX_HTML = """<!doctype html>
         ${citationMetricsMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
-          <button class="action" data-action="copy-bibtex">Copy Code</button>
+          <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
         </div>
         <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
         <div class="library-reference-head">
           <strong>Nature Reference</strong>
-          <button class="action" data-action="copy-nature-reference">Copy Reference</button>
+          <button class="action" data-action="copy-nature-reference" data-copy-button data-default-label="Copy Reference">Copy Reference</button>
         </div>
         <div class="bibtex-box nature-reference-box">${natureReferenceMarkup(paper)}</div>
       `;
@@ -4491,6 +4623,17 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="remove-library-paper"]')?.addEventListener("click", async () => {
+        const status = $("libraryDetailStatus");
+        try {
+          await removePaperFromLibrary(paper);
+        } catch (error) {
+          if (status) {
+            status.textContent = error.message || "Could not remove paper from Library";
+            status.className = "library-detail-status err";
+          }
+        }
+      });
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
     }
@@ -4633,7 +4776,8 @@ INDEX_HTML = """<!doctype html>
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
           setLibraryColumnSelection(parentFolderId, {type, id});
-          renderLibrary();
+          renderLibraryDetail();
+          refreshLibraryQuickLookForSelection();
           const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
           showLibraryContextMenu(event, parentId, type, id);
         });
@@ -5004,6 +5148,37 @@ INDEX_HTML = """<!doctype html>
       quickLookLibraryPdf(paper, {silent: true});
     }
 
+    async function runLibraryMenuAction(action) {
+      try {
+        await action();
+      } catch (error) {
+        window.alert(error.message || "Library action failed");
+      }
+    }
+
+    function libraryEntryIsCopyable(type, id) {
+      if (!type || !id) return false;
+      if (type === "item") return Boolean(libraryItemById(id));
+      if (type === "folder") {
+        const folder = libraryFolderById(id);
+        return Boolean(folder && !folder.protected);
+      }
+      return false;
+    }
+
+    function copyLibraryEntryToClipboard(type, id) {
+      if (!libraryEntryIsCopyable(type, id)) return false;
+      state.libraryClipboard = {type, id: Number(id)};
+      return true;
+    }
+
+    function libraryPasteTargetFolderId() {
+      const selection = state.librarySelection;
+      if (selection?.type === "folder") return Number(selection.id || state.libraryRootId);
+      if (selection?.type === "item") return Number(libraryItemById(selection.id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId);
+      return Number(state.libraryActiveFolderId || state.libraryRootId);
+    }
+
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
       const menu = $("libraryContextMenu");
@@ -5015,42 +5190,56 @@ INDEX_HTML = """<!doctype html>
       menu.style.top = `${event.clientY}px`;
       menu.classList.add("open");
       const hasEntry = Boolean(entryType && entryId);
+      const folder = entryType === "folder" ? libraryFolderById(entryId) : null;
+      const item = entryType === "item" ? libraryItemById(entryId) : null;
+      const recycleId = libraryRecycleFolderId();
       const isRoot = entryType === "folder" && Number(entryId) === Number(state.libraryRootId);
+      const isProtectedFolder = Boolean(folder?.protected || isRoot);
+      const isRecoverable = (entryType === "item" && Number(item?.folder_id || 0) === recycleId)
+        || (entryType === "folder" && Number(folder?.parent_id || 0) === recycleId);
       const renameButton = menu.querySelector('[data-action="rename-entry"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
+      const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       if (renameButton) {
-        renameButton.style.display = hasEntry && !isRoot ? "" : "none";
+        renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
           hideLibraryContextMenu();
           beginLibraryEntryRename(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
         };
       }
       if (deleteButton) {
-        deleteButton.style.display = hasEntry && !isRoot ? "" : "none";
+        deleteButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         deleteButton.onclick = async () => {
           hideLibraryContextMenu();
-          await deleteLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
+          await runLibraryMenuAction(() => deleteLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0)));
         };
       }
       if (copyButton) {
-        copyButton.style.display = hasEntry && !isRoot ? "" : "none";
+        copyButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         copyButton.onclick = () => {
-          state.libraryClipboard = {type: menu.dataset.entryType, id: Number(menu.dataset.entryId || 0)};
+          copyLibraryEntryToClipboard(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
           hideLibraryContextMenu();
+        };
+      }
+      if (recoverButton) {
+        recoverButton.style.display = isRecoverable ? "" : "none";
+        recoverButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => recoverLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0)));
         };
       }
       if (pasteButton) {
         pasteButton.style.display = state.libraryClipboard ? "" : "none";
         pasteButton.onclick = async () => {
           hideLibraryContextMenu();
-          await pasteLibraryEntry(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId));
+          await runLibraryMenuAction(() => pasteLibraryEntry(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
         };
       }
       menu.querySelector('[data-action="new-folder"]').onclick = async () => {
         hideLibraryContextMenu();
-        await createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId));
+        await runLibraryMenuAction(() => createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
       };
     }
 
@@ -5069,9 +5258,30 @@ INDEX_HTML = """<!doctype html>
         "Spacebar": " "
       };
       const key = keyAliases[event.key] || event.key;
-      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter"].includes(key);
+      if (event.metaKey && !event.altKey && !event.shiftKey && key.toLowerCase() === "c") {
+        const selection = state.librarySelection;
+        if (copyLibraryEntryToClipboard(selection?.type, Number(selection?.id || 0))) {
+          event.preventDefault();
+          return true;
+        }
+        return false;
+      }
+      if (event.metaKey && !event.altKey && !event.shiftKey && key.toLowerCase() === "v") {
+        if (!state.libraryClipboard) return false;
+        event.preventDefault();
+        runLibraryMenuAction(() => pasteLibraryEntry(libraryPasteTargetFolderId()));
+        return true;
+      }
+      const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "Delete", "Backspace"].includes(key);
       if (!handled) return false;
       event.preventDefault();
+      if (key === "Delete" || key === "Backspace") {
+        const selection = state.librarySelection;
+        if (selection?.type && selection.id) {
+          runLibraryMenuAction(() => deleteLibraryEntry(selection.type, Number(selection.id)));
+        }
+        return true;
+      }
       if (key === " ") {
         const paper = selectedLibraryPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
@@ -5347,6 +5557,10 @@ INDEX_HTML = """<!doctype html>
 
     function markCopyButtonCopied(button) {
       if (!button) return;
+      $("libraryDetail")?.querySelectorAll("[data-copy-button]").forEach((item) => {
+        item.textContent = item.dataset.defaultLabel || "Copy";
+        item.classList.remove("copied");
+      });
       button.textContent = "Copied";
       button.classList.add("copied");
     }

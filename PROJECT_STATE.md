@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before library file-operation work: `8b002a3 Improve library reference copying`
+- Current Git HEAD before library recycle/keyboard-delete work: `7e9fef6 Expand library file operations`
 
 ## Completed work
 
@@ -67,6 +67,8 @@
    - Library column widths are adjustable by dragging the divider between columns.
    - Library detail panel now includes BibTeX/reference copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box with volume/page fallbacks.
    - Report and Library keep their top controls fixed while only the content panes scroll.
+   - Library now has `unsorted` and `Recycle` special folders, recoverable deletes, keyboard copy/paste/delete, and a Details-side `Remove from Library` action; deleting the last organized shortcut preserves the paper in `unsorted`, then `Recycle`.
+   - BibTeX and Nature-reference copy buttons now reset each other so only the most recently copied format shows `Copied`.
 
 ## Useful commits
 
@@ -77,6 +79,7 @@
 - `bc6762e` Enhance library citation details
 - `1c42259` Fix report and library scrolling
 - `8b002a3` Improve library reference copying
+- `7e9fef6` Expand library file operations
 
 ## Verification already done
 
@@ -86,11 +89,7 @@
 - Smoke-tested `http://127.0.0.1:8766/`, `/api/report?date=2026-05-15`, and `/api/page-proxy?url=https%3A%2F%2Fwww.nature.com%2Fnphys%2F`.
 - Smoke-tested `http://127.0.0.1:8767/`; `/api/report?date=2026-05-15&auto_fetch=0` returned in about 0.013s.
 - Verified `/api/open-url` rejects invalid URLs without launching a browser.
-- Verified in the native `.app`:
-  - live fetch progress appears and updates,
-  - fetching calendar cell uses a dot only,
-  - switching dates during fetch still works,
-  - report grouping and author display are visible.
+- Verified native `.app` fetch progress, fetching calendar dot, date switching during fetch, report grouping, and author display.
 
 ## Current caveats
 
