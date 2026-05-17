@@ -3100,6 +3100,36 @@ INDEX_HTML = """<!doctype html>
     .library-detail dl { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 10px; margin: 12px 0; }
     .library-detail dt { color: var(--muted); }
     .library-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .library-detail-figure {
+      margin: 10px 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      overflow: hidden;
+      background: #f8fafc;
+    }
+    .library-detail-figure img {
+      display: block;
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      background: #fff;
+    }
+    .library-detail-abstract {
+      margin: 12px 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfe;
+    }
+    .library-detail-abstract strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+    }
+    .library-detail-abstract p {
+      margin: 0;
+      color: #344054;
+    }
     .bibtex-box {
       margin-top: 12px;
       padding: 10px;
@@ -3487,6 +3517,7 @@ INDEX_HTML = """<!doctype html>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
+              <button class="smallbtn" id="findMyPublicationsGoogle" type="button">Google Scholar</button>
               <input class="search" id="publicationSearchBox" placeholder="DOI or title">
               <button class="smallbtn" id="addMyPublication" type="button">Add</button>
               <select class="search" id="myPublicationSort" title="Sort publications">
@@ -4005,6 +4036,11 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not load My Publications");
       applyMyPublications(data);
       renderMyPublications();
+    }
+
+    function renderActiveLibraryTab() {
+      if (state.libraryTab === "my-publications") renderMyPublications();
+      else renderLibrary();
     }
 
     function applyMyPublications(data) {
@@ -5266,6 +5302,31 @@ INDEX_HTML = """<!doctype html>
       return String(label).replace(/^(.+?) et al\.(\s+)/, "$1$2");
     }
 
+    function libraryDetailFigureMarkup(paper) {
+      if (!paper?.image_url) return "";
+      return `
+        <figure class="library-detail-figure">
+          <img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "First figure")}" loading="lazy">
+        </figure>
+      `;
+    }
+
+    function libraryDetailAbstractMarkup(paper) {
+      const abstract = String(paper?.abstract || "").trim();
+      if (!abstract) return "";
+      return `
+        <section class="library-detail-abstract">
+          <strong>Abstract</strong>
+          <p>${escapeHtml(abstract)}</p>
+        </section>
+      `;
+    }
+
+    function hydrateLibraryDetailFigureIfNeeded(paper) {
+      if (!paper?.paper_id || paper.image_url || state.figureFailures.has(paper.paper_id)) return;
+      queuePaperFigureHydration(paper.paper_id);
+    }
+
     function renderLibraryDetail() {
       const root = $("libraryDetail");
       if (!root) return;
@@ -5294,6 +5355,7 @@ INDEX_HTML = """<!doctype html>
         : (Array.isArray(paper.authors) ? paper.authors : []);
       root.innerHTML = `
         <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
@@ -5311,6 +5373,7 @@ INDEX_HTML = """<!doctype html>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
         </dl>
+        ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
@@ -5340,6 +5403,7 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
+      hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
     function renderPublicationDetail() {
@@ -5355,6 +5419,7 @@ INDEX_HTML = """<!doctype html>
         : (Array.isArray(paper.authors) ? paper.authors : []);
       root.innerHTML = `
         <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
@@ -5371,6 +5436,7 @@ INDEX_HTML = """<!doctype html>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
         </dl>
+        ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
@@ -5389,6 +5455,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
+      hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
     function citationMetricsMarkup(paper) {
@@ -5566,6 +5633,28 @@ INDEX_HTML = """<!doctype html>
           : "No publication candidates found.";
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Search failed";
+      }
+      renderMyPublications();
+    }
+
+    async function openMyPublicationsGoogleScholar() {
+      const name = ($("myPublicationName")?.value || state.myPublicationName || "").trim();
+      if (!name) return;
+      await saveMyPublicationName();
+      const url = `https://scholar.google.com/scholar?q=${encodeURIComponent(`author:"${name}"`)}`;
+      state.myPublicationSearchStatus = "Opening Google Scholar author search...";
+      renderMyPublications();
+      try {
+        const res = await fetch("/api/open-url", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not open Google Scholar");
+        state.myPublicationSearchStatus = "Google Scholar opened. Paste a title or DOI here to add a selected publication.";
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Could not open Google Scholar";
       }
       renderMyPublications();
     }
@@ -6470,7 +6559,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function drainFigureQueue() {
-      while (state.showFigures && state.activeFigureHydrations < state.maxFigureHydrations && state.figureQueue.length) {
+      while ((state.showFigures || state.mode === "library") && state.activeFigureHydrations < state.maxFigureHydrations && state.figureQueue.length) {
         const paperId = state.figureQueue.shift();
         state.queuedFigureIds.delete(paperId);
         hydratePaperFigure(paperId);
@@ -6489,7 +6578,7 @@ INDEX_HTML = """<!doctype html>
           return;
         }
         updatePaperState(paperId, data.paper);
-        if (state.mode === "library") renderLibrary();
+        if (state.mode === "library") renderActiveLibraryTab();
         else renderReport();
       } catch (error) {
         state.figureFailures.add(paperId);
@@ -6952,6 +7041,7 @@ INDEX_HTML = """<!doctype html>
     });
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
+    $("findMyPublicationsGoogle").addEventListener("click", () => openMyPublicationsGoogleScholar());
     $("publicationSearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
