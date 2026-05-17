@@ -3764,6 +3764,7 @@ INDEX_HTML = """<!doctype html>
       libraryColumnScrollTops: {},
       libraryColumnWidths: {},
       libraryClipboard: null,
+      libraryDragPayload: null,
       libraryRevealColumnFolderId: 0,
       libraryRevealColumnDirection: "",
       libraryRenamingFolderId: 0,
@@ -5248,6 +5249,7 @@ INDEX_HTML = """<!doctype html>
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
           event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
           button.classList.add("drag-over");
         });
         button.addEventListener("dragleave", () => button.classList.remove("drag-over"));
@@ -5256,6 +5258,7 @@ INDEX_HTML = """<!doctype html>
           if (payload?.type !== "folder") return;
           event.preventDefault();
           button.classList.remove("drag-over");
+          state.libraryDragPayload = null;
           await runLibraryMenuAction(() => assignLibraryShortcutTab(Number(button.dataset.shortcutTab || 0), Number(payload.id || 0)));
         });
       });
@@ -5728,8 +5731,17 @@ INDEX_HTML = """<!doctype html>
     }
 
     function authorMatchesMyName(author) {
-      const target = authorNameSignature(state.myPublicationName || "");
-      const candidate = authorNameSignature(author || "");
+      const targets = authorNameSignatures(currentMyPublicationName());
+      const candidates = authorNameSignatures(author || "");
+      return targets.some((target) => candidates.some((candidate) => authorSignaturesMatch(target, candidate)));
+    }
+
+    function currentMyPublicationName() {
+      const input = $("myPublicationName");
+      return (input?.value || state.myPublicationName || "").trim();
+    }
+
+    function authorSignaturesMatch(target, candidate) {
       if (!target.family || !candidate.family || target.family !== candidate.family) return false;
       if (target.givenFull && candidate.givenFull && target.givenFull === candidate.givenFull) return true;
       if (target.initials && candidate.initials && target.initials === candidate.initials) return true;
@@ -5739,7 +5751,7 @@ INDEX_HTML = """<!doctype html>
       return !target.givenFull && !candidate.givenFull;
     }
 
-    function authorNameSignature(value) {
+    function authorNameSignatures(value) {
       const clean = String(value || "")
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
@@ -5749,14 +5761,21 @@ INDEX_HTML = """<!doctype html>
         .trim()
         .toLowerCase();
       const parts = clean.split(" ").filter(Boolean);
-      if (!parts.length) return {family: "", givenFull: "", initials: ""};
-      const family = parts[parts.length - 1];
-      const given = parts.slice(0, -1);
-      return {
-        family,
-        givenFull: given.join(""),
-        initials: given.map((part) => part[0] || "").join("")
+      if (!parts.length) return [];
+      const variants = [];
+      const addVariant = (family, given) => {
+        const signature = {
+          family,
+          givenFull: given.join(""),
+          initials: given.map((part) => part[0] || "").join("")
+        };
+        if (!variants.some((item) => item.family === signature.family && item.givenFull === signature.givenFull && item.initials === signature.initials)) {
+          variants.push(signature);
+        }
       };
+      addVariant(parts[parts.length - 1], parts.slice(0, -1));
+      if (parts.length > 1) addVariant(parts[0], parts.slice(1));
+      return variants;
     }
 
     function renderLibraryDetail() {
@@ -6153,6 +6172,13 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not save name");
       state.myPublicationName = data.myName || "";
       renderLibraryTabs();
+      refreshLibraryDetailAuthors();
+    }
+
+    function refreshLibraryDetailAuthors() {
+      if (state.libraryTab === "my-publications") renderPublicationDetail();
+      else if (state.libraryTab === "all-literatures") renderAllLiteratureDetail();
+      else if (state.mode === "library") renderLibraryDetail();
     }
 
     async function searchMyPublications(kind = "auto") {
@@ -6274,12 +6300,18 @@ INDEX_HTML = """<!doctype html>
             event.preventDefault();
             return;
           }
-          event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify({
+          const payload = {
             type: row.dataset.libraryType,
             id: Number(row.dataset.libraryId),
             parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
-          }));
-          event.dataTransfer.effectAllowed = "move";
+          };
+          state.libraryDragPayload = payload;
+          event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify(payload));
+          event.dataTransfer.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
+          event.dataTransfer.effectAllowed = "copyMove";
+        });
+        row.addEventListener("dragend", () => {
+          state.libraryDragPayload = null;
         });
         row.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
@@ -6355,11 +6387,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryDragPayload(event) {
-      if (!event.dataTransfer?.types?.includes("application/x-paper-monitor-library")) return null;
+      const types = Array.prototype.slice.call(event.dataTransfer?.types || []);
+      if (!types.includes("application/x-paper-monitor-library")) return state.libraryDragPayload || null;
       try {
-        return JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "{}");
+        return JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "null") || state.libraryDragPayload || null;
       } catch (error) {
-        return null;
+        return state.libraryDragPayload || null;
       }
     }
 
@@ -7692,6 +7725,10 @@ INDEX_HTML = """<!doctype html>
       }
     });
     $("myPublicationName").addEventListener("change", () => saveMyPublicationName().catch(() => {}));
+    $("myPublicationName").addEventListener("input", (event) => {
+      state.myPublicationName = event.target.value || "";
+      refreshLibraryDetailAuthors();
+    });
     $("myPublicationName").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
