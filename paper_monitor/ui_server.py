@@ -148,6 +148,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications":
                 self.handle_my_publications(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/all-literatures":
+                self.handle_all_literatures(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/publication-search":
                 self.handle_publication_search(parse_qs(parsed.query))
                 return
@@ -435,6 +438,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"publications": publications, "myName": my_name})
+
+    def handle_all_literatures(self, query: dict[str, list[str]]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            entries = [all_literature_to_api(row) for row in storage.list_all_literatures()]
+        finally:
+            storage.close()
+        self.send_json({"entries": entries})
 
     def handle_publication_search(self, query: dict[str, list[str]]) -> None:
         search_text = (first(query, "q") or "").strip()
@@ -1283,6 +1294,15 @@ def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "starred": bool(row.get("starred")),
         "created_at": row.get("created_at") or "",
         "updated_at": row.get("updated_at") or "",
+        "paper": paper_to_api(row),
+    }
+
+
+def all_literature_to_api(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("paper_id") or "",
+        "paper_id": row.get("paper_id") or "",
+        "added_at": row.get("all_added_at") or "",
         "paper": paper_to_api(row),
     }
 
@@ -2976,6 +2996,8 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-row:hover { background: #f8fafc; }
     .my-publications-row.active { background: #e8f3f4; }
+    .my-publications-id em { font-style: italic; }
+    .my-publications-id strong { font-weight: 750; color: var(--ink); }
     .star-button {
       width: 28px;
       height: 28px;
@@ -2987,6 +3009,24 @@ INDEX_HTML = """<!doctype html>
       line-height: 1;
     }
     .star-button.active { color: #d97706; }
+    .all-literatures-panel {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .all-literatures-stats {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+      color: var(--muted);
+      font-size: 12px;
+    }
     .library-shell {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
@@ -3542,6 +3582,7 @@ INDEX_HTML = """<!doctype html>
           <div class="library-controls" id="libraryControls">
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
+            <button class="library-tab" id="allLiteraturesTab" type="button">All Literatures</button>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
@@ -3615,7 +3656,7 @@ INDEX_HTML = """<!doctype html>
     };
     const MY_PUBLICATION_COLUMNS = [
       {key: "star", label: "", defaultWidth: 42, minWidth: 38, maxWidth: 90},
-      {key: "number", label: "No.", defaultWidth: 56, minWidth: 46, maxWidth: 120},
+      {key: "number", label: "No", defaultWidth: 56, minWidth: 46, maxWidth: 120},
       {key: "date", label: "Date", defaultWidth: 120, minWidth: 92, maxWidth: 180},
       {key: "id", label: "ID", defaultWidth: 230, minWidth: 140, maxWidth: 520},
       {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200}
@@ -3662,6 +3703,8 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchStatus: "",
       myPublicationName: "",
       myPublicationColumnWidths: {},
+      allLiteratures: [],
+      allLiteratureSelectionId: "",
       mode: "report",
       activeReportJournal: "",
       noteWidth: 460,
@@ -4073,7 +4116,22 @@ INDEX_HTML = """<!doctype html>
       renderMyPublications();
     }
 
+    async function loadAllLiteratures() {
+      state.mode = "library";
+      state.libraryTab = "all-literatures";
+      setSidebarCollapsed(true);
+      const res = await fetch("/api/all-literatures");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load All Literatures");
+      applyAllLiteratures(data);
+      renderAllLiteratures();
+    }
+
     function renderActiveLibraryTab() {
+      if (state.libraryTab === "all-literatures") {
+        renderAllLiteratures();
+        return;
+      }
       if (state.libraryTab === "my-publications") renderMyPublications();
       else renderLibrary();
     }
@@ -4109,6 +4167,24 @@ INDEX_HTML = """<!doctype html>
 
     function selectedMyPublicationPaper() {
       return myPublicationById(state.myPublicationSelectionId)?.paper || null;
+    }
+
+    function applyAllLiteratures(data) {
+      state.allLiteratures = Array.isArray(data.entries) ? data.entries : [];
+      if (!state.allLiteratureSelectionId && state.allLiteratures.length) {
+        state.allLiteratureSelectionId = state.allLiteratures[0]?.paper_id || "";
+      }
+      if (state.allLiteratureSelectionId && !allLiteratureById(state.allLiteratureSelectionId)) {
+        state.allLiteratureSelectionId = state.allLiteratures[0]?.paper_id || "";
+      }
+    }
+
+    function allLiteratureById(id) {
+      return state.allLiteratures.find((entry) => String(entry.paper_id || entry.id) === String(id));
+    }
+
+    function selectedAllLiteraturePaper() {
+      return allLiteratureById(state.allLiteratureSelectionId)?.paper || null;
     }
 
     function applyLibrarySnapshot(data) {
@@ -5045,6 +5121,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryControls").classList.add("open");
       $("libraryTab")?.classList.toggle("active", state.libraryTab === "library");
       $("myPublicationsTab")?.classList.toggle("active", state.libraryTab === "my-publications");
+      $("allLiteraturesTab")?.classList.toggle("active", state.libraryTab === "all-literatures");
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
@@ -5097,6 +5174,58 @@ INDEX_HTML = """<!doctype html>
       window.requestAnimationFrame(() => revealMyPublicationSelection());
     }
 
+    function renderAllLiteratures() {
+      state.mode = "library";
+      state.libraryTab = "all-literatures";
+      stopArxivUpdateCountdown();
+      renderLibraryTabs();
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      $("reportTitle").textContent = "Library";
+      const query = state.query.trim().toLowerCase();
+      const entries = (state.allLiteratures || []).filter((entry) => {
+        if (!query) return true;
+        const paper = entry.paper || {};
+        const haystack = `${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
+        return haystack.includes(query);
+      });
+      const selected = entries.find((entry) => String(entry.paper_id || entry.id) === String(state.allLiteratureSelectionId || "")) || entries[0] || null;
+      if (selected) state.allLiteratureSelectionId = selected.paper_id || selected.id || "";
+      $("summary").textContent = `${state.allLiteratures.length} total literatures · ${entries.length} shown · Ordered by added time`;
+      const root = $("papers");
+      root.classList.add("library-view");
+      root.innerHTML = `
+        <div class="library-shell" id="libraryShell" tabindex="0">
+          <section class="all-literatures-panel">
+            <div class="all-literatures-stats">${entries.length} papers in Library and My Publications · oldest added first</div>
+            <div class="library-column-body">
+              ${entries.length ? entries.map((entry, index) => allLiteratureRowMarkup(entry, index)).join("") : `<div class="empty">No literatures yet.</div>`}
+            </div>
+          </section>
+          <aside class="library-pane">
+            <div class="library-pane-header">Details</div>
+            <div class="library-detail" id="libraryDetail"></div>
+          </aside>
+        </div>
+      `;
+      resizeLibraryViewport();
+      renderAllLiteratureDetail();
+      wireAllLiteratureInteractions();
+      window.requestAnimationFrame(() => revealAllLiteratureSelection());
+    }
+
+    function allLiteratureRowMarkup(entry, index) {
+      const paper = entry.paper || {};
+      const active = String(entry.paper_id || entry.id) === String(state.allLiteratureSelectionId || "");
+      return `
+        <button class="library-row${active ? " active" : ""}" type="button" data-literature-id="${escapeAttr(entry.paper_id || entry.id || "")}">
+          <span>○</span>
+          <span class="library-name">${escapeHtml(libraryPaperDisplayName(paper))}</span>
+          <span class="library-meta">${escapeHtml(entry.added_at ? `#${index + 1}` : "")}</span>
+        </button>
+      `;
+    }
+
     function myPublicationColumnWidth(key) {
       const column = MY_PUBLICATION_COLUMNS.find((item) => item.key === key);
       if (!column) return 120;
@@ -5133,26 +5262,26 @@ INDEX_HTML = """<!doctype html>
           <td><button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button></td>
           <td>${index + 1}</td>
           <td>${escapeHtml(paper.publication_date || "")}</td>
-          <td>${escapeHtml(myPublicationIdLabel(paper))}</td>
+          <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
           <td>${escapeHtml(paper.title || "Untitled paper")}</td>
         </tr>
       `;
     }
 
-    function myPublicationIdLabel(paper) {
+    function myPublicationIdMarkup(paper) {
       const ref = paper?.nature_reference || {};
-      const year = ref.year || String(paper?.publication_date || "").slice(0, 4);
       if (paper?.preprint_id) {
-        const source = `${paper.journal || "arXiv"}:${paper.preprint_id}`;
-        return year ? `${source} (${year})` : source;
+        return `<em>${escapeHtml(paper.journal || "arXiv")}</em>:${escapeHtml(paper.preprint_id)}`;
       }
-      let source = ref.journal || paper?.journal || "";
+      const journal = ref.journal || paper?.journal || "";
       const volume = ref.volume || "";
       const pages = ref.pages || "";
-      if (volume) source = `${source}${source ? " " : ""}${volume}`;
-      if (pages) source = `${source}${source ? ", " : ""}${pages}`;
-      if (!source && paper?.doi) source = `doi:${paper.doi}`;
-      return year && source ? `${source} (${year})` : (source || paper?.citation_label || "");
+      const parts = [];
+      if (journal) parts.push(`<em>${escapeHtml(journal)}</em>`);
+      if (volume) parts.push(`<strong>${escapeHtml(volume)}</strong>${pages ? `, ${escapeHtml(pages)}` : ""}`);
+      else if (pages) parts.push(escapeHtml(pages));
+      if (!parts.length && paper?.doi) parts.push(`doi:${escapeHtml(paper.doi)}`);
+      return parts.join(" ") || escapeHtml(paper?.citation_label || "");
     }
 
     function myPublicationSearchResultsMarkup() {
@@ -5485,6 +5614,58 @@ INDEX_HTML = """<!doctype html>
       const paper = selectedMyPublicationPaper();
       if (!paper) {
         root.innerHTML = `<div class="empty">Select a publication.</div>`;
+        return;
+      }
+      const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
+        ? paper.full_authors
+        : (Array.isArray(paper.authors) ? paper.authors : []);
+      root.innerHTML = `
+        <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        ${libraryDetailFigureMarkup(paper)}
+        <div class="actions">
+          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
+          ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
+          ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
+        </div>
+        <div class="library-detail-status" id="libraryDetailStatus"></div>
+        <dl>
+          <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
+          <dt>Authors</dt><dd>${escapeHtml(authors.length ? authors.join(", ") : "Authors unavailable")}</dd>
+          <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
+          <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
+          <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
+          <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
+          <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
+        </dl>
+        ${libraryDetailAbstractMarkup(paper)}
+        ${citationMetricsMarkup(paper)}
+        <div class="library-reference-head">
+          <strong>BibTeX</strong>
+          <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
+        </div>
+        <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
+        <div class="library-reference-head">
+          <strong>Nature Reference</strong>
+          <button class="action" data-action="copy-nature-reference" data-copy-button data-default-label="Copy Reference">Copy Reference</button>
+        </div>
+        <div class="bibtex-box nature-reference-box">${natureReferenceMarkup(paper)}</div>
+      `;
+      root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
+      root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
+      root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
+      hydrateLibraryDetailFigureIfNeeded(paper);
+    }
+
+    function renderAllLiteratureDetail() {
+      const root = $("libraryDetail");
+      if (!root) return;
+      const paper = selectedAllLiteraturePaper();
+      if (!paper) {
+        root.innerHTML = `<div class="empty">Select a literature.</div>`;
         return;
       }
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
@@ -5968,6 +6149,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function selectedLibraryPaper() {
+      if (state.libraryTab === "all-literatures") return selectedAllLiteraturePaper();
       if (state.libraryTab === "my-publications") return selectedMyPublicationPaper();
       if (state.librarySelection?.type !== "item") return null;
       return libraryItemById(state.librarySelection.id)?.paper || null;
@@ -6090,6 +6272,10 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab === "my-publications") {
         const paper = selectedMyPublicationPaper();
         return {icon: "○", title: paper?.citation_label || paper?.title || "Publication", type: paper ? "No PDF" : "My Publications"};
+      }
+      if (state.libraryTab === "all-literatures") {
+        const paper = selectedAllLiteraturePaper();
+        return {icon: "○", title: paper?.citation_label || paper?.title || "Literature", type: paper ? "No PDF" : "All Literatures"};
       }
       const selection = state.librarySelection || {};
       if (selection.type === "folder") {
@@ -6457,6 +6643,12 @@ INDEX_HTML = """<!doctype html>
         "Spacebar": " "
       };
       const key = keyAliases[event.key] || event.key;
+      if (state.libraryTab === "all-literatures") {
+        const handled = ["ArrowUp", "ArrowDown", " "].includes(key);
+        if (!handled) return false;
+        event.preventDefault();
+        return handleAllLiteratureKeydown(event, key);
+      }
       if (state.libraryTab === "my-publications") {
         const handled = ["ArrowUp", "ArrowDown", " "].includes(key);
         if (!handled) return false;
@@ -6541,6 +6733,49 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function wireAllLiteratureInteractions() {
+      const shell = $("libraryShell");
+      if (!shell) return;
+      shell.querySelectorAll("[data-literature-id]").forEach((row) => {
+        row.addEventListener("click", () => selectAllLiterature(row.dataset.literatureId || ""));
+      });
+      shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+    }
+
+    function selectAllLiterature(id) {
+      if (!allLiteratureById(id)) return;
+      state.allLiteratureSelectionId = String(id);
+      renderAllLiteratures();
+      refreshLibraryQuickLookForSelection();
+    }
+
+    function revealAllLiteratureSelection() {
+      const row = [...document.querySelectorAll("[data-literature-id]")]
+        .find((item) => String(item.dataset.literatureId || "") === String(state.allLiteratureSelectionId || ""));
+      row?.scrollIntoView({block: "nearest"});
+    }
+
+    function handleAllLiteratureKeydown(event, key) {
+      const rows = state.allLiteratures || [];
+      if (!rows.length) return true;
+      if (key === " ") {
+        const paper = selectedAllLiteraturePaper();
+        if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
+        else if (state.libraryQuickLookOpen) showLibraryQuickLookPlaceholder();
+        return true;
+      }
+      if (!["ArrowUp", "ArrowDown"].includes(key)) return false;
+      const currentIndex = rows.findIndex((entry) => String(entry.paper_id || entry.id) === String(state.allLiteratureSelectionId || ""));
+      const fallback = key === "ArrowDown" ? 0 : rows.length - 1;
+      const nextIndex = currentIndex < 0
+        ? fallback
+        : Math.max(0, Math.min(rows.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+      state.allLiteratureSelectionId = String(rows[nextIndex].paper_id || rows[nextIndex].id || "");
+      renderAllLiteratures();
+      refreshLibraryQuickLookForSelection();
+      return true;
+    }
+
     function updatePaperState(paperId, paper) {
       if (!paper) return;
       const reportIndex = state.papers.findIndex((item) => item.paper_id === paperId);
@@ -6552,6 +6787,9 @@ INDEX_HTML = """<!doctype html>
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
       });
       state.myPublications.forEach((item) => {
+        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
+      });
+      state.allLiteratures.forEach((item) => {
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
       });
     }
@@ -6861,7 +7099,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "upload failed");
         updatePaperState(paperId, data.paper);
-        if (state.mode === "library") renderLibrary();
+        if (state.mode === "library") renderActiveLibraryTab();
         else renderReport();
       } catch (error) {
         status.textContent = error.message;
@@ -6885,7 +7123,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "request failed");
         updatePaperState(paperId, data.paper);
-        if (state.mode === "library") renderLibrary();
+        if (state.mode === "library") renderActiveLibraryTab();
         else renderReport();
       } catch (error) {
         status.textContent = error.message;
@@ -6912,7 +7150,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "delete failed");
         updatePaperState(paperId, data.paper);
         if (action === "delete-analysis") closeAnalysis();
-        if (state.mode === "library") renderLibrary();
+        if (state.mode === "library") renderActiveLibraryTab();
         else renderReport();
       } catch (error) {
         status.textContent = error.message;
@@ -7120,6 +7358,11 @@ INDEX_HTML = """<!doctype html>
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
     });
+    $("allLiteraturesTab").addEventListener("click", () => {
+      loadAllLiteratures().catch((error) => {
+        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      });
+    });
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
     $("publicationSearchBox").addEventListener("keydown", (event) => {
@@ -7158,13 +7401,13 @@ INDEX_HTML = """<!doctype html>
         state.figureQueue = [];
         state.queuedFigureIds.clear();
       }
-      if (state.mode === "library") renderLibrary();
+      if (state.mode === "library") renderActiveLibraryTab();
       else renderReport();
     });
     $("searchBox").addEventListener("input", (event) => {
       state.query = event.target.value;
       state.noMatchDates = new Set();
-      if (state.mode === "library") renderLibrary();
+      if (state.mode === "library") renderActiveLibraryTab();
       else renderReport();
     });
     $("closeAnalysis").addEventListener("click", closeAnalysis);
