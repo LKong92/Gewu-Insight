@@ -49,7 +49,12 @@
                       defer:NO];
     self.window.title = @"Paper Monitor";
     self.window.minSize = NSMakeSize(980, 680);
-    [self.window center];
+    NSScreen *screen = [NSScreen mainScreen];
+    if (screen) {
+        [self.window setFrame:screen.visibleFrame display:YES];
+    } else {
+        [self.window center];
+    }
     self.window.contentView = self.webView;
     [self.window makeKeyAndOrderFront:nil];
 }
