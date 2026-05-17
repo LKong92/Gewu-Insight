@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Finder-style column reveal work: `6fd0e10 Refine library keyboard polish`
+- Current Git HEAD before next-column reveal tuning: `df76278 Tune library column reveal`
 
 ## Completed work
 
@@ -72,7 +72,6 @@
 
 ## Useful commits
 
-- `257e9d1` Open library pages externally
 - `bc6762e` Enhance library citation details
 - `1c42259` Fix report and library scrolling
 - `8b002a3` Improve library reference copying
@@ -80,6 +79,7 @@
 - `2e74421` Improve library recycle operations
 - `b9b5862` Polish library citations
 - `6fd0e10` Refine library keyboard polish
+- `df76278` Tune library column reveal
 
 ## Verification already done
 
