@@ -2945,18 +2945,40 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
       font-weight: 650;
     }
+    #libraryShortcutTabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
     .library-tab.active {
       border-color: var(--accent);
       color: var(--accent-strong);
       box-shadow: inset 0 0 0 1px var(--accent);
     }
     .library-tab.shortcut-tab {
+      width: 82px;
       background: #fff8d7;
       border-color: #eadc99;
+      padding: 0 8px;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .library-tab.workspace-tab {
+      width: 66px;
       background: #eaf8df;
       border-color: #c4e3b1;
+      padding: 0 8px;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-tab.shortcut-tab + .library-tab.workspace-tab {
+      margin-left: 10px;
     }
     .library-tab.drag-over {
       border-color: var(--accent);
@@ -4182,6 +4204,10 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/library");
       const data = await res.json();
       applyLibrarySnapshot(data);
+      state.libraryActiveFolderId = Number(state.libraryRootId || 1);
+      state.libraryCurrentFolderId = Number(state.libraryRootId || 1);
+      state.librarySelection = {type: "folder", id: Number(state.libraryRootId || 1)};
+      ensureLibraryColumnSelection(state.libraryRootId);
       renderLibrary();
     }
 
@@ -7700,11 +7726,9 @@ INDEX_HTML = """<!doctype html>
     });
     $("libraryMode").addEventListener("click", loadLibrary);
     $("libraryTab").addEventListener("click", () => {
-      if (state.mode !== "library") {
-        loadLibrary();
-        return;
-      }
-      renderLibrary();
+      loadLibrary().catch((error) => {
+        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      });
     });
     $("myPublicationsTab").addEventListener("click", () => {
       loadMyPublications().catch((error) => {
@@ -7732,7 +7756,7 @@ INDEX_HTML = """<!doctype html>
     $("myPublicationName").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        searchMyPublications("author");
+        saveMyPublicationName().catch(() => {});
       }
     });
     $("myPublicationSort").addEventListener("change", (event) => {
