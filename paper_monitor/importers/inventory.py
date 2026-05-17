@@ -31,20 +31,30 @@ DOI_PATTERN = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.I)
 ARXIV_PATTERN = re.compile(r"(?:arxiv[:_\s-]*)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
 
 
-def build_inventory_from_folder(folder_path: str | Path, *, output_path: str | Path | None = None) -> dict[str, Any]:
+def build_inventory_from_folder(
+    folder_path: str | Path,
+    *,
+    output_path: str | Path | None = None,
+    parse_pdfs: bool = True,
+) -> dict[str, Any]:
     root = Path(folder_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Folder does not exist: {root}")
     directories: list[dict[str, str]] = []
     files: list[dict[str, Any]] = []
-    for current, dirnames, filenames in os_walk_sorted(root):
+    scan_errors: list[dict[str, str]] = []
+    for current, dirnames, filenames in os_walk_sorted(root, scan_errors=scan_errors):
         current_path = Path(current)
         relative_dir = "" if current_path == root else current_path.relative_to(root).as_posix()
         directories.append({"path": str(current_path), "relative_path": relative_dir})
         for filename in filenames:
             path = current_path / filename
-            files.append(scan_inventory_file(path, root))
-    summary = inventory_summary(root, directories, files)
+            try:
+                files.append(scan_inventory_file(path, root, parse_pdfs=parse_pdfs))
+            except Exception as exc:
+                files.append(scan_error_record(path, root, exc))
+                scan_errors.append({"path": str(path), "error": str(exc)})
+    summary = inventory_summary(root, directories, files, scan_errors)
     inventory = {"summary": summary, "directories": directories, "files": files}
     if output_path:
         target = Path(output_path)
@@ -454,13 +464,17 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def os_walk_sorted(root: Path):
-    for current, dirnames, filenames in os.walk(root):
+def os_walk_sorted(root: Path, *, scan_errors: list[dict[str, str]] | None = None):
+    def onerror(exc: OSError) -> None:
+        if scan_errors is not None:
+            scan_errors.append({"path": str(getattr(exc, "filename", "") or ""), "error": str(exc)})
+
+    for current, dirnames, filenames in os.walk(root, onerror=onerror):
         dirnames[:] = sorted(dirnames)
         yield current, dirnames, sorted(filenames)
 
 
-def scan_inventory_file(path: Path, root: Path) -> dict[str, Any]:
+def scan_inventory_file(path: Path, root: Path, *, parse_pdfs: bool = True) -> dict[str, Any]:
     stat = path.stat()
     relative_path = path.relative_to(root).as_posix()
     parent_relative_path = "" if path.parent == root else path.parent.relative_to(root).as_posix()
@@ -480,8 +494,34 @@ def scan_inventory_file(path: Path, root: Path) -> dict[str, Any]:
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds"),
     }
     if kind == "pdf":
-        record.update(pdf_metadata(path))
+        record.update(pdf_metadata(path) if parse_pdfs else fast_pdf_metadata(path))
     return record
+
+
+def scan_error_record(path: Path, root: Path, exc: Exception) -> dict[str, Any]:
+    try:
+        relative_path = path.relative_to(root).as_posix()
+    except ValueError:
+        relative_path = path.name
+    try:
+        parent_relative_path = "" if path.parent == root else path.parent.relative_to(root).as_posix()
+    except ValueError:
+        parent_relative_path = ""
+    return {
+        "path": str(path),
+        "relative_path": relative_path,
+        "parent_relative_path": parent_relative_path,
+        "filename": path.name,
+        "extension": path.suffix.lower(),
+        "kind": "scan_error",
+        "mime_type": None,
+        "import_as": "ignore_candidate",
+        "status": "scan_error",
+        "size_bytes": None,
+        "modified_at": "",
+        "parse_status": "scan_error",
+        "parse_error": str(exc),
+    }
 
 
 def file_kind(path: Path) -> str:
@@ -588,6 +628,21 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
     return metadata
 
 
+def fast_pdf_metadata(path: Path) -> dict[str, Any]:
+    doi = doi_from_filename(path.name)
+    arxiv_id = normalize_arxiv_id(arxiv_from_text(path.name))
+    return {
+        "doi": doi,
+        "doi_source": "filename_rule" if doi else None,
+        "arxiv_id": arxiv_id,
+        "title": path.name,
+        "authors": [],
+        "page_count": None,
+        "parse_status": "not_parsed",
+        "parse_error": "PDF body parsing skipped during folder import for speed.",
+    }
+
+
 def split_pdf_authors(value: str) -> list[str]:
     if not value:
         return []
@@ -602,7 +657,7 @@ def doi_from_text(value: str) -> str:
 
 
 def doi_from_filename(filename: str) -> str:
-    text = filename.replace("_", "/")
+    text = Path(filename).stem.replace("_", "/")
     doi = doi_from_text(text)
     if doi:
         return doi
@@ -625,7 +680,12 @@ def arxiv_from_text(value: str) -> str:
     return match.group(1) if match else ""
 
 
-def inventory_summary(root: Path, directories: list[dict[str, str]], files: list[dict[str, Any]]) -> dict[str, Any]:
+def inventory_summary(
+    root: Path,
+    directories: list[dict[str, str]],
+    files: list[dict[str, Any]],
+    scan_errors: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     return {
         "root": str(root),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -635,6 +695,8 @@ def inventory_summary(root: Path, directories: list[dict[str, str]], files: list
         "doi_count": sum(1 for item in files if item.get("doi")),
         "arxiv_count": sum(1 for item in files if item.get("arxiv_id")),
         "alias_count": sum(1 for item in files if item.get("kind") == "mac_alias"),
+        "scan_error_count": len(scan_errors or []),
+        "scan_errors": (scan_errors or [])[:200],
         "recorded_only_count": sum(1 for item in files if item.get("import_as") != "paper_candidate"),
     }
 

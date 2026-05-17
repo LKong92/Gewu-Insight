@@ -662,7 +662,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
         report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-{'dry-run' if dry_run else 'import'}-{timestamp}.json"
         try:
-            build_inventory_from_folder(folder_path, output_path=inventory_path)
+            build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=False)
             storage = Storage(self.configured_db_path)
             try:
                 result = import_library_inventory(
@@ -5640,7 +5640,7 @@ INDEX_HTML = """<!doctype html>
         state.libraryImportStatus = "Waiting for macOS folder permission...";
         renderLibrary();
         const res = await fetch("/api/library/import-folder/choose", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not choose folder");
         state.libraryImportPath = data.path || "";
         state.libraryImportStatus = "Folder selected. Run Dry Run before importing.";
@@ -5672,7 +5672,7 @@ INDEX_HTML = """<!doctype html>
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({folder_path: path, copy_mode: copyMode, dry_run: dryRun})
         });
-        const data = await res.json();
+        const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Import failed");
         state.libraryImportLastResult = data.import_result || null;
         state.libraryImportStatus = dryRun ? "Dry-run complete." : "Import complete.";
@@ -5683,6 +5683,16 @@ INDEX_HTML = """<!doctype html>
       } finally {
         state.libraryImportBusy = false;
         renderLibrary();
+      }
+    }
+
+    async function parseJsonResponse(res) {
+      const text = await res.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch (error) {
+        return {error: text};
       }
     }
 

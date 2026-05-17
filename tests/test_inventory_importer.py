@@ -257,6 +257,20 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(records[ds_store.relative_to(scan_root).as_posix()]["kind"], "system_metadata")
         self.assertEqual(inventory["summary"]["file_count"], 3)
 
+    def test_build_inventory_from_folder_can_skip_pdf_body_parsing(self) -> None:
+        scan_root = self.root / "quick-scan"
+        scan_root.mkdir()
+        pdf = scan_root / "topic" / "10.1234_example.pdf"
+        pdf.parent.mkdir()
+        pdf.write_bytes(b"not actually a pdf")
+
+        inventory = build_inventory_from_folder(scan_root, parse_pdfs=False)
+
+        record = inventory["files"][0]
+        self.assertEqual(record["kind"], "pdf")
+        self.assertEqual(record["parse_status"], "not_parsed")
+        self.assertEqual(record["doi"], "10.1234/example")
+
     def test_folder_import_can_name_library_shortcut_by_filename(self) -> None:
         pdf = self.touch("topic/original-name.pdf", b"%PDF fixture")
         inventory_path = self.write_inventory([self.pdf_record(pdf, doi="10.8888/name", title="Named Paper")])
