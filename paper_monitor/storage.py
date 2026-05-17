@@ -568,15 +568,40 @@ class Storage:
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
         row = self.conn.execute(
             """
+            WITH RECURSIVE recycle_tree(id) AS (
+              SELECT id FROM library_folders WHERE id = ?
+              UNION ALL
+              SELECT library_folders.id
+              FROM library_folders
+              JOIN recycle_tree ON library_folders.parent_id = recycle_tree.id
+            )
             SELECT COUNT(*) AS count
             FROM library_items
             WHERE paper_id = ?
-              AND folder_id != ?
+              AND folder_id NOT IN (SELECT id FROM recycle_tree)
               AND trashed_at IS NULL
             """,
-            (str(paper_id), int(recycle_folder_id)),
+            (int(recycle_folder_id), str(paper_id)),
         ).fetchone()
         return int(row["count"] or 0)
+
+    def library_paper_ids_in_folder_tree(self, *, folder_id: int) -> list[str]:
+        rows = self.conn.execute(
+            """
+            WITH RECURSIVE folder_tree(id) AS (
+              SELECT id FROM library_folders WHERE id = ?
+              UNION ALL
+              SELECT library_folders.id
+              FROM library_folders
+              JOIN folder_tree ON library_folders.parent_id = folder_tree.id
+            )
+            SELECT DISTINCT paper_id
+            FROM library_items
+            WHERE folder_id IN (SELECT id FROM folder_tree)
+            """,
+            (int(folder_id),),
+        ).fetchall()
+        return [str(row["paper_id"]) for row in rows if row["paper_id"]]
 
     def move_library_item_to_trash(self, *, item_id: int, recycle_folder_id: int) -> dict[str, Any]:
         source = self.get_library_item(item_id)
@@ -798,6 +823,61 @@ class Storage:
         )
         self.conn.commit()
         return self.get_library_folder(folder_id) or {}
+
+    def reorder_library_entry(
+        self,
+        *,
+        entry_type: str,
+        entry_id: int,
+        parent_id: int,
+        target_id: int,
+        position: str,
+    ) -> dict[str, Any]:
+        entry_id = int(entry_id)
+        parent_id = int(parent_id or 1)
+        target_id = int(target_id)
+        position = "after" if position == "after" else "before"
+        if entry_type == "folder":
+            table = "library_folders"
+            parent_column = "parent_id"
+            label_column = "name"
+            if entry_id == 1:
+                raise ValueError("Root folder cannot be reordered")
+        elif entry_type == "item":
+            table = "library_items"
+            parent_column = "folder_id"
+            label_column = "id"
+        else:
+            raise ValueError("type must be item or folder")
+        source = self.conn.execute(f"SELECT * FROM {table} WHERE id = ?", (entry_id,)).fetchone()
+        target = self.conn.execute(f"SELECT * FROM {table} WHERE id = ?", (target_id,)).fetchone()
+        if not source or not target:
+            raise ValueError("Library entry not found")
+        if int(source[parent_column] or 1) != parent_id or int(target[parent_column] or 1) != parent_id:
+            raise ValueError("Entries must be in the same folder")
+        rows = self.conn.execute(
+            f"""
+            SELECT id
+            FROM {table}
+            WHERE {parent_column} = ?
+            ORDER BY sort_order, {label_column}, id
+            """,
+            (parent_id,),
+        ).fetchall()
+        ordered = [int(row["id"]) for row in rows if int(row["id"]) != entry_id]
+        if target_id not in ordered:
+            raise ValueError("Target entry not found")
+        target_index = ordered.index(target_id)
+        insert_index = target_index + (1 if position == "after" else 0)
+        ordered.insert(insert_index, entry_id)
+        for sort_order, row_id in enumerate(ordered, start=1):
+            self.conn.execute(f"UPDATE {table} SET sort_order = ? WHERE id = ?", (sort_order, row_id))
+        if entry_type == "folder":
+            self.conn.execute("UPDATE library_folders SET updated_at = ? WHERE id = ?", (now_iso(), entry_id))
+        self.conn.commit()
+        if entry_type == "folder":
+            return self.get_library_folder(entry_id) or {}
+        return self.get_library_item(entry_id) or {}
 
     def list_library_folders(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
