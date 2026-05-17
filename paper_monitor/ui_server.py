@@ -5585,7 +5585,10 @@ INDEX_HTML = """<!doctype html>
           addLibraryWorkspaceDoi(index);
         }
       });
-      shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+      shell.addEventListener("click", (event) => {
+        if (event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+        shell.focus({preventScroll: true});
+      });
     }
 
     function selectWorkspacePaper(paperId) {
