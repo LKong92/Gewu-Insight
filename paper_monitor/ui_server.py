@@ -4457,22 +4457,27 @@ INDEX_HTML = """<!doctype html>
       const allColumns = [...columns.querySelectorAll("[data-library-column-folder]")];
       const column = allColumns.find((item) => Number(item.dataset.libraryColumnFolder) === Number(folderId));
       if (!column) return;
+      const columnIndex = allColumns.indexOf(column);
+      const rightRevealColumn = allColumns[columnIndex + 1] || column;
+      const revealColumn = direction === "right" ? rightRevealColumn : column;
       const padding = 12;
-      const left = column.offsetLeft;
-      const right = column.offsetLeft + column.offsetWidth;
+      const targetLeft = column.offsetLeft;
+      const targetRight = column.offsetLeft + column.offsetWidth;
+      const revealLeft = revealColumn.offsetLeft;
+      const revealRight = revealColumn.offsetLeft + revealColumn.offsetWidth;
       const viewLeft = columns.scrollLeft;
       const viewRight = viewLeft + columns.clientWidth;
       let target = columns.scrollLeft;
       if (direction === "left") {
-        if (left - padding < viewLeft) target = left - padding;
-        else if (right + padding > viewRight) target = right + padding - columns.clientWidth;
+        if (targetLeft - padding < viewLeft) target = targetLeft - padding;
+        else if (targetRight + padding > viewRight) target = targetRight + padding - columns.clientWidth;
       } else if (direction === "right") {
-        if (right + padding > viewRight) target = right + padding - columns.clientWidth;
-        else if (left - padding < viewLeft) target = left - padding;
-      } else if (right + padding > viewRight) {
-        target = right + padding - columns.clientWidth;
-      } else if (left - padding < viewLeft) {
-        target = left - padding;
+        if (revealRight + padding > viewRight) target = revealRight + padding - columns.clientWidth;
+        else if (revealLeft - padding < viewLeft) target = revealLeft - padding;
+      } else if (revealRight + padding > viewRight) {
+        target = revealRight + padding - columns.clientWidth;
+      } else if (revealLeft - padding < viewLeft) {
+        target = revealLeft - padding;
       }
       const maxScroll = Math.max(0, columns.scrollWidth - columns.clientWidth);
       const nextScrollLeft = Math.max(0, Math.min(maxScroll, target));
@@ -5387,6 +5392,7 @@ INDEX_HTML = """<!doctype html>
         ? fallback
         : Math.max(0, Math.min(entries.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
       setLibraryColumnSelection(activeFolderId, entries[nextIndex]);
+      if (entries[nextIndex]?.type === "folder") requestLibraryColumnReveal(activeFolderId, "right");
       renderLibrary();
       refreshLibraryQuickLookForSelection();
       return true;
