@@ -191,6 +191,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/folders/rename":
                 self.handle_rename_library_folder(payload)
                 return
+            if parsed.path == "/api/library/folders/color":
+                self.handle_color_library_folder(payload)
+                return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
                 return
@@ -425,6 +428,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.rename_library_folder(folder_id=folder_id, name=name)
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"folder": library_folder_to_api(folder), **snapshot})
+
+    def handle_color_library_folder(self, payload: dict[str, Any]) -> None:
+        folder_id = int(payload.get("folder_id") or 0)
+        color = str(payload.get("color") or "")
+        storage = Storage(self.configured_db_path)
+        try:
+            folder = storage.set_library_folder_color(folder_id=folder_id, color=color)
             snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1157,6 +1174,7 @@ def library_folder_to_api(folder: dict[str, Any]) -> dict[str, Any]:
         "id": int(folder.get("id") or 0),
         "name": name,
         "parent_id": parent_id,
+        "color": folder.get("color") or "",
         "sort_order": int(folder.get("sort_order") or 0),
         "original_parent_id": int(folder["original_parent_id"]) if folder.get("original_parent_id") is not None else None,
         "trashed_at": folder.get("trashed_at") or "",
@@ -2627,6 +2645,7 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
       gap: 12px;
       height: 100%;
+      max-height: 100%;
       min-height: 0;
       outline: none;
     }
@@ -2634,6 +2653,7 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       min-height: 0;
       height: 100%;
+      max-height: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
@@ -2679,6 +2699,7 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       min-height: 0;
       height: 100%;
+      max-height: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
@@ -2725,6 +2746,8 @@ INDEX_HTML = """<!doctype html>
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
+    .library-row.special-folder { color: #667085; background: #f7f8fa; }
+    .library-row.special-folder.active { background: #e9edf2; border-color: #cbd5e1; }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-rename-input {
@@ -2846,6 +2869,7 @@ INDEX_HTML = """<!doctype html>
     .library-context-menu button:hover { background: #eef2f7; }
     .library-context-menu button[data-action="delete-entry"] { color: #b42318; }
     .library-context-menu button[data-action="delete-entry"]:hover { background: #fff1f0; }
+    .library-color-input { position: fixed; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
     .action.copied {
       border-color: rgba(29, 112, 68, 0.35);
       color: var(--ok);
@@ -2874,6 +2898,7 @@ INDEX_HTML = """<!doctype html>
     }
     .papers.library-view {
       display: block;
+      height: 100%;
       overflow: hidden;
       padding-right: 0;
     }
@@ -3687,6 +3712,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     function compareLibraryOrder(a, b, fallbackKey) {
+      const specialDelta = libraryFolderSpecialRank(a) - libraryFolderSpecialRank(b);
+      if (specialDelta) return specialDelta;
       const orderDelta = Number(a.sort_order || 0) - Number(b.sort_order || 0);
       if (orderDelta) return orderDelta;
       const left = fallbackKey === "display_name"
@@ -3696,6 +3723,13 @@ INDEX_HTML = """<!doctype html>
         ? (b.display_name || b.paper?.citation_label || b.paper?.title || "")
         : (b[fallbackKey] || "");
       return String(left).localeCompare(String(right)) || (Number(a.id || 0) - Number(b.id || 0));
+    }
+
+    function libraryFolderSpecialRank(entry) {
+      if (!entry || Number(entry.parent_id || 0) !== Number(state.libraryRootId || 1)) return 0;
+      if (entry.is_unsorted || entry.name === "unsorted") return 10;
+      if (entry.is_recycle || entry.name === "Recycle") return 11;
+      return 0;
     }
 
     function libraryEntriesForFolder(folderId) {
@@ -3877,6 +3911,19 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not reorder library entry");
       applyLibrarySnapshot(data);
       setLibraryColumnSelection(Number(parentFolderId || state.libraryRootId), {type, id: Number(data.reordered?.id || id)});
+      renderLibrary();
+    }
+
+    async function colorLibraryFolder(folderId, color) {
+      const res = await fetch("/api/library/folders/color", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({folder_id: folderId, color})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not color folder");
+      applyLibrarySnapshot(data);
+      setLibraryColumnSelection(parentFolderId(folderId), {type: "folder", id: Number(data.folder?.id || folderId)});
       renderLibrary();
     }
 
@@ -4483,10 +4530,12 @@ INDEX_HTML = """<!doctype html>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
           <button type="button" data-action="rename-entry">Rename</button>
+          <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="copy-entry">Copy</button>
           <button type="button" data-action="paste-entry">Paste</button>
           <button type="button" data-action="recover-entry">Recover</button>
           <button type="button" data-action="delete-entry">Delete</button>
+          <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
       `;
       renderLibraryColumns();
@@ -4651,6 +4700,8 @@ INDEX_HTML = """<!doctype html>
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
       const icon = type === "folder" ? "›" : "○";
+      const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
+      const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
       const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
         || (type === "item" && Number(state.libraryRenamingItemId || 0) === id);
       const rowTag = renaming ? "div" : "button";
@@ -4662,17 +4713,27 @@ INDEX_HTML = """<!doctype html>
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
       return `
-        <${rowTag} class="library-row${selected ? " active" : ""}"
+        <${rowTag} class="library-row${selected ? " active" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
           data-library-parent-folder="${parentFolderId}"
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}>
           <span>${icon}</span>
-          <span class="library-name">${nameMarkup}</span>
+          <span class="library-name" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
+    }
+
+    function libraryFolderTextColor(folder) {
+      if (!folder) return "";
+      if (folder.is_unsorted || folder.is_recycle) return "#667085";
+      return isValidFolderColor(folder.color) ? folder.color : "";
+    }
+
+    function isValidFolderColor(color) {
+      return /^#[0-9A-Fa-f]{6}$/.test(String(color || ""));
     }
 
     function libraryPaperDisplayName(paper) {
@@ -5391,6 +5452,8 @@ INDEX_HTML = """<!doctype html>
       const isRecoverable = (entryType === "item" && Number(item?.folder_id || 0) === recycleId)
         || (entryType === "folder" && Number(folder?.parent_id || 0) === recycleId);
       const renameButton = menu.querySelector('[data-action="rename-entry"]');
+      const colorButton = menu.querySelector('[data-action="color-folder"]');
+      const colorPicker = menu.querySelector('[data-action="folder-color-picker"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
@@ -5400,6 +5463,20 @@ INDEX_HTML = """<!doctype html>
         renameButton.onclick = () => {
           hideLibraryContextMenu();
           beginLibraryEntryRename(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
+        };
+      }
+      if (colorButton && colorPicker) {
+        const canColor = entryType === "folder" && hasEntry && !isProtectedFolder;
+        colorButton.style.display = canColor ? "" : "none";
+        colorPicker.value = isValidFolderColor(folder?.color) ? folder.color : "#4f46e5";
+        colorButton.onclick = () => {
+          colorPicker.value = isValidFolderColor(folder?.color) ? folder.color : "#4f46e5";
+          colorPicker.click();
+        };
+        colorPicker.oninput = async () => {
+          const folderId = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => colorLibraryFolder(folderId, colorPicker.value));
         };
       }
       if (deleteButton) {

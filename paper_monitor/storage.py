@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS library_folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   parent_id INTEGER REFERENCES library_folders(id) ON DELETE CASCADE,
+  color TEXT,
   original_parent_id INTEGER,
   trashed_at TEXT,
   created_at TEXT NOT NULL,
@@ -123,6 +124,9 @@ class Storage:
             self.conn.execute("ALTER TABLE library_items ADD COLUMN trashed_at TEXT")
             self.conn.commit()
         library_folder_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_folders)").fetchall()}
+        if "color" not in library_folder_columns:
+            self.conn.execute("ALTER TABLE library_folders ADD COLUMN color TEXT")
+            self.conn.commit()
         if "original_parent_id" not in library_folder_columns:
             self.conn.execute("ALTER TABLE library_folders ADD COLUMN original_parent_id INTEGER")
             self.conn.commit()
@@ -506,6 +510,26 @@ class Storage:
             WHERE id = ?
             """,
             (clean_name, now_iso(), folder_id),
+        )
+        self.conn.commit()
+        return self.get_library_folder(folder_id) or {}
+
+    def set_library_folder_color(self, *, folder_id: int, color: str) -> dict[str, Any]:
+        folder_id = int(folder_id)
+        if folder_id == 1:
+            raise ValueError("Root folder cannot be colored")
+        if not self.get_library_folder(folder_id):
+            raise ValueError("Folder not found")
+        clean_color = str(color or "").strip()
+        if clean_color and not re.fullmatch(r"#[0-9A-Fa-f]{6}", clean_color):
+            raise ValueError("Folder color must be a hex color")
+        self.conn.execute(
+            """
+            UPDATE library_folders
+            SET color = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (clean_color or None, now_iso(), folder_id),
         )
         self.conn.commit()
         return self.get_library_folder(folder_id) or {}
