@@ -4153,6 +4153,7 @@ INDEX_HTML = """<!doctype html>
     function selectLibraryEntry(parentFolderId, type, id) {
       setLibraryColumnSelection(parentFolderId, {type, id: Number(id)});
       renderLibrary();
+      refreshLibraryQuickLookForSelection();
     }
 
     function focusLibraryFolder(folderId) {
@@ -4161,6 +4162,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryCurrentFolderId = Number(folderId);
       state.librarySelection = {type: "folder", id: Number(folderId)};
       renderLibrary();
+      refreshLibraryQuickLookForSelection();
     }
 
     function selectedLibraryPaper() {
@@ -4551,6 +4553,7 @@ INDEX_HTML = """<!doctype html>
           }
           requestLibraryColumnReveal(childFolderId);
           renderLibrary();
+          refreshLibraryQuickLookForSelection();
         }
         return true;
       }
