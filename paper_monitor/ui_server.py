@@ -41,6 +41,8 @@ JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
+LIBRARY_SHORTCUT_TAB_COUNT = 5
+LIBRARY_WORKSPACE_TAB_COUNT = 3
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -234,8 +236,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/star":
                 self.handle_star_my_publication(payload)
                 return
+            if parsed.path == "/api/my-publications/delete":
+                self.handle_delete_my_publication(payload)
+                return
             if parsed.path == "/api/my-publications/name":
                 self.handle_set_my_publication_name(payload)
+                return
+            if parsed.path == "/api/library/shortcut-tabs":
+                self.handle_set_library_shortcut_tabs(payload)
                 return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown route")
         except Exception as exc:
@@ -492,6 +500,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
 
+    def handle_delete_my_publication(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.delete_my_publication(publication_id=publication_id)
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publications": publications})
+
     def handle_set_my_publication_name(self, payload: dict[str, Any]) -> None:
         my_name = " ".join(str(payload.get("name") or "").split())
         storage = Storage(self.configured_db_path)
@@ -500,6 +518,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"myName": my_name})
+
+    def handle_set_library_shortcut_tabs(self, payload: dict[str, Any]) -> None:
+        index = int(payload.get("index") or 0)
+        folder_id = int(payload.get("folder_id") or 0)
+        if index < 0 or index >= LIBRARY_SHORTCUT_TAB_COUNT:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "shortcut index is out of range")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            folder = storage.get_library_folder(folder_id) if folder_id else None
+            if folder_id and (not folder or int(folder.get("id") or 0) == 1):
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Drop a Library folder onto this shortcut")
+                return
+            shortcuts = library_shortcut_tabs(storage)
+            shortcuts[index] = {"folder_id": folder_id, "label": str(folder.get("name") or "") if folder else ""}
+            storage.set_setting("library_shortcut_tabs", json.dumps(shortcuts, ensure_ascii=False))
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
 
     def handle_create_library_folder(self, payload: dict[str, Any]) -> None:
         name = str(payload.get("name") or "New Folder")
@@ -1245,7 +1283,26 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
         "root_id": 1,
         "folders": [library_folder_to_api(folder) for folder in storage.list_library_folders()],
         "items": [library_item_to_api(item, item) for item in storage.list_library_items()],
+        "shortcut_tabs": library_shortcut_tabs(storage),
     }
+
+
+def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
+    raw = storage.get_setting("library_shortcut_tabs", "[]")
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError:
+        values = []
+    result: list[dict[str, Any]] = []
+    for index in range(LIBRARY_SHORTCUT_TAB_COUNT):
+        item = values[index] if isinstance(values, list) and index < len(values) and isinstance(values[index], dict) else {}
+        folder_id = int(item.get("folder_id") or 0)
+        folder = storage.get_library_folder(folder_id) if folder_id else None
+        result.append({
+            "folder_id": int(folder.get("id") or 0) if folder else 0,
+            "label": str(folder.get("name") or item.get("label") or "") if folder else "",
+        })
+    return result
 
 
 def ensure_library_special_folders(storage: Storage) -> dict[str, dict[str, Any]]:
@@ -2893,6 +2950,18 @@ INDEX_HTML = """<!doctype html>
       color: var(--accent-strong);
       box-shadow: inset 0 0 0 1px var(--accent);
     }
+    .library-tab.shortcut-tab {
+      background: #fff8d7;
+      border-color: #eadc99;
+    }
+    .library-tab.workspace-tab {
+      background: #eaf8df;
+      border-color: #c4e3b1;
+    }
+    .library-tab.drag-over {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
     .my-publications-tools {
       display: none;
       align-items: center;
@@ -3587,6 +3656,7 @@ INDEX_HTML = """<!doctype html>
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
             <button class="library-tab" id="allLiteraturesTab" type="button">All Literatures</button>
+            <span id="libraryShortcutTabs"></span>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
@@ -3663,8 +3733,11 @@ INDEX_HTML = """<!doctype html>
       {key: "number", label: "No", defaultWidth: 56, minWidth: 46, maxWidth: 120},
       {key: "date", label: "Date", defaultWidth: 120, minWidth: 92, maxWidth: 180},
       {key: "id", label: "ID", defaultWidth: 230, minWidth: 140, maxWidth: 520},
-      {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200}
+      {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200},
+      {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140}
     ];
+    const LIBRARY_SHORTCUT_TAB_COUNT = 5;
+    const LIBRARY_WORKSPACE_TAB_COUNT = 3;
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -3680,6 +3753,8 @@ INDEX_HTML = """<!doctype html>
       libraryFolders: [],
       libraryItems: [],
       libraryTab: "library",
+      libraryShortcutTabs: [],
+      activeShortcutIndex: -1,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -4195,8 +4270,10 @@ INDEX_HTML = """<!doctype html>
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
-      if (!libraryFolderById(state.libraryCurrentFolderId)) state.libraryCurrentFolderId = state.libraryRootId;
-      if (!libraryFolderById(state.libraryActiveFolderId)) state.libraryActiveFolderId = state.libraryRootId;
+      state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
+      const displayRootId = libraryDisplayRootId();
+      if (!libraryFolderById(state.libraryCurrentFolderId)) state.libraryCurrentFolderId = displayRootId;
+      if (!libraryFolderById(state.libraryActiveFolderId)) state.libraryActiveFolderId = displayRootId;
       if (!librarySelectionExists(state.librarySelection)) {
         state.librarySelection = {type: "folder", id: state.libraryCurrentFolderId};
       }
@@ -4206,15 +4283,29 @@ INDEX_HTML = """<!doctype html>
         }
       });
       if (state.libraryClipboard && !librarySelectionExists(state.libraryClipboard)) state.libraryClipboard = null;
-      ensureLibraryColumnSelection(state.libraryRootId);
+      ensureLibraryColumnSelection(displayRootId);
     }
 
     function libraryFolderById(id) {
       return state.libraryFolders.find((folder) => Number(folder.id) === Number(id));
     }
 
+    function libraryDisplayRootId() {
+      if (state.libraryTab?.startsWith("shortcut-")) {
+        const index = Number(state.libraryTab.split("-")[1] || -1);
+        const folderId = Number(state.libraryShortcutTabs[index]?.folder_id || 0);
+        if (folderId && libraryFolderById(folderId)) return folderId;
+      }
+      return Number(state.libraryRootId || 1);
+    }
+
+    function libraryShortcutLabel(index) {
+      const shortcut = state.libraryShortcutTabs[index] || {};
+      return shortcut.label || `Shortcut ${index + 1}`;
+    }
+
     function libraryUnsortedFolderId() {
-      return Number(state.libraryFolders.find((folder) => folder.is_unsorted || folder.name === "unsorted")?.id || state.libraryRootId);
+      return Number(state.libraryFolders.find((folder) => folder.is_unsorted || folder.name === "unsorted")?.id || libraryDisplayRootId());
     }
 
     function libraryRecycleFolderId() {
@@ -4283,7 +4374,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryVisibleEntries() {
-      return libraryEntriesForFolder(state.libraryActiveFolderId || state.libraryRootId);
+      return libraryEntriesForFolder(state.libraryActiveFolderId || libraryDisplayRootId());
     }
 
     function libraryEntryKey(entry) {
@@ -4291,7 +4382,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function ensureLibraryColumnSelection(folderId) {
-      const id = Number(folderId || state.libraryRootId);
+      const id = Number(folderId || libraryDisplayRootId());
       const selection = state.libraryColumnSelections[id];
       const entries = libraryEntriesForFolder(id);
       if (selection && entries.some((entry) => libraryEntryKey(entry) === libraryEntryKey(selection))) return selection;
@@ -4300,7 +4391,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function setLibraryColumnSelection(folderId, entry) {
-      const parentId = Number(folderId || state.libraryRootId);
+      const parentId = Number(folderId || libraryDisplayRootId());
       const selection = {type: entry.type, id: Number(entry.id)};
       state.libraryColumnSelections[parentId] = selection;
       state.libraryActiveFolderId = parentId;
@@ -4319,12 +4410,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function parentFolderId(folderId) {
+      const displayRootId = libraryDisplayRootId();
+      if (Number(folderId) === displayRootId) return displayRootId;
       const folder = libraryFolderById(folderId);
-      return Number(folder?.parent_id || state.libraryRootId);
+      return Number(folder?.parent_id || displayRootId);
     }
 
     function selectedLibraryPathFolderIds() {
       const ids = new Set();
+      const displayRootId = libraryDisplayRootId();
       let currentFolderId = 0;
       if (state.librarySelection?.type === "folder") {
         currentFolderId = Number(state.librarySelection.id || 0);
@@ -4335,6 +4429,7 @@ INDEX_HTML = """<!doctype html>
       let guard = 0;
       while (currentFolderId && guard < 64) {
         guard += 1;
+        if (currentFolderId === displayRootId) break;
         const parentId = parentFolderId(currentFolderId);
         if (!parentId || parentId === currentFolderId) break;
         if (currentFolderId !== selectedFolderId) ids.add(currentFolderId);
@@ -5069,16 +5164,17 @@ INDEX_HTML = """<!doctype html>
 
     function renderLibrary() {
       state.mode = "library";
-      state.libraryTab = "library";
+      if (!state.libraryTab?.startsWith("shortcut-")) state.libraryTab = "library";
       stopArxivUpdateCountdown();
       renderLibraryTabs();
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
-      $("reportTitle").textContent = "Library";
+      $("reportTitle").textContent = state.libraryTab?.startsWith("shortcut-") ? libraryShortcutLabel(Number(state.libraryTab.split("-")[1] || 0)) : "Library";
       const root = $("papers");
       captureLibraryColumnScrollTops();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
-      const activeFolder = libraryFolderById(state.libraryActiveFolderId) || libraryFolderById(state.libraryRootId) || {name: "Library"};
+      const displayRootId = libraryDisplayRootId();
+      const activeFolder = libraryFolderById(state.libraryActiveFolderId) || libraryFolderById(displayRootId) || {name: "Library"};
       const visible = libraryVisibleEntries();
       $("summary").textContent = `${state.libraryItems.length} shortcuts · ${visible.length} shown · Active column: ${activeFolder.name}`;
       root.classList.add("library-view");
@@ -5126,11 +5222,100 @@ INDEX_HTML = """<!doctype html>
       $("libraryTab")?.classList.toggle("active", state.libraryTab === "library");
       $("myPublicationsTab")?.classList.toggle("active", state.libraryTab === "my-publications");
       $("allLiteraturesTab")?.classList.toggle("active", state.libraryTab === "all-literatures");
+      renderLibraryShortcutTabs();
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
       const sortSelect = $("myPublicationSort");
       if (sortSelect) sortSelect.value = state.myPublicationSort || "time";
+    }
+
+    function renderLibraryShortcutTabs() {
+      const root = $("libraryShortcutTabs");
+      if (!root) return;
+      const shortcutTabs = Array.from({length: LIBRARY_SHORTCUT_TAB_COUNT}, (_, index) => {
+        const assigned = Boolean(Number(state.libraryShortcutTabs[index]?.folder_id || 0));
+        const label = libraryShortcutLabel(index);
+        return `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}">${escapeHtml(label)}</button>`;
+      }).join("");
+      const workspaceTabs = Array.from({length: LIBRARY_WORKSPACE_TAB_COUNT}, (_, index) => (
+        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" type="button" data-workspace-tab="${index}">Space ${index + 1}</button>`
+      )).join("");
+      root.innerHTML = shortcutTabs + workspaceTabs;
+      root.querySelectorAll("[data-shortcut-tab]").forEach((button) => {
+        button.addEventListener("click", () => openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
+        button.addEventListener("dragover", (event) => {
+          const payload = libraryDragPayload(event);
+          if (payload?.type !== "folder") return;
+          event.preventDefault();
+          button.classList.add("drag-over");
+        });
+        button.addEventListener("dragleave", () => button.classList.remove("drag-over"));
+        button.addEventListener("drop", async (event) => {
+          const payload = libraryDragPayload(event);
+          if (payload?.type !== "folder") return;
+          event.preventDefault();
+          button.classList.remove("drag-over");
+          await runLibraryMenuAction(() => assignLibraryShortcutTab(Number(button.dataset.shortcutTab || 0), Number(payload.id || 0)));
+        });
+      });
+      root.querySelectorAll("[data-workspace-tab]").forEach((button) => {
+        button.addEventListener("click", () => renderWorkspacePlaceholder(Number(button.dataset.workspaceTab || 0)));
+      });
+    }
+
+    async function openLibraryShortcutTab(index) {
+      if (!state.libraryFolders.length) {
+        const res = await fetch("/api/library");
+        const data = await res.json();
+        applyLibrarySnapshot(data);
+      }
+      const folderId = Number(state.libraryShortcutTabs[index]?.folder_id || 0);
+      if (!folderId || !libraryFolderById(folderId)) return;
+      state.libraryTab = `shortcut-${index}`;
+      state.libraryActiveFolderId = folderId;
+      state.libraryCurrentFolderId = folderId;
+      state.librarySelection = {type: "folder", id: folderId};
+      ensureLibraryColumnSelection(folderId);
+      renderLibrary();
+    }
+
+    async function assignLibraryShortcutTab(index, folderId) {
+      const res = await fetch("/api/library/shortcut-tabs", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({index, folder_id: folderId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not assign shortcut");
+      applyLibrarySnapshot(data);
+      await openLibraryShortcutTab(index);
+    }
+
+    function renderWorkspacePlaceholder(index) {
+      state.mode = "library";
+      state.libraryTab = `workspace-${index}`;
+      stopArxivUpdateCountdown();
+      renderLibraryTabs();
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      $("reportTitle").textContent = `Space ${index + 1}`;
+      $("summary").textContent = "Reserved independent literature space";
+      const root = $("papers");
+      root.classList.add("library-view");
+      root.innerHTML = `
+        <div class="library-shell" id="libraryShell" tabindex="0">
+          <section class="all-literatures-panel">
+            <div class="all-literatures-stats">Independent space reserved for future collections.</div>
+            <div class="library-column-body"><div class="empty">Empty space.</div></div>
+          </section>
+          <aside class="library-pane">
+            <div class="library-pane-header">Details</div>
+            <div class="library-detail" id="libraryDetail"><div class="empty">Select an item when this space has content.</div></div>
+          </aside>
+        </div>
+      `;
+      resizeLibraryViewport();
     }
 
     function renderMyPublications() {
@@ -5161,7 +5346,7 @@ INDEX_HTML = """<!doctype html>
                   <tr>${myPublicationHeaderMarkup()}</tr>
                 </thead>
                 <tbody>
-                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="5"><div class="empty">No publications yet.</div></td></tr>`}
+                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="6"><div class="empty">No publications yet.</div></td></tr>`}
                 </tbody>
               </table>
             </div>
@@ -5268,6 +5453,7 @@ INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(paper.publication_date || "")}</td>
           <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
           <td>${escapeHtml(paper.title || "Untitled paper")}</td>
+          <td><button class="action danger" type="button" data-action="delete-publication">Delete</button></td>
         </tr>
       `;
     }
@@ -5424,7 +5610,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryColumnFolderIds() {
-      const folderIds = [Number(state.libraryRootId || 1)];
+      const folderIds = [Number(libraryDisplayRootId() || 1)];
       let folderId = folderIds[0];
       const seen = new Set(folderIds);
       for (let depth = 0; depth < 24; depth += 1) {
@@ -5533,6 +5719,46 @@ INDEX_HTML = """<!doctype html>
       queuePaperFigureHydration(paper.paper_id);
     }
 
+    function authorsMarkup(authors) {
+      if (!Array.isArray(authors) || !authors.length) return "Authors unavailable";
+      return authors.map((author) => {
+        const escaped = escapeHtml(author);
+        return authorMatchesMyName(author) ? `<strong>${escaped}</strong>` : escaped;
+      }).join(", ");
+    }
+
+    function authorMatchesMyName(author) {
+      const target = authorNameSignature(state.myPublicationName || "");
+      const candidate = authorNameSignature(author || "");
+      if (!target.family || !candidate.family || target.family !== candidate.family) return false;
+      if (target.givenFull && candidate.givenFull && target.givenFull === candidate.givenFull) return true;
+      if (target.initials && candidate.initials && target.initials === candidate.initials) return true;
+      if (target.initials && candidate.initials && (target.initials.startsWith(candidate.initials) || candidate.initials.startsWith(target.initials))) return true;
+      if (target.givenFull && candidate.initials) return target.initials === candidate.initials;
+      if (target.initials && candidate.givenFull) return target.initials === candidate.initials;
+      return !target.givenFull && !candidate.givenFull;
+    }
+
+    function authorNameSignature(value) {
+      const clean = String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[.,-]/g, " ")
+        .replace(/[^a-zA-Z\s]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      const parts = clean.split(" ").filter(Boolean);
+      if (!parts.length) return {family: "", givenFull: "", initials: ""};
+      const family = parts[parts.length - 1];
+      const given = parts.slice(0, -1);
+      return {
+        family,
+        givenFull: given.join(""),
+        initials: given.map((part) => part[0] || "").join("")
+      };
+    }
+
     function renderLibraryDetail() {
       const root = $("libraryDetail");
       if (!root) return;
@@ -5572,7 +5798,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
-          <dt>Authors</dt><dd>${escapeHtml(authors.length ? authors.join(", ") : "Authors unavailable")}</dd>
+          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
@@ -5635,7 +5861,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
-          <dt>Authors</dt><dd>${escapeHtml(authors.length ? authors.join(", ") : "Authors unavailable")}</dd>
+          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
@@ -5687,7 +5913,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         <dl>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
-          <dt>Authors</dt><dd>${escapeHtml(authors.length ? authors.join(", ") : "Authors unavailable")}</dd>
+          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
@@ -5812,7 +6038,7 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".star-button")) return;
+          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]')) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
         });
       });
@@ -5823,6 +6049,14 @@ INDEX_HTML = """<!doctype html>
           const publication = myPublicationById(Number(row?.dataset.publicationId || 0));
           if (!publication) return;
           await toggleMyPublicationStar(publication, !publication.starred);
+        });
+      });
+      shell.querySelectorAll('[data-action="delete-publication"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const row = button.closest(".my-publications-row");
+          const publicationId = Number(row?.dataset.publicationId || 0);
+          if (publicationId) await deleteMyPublication(publicationId);
         });
       });
       shell.querySelectorAll('[data-action="add-publication-result"]').forEach((button) => {
@@ -5888,6 +6122,24 @@ INDEX_HTML = """<!doctype html>
       applyMyPublications(data);
       state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
       renderMyPublications();
+    }
+
+    async function deleteMyPublication(publicationId) {
+      const res = await fetch("/api/my-publications/delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({publication_id: publicationId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete publication");
+      applyMyPublications(data);
+      const rows = sortedMyPublications();
+      if (!myPublicationById(state.myPublicationSelectionId)) {
+        state.myPublicationSelectionId = Number(rows[0]?.id || 0);
+      }
+      state.myPublicationSearchStatus = "Publication deleted.";
+      renderMyPublications();
+      refreshLibraryQuickLookForSelection();
     }
 
     async function saveMyPublicationName() {
