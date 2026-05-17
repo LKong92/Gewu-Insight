@@ -200,6 +200,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/move":
                 self.handle_move_library_entry(payload)
                 return
+            if parsed.path == "/api/library/reorder":
+                self.handle_reorder_library_entry(payload)
+                return
             if parsed.path == "/api/library/delete":
                 self.handle_delete_library_entry(payload)
                 return
@@ -475,11 +478,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         target_folder_id = int(payload.get("target_folder_id") or 1)
         storage = Storage(self.configured_db_path)
         try:
+            special = ensure_library_special_folders(storage)
+            unsorted_id = int(special["unsorted"].get("id") or 1)
+            recycle_id = int(special["recycle"].get("id") or 1)
             moved: dict[str, Any] | None = None
             if entry_type == "item":
-                moved = storage.move_library_item(item_id=int(payload.get("id") or 0), folder_id=target_folder_id)
+                item_id = int(payload.get("id") or 0)
+                if target_folder_id == recycle_id:
+                    moved = storage.move_library_item_to_trash(item_id=item_id, recycle_folder_id=recycle_id)
+                else:
+                    moved = storage.move_library_item(item_id=item_id, folder_id=target_folder_id)
             elif entry_type == "folder":
-                moved = storage.move_library_folder(folder_id=int(payload.get("id") or 0), parent_id=target_folder_id)
+                folder_id = int(payload.get("id") or 0)
+                if folder_id in {1, unsorted_id, recycle_id}:
+                    raise ValueError("This folder cannot be moved")
+                if target_folder_id == recycle_id:
+                    moved = storage.move_library_folder_to_trash(folder_id=folder_id, recycle_folder_id=recycle_id)
+                else:
+                    moved = storage.move_library_folder(folder_id=folder_id, parent_id=target_folder_id)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -490,6 +506,29 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"moved": dict(moved or {}), **snapshot})
+
+    def handle_reorder_library_entry(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        entry_id = int(payload.get("id") or 0)
+        parent_id = int(payload.get("parent_folder_id") or 1)
+        target_id = int(payload.get("target_id") or 0)
+        position = str(payload.get("position") or "before")
+        storage = Storage(self.configured_db_path)
+        try:
+            reordered = storage.reorder_library_entry(
+                entry_type=entry_type,
+                entry_id=entry_id,
+                parent_id=parent_id,
+                target_id=target_id,
+                position=position,
+            )
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"reordered": dict(reordered or {}), **snapshot})
 
     def handle_delete_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -507,6 +546,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 paper_id = str(item.get("paper_id") or "")
                 if folder_id == recycle_id:
                     storage.delete_library_item(item_id=entry_id)
+                    if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
                 elif folder_id == unsorted_id:
                     storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
                 else:
@@ -520,7 +561,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id}:
                     raise ValueError("This folder cannot be deleted")
                 if int(folder.get("parent_id") or 0) == recycle_id:
+                    paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
                     storage.delete_library_folder(folder_id=entry_id)
+                    for paper_id in paper_ids:
+                        if storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                            storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
                 else:
                     storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
             else:
@@ -1112,6 +1157,7 @@ def library_folder_to_api(folder: dict[str, Any]) -> dict[str, Any]:
         "id": int(folder.get("id") or 0),
         "name": name,
         "parent_id": parent_id,
+        "sort_order": int(folder.get("sort_order") or 0),
         "original_parent_id": int(folder["original_parent_id"]) if folder.get("original_parent_id") is not None else None,
         "trashed_at": folder.get("trashed_at") or "",
         "is_recycle": is_recycle,
@@ -1126,6 +1172,7 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "folder_id": int(item.get("folder_id") or 1),
         "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
         "display_name": item.get("display_name") or "",
+        "sort_order": int(item.get("sort_order") or 0),
         "original_folder_id": int(item["original_folder_id"]) if item.get("original_folder_id") is not None else None,
         "trashed_at": item.get("trashed_at") or "",
         "paper": paper_to_api(paper),
@@ -2659,7 +2706,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-row {
       width: 100%;
-      min-height: 32px;
+      height: 44px;
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
@@ -2676,8 +2723,10 @@ INDEX_HTML = """<!doctype html>
     .library-row:hover { background: #f8fafc; }
     .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
+    .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
+    .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .library-meta { color: var(--muted); font-size: 12px; }
+    .library-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-rename-input {
       width: 100%;
       min-width: 0;
@@ -3621,7 +3670,7 @@ INDEX_HTML = """<!doctype html>
     function libraryChildFolders(parentId) {
       return state.libraryFolders
         .filter((folder) => Number(folder.parent_id || 0) === Number(parentId))
-        .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        .sort((a, b) => compareLibraryOrder(a, b, "name"));
     }
 
     function libraryFolderItems(folderId) {
@@ -3634,7 +3683,19 @@ INDEX_HTML = """<!doctype html>
           const haystack = `${item.display_name || ""} ${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
           return haystack.includes(query);
         })
-        .sort((a, b) => (a.display_name || a.paper?.citation_label || "").localeCompare(b.display_name || b.paper?.citation_label || ""));
+        .sort((a, b) => compareLibraryOrder(a, b, "display_name"));
+    }
+
+    function compareLibraryOrder(a, b, fallbackKey) {
+      const orderDelta = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+      if (orderDelta) return orderDelta;
+      const left = fallbackKey === "display_name"
+        ? (a.display_name || a.paper?.citation_label || a.paper?.title || "")
+        : (a[fallbackKey] || "");
+      const right = fallbackKey === "display_name"
+        ? (b.display_name || b.paper?.citation_label || b.paper?.title || "")
+        : (b[fallbackKey] || "");
+      return String(left).localeCompare(String(right)) || (Number(a.id || 0) - Number(b.id || 0));
     }
 
     function libraryEntriesForFolder(folderId) {
@@ -3803,6 +3864,19 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not move library entry");
       applyLibrarySnapshot(data);
       setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
+      renderLibrary();
+    }
+
+    async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
+      const res = await fetch("/api/library/reorder", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type, id, parent_folder_id: parentFolderId, target_id: targetId, position})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not reorder library entry");
+      applyLibrarySnapshot(data);
+      setLibraryColumnSelection(Number(parentFolderId || state.libraryRootId), {type, id: Number(data.reordered?.id || id)});
       renderLibrary();
     }
 
@@ -4580,9 +4654,10 @@ INDEX_HTML = """<!doctype html>
       const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
         || (type === "item" && Number(state.libraryRenamingItemId || 0) === id);
       const rowTag = renaming ? "div" : "button";
+      const draggable = !(type === "folder" && (entry.protected || id === state.libraryRootId));
       const rowAttrs = renaming
         ? ""
-        : `type="button" draggable="${id === state.libraryRootId && type === "folder" ? "false" : "true"}"`;
+        : `type="button" draggable="${draggable ? "true" : "false"}"`;
       const nameMarkup = renaming
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
@@ -4823,11 +4898,33 @@ INDEX_HTML = """<!doctype html>
           if (row.dataset.libraryType === "folder") focusLibraryFolder(Number(row.dataset.libraryId));
         });
         row.addEventListener("dragstart", (event) => {
+          if (row.getAttribute("draggable") === "false") {
+            event.preventDefault();
+            return;
+          }
           event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify({
             type: row.dataset.libraryType,
-            id: Number(row.dataset.libraryId)
+            id: Number(row.dataset.libraryId),
+            parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
           }));
           event.dataTransfer.effectAllowed = "move";
+        });
+        row.addEventListener("dragover", (event) => {
+          const payload = libraryDragPayload(event);
+          if (!payload || !libraryDropIsReorder(payload, row, event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          markLibraryReorderTarget(row, event);
+        });
+        row.addEventListener("dragleave", () => clearLibraryDragClasses(row));
+        row.addEventListener("drop", async (event) => {
+          const payload = libraryDragPayload(event);
+          if (!payload || !libraryDropIsReorder(payload, row, event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const position = libraryDropIntent(row, event);
+          clearLibraryDragClasses(row);
+          await reorderLibraryEntry(payload.type, Number(payload.id), Number(payload.parent_folder_id), Number(row.dataset.libraryId), position);
         });
         row.addEventListener("contextmenu", (event) => {
           event.stopPropagation();
@@ -4843,16 +4940,18 @@ INDEX_HTML = """<!doctype html>
       });
       shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
         target.addEventListener("dragover", (event) => {
-          if (!event.dataTransfer.types.includes("application/x-paper-monitor-library")) return;
+          if (!libraryDragPayload(event)) return;
           event.preventDefault();
+          event.stopPropagation();
           target.classList.add("drag-over");
         });
         target.addEventListener("dragleave", () => target.classList.remove("drag-over"));
         target.addEventListener("drop", async (event) => {
-          if (!event.dataTransfer.types.includes("application/x-paper-monitor-library")) return;
+          const payload = libraryDragPayload(event);
+          if (!payload) return;
           event.preventDefault();
+          event.stopPropagation();
           target.classList.remove("drag-over");
-          const payload = JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "{}");
           const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
           if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
         });
@@ -4881,6 +4980,41 @@ INDEX_HTML = """<!doctype html>
         state.libraryActiveFolderId = folderId;
         showLibraryContextMenu(event, folderId);
       });
+    }
+
+    function libraryDragPayload(event) {
+      if (!event.dataTransfer?.types?.includes("application/x-paper-monitor-library")) return null;
+      try {
+        return JSON.parse(event.dataTransfer.getData("application/x-paper-monitor-library") || "{}");
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function libraryDropIsReorder(payload, row, event) {
+      return Boolean(
+        payload?.type
+        && payload.type === row.dataset.libraryType
+        && Number(payload.id || 0) !== Number(row.dataset.libraryId || 0)
+        && Number(payload.parent_folder_id || 0) === Number(row.dataset.libraryParentFolder || 0)
+        && libraryDropIntent(row, event) !== "inside"
+      );
+    }
+
+    function libraryDropIntent(row, event) {
+      const rect = row.getBoundingClientRect();
+      const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
+      if (row.dataset.libraryType === "folder" && ratio > 0.25 && ratio < 0.75) return "inside";
+      return ratio >= 0.5 ? "after" : "before";
+    }
+
+    function markLibraryReorderTarget(row, event) {
+      clearLibraryDragClasses(row);
+      row.classList.add(libraryDropIntent(row, event) === "after" ? "drag-reorder-after" : "drag-reorder-before");
+    }
+
+    function clearLibraryDragClasses(row) {
+      row.classList.remove("drag-over", "drag-reorder-before", "drag-reorder-after");
     }
 
     function selectLibraryEntry(parentFolderId, type, id) {
@@ -5369,13 +5503,10 @@ INDEX_HTML = """<!doctype html>
           const childFolderId = Number(selection.id);
           const existing = selectedEntryInFolder(childFolderId);
           const firstEntry = libraryEntriesForFolder(childFolderId)[0];
+          if (!existing && !firstEntry) return true;
           state.libraryActiveFolderId = childFolderId;
           state.libraryCurrentFolderId = childFolderId;
-          if (existing || firstEntry) {
-            setLibraryColumnSelection(childFolderId, existing || firstEntry);
-          } else {
-            state.librarySelection = {type: "folder", id: childFolderId};
-          }
+          setLibraryColumnSelection(childFolderId, existing || firstEntry);
           requestLibraryColumnReveal(childFolderId, "right");
           renderLibrary();
           refreshLibraryQuickLookForSelection();
