@@ -21,7 +21,15 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 
 from .analysis import queue_codex_analysis
-from .config import AppConfig, DEFAULT_ANALYSIS_DIR, DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, DEFAULT_PDF_DIR, load_config
+from .config import (
+    AppConfig,
+    DEFAULT_ANALYSIS_DIR,
+    DEFAULT_CONFIG_PATH,
+    DEFAULT_DB_PATH,
+    DEFAULT_LIBRARY_IMPORT_DIR,
+    DEFAULT_PDF_DIR,
+    load_config,
+)
 from .download import download_paper
 from .http import request_with_retries
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
@@ -916,7 +924,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
         requested = Path(raw_path).expanduser().resolve()
-        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+        if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return
         if not requested.exists() or requested.suffix.lower() != ".pdf":
@@ -931,7 +939,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
         requested = Path(raw_path).expanduser().resolve()
-        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+        if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return
         if not requested.exists() or requested.suffix.lower() != ".pdf":
@@ -1081,7 +1089,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
         requested = Path(unquote(raw_path)).expanduser().resolve()
-        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve(), DEFAULT_ANALYSIS_DIR.resolve()]):
+        if not is_allowed_file(requested, [*allowed_pdf_roots(), DEFAULT_ANALYSIS_DIR.resolve()]):
             self.send_error_json(HTTPStatus.FORBIDDEN, "File is outside allowed report/PDF folders")
             return
         if not requested.exists() or not requested.is_file():
@@ -1101,7 +1109,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
         requested = Path(unquote(raw_path)).expanduser().resolve()
-        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+        if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return
         if not requested.exists() or requested.suffix.lower() != ".pdf":
@@ -1149,7 +1157,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return None
         requested = Path(unquote(raw_path)).expanduser().resolve()
-        if not is_allowed_file(requested, [DEFAULT_PDF_DIR.resolve()]):
+        if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return None
         if not requested.exists() or requested.suffix.lower() != ".pdf":
@@ -2170,8 +2178,9 @@ def delete_pdf_files_for_paper(paper: dict[str, Any]) -> list[str]:
             paths.extend(str(path) for path in json.loads(supplements) if path)
         except (TypeError, json.JSONDecodeError):
             pass
-    deleted = delete_allowed_files(paths, [DEFAULT_PDF_DIR.resolve()])
-    cleanup_empty_parents(deleted, DEFAULT_PDF_DIR.resolve())
+    deleted = delete_allowed_files(paths, allowed_pdf_roots())
+    for root in allowed_pdf_roots():
+        cleanup_empty_parents(deleted, root)
     return deleted
 
 
@@ -2268,6 +2277,10 @@ def read_text_file(path: str) -> str:
 
 def is_allowed_file(path: Path, roots: list[Path]) -> bool:
     return any(is_relative_to(path, root) for root in roots)
+
+
+def allowed_pdf_roots() -> list[Path]:
+    return [DEFAULT_PDF_DIR.resolve(), DEFAULT_LIBRARY_IMPORT_DIR.resolve()]
 
 
 PHYSICAL_INCLUDE_KEYWORDS = [

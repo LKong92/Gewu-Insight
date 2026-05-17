@@ -12,6 +12,7 @@ DEFAULT_DB_PATH = ROOT / "data" / "paper_monitor.sqlite"
 DEFAULT_DAILY_REPORT_DIR = ROOT / "reports" / "daily"
 DEFAULT_ANALYSIS_DIR = ROOT / "reports" / "analyses"
 DEFAULT_PDF_DIR = ROOT / "data" / "pdfs"
+DEFAULT_LIBRARY_IMPORT_DIR = ROOT / "data" / "library_imports"
 
 
 @dataclass(frozen=True)

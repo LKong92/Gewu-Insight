@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from ..config import DEFAULT_DB_PATH, ROOT
+from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_IMPORT_DIR, ROOT
 from ..storage import Storage
 from ..text import clean_text, make_paper_id, normalize_doi, safe_slug, sha1_short
 
@@ -16,7 +16,7 @@ SUPPORTED_COPY_MODES = {"copy", "link"}
 PAPER_CANDIDATE_KIND = "pdf"
 PAPER_CANDIDATE_IMPORT_AS = "paper_candidate"
 REPORT_DIR = ROOT / "reports" / "imports"
-LIBRARY_IMPORT_DIR = ROOT / "data" / "library_imports"
+LIBRARY_IMPORT_DIR = DEFAULT_LIBRARY_IMPORT_DIR
 
 
 def import_library_inventory(
