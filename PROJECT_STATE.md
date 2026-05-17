@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before Library viewport-height fix: `c70f9d4 Fix library column heights`
+- Current Git HEAD before Library path highlight cleanup: `ad86c29 Lock library viewport height`
 
 ## Completed work
 
@@ -68,11 +68,10 @@
    - Library detail panel now includes BibTeX/reference copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box with volume/page fallbacks.
    - Report and Library keep their top controls fixed while only the content panes scroll.
    - Library now has `unsorted` and `Recycle` special folders, recoverable deletes, keyboard copy/paste/delete, and a Details-side `Remove from Library` action; deleting the last organized shortcut preserves the paper in `unsorted`, then `Recycle`.
-   - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/column-height behavior is closer to Finder.
+   - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/path/column-height behavior is closer to Finder.
 
 ## Useful commits
 
-- `2e74421` Improve library recycle operations
 - `b9b5862` Polish library citations
 - `6fd0e10` Refine library keyboard polish
 - `df76278` Tune library column reveal
@@ -80,6 +79,7 @@
 - `48e4eee` Add library folder colors
 - `285aa45` Improve library drag and recycle semantics
 - `c70f9d4` Fix library column heights
+- `ad86c29` Lock library viewport height
 
 ## Verification already done
 
