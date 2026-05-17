@@ -3168,6 +3168,7 @@ INDEX_HTML = """<!doctype html>
       libraryColumnWidths: {},
       libraryClipboard: null,
       libraryRevealColumnFolderId: 0,
+      libraryRevealColumnDirection: "",
       libraryRenamingFolderId: 0,
       libraryRenamingItemId: 0,
       libraryQuickLookOpen: false,
@@ -3677,8 +3678,9 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function requestLibraryColumnReveal(folderId) {
+    function requestLibraryColumnReveal(folderId, direction = "nearest") {
       state.libraryRevealColumnFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
+      state.libraryRevealColumnDirection = direction;
     }
 
     function parentFolderId(folderId) {
@@ -4421,8 +4423,10 @@ INDEX_HTML = """<!doctype html>
       if (columns) {
         if (state.libraryRevealColumnFolderId) {
           const folderId = state.libraryRevealColumnFolderId;
+          const direction = state.libraryRevealColumnDirection || "nearest";
           state.libraryRevealColumnFolderId = 0;
-          revealLibraryColumns(folderId);
+          state.libraryRevealColumnDirection = "";
+          revealLibraryColumns(folderId, direction);
         } else {
           columns.scrollLeft = previousColumnsScrollLeft;
         }
@@ -4447,26 +4451,32 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function revealLibraryColumns(folderId) {
+    function revealLibraryColumns(folderId, direction = "nearest") {
       const columns = $("libraryColumns");
       if (!columns) return;
       const allColumns = [...columns.querySelectorAll("[data-library-column-folder]")];
       const column = allColumns.find((item) => Number(item.dataset.libraryColumnFolder) === Number(folderId));
       if (!column) return;
-      const nextColumn = allColumns[allColumns.indexOf(column) + 1] || column;
       const padding = 12;
       const left = column.offsetLeft;
-      const right = nextColumn.offsetLeft + nextColumn.offsetWidth;
-      const pairWidth = right - left;
+      const right = column.offsetLeft + column.offsetWidth;
+      const viewLeft = columns.scrollLeft;
+      const viewRight = viewLeft + columns.clientWidth;
       let target = columns.scrollLeft;
-      if (pairWidth + (padding * 2) <= columns.clientWidth) {
-        if (right + padding > target + columns.clientWidth) target = right + padding - columns.clientWidth;
-        if (left - padding < target) target = left - padding;
-      } else if (right + padding > target + columns.clientWidth) {
+      if (direction === "left") {
+        if (left - padding < viewLeft) target = left - padding;
+        else if (right + padding > viewRight) target = right + padding - columns.clientWidth;
+      } else if (direction === "right") {
+        if (right + padding > viewRight) target = right + padding - columns.clientWidth;
+        else if (left - padding < viewLeft) target = left - padding;
+      } else if (right + padding > viewRight) {
         target = right + padding - columns.clientWidth;
+      } else if (left - padding < viewLeft) {
+        target = left - padding;
       }
       const maxScroll = Math.max(0, columns.scrollWidth - columns.clientWidth);
       const nextScrollLeft = Math.max(0, Math.min(maxScroll, target));
+      if (Math.abs(nextScrollLeft - columns.scrollLeft) < 1) return;
       columns.scrollTo({left: nextScrollLeft, behavior: "smooth"});
       state.libraryColumnsScrollLeft = nextScrollLeft;
     }
@@ -5342,7 +5352,7 @@ INDEX_HTML = """<!doctype html>
           state.libraryActiveFolderId = parentId;
           state.libraryCurrentFolderId = activeFolderId;
           state.librarySelection = {type: "folder", id: activeFolderId};
-          requestLibraryColumnReveal(parentId);
+          requestLibraryColumnReveal(parentId, "left");
         }
         renderLibrary();
         return true;
@@ -5361,7 +5371,7 @@ INDEX_HTML = """<!doctype html>
           } else {
             state.librarySelection = {type: "folder", id: childFolderId};
           }
-          requestLibraryColumnReveal(childFolderId);
+          requestLibraryColumnReveal(childFolderId, "right");
           renderLibrary();
           refreshLibraryQuickLookForSelection();
         }
