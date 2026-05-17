@@ -2285,7 +2285,16 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: 14px minmax(260px, 1fr);
       grid-template-areas: "toggle note";
     }
-    .report-column { grid-area: report; min-width: 0; height: 100%; min-height: 0; overflow-y: auto; padding-right: 18px; }
+    .report-column {
+      grid-area: report;
+      min-width: 0;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      padding-right: 18px;
+      display: grid;
+      grid-template-rows: auto auto auto auto minmax(0, 1fr);
+    }
     .workspace.report-collapsed .report-column { display: none; }
     .workspace-toggle, .workspace-resizer { display: none; }
     .workspace.note-open .workspace-toggle {
@@ -2406,12 +2415,14 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
       gap: 12px;
-      min-height: 560px;
+      height: 100%;
+      min-height: 0;
       outline: none;
     }
     .library-columns {
       min-width: 0;
       min-height: 0;
+      height: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
@@ -2423,23 +2434,26 @@ INDEX_HTML = """<!doctype html>
       flex: 0 0 260px;
       min-width: 260px;
       max-width: 260px;
-      min-height: 560px;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
       border-right: 1px solid var(--line);
-      overflow-y: auto;
+      overflow: hidden;
       background: #fff;
     }
     .library-column:last-child { border-right: 0; }
     .library-pane {
       min-width: 0;
       min-height: 0;
+      height: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
-      overflow: auto;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
     }
     .library-pane-header {
-      position: sticky;
-      top: 0;
       z-index: 1;
       min-height: 38px;
       padding: 10px 12px;
@@ -2451,7 +2465,12 @@ INDEX_HTML = """<!doctype html>
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
-    .library-column-body { padding: 8px; }
+    .library-column-body {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 8px;
+    }
     .library-row {
       width: 100%;
       min-height: 32px;
@@ -2485,6 +2504,8 @@ INDEX_HTML = """<!doctype html>
       outline: 0;
     }
     .library-detail {
+      min-height: 0;
+      overflow-y: auto;
       padding: 14px;
       color: #344054;
       font-size: 13px;
@@ -2601,7 +2622,19 @@ INDEX_HTML = """<!doctype html>
       font-size: 14px;
     }
     .subject-option.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
-    .papers { display: grid; gap: 12px; }
+    .papers {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+      padding-right: 2px;
+    }
+    .papers.library-view {
+      display: block;
+      overflow: hidden;
+      padding-right: 0;
+    }
     .paper {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -2790,7 +2823,8 @@ INDEX_HTML = """<!doctype html>
       .workspace { grid-template-areas: "report"; }
       .workspace.note-open, .workspace.note-open.report-collapsed { grid-template-areas: "report" "note"; }
       .workspace-toggle, .workspace-resizer { display: none !important; }
-      .report-column, .analysis-panel { height: auto; overflow: visible; }
+      .report-column, .analysis-panel { height: auto; overflow: visible; display: block; }
+      .papers, .papers.library-view { overflow: visible; display: grid; padding-right: 0; }
       .workspace.report-collapsed .report-column { display: block; }
       .paper.with-figure .paper-layout { grid-template-columns: 1fr; }
       .paper-head { flex-direction: column; }
@@ -2937,6 +2971,7 @@ INDEX_HTML = """<!doctype html>
       librarySelection: {type: "folder", id: 1},
       libraryColumnSelections: {},
       libraryColumnsScrollLeft: 0,
+      libraryColumnScrollTops: {},
       libraryRevealColumnFolderId: 0,
       libraryRenamingFolderId: 0,
       libraryQuickLookOpen: false,
@@ -3830,6 +3865,7 @@ INDEX_HTML = """<!doctype html>
         .join(", ");
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
+      root.classList.remove("library-view");
       root.innerHTML = "";
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
@@ -4025,10 +4061,12 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = "Library";
       const root = $("papers");
+      captureLibraryColumnScrollTops();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
       const activeFolder = libraryFolderById(state.libraryActiveFolderId) || libraryFolderById(state.libraryRootId) || {name: "Library"};
       const visible = libraryVisibleEntries();
       $("summary").textContent = `${state.libraryItems.length} shortcuts · ${visible.length} shown · Active column: ${activeFolder.name}`;
+      root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
           <div class="library-columns" id="libraryColumns"></div>
@@ -4045,6 +4083,7 @@ INDEX_HTML = """<!doctype html>
       renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
+      restoreLibraryColumnScrollTops();
       const columns = $("libraryColumns");
       if (columns) {
         if (state.libraryRevealColumnFolderId) {
@@ -4055,6 +4094,24 @@ INDEX_HTML = """<!doctype html>
           columns.scrollLeft = previousColumnsScrollLeft;
         }
       }
+      window.requestAnimationFrame(() => revealLibrarySelectionInColumn(state.libraryActiveFolderId));
+    }
+
+    function captureLibraryColumnScrollTops() {
+      document.querySelectorAll("[data-library-column-folder]").forEach((column) => {
+        const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        const body = column.querySelector(".library-column-body");
+        if (folderId && body) state.libraryColumnScrollTops[folderId] = body.scrollTop;
+      });
+    }
+
+    function restoreLibraryColumnScrollTops() {
+      document.querySelectorAll("[data-library-column-folder]").forEach((column) => {
+        const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        const body = column.querySelector(".library-column-body");
+        if (!folderId || !body) return;
+        body.scrollTop = state.libraryColumnScrollTops[folderId] || 0;
+      });
     }
 
     function revealLibraryColumns(folderId) {
@@ -4079,6 +4136,22 @@ INDEX_HTML = """<!doctype html>
       const nextScrollLeft = Math.max(0, Math.min(maxScroll, target));
       columns.scrollTo({left: nextScrollLeft, behavior: "smooth"});
       state.libraryColumnsScrollLeft = nextScrollLeft;
+    }
+
+    function revealLibrarySelectionInColumn(folderId) {
+      const column = document.querySelector(`[data-library-column-folder="${Number(folderId || 0)}"]`);
+      const body = column?.querySelector(".library-column-body");
+      const row = column?.querySelector(".library-row.active");
+      if (!body || !row) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const padding = 6;
+      if (rowRect.bottom > bodyRect.bottom - padding) {
+        body.scrollTop += rowRect.bottom - bodyRect.bottom + padding;
+      } else if (rowRect.top < bodyRect.top + padding) {
+        body.scrollTop -= bodyRect.top - rowRect.top + padding;
+      }
+      state.libraryColumnScrollTops[Number(folderId)] = body.scrollTop;
     }
 
     function renderLibraryColumns() {
@@ -4342,6 +4415,11 @@ INDEX_HTML = """<!doctype html>
         });
       });
       shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
+        const body = column.querySelector(".library-column-body");
+        const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        body?.addEventListener("scroll", () => {
+          if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
+        });
         column.addEventListener("click", (event) => {
           if (event.target.closest(".library-row")) return;
           state.libraryActiveFolderId = Number(column.dataset.libraryColumnFolder || state.libraryRootId);
