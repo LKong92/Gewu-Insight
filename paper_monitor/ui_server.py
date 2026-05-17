@@ -3187,7 +3187,6 @@ INDEX_HTML = """<!doctype html>
           <div class="report-tabs" id="reportTabs"></div>
           <div class="library-controls" id="libraryControls">
             <button class="smallbtn" id="newLibraryFolder" type="button">New Folder</button>
-            <button class="smallbtn" id="refreshLibrary" type="button">Refresh Library</button>
           </div>
           <div class="papers" id="papers"></div>
         </section>
@@ -6292,7 +6291,6 @@ INDEX_HTML = """<!doctype html>
       renderReport();
     });
     $("libraryMode").addEventListener("click", loadLibrary);
-    $("refreshLibrary").addEventListener("click", loadLibrary);
     $("newLibraryFolder").addEventListener("click", () => createLibraryFolder(state.libraryActiveFolderId || state.libraryRootId));
     $("toggleSidebar").addEventListener("click", () => {
       const collapsed = document.querySelector(".app").classList.contains("sidebar-collapsed");
