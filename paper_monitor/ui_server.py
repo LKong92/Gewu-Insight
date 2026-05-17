@@ -1521,6 +1521,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "updated_papers",
         "pdf_attachments_to_import",
         "created_resources",
+        "reused_existing_files",
         "resources_or_attachments_to_import",
         "skipped",
         "skipped_system_metadata",
@@ -2224,6 +2225,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
                 f"Done: {summary.get('created_papers', 0)} created, "
                 f"{summary.get('updated_papers', 0)} updated, "
                 f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
+                f"{summary.get('reused_existing_files', 0)} reused, "
                 f"{summary.get('skipped', 0)} skipped"
             ),
             level=level,
@@ -5923,6 +5925,7 @@ INDEX_HTML = """<!doctype html>
         `${result.created_papers || 0} created`,
         `${result.updated_papers || 0} updated`,
         `${result.resources_or_attachments_to_import || 0} resources/attachments`,
+        `${result.reused_existing_files || 0} reused`,
         `${result.skipped || 0} skipped`,
         `${result.missing_source_files || 0} missing`,
         result.report_path ? `Report: ${result.report_path}` : ""
@@ -5959,6 +5962,7 @@ INDEX_HTML = """<!doctype html>
         <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Paper Monitor.</span></div>
         <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known papers matched and refreshed instead of duplicated.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
+        <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Paper Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
         <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
         <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>

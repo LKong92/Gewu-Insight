@@ -174,6 +174,7 @@ def empty_result(
         "updated_papers": 0,
         "pdf_attachments_to_import": 0,
         "created_resources": 0,
+        "reused_existing_files": 0,
         "resources_or_attachments_to_import": 0,
         "skipped": 0,
         "skipped_system_metadata": 0,
@@ -332,7 +333,7 @@ def execute_import(
     *,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+    batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     target_root = library_target_root / batch_id
     result["import_batch_id"] = batch_id
     result["copy_target_root"] = str(target_root)
@@ -363,11 +364,15 @@ def execute_import(
             record = normalize_record(raw)
             source_path = record["source_path"]
             source = Path(source_path) if source_path else None
+            reusable_path = reusable_stored_path(storage, record, copy_mode=result["copy_mode"])
             source_exists = bool(source and source.exists())
             if source_path and not source_exists:
                 result["missing_source_files"] += 1
                 append_limited(result["missing_sources"], compact_record(record), 200)
-                result["warnings"].append(f"Missing source file: {source_path}")
+                if reusable_path:
+                    result["warnings"].append(f"Missing source file; reused existing stored file: {source_path}")
+                else:
+                    result["warnings"].append(f"Missing source file: {source_path}")
 
             kind = record["kind"]
             import_as = record["import_as"]
@@ -395,8 +400,12 @@ def execute_import(
                 matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
                 stored_path = ""
-                if source_exists:
+                if reusable_path:
+                    stored_path = reusable_path
+                    result["reused_existing_files"] += 1
+                elif source_exists:
                     stored_path = copy_or_link_record(record, target_root=target_root, copy_mode=result["copy_mode"])
+                if stored_path:
                     result["pdf_attachments_to_import"] += 1
                     result["resources_or_attachments_to_import"] += 1
 
@@ -419,8 +428,12 @@ def execute_import(
 
             if import_as == "resource":
                 stored_path = ""
-                if source_exists:
+                if reusable_path:
+                    stored_path = reusable_path
+                    result["reused_existing_files"] += 1
+                elif source_exists:
                     stored_path = copy_or_link_record(record, target_root=target_root, copy_mode=result["copy_mode"])
+                if stored_path:
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
                 upsert_resource(storage, record, batch_id=batch_id, paper_id=None, stored_path=stored_path)
@@ -935,6 +948,38 @@ def copy_or_link_record(record: dict[str, Any], *, target_root: Path, copy_mode:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     return str(target)
+
+
+def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode: str) -> str:
+    if copy_mode != "copy":
+        return ""
+    source_path = record.get("source_path") or ""
+    size_bytes = record.get("size_bytes")
+    kind = record.get("kind") or ""
+    if not source_path or size_bytes is None or not kind:
+        return ""
+    row = storage.conn.execute(
+        """
+        SELECT resources.stored_path
+        FROM resources
+        LEFT JOIN inventory_import_batches
+          ON inventory_import_batches.id = resources.import_batch_id
+        WHERE resources.source_path = ?
+          AND resources.size_bytes = ?
+          AND resources.kind = ?
+          AND resources.stored_path IS NOT NULL
+          AND resources.stored_path != ''
+        ORDER BY
+          CASE WHEN inventory_import_batches.status = 'completed' THEN 0 ELSE 1 END,
+          resources.updated_at DESC
+        LIMIT 1
+        """,
+        (source_path, size_bytes, kind),
+    ).fetchone()
+    stored_path = clean_text(row["stored_path"] if row else "")
+    if stored_path and Path(stored_path).exists():
+        return stored_path
+    return ""
 
 
 def safe_inventory_relative_path(value: str) -> Path:

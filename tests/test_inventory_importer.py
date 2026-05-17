@@ -164,6 +164,39 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["display_name"], "plain-name.pdf")
 
+    def test_repeated_real_import_reuses_existing_copied_file(self) -> None:
+        pdf = self.touch("repeat/reuse-me.pdf", b"%PDF fixture")
+        inventory_path = self.write_inventory([self.pdf_record(pdf, doi="10.4242/reuse", title="Reuse Me")])
+        copied_root = self.root / "copied"
+        first = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "first-report.json",
+            target_root=copied_root,
+            library_item_name="filename",
+        )
+        second = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "second-report.json",
+            target_root=copied_root,
+            library_item_name="filename",
+        )
+
+        self.assertFalse(first["errors"])
+        self.assertFalse(second["errors"])
+        self.assertEqual(second["updated_papers"], 1)
+        self.assertEqual(second["reused_existing_files"], 1)
+        self.assertEqual(len(list(copied_root.rglob("reuse-me.pdf"))), 1)
+
     def test_dry_run_counts_resource_import(self) -> None:
         resource = self.touch("slides/talk.pptx")
         result = self.run_dry(
