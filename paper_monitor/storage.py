@@ -91,6 +91,23 @@ CREATE TABLE IF NOT EXISTS library_items (
 
 CREATE INDEX IF NOT EXISTS idx_library_items_folder ON library_items(folder_id, sort_order, id);
 CREATE INDEX IF NOT EXISTS idx_library_items_paper ON library_items(paper_id);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS my_publications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  starred INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(paper_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starred, id);
 """
 
 
@@ -588,6 +605,71 @@ class Storage:
     def remove_library_paper(self, *, paper_id: str) -> None:
         self.conn.execute("DELETE FROM library_items WHERE paper_id = ?", (str(paper_id),))
         self.conn.commit()
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        row = self.conn.execute("SELECT value FROM app_settings WHERE key = ?", (str(key),)).fetchone()
+        return str(row["value"] or "") if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (str(key), str(value or ""), now_iso()),
+        )
+        self.conn.commit()
+
+    def add_my_publication(self, *, paper_id: str) -> dict[str, Any]:
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO my_publications (paper_id, starred, created_at, updated_at)
+            VALUES (?, 0, ?, ?)
+            ON CONFLICT(paper_id) DO UPDATE SET updated_at = excluded.updated_at
+            """,
+            (str(paper_id), timestamp, timestamp),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """
+            SELECT my_publications.*, papers.*
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            WHERE my_publications.paper_id = ?
+            """,
+            (str(paper_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def set_my_publication_starred(self, *, publication_id: int, starred: bool) -> dict[str, Any]:
+        self.conn.execute(
+            "UPDATE my_publications SET starred = ?, updated_at = ? WHERE id = ?",
+            (1 if starred else 0, now_iso(), int(publication_id)),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """
+            SELECT my_publications.*, papers.*
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            WHERE my_publications.id = ?
+            """,
+            (int(publication_id),),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def list_my_publications(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT my_publications.*, papers.*
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            ORDER BY papers.publication_date DESC, papers.title ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
         row = self.conn.execute(
