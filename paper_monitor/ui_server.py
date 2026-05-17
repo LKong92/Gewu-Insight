@@ -746,7 +746,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not requested:
             return
         page_number = max(1, int(first(query, "page") or 1))
-        data, content_type = pdf_page_thumbnail(requested, page_number)
+        size = max(120, min(1800, int(first(query, "size") or 240)))
+        data, content_type = pdf_page_thumbnail(requested, page_number, size=size)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "public, max-age=86400")
@@ -1530,8 +1531,8 @@ def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
         return None
 
 
-def pdf_page_thumbnail(path: Path, page_number: int) -> tuple[bytes, str]:
-    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}".encode("utf-8")).hexdigest()
+def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tuple[bytes, str]:
+    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}".encode("utf-8")).hexdigest()
     thumb_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
     if thumb_path.exists():
         return thumb_path.read_bytes(), "image/png"
@@ -1542,7 +1543,7 @@ def pdf_page_thumbnail(path: Path, page_number: int) -> tuple[bytes, str]:
         page_pdf.write_bytes(data)
         try:
             subprocess.run(
-                ["qlmanage", "-t", "-s", "240", "-o", str(PDF_THUMB_CACHE_DIR), str(page_pdf)],
+                ["qlmanage", "-t", "-s", str(size), "-o", str(PDF_THUMB_CACHE_DIR), str(page_pdf)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -2144,11 +2145,32 @@ INDEX_HTML = """<!doctype html>
       font-size: 10px;
       background: linear-gradient(180deg, #fff 0%, #fff 72%, #f3f4f6 72%, #f3f4f6 100%);
     }
-    .library-quicklook iframe {
+    .library-quicklook-pages {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      padding: 18px;
+      background: #68717c;
+    }
+    .library-preview-page {
+      width: min(100%, 980px);
+      display: grid;
+      justify-items: center;
+      gap: 6px;
+      color: #eef2f7;
+      font-size: 12px;
+    }
+    .library-preview-page img {
       width: 100%;
-      height: 100%;
-      border: 0;
+      height: auto;
+      display: block;
+      border-radius: 2px;
       background: #fff;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.25);
     }
     .library-quicklook-resize {
       position: absolute;
@@ -2723,7 +2745,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-quicklook-body">
           <div class="library-quicklook-thumbs" id="libraryQuickLookThumbs"></div>
-          <iframe id="libraryQuickLookFrame" title="Library PDF Quick Look" tabindex="-1"></iframe>
+          <div class="library-quicklook-pages" id="libraryQuickLookPages" tabindex="-1"></div>
         </div>
         <div class="library-quicklook-resize" id="libraryQuickLookResize" title="Resize preview"></div>
       </div>
@@ -4212,12 +4234,12 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
       const overlay = $("libraryQuickLook");
-      const frame = $("libraryQuickLookFrame");
+      const pages = $("libraryQuickLookPages");
       if (overlay) {
         overlay.classList.remove("open");
         overlay.setAttribute("aria-hidden", "true");
       }
-      if (frame) frame.src = "about:blank";
+      if (pages) pages.innerHTML = "";
       renderLibraryQuickLookThumbs(0);
     }
 
@@ -4251,31 +4273,26 @@ INDEX_HTML = """<!doctype html>
       overlay.style.height = `${height}px`;
     }
 
-    function libraryQuickLookPageUrl(page = state.libraryQuickLookPage) {
-      if (!state.libraryQuickLookUrl) return "";
-      const safePage = Math.max(1, Number(page || 1));
-      return `/api/pdf-page?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}`;
-    }
-
-    function libraryQuickLookThumbUrl(page) {
+    function libraryQuickLookImageUrl(page, size) {
       if (!state.libraryQuickLookPath) return "";
       const safePage = Math.max(1, Number(page || 1));
-      return `/api/pdf-thumb?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}`;
+      return `/api/pdf-thumb?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}&size=${size}`;
     }
 
     function setLibraryQuickLookPage(page) {
       const nextPage = Math.max(1, Math.min(Number(page || 1), state.libraryQuickLookPageCount || Number(page || 1)));
-      state.libraryQuickLookPage = nextPage;
-      const frame = $("libraryQuickLookFrame");
-      const url = libraryQuickLookPageUrl(nextPage);
-      if (frame && url) {
-        frame.src = "about:blank";
-        window.requestAnimationFrame(() => {
-          frame.src = url;
-        });
-      }
-      renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
+      updateLibraryQuickLookActivePage(nextPage);
+      const pageEl = $("libraryQuickLookPages")?.querySelector(`[data-preview-page="${nextPage}"]`);
+      pageEl?.scrollIntoView({block: "start"});
       $("libraryShell")?.focus({preventScroll: true});
+    }
+
+    function updateLibraryQuickLookActivePage(page) {
+      state.libraryQuickLookPage = Math.max(1, Number(page || 1));
+      $("libraryQuickLookThumbs")?.querySelectorAll("[data-page]").forEach((button) => {
+        button.classList.toggle("active", Number(button.dataset.page || 0) === state.libraryQuickLookPage);
+      });
+      $("libraryQuickLookThumbs")?.querySelector(".library-page-thumb.active")?.scrollIntoView({block: "nearest"});
     }
 
     function renderLibraryQuickLookThumbs(pageCount) {
@@ -4289,7 +4306,7 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = Array.from({length: count}, (_, index) => {
         const page = index + 1;
         const preview = page <= 80
-          ? `<img src="${escapeAttr(libraryQuickLookThumbUrl(page))}" alt="Page ${page}" loading="lazy">`
+          ? `<img src="${escapeAttr(libraryQuickLookImageUrl(page, 240))}" alt="Page ${page}" loading="lazy">`
           : `<span class="library-page-thumb-placeholder">PDF</span>`;
         return `
           <button class="library-page-thumb${page === state.libraryQuickLookPage ? " active" : ""}" type="button" data-page="${page}">
@@ -4304,6 +4321,40 @@ INDEX_HTML = """<!doctype html>
       root.querySelector(".library-page-thumb.active")?.scrollIntoView({block: "nearest"});
     }
 
+    function renderLibraryQuickLookPages(pageCount) {
+      const root = $("libraryQuickLookPages");
+      if (!root) return;
+      const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
+      if (!count) {
+        root.innerHTML = `<div class="empty">Loading pages...</div>`;
+        return;
+      }
+      root.innerHTML = Array.from({length: count}, (_, index) => {
+        const page = index + 1;
+        return `
+          <section class="library-preview-page" data-preview-page="${page}">
+            <img src="${escapeAttr(libraryQuickLookImageUrl(page, 1400))}" alt="Page ${page}" loading="${page <= 2 ? "eager" : "lazy"}">
+            <span>Page ${page}</span>
+          </section>
+        `;
+      }).join("");
+      root.scrollTop = 0;
+      root.onscroll = () => updateLibraryQuickLookPageFromScroll();
+    }
+
+    function updateLibraryQuickLookPageFromScroll() {
+      const root = $("libraryQuickLookPages");
+      if (!root || !state.libraryQuickLookOpen) return;
+      const pages = [...root.querySelectorAll("[data-preview-page]")];
+      if (!pages.length) return;
+      const anchor = root.scrollTop + 48;
+      let current = Number(pages[0].dataset.previewPage || 1);
+      pages.forEach((pageEl) => {
+        if (pageEl.offsetTop <= anchor) current = Number(pageEl.dataset.previewPage || current);
+      });
+      if (current !== state.libraryQuickLookPage) updateLibraryQuickLookActivePage(current);
+    }
+
     async function loadLibraryQuickLookInfo(path) {
       try {
         const res = await fetch(`/api/pdf-info?path=${encodeURIComponent(path)}`);
@@ -4311,9 +4362,11 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok || path !== state.libraryQuickLookPath) return;
         state.libraryQuickLookPageCount = Number(data.page_count || 0);
         renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
+        renderLibraryQuickLookPages(state.libraryQuickLookPageCount);
       } catch (error) {
         state.libraryQuickLookPageCount = 0;
         renderLibraryQuickLookThumbs(0);
+        renderLibraryQuickLookPages(0);
       }
     }
 
@@ -4330,8 +4383,8 @@ INDEX_HTML = """<!doctype html>
       }
       const overlay = $("libraryQuickLook");
       const title = $("libraryQuickLookTitle");
-      const frame = $("libraryQuickLookFrame");
-      if (!overlay || !frame) return;
+      const pages = $("libraryQuickLookPages");
+      if (!overlay || !pages) return;
       const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
       const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath;
       state.libraryQuickLookOpen = true;
@@ -4341,6 +4394,7 @@ INDEX_HTML = """<!doctype html>
         state.libraryQuickLookPage = 1;
         state.libraryQuickLookPageCount = 0;
         renderLibraryQuickLookThumbs(0);
+        renderLibraryQuickLookPages(0);
         loadLibraryQuickLookInfo(paper.merged_pdf_path);
       }
       if (title) title.textContent = paper.citation_label || paper.title || "PDF Preview";
@@ -4350,10 +4404,6 @@ INDEX_HTML = """<!doctype html>
         applyLibraryQuickLookFrame(defaultLibraryQuickLookFrame());
       } else {
         applyLibraryQuickLookFrame();
-      }
-      const nextUrl = new URL(libraryQuickLookPageUrl(), window.location.href).href;
-      if (frame.src !== nextUrl) {
-        frame.src = libraryQuickLookPageUrl();
       }
       $("libraryShell")?.focus({preventScroll: true});
       if (status && !options.silent) {
