@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before shortcut-tab return/name-search fix: `515be08 Fix library shortcut drag and author highlighting`
+- Current Git HEAD before workspace space DOI/rename work: `be9a5f9 Fix library tab return and publication name search`
 
 ## Completed work
 
@@ -75,11 +75,11 @@
    - App text selection/copy-paste now works better via selectable UI text, JS Ctrl/Cmd copy fallback, and a native macOS Edit menu in the wrapper.
    - My Publications rows can be deleted, Details bolds the saved/input author name including initial variants, and Library has working drag-assigned folder shortcut tabs plus three reserved independent spaces.
    - Clicking `Library` from a shortcut tab returns to the real Library root; shortcut/space tabs have compact fixed widths, and `My name` Enter saves without auto-searching.
+   - Shortcut/Space tabs use more available width; green Spaces can be renamed and can add DOI-based literature pointers.
 
 ## Useful commits
 
-- `e726f19` Add publication delete and library shortcut tabs
-- `515be08` Fix library shortcut drag and author highlighting
+- `be9a5f9` Fix library tab return and publication name search
 
 ## Verification already done
 
