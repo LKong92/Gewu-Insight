@@ -44,11 +44,13 @@
                   styleMask:(NSWindowStyleMaskTitled |
                              NSWindowStyleMaskClosable |
                              NSWindowStyleMaskMiniaturizable |
-                             NSWindowStyleMaskResizable)
+                             NSWindowStyleMaskResizable |
+                             NSWindowStyleMaskFullSizeContentView)
                     backing:NSBackingStoreBuffered
                       defer:NO];
     self.window.title = @"";
     self.window.titleVisibility = NSWindowTitleHidden;
+    self.window.titlebarAppearsTransparent = YES;
     self.window.minSize = NSMakeSize(980, 680);
     NSScreen *screen = [NSScreen mainScreen];
     if (screen) {
@@ -58,6 +60,27 @@
     }
     self.window.contentView = self.webView;
     [self.window makeKeyAndOrderFront:nil];
+    [self positionTrafficLightButtons];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self positionTrafficLightButtons];
+    });
+}
+
+- (void)positionTrafficLightButtons {
+    CGFloat tabBarHeight = 38.0;
+    NSArray *windowButtons = @[
+        [self.window standardWindowButton:NSWindowCloseButton],
+        [self.window standardWindowButton:NSWindowMiniaturizeButton],
+        [self.window standardWindowButton:NSWindowZoomButton]
+    ];
+    for (NSButton *button in windowButtons) {
+        if (!button) continue;
+        NSView *container = button.superview;
+        NSRect frame = button.frame;
+        CGFloat containerHeight = container ? NSHeight(container.bounds) : tabBarHeight;
+        frame.origin.y = round(containerHeight - tabBarHeight + ((tabBarHeight - NSHeight(frame)) / 2.0));
+        button.frame = frame;
+    }
 }
 
 - (void)installMainMenu {

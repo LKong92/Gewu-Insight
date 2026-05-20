@@ -2881,6 +2881,17 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       position: relative;
     }
+    .app::before {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 38px;
+      background: #d9e8ff;
+      z-index: 60;
+      pointer-events: none;
+    }
     .app.sidebar-collapsed { --sidebar-width: 0px; grid-template-columns: 0 minmax(0, 1fr); }
     .app.sidebar-collapsed .sidebar { padding: 0; border-right: 0; overflow: hidden; }
     .app.library-mode { --sidebar-width: 0px; grid-template-columns: minmax(0, 1fr); }
@@ -3072,7 +3083,8 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
     }
     .journal-setting-name { font-size: 14px; min-width: 0; }
-    .main { padding: 24px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
+    .main { padding: 50px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
+    .app.library-mode .main { padding-top: 52px; }
     .internal-browser {
       position: fixed;
       inset: 0;
@@ -3333,54 +3345,77 @@ INDEX_HTML = """<!doctype html>
       flex-wrap: wrap;
     }
     .toolbar h2 { display: none; }
+    .app.library-mode .toolbar {
+      min-height: 0;
+      margin-bottom: 8px;
+    }
     .view-switcher {
-      display: grid;
-      grid-template-columns: 82px 128px;
-      align-items: baseline;
-      column-gap: 18px;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
       min-width: 0;
+      height: 32px;
       position: fixed;
-      top: 24px;
-      left: 30px;
-      z-index: 65;
+      top: 6px;
+      left: 86px;
+      z-index: 70;
     }
     .view-switcher.hidden { display: none; }
     .sidebar-view-switcher {
       display: none;
-      grid-template-columns: 82px 128px;
-      align-items: baseline;
-      column-gap: 18px;
+      align-items: flex-end;
+      gap: 2px;
       min-width: 0;
+      height: 32px;
       position: fixed;
-      top: 24px;
-      left: 30px;
-      z-index: 65;
+      top: 6px;
+      left: 86px;
+      z-index: 70;
     }
-    .sidebar-view-switcher.open { display: grid; }
+    .sidebar-view-switcher.open { display: flex; }
     .view-switch {
+      min-height: 32px;
       border: 0;
-      border-bottom: 2px solid transparent;
+      border-radius: 14px 14px 0 0;
       background: transparent;
-      color: var(--muted);
+      color: #475467;
       cursor: pointer;
-      font-size: 24px;
-      font-weight: 720;
+      font-size: 13px;
+      font-weight: 560;
       letter-spacing: 0;
-      line-height: 1.15;
-      padding: 0 0 4px;
-      text-align: left;
+      line-height: 1;
+      padding: 0 22px;
+      position: relative;
+      text-align: center;
       white-space: nowrap;
     }
-    .view-switch:hover { color: var(--ink); }
+    .view-switch:hover {
+      background: rgba(255, 255, 255, .38);
+      color: var(--ink);
+    }
     .view-switch.active {
       color: var(--ink);
-      border-bottom-color: var(--accent);
+      background: var(--paper);
+      box-shadow: none;
+      position: relative;
+      z-index: 1;
     }
-    #reportMode.view-switch,
-    #sideReportMode.view-switch {
-      font-size: 14px;
-      font-weight: 620;
-      padding-bottom: 3px;
+    .view-switch.active::before,
+    .view-switch.active::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      width: 14px;
+      height: 14px;
+      pointer-events: none;
+    }
+    .view-switch.active::before {
+      left: -14px;
+      background: radial-gradient(circle at 0 0, transparent 14px, var(--paper) 15px);
+    }
+    .view-switch.active::after {
+      right: -14px;
+      background: radial-gradient(circle at 100% 0, transparent 14px, var(--paper) 15px);
     }
     .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .toolbar-actions.hidden { display: none; }
@@ -3571,19 +3606,16 @@ INDEX_HTML = """<!doctype html>
     }
     .top-tools {
       position: fixed;
-      top: 24px;
+      top: 46px;
       right: 30px;
-      z-index: 65;
+      z-index: 70;
       display: flex;
       align-items: center;
-      gap: 8px;
-    }
-    .app.library-mode .top-tools {
-      right: 30px;
+      gap: 6px;
     }
     .top-tools.hidden { display: none; }
     .top-tools-label {
-      color: var(--muted);
+      color: #475467;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: .06em;
