@@ -2883,6 +2883,11 @@ INDEX_HTML = """<!doctype html>
     }
     .app.sidebar-collapsed { --sidebar-width: 0px; grid-template-columns: 0 minmax(0, 1fr); }
     .app.sidebar-collapsed .sidebar { padding: 0; border-right: 0; overflow: hidden; }
+    .app.library-mode { --sidebar-width: 0px; grid-template-columns: minmax(0, 1fr); }
+    .app.library-mode .sidebar,
+    .app.library-mode .sidebar-edge {
+      display: none;
+    }
     .sidebar {
       border-right: 1px solid var(--line);
       background: #fff;
@@ -3276,6 +3281,9 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-rows: auto auto auto auto minmax(0, 1fr);
     }
+    .app.library-mode .report-column {
+      padding-right: 0;
+    }
     .workspace.report-collapsed .report-column { display: none; }
     .workspace-toggle, .workspace-resizer { display: none; }
     .workspace.note-open .workspace-toggle {
@@ -3569,6 +3577,9 @@ INDEX_HTML = """<!doctype html>
       display: flex;
       align-items: center;
       gap: 8px;
+    }
+    .app.library-mode .top-tools {
+      right: 30px;
     }
     .top-tools.hidden { display: none; }
     .top-tools-label {
@@ -4193,6 +4204,15 @@ INDEX_HTML = """<!doctype html>
       object-fit: cover;
       display: block;
     }
+    .paper-figure-placeholder {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      background: #f8fafc;
+    }
     .paper-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
     .paper-head > div:first-child { min-width: 0; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
@@ -4716,7 +4736,8 @@ INDEX_HTML = """<!doctype html>
       await loadJournalSettings();
     }
 
-    async function loadReport() {
+    async function loadReport(options = {}) {
+      const showLoading = options.showLoading !== false;
       const selectedDate = state.selectedDate;
       const sequence = ++state.reportSequence;
       const cached = state.reportCache[selectedDate];
@@ -4724,7 +4745,7 @@ INDEX_HTML = """<!doctype html>
         setPendingFetchDate(selectedDate, reportStillFetching(cached));
         updateCalendarCountFromReport(selectedDate, cached);
         applyReportData(selectedDate, cached, sequence);
-      } else {
+      } else if (showLoading) {
         showReportLoading(selectedDate);
       }
       try {
@@ -4738,6 +4759,7 @@ INDEX_HTML = """<!doctype html>
         }
       } catch (error) {
         if (selectedDate !== state.selectedDate || sequence !== state.reportSequence) return;
+        if (state.mode !== "library") setPrimaryView("report");
         $("summary").textContent = "Local data is busy";
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       }
@@ -8133,8 +8155,8 @@ INDEX_HTML = """<!doctype html>
 
     function renderPaper(paper) {
       const article = document.createElement("article");
-      const showFigure = state.showFigures && paper.image_url;
-      article.className = `paper${showFigure ? " with-figure" : ""}`;
+      const reserveFigure = state.showFigures && (paper.image_url || (paper.paper_id && !state.figureFailures.has(paper.paper_id)));
+      article.className = `paper${reserveFigure ? " with-figure" : ""}`;
       article.dataset.paperId = paper.paper_id;
       const authorText = authorLine(paper);
       const identifierText = paper.doi || paper.preprint_id || "no DOI";
@@ -8144,7 +8166,7 @@ INDEX_HTML = """<!doctype html>
         .join("");
       article.innerHTML = `
         <div class="paper-layout">
-          ${showFigure ? `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>` : ""}
+          ${reserveFigure ? reportFigureMarkup(paper) : ""}
           <div class="paper-main">
             <div class="paper-head">
               <div>
@@ -8198,13 +8220,48 @@ INDEX_HTML = """<!doctype html>
       const figureImage = article.querySelector(".paper-figure img");
       if (figureImage) {
         figureImage.addEventListener("error", () => {
+          state.figureFailures.add(paper.paper_id);
           article.classList.remove("with-figure");
           article.querySelector(".paper-figure")?.remove();
         }, {once: true});
-      } else if (state.showFigures && paper.paper_id && !state.figureFailures.has(paper.paper_id)) {
+      } else if (reserveFigure && !paper.image_url) {
         queuePaperFigureHydration(paper.paper_id);
       }
       return article;
+    }
+
+    function reportFigureMarkup(paper) {
+      if (paper.image_url) {
+        return `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>`;
+      }
+      return `<figure class="paper-figure"><div class="paper-figure-placeholder"></div></figure>`;
+    }
+
+    function updateReportFigure(paper) {
+      if (!state.showFigures || !paper?.paper_id || !paper.image_url) return;
+      document.querySelectorAll(`.paper[data-paper-id="${CSS.escape(String(paper.paper_id))}"]`).forEach((article) => {
+        article.classList.add("with-figure");
+        const figure = article.querySelector(".paper-figure");
+        const markup = `<img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy">`;
+        if (figure) {
+          figure.innerHTML = markup;
+        } else {
+          article.querySelector(".paper-layout")?.insertAdjacentHTML("afterbegin", `<figure class="paper-figure">${markup}</figure>`);
+        }
+        article.querySelector(".paper-figure img")?.addEventListener("error", () => {
+          state.figureFailures.add(paper.paper_id);
+          article.classList.remove("with-figure");
+          article.querySelector(".paper-figure")?.remove();
+        }, {once: true});
+      });
+    }
+
+    function removeReportFigure(paperId) {
+      if (!paperId) return;
+      document.querySelectorAll(`.paper[data-paper-id="${CSS.escape(String(paperId))}"]`).forEach((article) => {
+        article.classList.remove("with-figure");
+        article.querySelector(".paper-figure")?.remove();
+      });
     }
 
     function queuePaperFigureHydration(paperId) {
@@ -8231,13 +8288,15 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok || !data.paper?.image_url) {
           state.figureFailures.add(paperId);
+          removeReportFigure(paperId);
           return;
         }
         updatePaperState(paperId, data.paper);
         if (state.mode === "library") renderActiveLibraryTab();
-        else renderReport();
+        else updateReportFigure(data.paper);
       } catch (error) {
         state.figureFailures.add(paperId);
+        removeReportFigure(paperId);
       } finally {
         delete state.figureRequests[paperId];
         state.activeFigureHydrations = Math.max(0, state.activeFigureHydrations - 1);
@@ -8743,13 +8802,14 @@ INDEX_HTML = """<!doctype html>
       await loadReport();
     });
     async function openJournalMonitor() {
-      setSidebarCollapsed(false);
       state.mode = "report";
-      setPrimaryView("report");
-      await loadReport();
+      await loadMonth();
+      setSidebarCollapsed(false);
+      await loadReport({showLoading: false});
     }
 
     function setPrimaryView(view) {
+      document.querySelector(".app")?.classList.toggle("library-mode", view === "library");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("reportMode")?.classList.toggle("active", view === "report");
       $("sideLibraryMode")?.classList.toggle("active", view === "library");
@@ -8867,7 +8927,7 @@ INDEX_HTML = """<!doctype html>
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     });
 
-    Promise.resolve().then(loadMonth).then(loadLibrary).catch((error) => {
+    Promise.resolve().then(loadLibrary).catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     });
     updateSidebarToggle();
