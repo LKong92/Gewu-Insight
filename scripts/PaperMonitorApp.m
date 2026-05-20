@@ -47,7 +47,7 @@
                              NSWindowStyleMaskResizable)
                     backing:NSBackingStoreBuffered
                       defer:NO];
-    self.window.title = @"Paper Monitor";
+    self.window.title = @"Journal Monitor";
     self.window.minSize = NSMakeSize(980, 680);
     NSScreen *screen = [NSScreen mainScreen];
     if (screen) {
@@ -64,8 +64,8 @@
 
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Paper Monitor"];
-    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Paper Monitor"];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Journal Monitor"];
+    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Journal Monitor"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
 
@@ -90,7 +90,7 @@
         "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
         ".card{padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><strong>Starting Paper Monitor…</strong>Preparing the local reading workspace.</div></body></html>";
+        "</style></head><body><div class='card'><strong>Starting Journal Monitor…</strong>Preparing the local reading workspace.</div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -161,7 +161,7 @@
     [[[NSURLSession sharedSession] dataTaskWithRequest:request
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSString *body = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-        BOOL available = (error == nil && [body containsString:@"Paper Monitor"]);
+        BOOL available = (error == nil && [body containsString:@"Journal Monitor"]);
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(available);
         });
@@ -176,7 +176,7 @@
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
     NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Paper Monitor could not start";
+    alert.messageText = @"Journal Monitor could not start";
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];

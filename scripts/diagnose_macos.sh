@@ -7,7 +7,7 @@ PORT="${PAPER_MONITOR_PORT:-8765}"
 HOST="${PAPER_MONITOR_HOST:-127.0.0.1}"
 URL="http://$HOST:$PORT"
 
-echo "Paper Monitor diagnostics"
+echo "Journal Monitor diagnostics"
 echo "Project: $PROJECT_DIR"
 echo "URL: $URL"
 echo ""
@@ -25,7 +25,7 @@ check() {
   fi
 }
 
-check "Paper Monitor.app exists" test -d "$PROJECT_DIR/Paper Monitor.app"
+check "Journal Monitor app exists" test -d "$PROJECT_DIR/Paper Monitor.app"
 check "bootstrap script exists" test -f "$PROJECT_DIR/scripts/bootstrap_macos.sh"
 check "requirements.txt exists" test -f "$PROJECT_DIR/requirements.txt"
 check "python3 is available" /usr/bin/env python3 --version

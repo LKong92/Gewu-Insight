@@ -103,7 +103,7 @@ def run_ui_server(
 
     server = ThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{server.server_port}"
-    print(f"Paper Monitor UI: {url}")
+    print(f"Journal Monitor UI: {url}")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     server.serve_forever()
@@ -635,7 +635,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             script = (
                 'POSIX path of (choose folder with prompt '
-                '"Choose a folder to import into Paper Monitor. The source folder will be read only.")'
+                '"Choose a folder to import into Journal Monitor. The source folder will be read only.")'
             )
             result = subprocess.run(
                 ["osascript", "-e", script],
@@ -2867,7 +2867,7 @@ INDEX_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Paper Monitor</title>
+  <title>Journal Monitor</title>
   <style>
     :root {
       --ink: #18212f;
@@ -3048,7 +3048,23 @@ INDEX_HTML = """<!doctype html>
       padding: 8px 10px;
       background: #fff;
     }
+    .preprint-filter-row { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 6px; align-items: stretch; }
+    .preprint-filter-row .journal-toggle { min-width: 0; }
+    .preprint-collapse-toggle {
+      display: grid;
+      place-items: center;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .preprint-collapse-toggle:hover { color: var(--ink); border-color: rgba(15, 107, 110, 0.34); }
     .preprint-category-list { display: flex; flex-direction: column; gap: 6px; padding-left: 14px; }
+    .preprint-category-list[hidden] { display: none; }
     .preprint-category-toggle { padding: 7px 8px; }
     .journal-toggle input, .preprint-category-toggle input { width: 16px; height: 16px; }
     .journal-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
@@ -4270,7 +4286,7 @@ INDEX_HTML = """<!doctype html>
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <h1>Paper Monitor</h1>
+        <h1>Journal Monitor</h1>
         <div class="today" id="todayLabel"></div>
       </div>
       <div class="monthbar">
@@ -4413,6 +4429,7 @@ INDEX_HTML = """<!doctype html>
       journalHistory: [],
       selectedJournals: new Set(),
       selectedPreprintCategories: new Set(DEFAULT_ARXIV_CATEGORIES),
+      preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
       papers: [],
@@ -4648,11 +4665,22 @@ INDEX_HTML = """<!doctype html>
       state.papers = data.papers || [];
       renderSubjectFilters();
       renderFilters();
-      if (state.mode === "library") loadLibrary();
-      else renderReport();
+      if (state.mode === "library") {
+        loadLibrary();
+        return;
+      }
+      renderReport();
       if ((data.missingJournals || []).length && !state.papers.length) {
         $("papers").innerHTML = `<div class="empty">Fetching papers for this date in the background. You can keep browsing other dates.</div>`;
       }
+    }
+
+    function reportIsActiveForDate(selectedDate) {
+      return state.mode !== "library" && selectedDate === state.selectedDate;
+    }
+
+    function renderReportIfActive(selectedDate) {
+      if (reportIsActiveForDate(selectedDate)) renderReport();
     }
 
     async function refreshMissingDateInBackground(selectedDate) {
@@ -4662,7 +4690,7 @@ INDEX_HTML = """<!doctype html>
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
       startProgressPolling(selectedDate);
       renderCalendar();
-      if (selectedDate === state.selectedDate) renderReport();
+      renderReportIfActive(selectedDate);
       try {
         const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
         updateCalendarCountFromReport(selectedDate, data);
@@ -4698,7 +4726,7 @@ INDEX_HTML = """<!doctype html>
           applyReportData(selectedDate, data, sequence);
         }
       } catch (error) {
-        if (selectedDate === state.selectedDate) {
+        if (reportIsActiveForDate(selectedDate)) {
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         }
       } finally {
@@ -4709,7 +4737,7 @@ INDEX_HTML = """<!doctype html>
           await startProgressPolling(selectedDate);
           watchFetchCompletion(selectedDate);
           renderCalendar();
-          if (selectedDate === state.selectedDate) renderReport();
+          renderReportIfActive(selectedDate);
           return;
         }
         finishFetchUi(selectedDate);
@@ -4749,7 +4777,7 @@ INDEX_HTML = """<!doctype html>
       state.fetchingDates.delete(selectedDate);
       stopProgressPolling(selectedDate);
       renderCalendar();
-      if (selectedDate === state.selectedDate) renderReport();
+      renderReportIfActive(selectedDate);
     }
 
     function watchFetchCompletion(selectedDate) {
@@ -4789,7 +4817,7 @@ INDEX_HTML = """<!doctype html>
           currentJournal: (current.missingJournals || [])[0] || ""
         };
         await startProgressPolling(selectedDate);
-        if (selectedDate === state.selectedDate) renderReport();
+        renderReportIfActive(selectedDate);
         current = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
         updateCalendarCountFromReport(selectedDate, current);
         state.reportCache[selectedDate] = current;
@@ -4845,7 +4873,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (data.progress) {
           state.fetchProgress[selectedDate] = data.progress;
-          if (selectedDate === state.selectedDate && state.fetchingDates.has(selectedDate)) renderReport();
+          if (state.fetchingDates.has(selectedDate)) renderReportIfActive(selectedDate);
         }
         return data.progress || null;
       } catch (error) {
@@ -5469,6 +5497,8 @@ INDEX_HTML = """<!doctype html>
       if (!root || !categoryRoot) return;
       const arxivPapers = state.papers.filter((paper) => isPreprintPaper(paper) && subjectMatches(paper));
       root.innerHTML = "";
+      const row = document.createElement("div");
+      row.className = "preprint-filter-row";
       const label = document.createElement("label");
       label.className = "journal-toggle";
       label.innerHTML = `<input type="checkbox" ${state.selectedJournals.has("arXiv") ? "checked" : ""}>
@@ -5480,13 +5510,28 @@ INDEX_HTML = """<!doctype html>
         renderFilters();
         renderReport();
       });
-      root.appendChild(label);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "preprint-collapse-toggle";
+      toggle.textContent = state.preprintFiltersExpanded ? "▲" : "▼";
+      toggle.title = state.preprintFiltersExpanded ? "Hide arXiv categories" : "Show arXiv categories";
+      toggle.setAttribute("aria-label", toggle.title);
+      toggle.setAttribute("aria-expanded", state.preprintFiltersExpanded ? "true" : "false");
+      toggle.addEventListener("click", () => {
+        state.preprintFiltersExpanded = !state.preprintFiltersExpanded;
+        renderPreprintFilters();
+      });
+      row.appendChild(label);
+      row.appendChild(toggle);
+      root.appendChild(row);
 
       const counts = {};
       arxivPapers.forEach((paper) => {
         paperPreprintCategories(paper).forEach((category) => counts[category] = (counts[category] || 0) + 1);
       });
       categoryRoot.innerHTML = "";
+      categoryRoot.hidden = !state.preprintFiltersExpanded;
+      categoryRoot.setAttribute("aria-hidden", state.preprintFiltersExpanded ? "false" : "true");
       ARXIV_CATEGORIES.forEach(([code, title]) => {
         const categoryLabel = document.createElement("label");
         categoryLabel.className = "preprint-category-toggle";
@@ -5959,10 +6004,10 @@ INDEX_HTML = """<!doctype html>
       const selected = missing[selectedIndex] || null;
       return `
         <h3>Result Guide</h3>
-        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Paper Monitor.</span></div>
+        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Journal Monitor.</span></div>
         <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known papers matched and refreshed instead of duplicated.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
-        <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Paper Monitor storage, so repeated imports do not copy them again.</span></div>
+        <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Journal Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
         <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
         <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>
@@ -8211,7 +8256,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
-              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page inside Paper Monitor">↗ Open</button>` : ""}
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page inside Journal Monitor">↗ Open</button>` : ""}
               <button class="action" data-action="add-library" title="Add a shortcut to Library">Add to Library</button>
               <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
               <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>

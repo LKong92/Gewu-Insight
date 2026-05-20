@@ -26,7 +26,7 @@ esac
 if [ ! -x "$PYTHON_BIN" ]; then
   SYSTEM_PYTHON="$(/usr/bin/env which python3 || true)"
   if [ -z "$SYSTEM_PYTHON" ]; then
-    echo "python3 was not found. Install Python 3 from https://www.python.org/downloads/macos/ or Homebrew, then open Paper Monitor again." >&2
+    echo "python3 was not found. Install Python 3 from https://www.python.org/downloads/macos/ or Homebrew, then open Journal Monitor again." >&2
     exit 1
   fi
   "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
@@ -37,13 +37,13 @@ if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
 fi
 
 if [ ! -f "$REQ_STAMP" ] || [ "$REQ_FILE" -nt "$REQ_STAMP" ]; then
-  echo "Installing Paper Monitor dependencies..."
+  echo "Installing Journal Monitor dependencies..."
   "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
   touch "$REQ_STAMP"
 fi
 
-if ! /usr/bin/curl -fsS "$URL" 2>/dev/null | /usr/bin/grep -q "Paper Monitor"; then
-  echo "Starting Paper Monitor UI at $URL"
+if ! /usr/bin/curl -fsS "$URL" 2>/dev/null | /usr/bin/grep -q "Journal Monitor"; then
+  echo "Starting Journal Monitor UI at $URL"
   exec "$PYTHON_BIN" -m paper_monitor ui --host "$HOST" --port "$PORT" --open
 fi
 
