@@ -6,7 +6,7 @@
 - App launcher: `Paper Monitor.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current Git HEAD before inventory-import work: `66c7a84 Build app for macOS 14 compatibility`
+- Current `main` includes the loader-based folder import workflow and the macOS app local-networking launcher fix.
 
 ## Completed work
 
@@ -80,6 +80,7 @@
    - Space rename/DOI inputs keep focus instead of being stolen by the library keyboard shell.
    - Green Spaces are independent Library-style filesystem roots; DOI adds papers into the active Space root as normal shortcuts.
    - Inventory importer has CLI/API/tests for `library_inventory.json`; UI can now import a user-selected folder via dry-run/import, preserving folder paths and filename shortcut labels.
+   - Native `.app` is allowed to load the local HTTP UI at `127.0.0.1` via App Transport Security local-networking permission.
 
 ## Verification already done
 

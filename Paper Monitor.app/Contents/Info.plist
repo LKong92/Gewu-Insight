@@ -22,5 +22,10 @@
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>10.15</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
 </dict>
 </plist>
