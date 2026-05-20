@@ -9,7 +9,7 @@ possible, queues Codex reading-analysis jobs, and serves a browser UI.
 Double-click:
 
 ```text
-Paper Monitor.app
+Daico.app
 ```
 
 On first launch the app will:
@@ -214,7 +214,7 @@ way for non-developer users to start the app. It opens a native app window and k
 the Paper Monitor icon in the Dock while the app is running:
 
 ```text
-Paper Monitor.app
+Daico.app
 ```
 
 ## Sharing This Project

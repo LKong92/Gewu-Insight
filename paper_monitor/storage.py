@@ -776,32 +776,6 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def list_all_literatures(self) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            """
-            WITH candidates AS (
-              SELECT paper_id, MIN(created_at) AS added_at
-              FROM library_items
-              WHERE trashed_at IS NULL
-              GROUP BY paper_id
-              UNION ALL
-              SELECT paper_id, MIN(created_at) AS added_at
-              FROM my_publications
-              GROUP BY paper_id
-            ),
-            dedup AS (
-              SELECT paper_id, MIN(added_at) AS added_at
-              FROM candidates
-              GROUP BY paper_id
-            )
-            SELECT dedup.added_at AS all_added_at, papers.*
-            FROM dedup
-            JOIN papers ON papers.paper_id = dedup.paper_id
-            ORDER BY dedup.added_at ASC, papers.title ASC
-            """
-        ).fetchall()
-        return [dict(row) for row in rows]
-
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
         row = self.conn.execute(
             """

@@ -47,7 +47,8 @@
                              NSWindowStyleMaskResizable)
                     backing:NSBackingStoreBuffered
                       defer:NO];
-    self.window.title = @"Journal Monitor";
+    self.window.title = @"";
+    self.window.titleVisibility = NSWindowTitleHidden;
     self.window.minSize = NSMakeSize(980, 680);
     NSScreen *screen = [NSScreen mainScreen];
     if (screen) {
@@ -64,8 +65,8 @@
 
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Journal Monitor"];
-    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Journal Monitor"];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Daico"];
+    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Daico"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
 
@@ -90,7 +91,7 @@
         "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
         ".card{padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><strong>Starting Journal Monitor…</strong>Preparing the local reading workspace.</div></body></html>";
+        "</style></head><body><div class='card'><strong>Starting Daico...</strong>Preparing the local reading workspace.</div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -176,7 +177,7 @@
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
     NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Journal Monitor could not start";
+    alert.messageText = @"Daico could not start";
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];

@@ -18,7 +18,7 @@ copy_item() {
   fi
 }
 
-copy_item "Paper Monitor.app"
+copy_item "Daico.app"
 copy_item "AGENTS.md"
 copy_item "README.md"
 copy_item "DISTRIBUTION.md"
@@ -34,7 +34,7 @@ find "$BUILD_DIR" -name ".DS_Store" -delete
 find "$BUILD_DIR" -name "__pycache__" -type d -prune -exec rm -rf {} +
 find "$BUILD_DIR" -name "*.pyc" -delete
 xattr -cr "$BUILD_DIR" 2>/dev/null || true
-/bin/chmod +x "$BUILD_DIR/Paper Monitor.app/Contents/MacOS/Paper Monitor" 2>/dev/null || true
+/bin/chmod +x "$BUILD_DIR/Daico.app/Contents/MacOS/Paper Monitor" 2>/dev/null || true
 /bin/chmod +x "$BUILD_DIR/scripts/"*.sh 2>/dev/null || true
 
 rm -f "$ZIP_PATH"

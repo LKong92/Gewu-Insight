@@ -12,7 +12,7 @@ scripts/make_release.sh
 
 It creates a zip under `dist/` containing:
 
-- `Paper Monitor.app`
+- `Daico.app`
 - source code under `paper_monitor/`
 - `config/`
 - `requirements.txt`
@@ -26,7 +26,7 @@ analysis jobs, logs, virtual environments, or presentation/output artifacts.
 ## Recipient Requirements
 
 The recipient needs macOS and a working `python3` command. On first launch,
-`Paper Monitor.app` creates `.venv`, installs `requirements.txt`, starts the
+`Daico.app` creates `.venv`, installs `requirements.txt`, starts the
 local UI, and opens `http://127.0.0.1:8765`.
 
 If the first launch fails, check:
@@ -82,6 +82,6 @@ export PAPER_MONITOR_SKILL_PATH=/path/to/SKILL.md
 
 ## GitHub
 
-For GitHub, commit source files, `Paper Monitor.app`, `config/`, scripts,
+For GitHub, commit source files, `Daico.app`, `config/`, scripts,
 `README.md`, and `DISTRIBUTION.md`. Keep local data out of git using
 `.gitignore`.

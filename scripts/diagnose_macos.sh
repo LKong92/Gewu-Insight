@@ -25,7 +25,7 @@ check() {
   fi
 }
 
-check "Journal Monitor app exists" test -d "$PROJECT_DIR/Paper Monitor.app"
+check "Daico app exists" test -d "$PROJECT_DIR/Daico.app"
 check "bootstrap script exists" test -f "$PROJECT_DIR/scripts/bootstrap_macos.sh"
 check "requirements.txt exists" test -f "$PROJECT_DIR/requirements.txt"
 check "python3 is available" /usr/bin/env python3 --version

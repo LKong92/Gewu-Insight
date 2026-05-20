@@ -3,7 +3,7 @@
 ## Current handoff
 
 - Repo: `/Users/lingyuan/PaperMonitor-20260516`
-- App launcher: `Paper Monitor.app`
+- App launcher: `Daico.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
 - Current `main` includes the loader-based folder import workflow and the macOS app local-networking launcher fix.
@@ -71,7 +71,7 @@
    - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/path/Quick Look controls are closer to Finder.
    - Library top controls now use `Library` and `My Publications` tabs; `My Publications` stores user publications, star/highlight state, and saved author name in SQLite while reusing the shared paper metadata/PDF details pane.
    - Library/My Publications details now include abstracts and first-figure previews; My Publications uses internal Crossref author/title/DOI lookup, with a horizontally scrollable/resizable publication table.
-   - Library now has a third `All Literatures` tab that derives one unified shortcut list from Library shortcuts and My Publications without duplicating PDFs; My Publications ID cells use italic journal and bold volume formatting.
+   - The former `All Literatures` Library tab and its API were removed; My Publications ID cells use italic journal and bold volume formatting.
    - App text selection/copy-paste now works better via selectable UI text, JS Ctrl/Cmd copy fallback, and a native macOS Edit menu in the wrapper.
    - My Publications rows can be deleted, Details bolds the saved/input author name including initial variants, and Library has working drag-assigned folder shortcut tabs plus three reserved independent spaces.
    - Clicking `Library` from a shortcut tab returns to the real Library root; shortcut/space tabs have compact fixed widths, and `My name` Enter saves without auto-searching.
