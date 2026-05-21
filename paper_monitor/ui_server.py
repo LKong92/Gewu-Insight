@@ -2558,18 +2558,21 @@ def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tupl
         page_pdf.write_bytes(data)
         try:
             subprocess.run(
-                ["qlmanage", "-t", "-s", str(size), "-o", str(PDF_THUMB_CACHE_DIR), str(page_pdf)],
+                ["sips", "-s", "format", "png", "-Z", str(size), str(page_pdf), "--out", str(thumb_path)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=20,
             )
-            generated = PDF_THUMB_CACHE_DIR / f"{page_pdf.name}.png"
-            if generated.exists():
-                generated.replace(thumb_path)
+            if thumb_path.exists():
                 return thumb_path.read_bytes(), "image/png"
         except Exception:
             pass
+        finally:
+            try:
+                page_pdf.unlink()
+            except OSError:
+                pass
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="156" viewBox="0 0 120 156">'
         '<rect x="10" y="8" width="100" height="140" rx="7" fill="#fff" stroke="#d0d5dd"/>'
@@ -3185,6 +3188,9 @@ INDEX_HTML = """<!doctype html>
     .library-page-thumb:hover { background: #eef2f7; }
     .library-page-thumb.active { border-color: var(--accent); background: #e8f3f4; color: var(--ink); }
     .library-page-thumb-preview {
+      display: block;
+      width: 100%;
+      aspect-ratio: 0.76;
       position: relative;
       overflow: hidden;
       border: 1px solid #d0d5dd;
@@ -3199,24 +3205,45 @@ INDEX_HTML = """<!doctype html>
       object-fit: cover;
       object-position: top center;
       background: #fff;
+      pointer-events: none;
     }
     .library-page-thumb-placeholder {
+      width: 100%;
+      height: 100%;
       display: grid;
-      place-items: center;
+      align-content: start;
+      gap: 5px;
+      padding: 13px 10px;
       color: #98a2b3;
       font-size: 10px;
-      background: linear-gradient(180deg, #fff 0%, #fff 72%, #f3f4f6 72%, #f3f4f6 100%);
+      background: linear-gradient(180deg, #fff 0%, #fff 76%, #f3f4f6 76%, #f3f4f6 100%);
+    }
+    .library-page-thumb-placeholder::before,
+    .library-page-thumb-placeholder::after {
+      content: "";
+      height: 4px;
+      border-radius: 999px;
+      background: #e5e7eb;
+    }
+    .library-page-thumb-placeholder::after {
+      width: 72%;
     }
     .library-quicklook-pages {
       min-width: 0;
       min-height: 0;
       overflow: auto;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 18px;
+      display: grid;
       padding: 18px;
       background: #68717c;
+    }
+    .library-pdf-frame {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      border: 0;
+      border-radius: 4px;
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.25);
     }
     .library-quicklook-placeholder {
       min-height: 100%;
@@ -3241,22 +3268,6 @@ INDEX_HTML = """<!doctype html>
     }
     .library-quicklook-placeholder-icon { font-size: 42px; line-height: 1; }
     .library-quicklook-placeholder-title { max-width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-    .library-preview-page {
-      width: min(100%, 980px);
-      display: grid;
-      justify-items: center;
-      gap: 6px;
-      color: #eef2f7;
-      font-size: 12px;
-    }
-    .library-preview-page img {
-      width: 100%;
-      height: auto;
-      display: block;
-      border-radius: 2px;
-      background: #fff;
-      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.25);
-    }
     .library-quicklook-resize {
       position: absolute;
       right: 0;
@@ -3524,6 +3535,72 @@ INDEX_HTML = """<!doctype html>
       border-radius: 7px;
       padding: 0 10px;
       background: #fff;
+    }
+    .library-search-tools {
+      margin-left: auto;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      min-width: min(360px, 100%);
+    }
+    .library-search-tools.open { display: flex; }
+    .library-search-wrap {
+      position: relative;
+      flex: 1 1 220px;
+      min-width: 160px;
+    }
+    .library-search-wrap::before {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      width: 11px;
+      height: 11px;
+      border: 1.6px solid #667085;
+      border-radius: 999px;
+      transform: translateY(-58%);
+      pointer-events: none;
+    }
+    .library-search-wrap::after {
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: 22px;
+      width: 7px;
+      height: 1.6px;
+      border-radius: 999px;
+      background: #667085;
+      transform: rotate(42deg);
+      transform-origin: left center;
+      pointer-events: none;
+    }
+    .library-search-wrap input {
+      width: 100%;
+      padding-left: 30px;
+      padding-right: 34px;
+    }
+    .library-search-clear {
+      position: absolute;
+      right: 5px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      min-height: 24px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #667085;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      display: none;
+    }
+    .library-search-clear.open { display: grid; place-items: center; }
+    .library-search-clear:hover { background: #eef2f7; color: var(--ink); }
+    .library-search-count {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
     }
     .library-tab {
       min-height: 34px;
@@ -3939,6 +4016,38 @@ INDEX_HTML = """<!doctype html>
       overflow-x: auto;
       overflow-y: hidden;
     }
+    .library-search-results {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      max-height: 100%;
+      align-self: stretch;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .library-search-results-body {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 8px;
+    }
+    .library-search-path {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-search-results .library-row { height: 50px; }
+    .library-search-results .library-name {
+      display: grid;
+      gap: 2px;
+      line-height: 1.2;
+    }
     .library-column {
       flex: 0 0 var(--library-column-width, 260px);
       min-width: 180px;
@@ -4014,7 +4123,7 @@ INDEX_HTML = """<!doctype html>
       background: transparent;
       color: var(--ink);
       display: grid;
-      grid-template-columns: 20px minmax(0, 1fr) auto;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
       padding: 5px 8px;
@@ -4023,12 +4132,67 @@ INDEX_HTML = """<!doctype html>
       font-size: 13px;
     }
     .library-row:hover { background: #f8fafc; }
+    .library-row.range-selected { background: #edf5ff; border-color: #cadcf5; }
     .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
     .library-row.path-parent { background: #f3f4f6; border-color: #e5e7eb; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-row.special-folder { color: #667085; }
+    .library-entry-icon {
+      width: 20px;
+      height: 18px;
+      position: relative;
+      display: inline-block;
+      justify-self: center;
+      flex: 0 0 auto;
+    }
+    .library-entry-icon.folder::before {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: 6px;
+      width: 18px;
+      height: 11px;
+      border-radius: 3px 3px 2px 2px;
+      background: linear-gradient(180deg, #62b4f9 0%, #2384dc 100%);
+      box-shadow: inset 0 0 0 1px rgba(20, 89, 150, 0.24);
+    }
+    .library-entry-icon.folder::after {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 3px;
+      width: 9px;
+      height: 5px;
+      border-radius: 3px 3px 0 0;
+      background: #78c3ff;
+      box-shadow: inset 0 0 0 1px rgba(20, 89, 150, 0.16);
+    }
+    .library-entry-icon.document::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 12px;
+      height: 16px;
+      border: 1px solid #aeb8c6;
+      border-radius: 2px;
+      background: linear-gradient(180deg, #ffffff 0%, #eef3f8 100%);
+      box-shadow: 0 1px 1px rgba(15, 23, 42, 0.08);
+    }
+    .library-entry-icon.document::after {
+      content: "";
+      position: absolute;
+      right: 4px;
+      top: 1px;
+      width: 5px;
+      height: 5px;
+      border-left: 1px solid #aeb8c6;
+      border-bottom: 1px solid #aeb8c6;
+      background: #dfe7f0;
+      clip-path: polygon(0 0, 100% 100%, 0 100%);
+    }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-rename-input {
@@ -4488,6 +4652,13 @@ INDEX_HTML = """<!doctype html>
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
             <span id="libraryShortcutTabs"></span>
+            <div class="library-search-tools" id="librarySearchTools">
+              <div class="library-search-wrap">
+                <input class="search" id="librarySearchBox" placeholder="Search Library" type="search">
+                <button class="library-search-clear" id="clearLibrarySearch" type="button" title="Clear search">×</button>
+              </div>
+              <span class="library-search-count" id="librarySearchCount"></span>
+            </div>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
@@ -4604,6 +4775,9 @@ INDEX_HTML = """<!doctype html>
       libraryActiveFolderId: 1,
       librarySelection: {type: "folder", id: 1},
       libraryColumnSelections: {},
+      libraryRangeAnchor: null,
+      libraryRangeFolderId: 0,
+      libraryRangeSelectionKeys: new Set(),
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
       libraryColumnWidths: {},
@@ -5039,6 +5213,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryActiveFolderId = Number(state.libraryRootId || 1);
       state.libraryCurrentFolderId = Number(state.libraryRootId || 1);
       state.librarySelection = {type: "folder", id: Number(state.libraryRootId || 1)};
+      clearLibraryRangeSelection();
       ensureLibraryColumnSelection(state.libraryRootId);
       setSidebarCollapsed(true);
       renderLibrary();
@@ -5125,6 +5300,7 @@ INDEX_HTML = """<!doctype html>
         }
       });
       if (state.libraryClipboard && !librarySelectionExists(state.libraryClipboard)) state.libraryClipboard = null;
+      pruneLibraryRangeSelection();
       ensureLibraryColumnSelection(displayRootId);
     }
 
@@ -5184,17 +5360,21 @@ INDEX_HTML = """<!doctype html>
         .sort((a, b) => compareLibraryOrder(a, b, "name"));
     }
 
-    function libraryFolderItems(folderId) {
-      const query = state.query.trim().toLowerCase();
+    function libraryFolderItemsRaw(folderId) {
       return state.libraryItems
         .filter((item) => Number(item.folder_id) === Number(folderId))
+        .sort((a, b) => compareLibraryOrder(a, b, "display_name"));
+    }
+
+    function libraryFolderItems(folderId) {
+      const query = state.query.trim().toLowerCase();
+      return libraryFolderItemsRaw(folderId)
         .filter((item) => {
           if (!query) return true;
           const paper = item.paper || {};
           const haystack = `${item.display_name || ""} ${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
           return haystack.includes(query);
-        })
-        .sort((a, b) => compareLibraryOrder(a, b, "display_name"));
+        });
     }
 
     function compareLibraryOrder(a, b, fallbackKey) {
@@ -5228,12 +5408,142 @@ INDEX_HTML = """<!doctype html>
       return folders.concat(items);
     }
 
+    function librarySearchIsActive() {
+      return Boolean(state.query.trim()) && !["loader", "my-publications"].includes(state.libraryTab || "");
+    }
+
+    function libraryItemSearchHaystack(item) {
+      const paper = item.paper || {};
+      return [
+        item.display_name,
+        paper.citation_label,
+        paper.title,
+        paper.abstract,
+        paper.doi,
+        paper.preprint_id,
+        paper.journal,
+        paper.publication_date,
+        ...(Array.isArray(paper.authors) ? paper.authors : []),
+        ...(Array.isArray(paper.full_authors) ? paper.full_authors : [])
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function libraryFolderPath(folderId) {
+      const displayRootId = libraryDisplayRootId();
+      const parts = [];
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        parts.push(current.name || "Folder");
+        if (Number(current.id) === Number(displayRootId) || current.parent_id === null) break;
+        current = libraryFolderById(current.parent_id);
+      }
+      return parts.reverse().join(" / ");
+    }
+
+    function libraryDescendantFolderIds(rootId) {
+      const ids = new Set([Number(rootId)]);
+      const queue = [Number(rootId)];
+      while (queue.length) {
+        const parentId = queue.shift();
+        libraryChildFolders(parentId).forEach((folder) => {
+          const folderId = Number(folder.id);
+          if (ids.has(folderId)) return;
+          ids.add(folderId);
+          queue.push(folderId);
+        });
+      }
+      return ids;
+    }
+
+    function librarySearchResults() {
+      const query = state.query.trim().toLowerCase();
+      if (!query) return [];
+      const displayRootId = libraryDisplayRootId();
+      const folderIds = libraryDescendantFolderIds(displayRootId);
+      const results = [];
+      state.libraryFolders
+        .filter((folder) => folderIds.has(Number(folder.id)) && Number(folder.id) !== Number(displayRootId))
+        .forEach((folder) => {
+          const path = libraryFolderPath(folder.id);
+          const haystack = `${folder.name || ""} ${path}`.toLowerCase();
+          if (haystack.includes(query)) {
+            results.push({
+              type: "folder",
+              id: Number(folder.id),
+              parentFolderId: Number(folder.parent_id || displayRootId),
+              path
+            });
+          }
+        });
+      state.libraryItems
+        .filter((item) => folderIds.has(Number(item.folder_id)))
+        .forEach((item) => {
+          const folderPath = libraryFolderPath(item.folder_id);
+          const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`.toLowerCase();
+          if (haystack.includes(query)) {
+            results.push({
+              type: "item",
+              id: Number(item.id),
+              parentFolderId: Number(item.folder_id || displayRootId),
+              path: folderPath
+            });
+          }
+        });
+      return results.sort((a, b) => {
+        const typeDelta = (a.type === "folder" ? 0 : 1) - (b.type === "folder" ? 0 : 1);
+        if (typeDelta) return typeDelta;
+        const left = a.type === "folder"
+          ? (libraryFolderById(a.id)?.name || "")
+          : (libraryItemById(a.id)?.display_name || libraryItemById(a.id)?.paper?.title || "");
+        const right = b.type === "folder"
+          ? (libraryFolderById(b.id)?.name || "")
+          : (libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "");
+        return String(left).localeCompare(String(right)) || Number(a.id) - Number(b.id);
+      });
+    }
+
     function libraryVisibleEntries() {
       return libraryEntriesForFolder(state.libraryActiveFolderId || libraryDisplayRootId());
     }
 
     function libraryEntryKey(entry) {
       return entry ? `${entry.type}:${Number(entry.id)}` : "";
+    }
+
+    function clearLibraryRangeSelection() {
+      state.libraryRangeAnchor = null;
+      state.libraryRangeFolderId = 0;
+      state.libraryRangeSelectionKeys = new Set();
+    }
+
+    function pruneLibraryRangeSelection() {
+      const folderId = Number(state.libraryRangeFolderId || 0);
+      if (!folderId || !libraryFolderById(folderId)) {
+        clearLibraryRangeSelection();
+        return;
+      }
+      const validKeys = new Set(libraryEntriesForFolder(folderId).map(libraryEntryKey));
+      state.libraryRangeSelectionKeys = new Set([...state.libraryRangeSelectionKeys].filter((key) => validKeys.has(key)));
+      if (state.libraryRangeAnchor && !validKeys.has(libraryEntryKey(state.libraryRangeAnchor))) {
+        state.libraryRangeAnchor = null;
+      }
+      if (state.libraryRangeSelectionKeys.size < 2) {
+        state.libraryRangeSelectionKeys = new Set();
+      }
+    }
+
+    function libraryEntryIsRangeSelected(folderId, entry) {
+      return state.libraryRangeSelectionKeys.size > 1
+        && Number(state.libraryRangeFolderId || 0) === Number(folderId)
+        && state.libraryRangeSelectionKeys.has(libraryEntryKey(entry));
+    }
+
+    function libraryRangeSelectionEntries() {
+      const folderId = Number(state.libraryRangeFolderId || 0);
+      if (!folderId || state.libraryRangeSelectionKeys.size < 2) return [];
+      return libraryEntriesForFolder(folderId).filter((entry) => state.libraryRangeSelectionKeys.has(libraryEntryKey(entry)));
     }
 
     function ensureLibraryColumnSelection(folderId) {
@@ -5245,18 +5555,55 @@ INDEX_HTML = """<!doctype html>
       return null;
     }
 
-    function setLibraryColumnSelection(folderId, entry) {
+    function setLibraryColumnSelection(folderId, entry, options = {}) {
       const parentId = Number(folderId || libraryDisplayRootId());
       const selection = {type: entry.type, id: Number(entry.id)};
       state.libraryColumnSelections[parentId] = selection;
       state.libraryActiveFolderId = parentId;
       state.librarySelection = selection;
+      if (options.rangeKeys) {
+        state.libraryRangeFolderId = parentId;
+        state.libraryRangeSelectionKeys = new Set(options.rangeKeys);
+        if (options.anchor) state.libraryRangeAnchor = options.anchor;
+      } else {
+        state.libraryRangeFolderId = parentId;
+        state.libraryRangeAnchor = selection;
+        state.libraryRangeSelectionKeys = new Set();
+      }
       if (selection.type === "folder") {
         state.libraryCurrentFolderId = selection.id;
       } else {
         const item = libraryItemById(selection.id);
         state.libraryCurrentFolderId = Number(item?.folder_id || parentId);
       }
+    }
+
+    function setLibraryRangeSelection(folderId, entry) {
+      const parentId = Number(folderId || libraryDisplayRootId());
+      const entries = libraryEntriesForFolder(parentId);
+      const target = {type: entry.type, id: Number(entry.id)};
+      const targetKey = libraryEntryKey(target);
+      const targetIndex = entries.findIndex((item) => libraryEntryKey(item) === targetKey);
+      if (targetIndex < 0) {
+        setLibraryColumnSelection(parentId, target);
+        return;
+      }
+      const existingAnchor = Number(state.libraryRangeFolderId || 0) === parentId
+        ? state.libraryRangeAnchor
+        : null;
+      const fallbackAnchor = selectedEntryInFolder(parentId) || target;
+      const anchor = existingAnchor && entries.some((item) => libraryEntryKey(item) === libraryEntryKey(existingAnchor))
+        ? existingAnchor
+        : fallbackAnchor;
+      const anchorIndex = entries.findIndex((item) => libraryEntryKey(item) === libraryEntryKey(anchor));
+      if (anchorIndex < 0) {
+        setLibraryColumnSelection(parentId, target);
+        return;
+      }
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      const keys = entries.slice(start, end + 1).map(libraryEntryKey);
+      setLibraryColumnSelection(parentId, target, {rangeKeys: keys, anchor});
     }
 
     function requestLibraryColumnReveal(folderId, direction = "nearest") {
@@ -5454,6 +5801,34 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not delete library entry");
       applyLibrarySnapshot(data);
       selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+      renderLibrary();
+    }
+
+    async function deleteSelectedLibraryEntries() {
+      const selectedEntries = libraryRangeSelectionEntries()
+        .filter((entry) => !(entry.type === "folder" && libraryFolderById(entry.id)?.protected));
+      if (selectedEntries.length <= 1) {
+        const selection = state.librarySelection;
+        if (selection?.type && selection.id) await deleteLibraryEntry(selection.type, Number(selection.id));
+        return;
+      }
+      const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
+      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+      for (const entry of selectedEntries.slice().reverse()) {
+        const stillExists = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+        if (!stillExists) continue;
+        const res = await fetch("/api/library/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type: entry.type, id: entry.id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        applyLibrarySnapshot(data);
+      }
+      clearLibraryRangeSelection();
+      const lastDeleted = selectedEntries[selectedEntries.length - 1];
+      selectLibraryDeletionFallback(parentId, lastDeleted, entriesBeforeDelete);
       renderLibrary();
     }
 
@@ -6194,7 +6569,9 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
           ${workspaceToolsMarkup()}
-          <div class="library-columns" id="libraryColumns"></div>
+          ${librarySearchIsActive()
+            ? `<div class="library-search-results" id="librarySearchResults"></div>`
+            : `<div class="library-columns" id="libraryColumns"></div>`}
           <aside class="library-pane">
             <div class="library-pane-header">Details</div>
             <div class="library-detail" id="libraryDetail"></div>
@@ -6212,7 +6589,8 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       resizeLibraryViewport();
-      renderLibraryColumns();
+      if (librarySearchIsActive()) renderLibrarySearchResults();
+      else renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryInteractions();
       wireWorkspaceTools();
@@ -6230,7 +6608,10 @@ INDEX_HTML = """<!doctype html>
           revealLibraryColumns(folderId, direction);
         }
       }
-      window.requestAnimationFrame(() => revealLibrarySelectionInColumn(state.libraryActiveFolderId));
+      window.requestAnimationFrame(() => {
+        if (librarySearchIsActive()) revealLibrarySearchSelection();
+        else revealLibrarySelectionInColumn(state.libraryActiveFolderId);
+      });
     }
 
     function libraryViewTitle() {
@@ -6424,6 +6805,21 @@ INDEX_HTML = """<!doctype html>
       const sortSelect = $("myPublicationSort");
       if (sortSelect) sortSelect.value = state.myPublicationSort || "time";
       updateToolbarLibraryImport();
+      updateLibrarySearchTools();
+    }
+
+    function updateLibrarySearchTools() {
+      const tools = $("librarySearchTools");
+      const input = $("librarySearchBox");
+      const clear = $("clearLibrarySearch");
+      const count = $("librarySearchCount");
+      if (!tools || !input || !clear || !count) return;
+      const open = state.mode === "library" && !["loader", "my-publications"].includes(state.libraryTab || "");
+      tools.classList.toggle("open", open);
+      if (document.activeElement !== input) input.value = state.query || "";
+      clear.classList.toggle("open", Boolean(state.query));
+      const results = open && state.query.trim() ? librarySearchResults().length : 0;
+      count.textContent = state.query.trim() ? `${results} match${results === 1 ? "" : "es"}` : "";
     }
 
     function renderLibraryShortcutTabs() {
@@ -6790,6 +7186,21 @@ INDEX_HTML = """<!doctype html>
       state.libraryColumnScrollTops[Number(folderId)] = body.scrollTop;
     }
 
+    function revealLibrarySearchSelection() {
+      const root = $("librarySearchResults");
+      const body = root?.querySelector(".library-search-results-body");
+      const row = root?.querySelector(".library-row.active");
+      if (!body || !row) return;
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const padding = 6;
+      if (rowRect.bottom > bodyRect.bottom - padding) {
+        body.scrollTop += rowRect.bottom - bodyRect.bottom + padding;
+      } else if (rowRect.top < bodyRect.top + padding) {
+        body.scrollTop -= bodyRect.top - rowRect.top + padding;
+      }
+    }
+
     function startLibraryColumnResize(event, folderId) {
       const column = event.currentTarget.closest(".library-column");
       if (!column || !folderId) return;
@@ -6858,14 +7269,62 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function renderLibrarySearchResults() {
+      const root = $("librarySearchResults");
+      if (!root) return;
+      const results = librarySearchResults();
+      const visibleResults = results.slice(0, 400);
+      const rows = visibleResults.map((result) => {
+        const entry = result.type === "folder" ? libraryFolderById(result.id) : libraryItemById(result.id);
+        return entry ? librarySearchResultRowMarkup(result.type, entry, result.parentFolderId, result.path) : "";
+      }).join("");
+      const trimmed = results.length > visibleResults.length
+        ? `<div class="empty">${results.length - visibleResults.length} more matches hidden. Refine the search.</div>`
+        : "";
+      root.innerHTML = `
+        <div class="library-pane-header">Search Results</div>
+        <div class="library-search-results-body">
+          ${rows || `<div class="empty">No Library matches for "${escapeHtml(state.query.trim())}".</div>`}
+          ${trimmed}
+        </div>
+      `;
+    }
+
+    function librarySearchResultRowMarkup(type, entry, parentFolderId, path) {
+      const id = Number(entry.id);
+      const selected = libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
+      const paper = entry.paper || {};
+      const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
+      const iconClass = type === "folder" ? "folder" : "document";
+      const meta = type === "folder" ? "Folder" : (paper.journal || "Paper");
+      return `
+        <button class="library-row${selected ? " active" : ""}"
+          type="button"
+          draggable="false"
+          data-library-type="${type}"
+          data-library-id="${id}"
+          data-library-parent-folder="${parentFolderId}"
+          ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
+          aria-selected="${selected ? "true" : "false"}">
+          <span class="library-entry-icon ${iconClass}" aria-hidden="true"></span>
+          <span class="library-name">
+            ${escapeHtml(name)}
+            <span class="library-search-path">${escapeHtml(path || "")}</span>
+          </span>
+          <span class="library-meta">${escapeHtml(meta)}</span>
+        </button>
+      `;
+    }
+
     function libraryRowMarkup(type, entry, parentFolderId, pathFolderIds = new Set()) {
       const id = Number(entry.id);
       const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
         && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
+      const rangeSelected = libraryEntryIsRangeSelected(parentFolderId, {type, id});
       const paper = entry.paper || {};
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
       const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
-      const icon = type === "folder" ? "›" : "○";
+      const iconClass = type === "folder" ? "folder" : "document";
       const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
       const isPathParent = type === "folder" && pathFolderIds.has(id) && !selected;
       const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
@@ -6880,13 +7339,14 @@ INDEX_HTML = """<!doctype html>
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
       return `
-        <${rowTag} class="library-row${selected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
+        <${rowTag} class="library-row${rangeSelected ? " range-selected" : ""}${selected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
           data-library-parent-folder="${parentFolderId}"
-          ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}>
-          <span>${icon}</span>
+          ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
+          aria-selected="${selected || rangeSelected ? "true" : "false"}">
+          <span class="library-entry-icon ${iconClass}" aria-hidden="true"></span>
           <span class="library-name" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
@@ -7449,7 +7909,7 @@ INDEX_HTML = """<!doctype html>
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          selectLibraryEntry(parentFolderId, type, id);
+          selectLibraryEntry(parentFolderId, type, id, {extendRange: event.shiftKey});
         });
         row.addEventListener("dblclick", () => {
           if (row.dataset.libraryType === "folder") focusLibraryFolder(Number(row.dataset.libraryId));
@@ -7528,6 +7988,7 @@ INDEX_HTML = """<!doctype html>
         column.addEventListener("click", (event) => {
           if (event.target.closest(".library-row")) return;
           state.libraryActiveFolderId = Number(column.dataset.libraryColumnFolder || state.libraryRootId);
+          clearLibraryRangeSelection();
           renderLibrary();
         });
       });
@@ -7581,17 +8042,20 @@ INDEX_HTML = """<!doctype html>
       row.classList.remove("drag-over", "drag-reorder-before", "drag-reorder-after");
     }
 
-    function selectLibraryEntry(parentFolderId, type, id) {
-      setLibraryColumnSelection(parentFolderId, {type, id: Number(id)});
+    function selectLibraryEntry(parentFolderId, type, id, options = {}) {
+      const entry = {type, id: Number(id)};
+      if (options.extendRange) setLibraryRangeSelection(parentFolderId, entry);
+      else setLibraryColumnSelection(parentFolderId, entry);
       renderLibrary();
       refreshLibraryQuickLookForSelection();
     }
 
     function focusLibraryFolder(folderId) {
       if (!libraryFolderById(folderId)) return;
+      const parentId = parentFolderId(folderId);
+      setLibraryColumnSelection(parentId, {type: "folder", id: Number(folderId)});
       state.libraryActiveFolderId = Number(folderId);
       state.libraryCurrentFolderId = Number(folderId);
-      state.librarySelection = {type: "folder", id: Number(folderId)};
       renderLibrary();
       refreshLibraryQuickLookForSelection();
     }
@@ -7709,12 +8173,6 @@ INDEX_HTML = """<!doctype html>
       overlay.style.height = `${height}px`;
     }
 
-    function libraryQuickLookImageUrl(page, size) {
-      if (!state.libraryQuickLookPath) return "";
-      const safePage = Math.max(1, Number(page || 1));
-      return `/api/pdf-thumb?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}&size=${size}`;
-    }
-
     function selectedLibraryQuickLookPlaceholder() {
       if (state.libraryTab === "my-publications") {
         const paper = selectedMyPublicationPaper();
@@ -7763,8 +8221,7 @@ INDEX_HTML = """<!doctype html>
     function setLibraryQuickLookPage(page) {
       const nextPage = Math.max(1, Math.min(Number(page || 1), state.libraryQuickLookPageCount || Number(page || 1)));
       updateLibraryQuickLookActivePage(nextPage);
-      const pageEl = $("libraryQuickLookPages")?.querySelector(`[data-preview-page="${nextPage}"]`);
-      pageEl?.scrollIntoView({block: "start"});
+      updateLibraryPdfFramePage(nextPage);
       $("libraryShell")?.focus({preventScroll: true});
     }
 
@@ -7774,6 +8231,28 @@ INDEX_HTML = """<!doctype html>
         button.classList.toggle("active", Number(button.dataset.page || 0) === state.libraryQuickLookPage);
       });
       $("libraryQuickLookThumbs")?.querySelector(".library-page-thumb.active")?.scrollIntoView({block: "nearest"});
+    }
+
+    function libraryPdfFrameUrl(page = state.libraryQuickLookPage) {
+      if (!state.libraryQuickLookUrl) return "";
+      const safePage = Math.max(1, Number(page || 1));
+      const [baseUrl] = state.libraryQuickLookUrl.split("#");
+      const separator = baseUrl.includes("?") ? "&" : "?";
+      return `${baseUrl}${separator}pm_page=${safePage}&pm_nonce=${Date.now()}#page=${safePage}&toolbar=0&navpanes=0&view=FitH`;
+    }
+
+    function updateLibraryPdfFramePage(page) {
+      const frame = $("libraryQuickLookPages")?.querySelector(".library-pdf-frame");
+      if (!frame) return;
+      const nextUrl = libraryPdfFrameUrl(page);
+      if (frame.getAttribute("src") === nextUrl) return;
+      frame.src = nextUrl;
+    }
+
+    function libraryQuickLookImageUrl(page, size) {
+      if (!state.libraryQuickLookPath) return "";
+      const safePage = Math.max(1, Number(page || 1));
+      return `/api/pdf-thumb?path=${encodeURIComponent(state.libraryQuickLookPath)}&page=${safePage}&size=${size}`;
     }
 
     function renderLibraryQuickLookThumbs(pageCount) {
@@ -7786,9 +8265,9 @@ INDEX_HTML = """<!doctype html>
       }
       root.innerHTML = Array.from({length: count}, (_, index) => {
         const page = index + 1;
-        const preview = page <= 80
+        const preview = page <= 160
           ? `<img src="${escapeAttr(libraryQuickLookImageUrl(page, 240))}" alt="Page ${page}" loading="lazy">`
-          : `<span class="library-page-thumb-placeholder">PDF</span>`;
+          : `<span class="library-page-thumb-placeholder"></span>`;
         return `
           <button class="library-page-thumb${page === state.libraryQuickLookPage ? " active" : ""}" type="button" data-page="${page}">
             <span class="library-page-thumb-preview">${preview}</span>
@@ -7810,17 +8289,10 @@ INDEX_HTML = """<!doctype html>
         root.innerHTML = `<div class="empty">Loading pages...</div>`;
         return;
       }
-      root.innerHTML = Array.from({length: count}, (_, index) => {
-        const page = index + 1;
-        return `
-          <section class="library-preview-page" data-preview-page="${page}">
-            <img src="${escapeAttr(libraryQuickLookImageUrl(page, 1400))}" alt="Page ${page}" loading="${page <= 2 ? "eager" : "lazy"}">
-            <span>Page ${page}</span>
-          </section>
-        `;
-      }).join("");
+      const page = Math.max(1, Math.min(state.libraryQuickLookPage || 1, count));
+      root.innerHTML = `<iframe class="library-pdf-frame" title="PDF preview" src="${escapeAttr(libraryPdfFrameUrl(page))}"></iframe>`;
       root.scrollTop = 0;
-      root.onscroll = () => updateLibraryQuickLookPageFromScroll();
+      root.onscroll = null;
     }
 
     function updateLibraryQuickLookPageFromScroll() {
@@ -8110,10 +8582,7 @@ INDEX_HTML = """<!doctype html>
       if (!handled) return false;
       event.preventDefault();
       if (key === "Delete" || key === "Backspace") {
-        const selection = state.librarySelection;
-        if (selection?.type && selection.id) {
-          runLibraryMenuAction(() => deleteLibraryEntry(selection.type, Number(selection.id)));
-        }
+        runLibraryMenuAction(deleteSelectedLibraryEntries);
         return true;
       }
       if (key === " ") {
@@ -8125,8 +8594,24 @@ INDEX_HTML = """<!doctype html>
         if (state.librarySelection?.type) beginLibraryEntryRename(state.librarySelection.type, state.librarySelection.id);
         return true;
       }
+      if (librarySearchIsActive() && ["ArrowUp", "ArrowDown"].includes(key)) {
+        const results = librarySearchResults();
+        if (!results.length) return true;
+        const currentKey = libraryEntryKey(state.librarySelection);
+        const currentIndex = results.findIndex((entry) => libraryEntryKey(entry) === currentKey);
+        const fallback = key === "ArrowDown" ? 0 : results.length - 1;
+        const nextIndex = currentIndex < 0
+          ? fallback
+          : Math.max(0, Math.min(results.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+        const next = results[nextIndex];
+        setLibraryColumnSelection(next.parentFolderId, next);
+        renderLibrary();
+        refreshLibraryQuickLookForSelection();
+        return true;
+      }
       if (key === "ArrowLeft") {
         const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+        clearLibraryRangeSelection();
         if (activeFolderId !== Number(state.libraryRootId)) {
           const parentId = parentFolderId(activeFolderId);
           state.libraryActiveFolderId = parentId;
@@ -8141,6 +8626,7 @@ INDEX_HTML = """<!doctype html>
         const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
         const selection = selectedEntryInFolder(activeFolderId);
         if (selection?.type === "folder") {
+          clearLibraryRangeSelection();
           const childFolderId = Number(selection.id);
           const existing = selectedEntryInFolder(childFolderId);
           const firstEntry = libraryEntriesForFolder(childFolderId)[0];
@@ -8163,7 +8649,8 @@ INDEX_HTML = """<!doctype html>
       const nextIndex = currentIndex < 0
         ? fallback
         : Math.max(0, Math.min(entries.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
-      setLibraryColumnSelection(activeFolderId, entries[nextIndex]);
+      if (event.shiftKey) setLibraryRangeSelection(activeFolderId, entries[nextIndex]);
+      else setLibraryColumnSelection(activeFolderId, entries[nextIndex]);
       if (entries[nextIndex]?.type === "folder") requestLibraryColumnReveal(activeFolderId, "right");
       renderLibrary();
       refreshLibraryQuickLookForSelection();
@@ -8498,6 +8985,21 @@ INDEX_HTML = """<!doctype html>
 
     function selectedTextForCopy() {
       return String(window.getSelection?.()?.toString() || "");
+    }
+
+    function handleSearchShortcut(event) {
+      if (event.altKey || event.shiftKey) return false;
+      const key = String(event.key || "").toLowerCase();
+      const isCommandLike = event.metaKey || event.ctrlKey;
+      if (!isCommandLike || key !== "f") return false;
+      const target = state.mode === "library" && !["loader", "my-publications"].includes(state.libraryTab || "")
+        ? $("librarySearchBox")
+        : $("searchBox");
+      if (!target) return false;
+      event.preventDefault();
+      target.focus({preventScroll: true});
+      target.select?.();
+      return true;
     }
 
     function handleTextClipboardShortcut(event) {
@@ -8923,6 +9425,18 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") renderActiveLibraryTab();
       else renderReport();
     });
+    $("librarySearchBox").addEventListener("input", (event) => {
+      state.query = event.target.value;
+      clearLibraryRangeSelection();
+      renderActiveLibraryTab();
+    });
+    $("clearLibrarySearch").addEventListener("click", () => {
+      state.query = "";
+      $("librarySearchBox").value = "";
+      clearLibraryRangeSelection();
+      renderActiveLibraryTab();
+      $("librarySearchBox")?.focus({preventScroll: true});
+    });
     $("closeAnalysis").addEventListener("click", closeAnalysis);
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
@@ -8934,6 +9448,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
+      if (handleSearchShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
