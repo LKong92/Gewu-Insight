@@ -349,25 +349,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.refresh_journals()
         selected = first(query, "date") or today_jst().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
+        force_fetch = first(query, "force_fetch") == "1"
         fetched = False
         missing_journals: list[str] = []
         storage = Storage(self.configured_db_path)
         try:
             selected_date = date.fromisoformat(selected)
             missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
-            if auto_fetch and selected_date <= today_jst() and missing_journals and try_start_fetch(selected):
+            sources_to_fetch = self.configured_journals if force_fetch else missing_journals
+            if (force_fetch or auto_fetch) and selected_date <= today_jst() and sources_to_fetch and try_start_fetch(selected):
                 storage.close()
                 fetch_storage = None
                 try:
                     config = load_config()
                     fetch_storage = Storage(self.configured_db_path)
-                    start_fetch_progress(selected, missing_journals)
+                    start_fetch_progress(selected, sources_to_fetch)
                     fetch_missing_sources_for_date(
                         config=config,
                         storage=fetch_storage,
                         selected=selected,
                         selected_date=selected_date,
-                        missing_sources=missing_journals,
+                        missing_sources=sources_to_fetch,
                     )
                     fetched = True
                 finally:
@@ -393,6 +395,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "papers": [paper_to_api(paper) for paper in papers],
                 "journalCounts": count_by_journal(papers),
                 "fetched": fetched,
+                "forcedFetch": force_fetch,
                 "missingJournals": missing_journals,
                 "fetchActive": is_fetch_active(selected),
             }
@@ -2893,7 +2896,7 @@ def recent_empty_journal_date_needs_refresh(
     if status != "empty":
         return False
     local_today = today_jst()
-    if selected_date < local_today - timedelta(days=1):
+    if selected_date != local_today:
         return False
     return not fetch_run_is_fresh(finished_at, now, RECENT_JOURNAL_REFRESH_AFTER)
 
@@ -4260,7 +4263,7 @@ INDEX_HTML = """<!doctype html>
       gap: 6px;
       align-items: center;
       flex-wrap: nowrap;
-      margin: -8px 0 18px;
+      margin: -8px 0 10px;
     }
     .library-controls.open { display: flex; }
     .library-controls input, .library-controls select {
@@ -4271,19 +4274,24 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
     }
     .library-search-tools {
-      margin-left: 4px;
       display: none;
       align-items: center;
       gap: 6px;
-      flex: 0 0 260px;
-      max-width: 260px;
-      min-width: 210px;
+      position: fixed;
+      top: 6px;
+      right: 30px;
+      z-index: 76;
+      width: 292px;
+      justify-content: flex-end;
+      pointer-events: none;
     }
     .library-search-tools.open { display: flex; }
     .library-search-wrap {
       position: relative;
-      flex: 1 1 auto;
-      min-width: 0;
+      width: 34px;
+      min-width: 34px;
+      transition: width 160ms ease;
+      pointer-events: auto;
     }
     .library-search-wrap::before {
       content: "";
@@ -4312,8 +4320,23 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-wrap input {
       width: 100%;
+      min-height: 32px;
       padding-left: 30px;
       padding-right: 34px;
+      opacity: 0;
+      cursor: pointer;
+      transition: opacity 120ms ease;
+    }
+    .library-search-tools:hover .library-search-wrap,
+    .library-search-tools:focus-within .library-search-wrap,
+    .library-search-tools.has-query .library-search-wrap {
+      width: 292px;
+    }
+    .library-search-tools:hover .library-search-wrap input,
+    .library-search-tools:focus-within .library-search-wrap input,
+    .library-search-tools.has-query .library-search-wrap input {
+      opacity: 1;
+      cursor: text;
     }
     .library-search-clear {
       position: absolute;
@@ -4337,7 +4360,10 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
       white-space: nowrap;
+      display: none;
     }
+    .library-search-tools.has-query:hover .library-search-count,
+    .library-search-tools.has-query:focus-within .library-search-count { display: inline; }
     .library-tab {
       min-height: 34px;
       border: 1px solid var(--line);
@@ -4350,10 +4376,6 @@ INDEX_HTML = """<!doctype html>
       display: inline-flex;
       align-items: center;
       justify-content: center;
-    }
-    #libraryTab,
-    #myPublicationsTab {
-      flex: 0 0 auto;
     }
     #libraryShortcutTabs {
       min-width: 0;
@@ -4439,6 +4461,10 @@ INDEX_HTML = """<!doctype html>
     .library-tab.shortcut-tab {
       background: #fff8d7;
       border-color: #eadc99;
+    }
+    .library-tab.root-tab {
+      background: #fff;
+      color: var(--ink);
     }
     .library-tab.shortcut-tab.active {
       background: #fff2b8;
@@ -4934,7 +4960,56 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
+    .library-pane-header-title { min-width: 0; }
+    .library-pane-loader {
+      flex: 0 0 auto;
+      min-height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 8px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .library-pane-loader:hover,
+    .library-pane-loader.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #f0f9f9;
+    }
+    .library-tab-context-menu {
+      position: fixed;
+      z-index: 120;
+      min-width: 132px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 5px;
+      display: none;
+    }
+    .library-tab-context-menu.open { display: grid; }
+    .library-tab-context-menu button {
+      min-height: 30px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      padding: 0 10px;
+      text-align: left;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .library-tab-context-menu button:hover { background: #eef2f7; }
     .library-column-body {
       min-height: 0;
       overflow-y: auto;
@@ -5488,24 +5563,15 @@ INDEX_HTML = """<!doctype html>
           <div class="toolbar">
             <div class="view-switcher" id="primaryViewSwitcher">
               <button class="view-switch active" id="libraryMode" type="button">Library</button>
+              <button class="view-switch" id="myPublicationsMode" type="button">My Publications</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
-            </div>
-            <div class="top-tools hidden" id="topLibraryTools">
-              <span class="top-tools-label">Tools:</span>
-              <button class="loader-tool-tab" id="topLibraryLoader" type="button">Loader</button>
             </div>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
+              <button class="smallbtn" id="refreshReport" type="button" title="Refresh papers for this date">Refresh</button>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
             </div>
-          </div>
-          <div class="summary" id="summary"></div>
-          <div class="report-tabs" id="reportTabs"></div>
-          <div class="fetch-progress-host" id="fetchProgressHost"></div>
-          <div class="library-controls" id="libraryControls">
-            <button class="library-tab active" id="libraryTab" type="button">Library</button>
-            <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
                 <input class="search" id="librarySearchBox" placeholder="Search Library" type="search">
@@ -5513,6 +5579,11 @@ INDEX_HTML = """<!doctype html>
               </div>
               <span class="library-search-count" id="librarySearchCount"></span>
             </div>
+          </div>
+          <div class="summary" id="summary"></div>
+          <div class="report-tabs" id="reportTabs"></div>
+          <div class="fetch-progress-host" id="fetchProgressHost"></div>
+          <div class="library-controls" id="libraryControls">
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="My name">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
@@ -5871,8 +5942,10 @@ INDEX_HTML = """<!doctype html>
       if (reportIsActiveForDate(selectedDate)) renderReport();
     }
 
-    async function refreshMissingDateInBackground(selectedDate) {
+    async function refreshMissingDateInBackground(selectedDate, options = {}) {
       if (state.fetchingDates.has(selectedDate)) return;
+      const forceFetch = Boolean(options.forceFetch);
+      if (forceFetch) delete state.reportCache[selectedDate];
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
@@ -5880,7 +5953,8 @@ INDEX_HTML = """<!doctype html>
       renderCalendar();
       renderReportIfActive(selectedDate);
       try {
-        const data = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
+        const forceParam = forceFetch ? "&force_fetch=1" : "";
+        const data = await fetchJson(`/api/report?date=${selectedDate}${forceParam}`, 20 * 60 * 1000);
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         if (data.fetchActive && (data.missingJournals || []).length) {
@@ -5930,6 +6004,13 @@ INDEX_HTML = """<!doctype html>
         }
         finishFetchUi(selectedDate);
       }
+    }
+
+    function refreshCurrentReportDate() {
+      const selectedDate = state.selectedDate;
+      state.noMatchDates.delete(selectedDate);
+      state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""};
+      refreshMissingDateInBackground(selectedDate, {forceFetch: true});
     }
 
     function setPendingFetchDate(selectedDate, value) {
@@ -7695,9 +7776,12 @@ INDEX_HTML = """<!doctype html>
               : `<div class="library-columns" id="libraryColumns"></div>`}
           </div>
           <aside class="library-pane">
-            <div class="library-pane-header">Details</div>
+            ${libraryPaneHeaderMarkup()}
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
+        </div>
+        <div class="library-tab-context-menu" id="libraryTabContextMenu">
+          <button type="button" data-action="rename-tab">Rename</button>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
@@ -7711,6 +7795,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       renderLibraryShortcutTabs();
+      wireLibraryPaneTools();
       resizeLibraryViewport();
       if (librarySearchIsActive()) renderLibrarySearchResults();
       else renderLibraryColumns();
@@ -7741,6 +7826,20 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab?.startsWith("shortcut-")) return libraryShortcutLabel(Number(state.libraryTab.split("-")[1] || 0));
       if (state.libraryTab?.startsWith("workspace-")) return libraryWorkspaceLabel(Number(state.libraryTab.split("-")[1] || 0));
       return "Library";
+    }
+
+    function libraryPaneHeaderMarkup() {
+      const active = state.libraryTab === "loader" ? " active" : "";
+      return `
+        <div class="library-pane-header">
+          <span class="library-pane-header-title">Details</span>
+          <button class="library-pane-loader${active}" id="libraryPaneLoader" type="button">Loader</button>
+        </div>
+      `;
+    }
+
+    function wireLibraryPaneTools() {
+      $("libraryPaneLoader")?.addEventListener("click", openLibraryLoader);
     }
 
     function activeWorkspaceIndex() {
@@ -7916,12 +8015,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderLibraryTabs() {
-      $("libraryControls").classList.add("open");
-      setPrimaryView("library");
-      const inLibraryFilesystem = state.libraryTab === "library" || state.libraryTab?.startsWith("shortcut-") || state.libraryTab?.startsWith("workspace-");
-      $("libraryTab")?.classList.toggle("active", inLibraryFilesystem);
-      $("myPublicationsTab")?.classList.toggle("active", state.libraryTab === "my-publications");
-      $("topLibraryLoader")?.classList.toggle("active", state.libraryTab === "loader");
+      $("libraryControls").classList.toggle("open", state.libraryTab === "my-publications");
+      setPrimaryView(state.libraryTab === "my-publications" ? "my-publications" : "library");
       renderLibraryShortcutTabs();
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
@@ -7940,6 +8035,7 @@ INDEX_HTML = """<!doctype html>
       if (!tools || !input || !clear || !count) return;
       const open = state.mode === "library" && !["loader", "my-publications"].includes(state.libraryTab || "");
       tools.classList.toggle("open", open);
+      tools.classList.toggle("has-query", Boolean(state.query));
       if (document.activeElement !== input) input.value = state.query || "";
       clear.classList.toggle("open", Boolean(state.query));
       const results = open && state.query.trim() ? librarySearchResults().length : 0;
@@ -7968,27 +8064,34 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryShortcutTabs() {
       const root = $("libraryShortcutTabs");
       if (!root) return;
+      const rootTab = `<button class="library-tab root-tab${state.libraryTab === "library" ? " active" : ""}" style="--tab-top:0px" type="button" data-root-tab="library" title="Library"><span class="library-tab-label">Library</span></button>`;
       const shortcutTabs = Array.from({length: LIBRARY_SHORTCUT_TAB_COUNT}, (_, index) => {
         const assigned = Boolean(Number(state.libraryShortcutTabs[index]?.folder_id || 0));
         const label = libraryShortcutLabel(index);
-        return `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${index * 92}px" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}"><span class="library-tab-label">${escapeHtml(label)}</span></button>`;
+        return `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${(index + 1) * 92}px" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}"><span class="library-tab-label">${escapeHtml(label)}</span></button>`;
       }).join("");
       const workspaceTabs = Array.from({length: LIBRARY_WORKSPACE_TAB_COUNT}, (_, index) => (
-        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${(LIBRARY_SHORTCUT_TAB_COUNT + index) * 92 + 14}px" type="button" data-workspace-tab="${index}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
+        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${(LIBRARY_SHORTCUT_TAB_COUNT + 1 + index) * 92 + 14}px" type="button" data-workspace-tab="${index}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
       )).join("");
-      const railHeight = (LIBRARY_SHORTCUT_TAB_COUNT + LIBRARY_WORKSPACE_TAB_COUNT) * 92 + 14;
+      const railHeight = (LIBRARY_SHORTCUT_TAB_COUNT + LIBRARY_WORKSPACE_TAB_COUNT + 1) * 92 + 14;
       root.innerHTML = `
         <div class="library-tab-rail-inner" style="--library-rail-height:${railHeight}px">
+          ${rootTab}
           ${shortcutTabs}
           ${workspaceTabs}
         </div>
       `;
+      root.querySelector("[data-root-tab]")?.addEventListener("click", () => {
+        loadLibrary().catch((error) => {
+          $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        });
+      });
       root.querySelectorAll("[data-shortcut-tab]").forEach((button) => {
         button.addEventListener("click", () => openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          runLibraryMenuAction(() => renameLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
+          showLibraryTabContextMenu(event, "shortcut", Number(button.dataset.shortcutTab || 0));
         });
         button.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
@@ -8012,7 +8115,7 @@ INDEX_HTML = """<!doctype html>
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          runLibraryMenuAction(() => renameLibraryWorkspaceFromTab(Number(button.dataset.workspaceTab || 0)));
+          showLibraryTabContextMenu(event, "workspace", Number(button.dataset.workspaceTab || 0));
         });
       });
     }
@@ -8198,12 +8301,13 @@ INDEX_HTML = """<!doctype html>
             </div>
           </section>
           <aside class="library-pane">
-            <div class="library-pane-header">Details</div>
+            ${libraryPaneHeaderMarkup()}
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
         </div>
       `;
       resizeLibraryViewport();
+      wireLibraryPaneTools();
       renderPublicationDetail();
       wireMyPublicationInteractions();
       window.requestAnimationFrame(() => revealMyPublicationSelection());
@@ -9804,6 +9908,7 @@ INDEX_HTML = """<!doctype html>
 
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
+      hideLibraryTabContextMenu();
       const menu = $("libraryContextMenu");
       if (!menu) return;
       menu.dataset.parentId = parentId || state.libraryActiveFolderId || state.libraryRootId;
@@ -9887,6 +9992,32 @@ INDEX_HTML = """<!doctype html>
 
     function hideLibraryContextMenu() {
       $("libraryContextMenu")?.classList.remove("open");
+    }
+
+    function showLibraryTabContextMenu(event, tabType, index) {
+      hideLibraryContextMenu();
+      const menu = $("libraryTabContextMenu");
+      if (!menu) return;
+      menu.dataset.tabType = tabType;
+      menu.dataset.tabIndex = String(index);
+      menu.style.left = `${event.clientX}px`;
+      menu.style.top = `${event.clientY}px`;
+      menu.classList.add("open");
+      menu.onclick = (clickEvent) => clickEvent.stopPropagation();
+      const renameButton = menu.querySelector('[data-action="rename-tab"]');
+      if (renameButton) {
+        renameButton.onclick = async () => {
+          const type = menu.dataset.tabType || "";
+          const tabIndex = Number(menu.dataset.tabIndex || 0);
+          hideLibraryTabContextMenu();
+          if (type === "shortcut") await runLibraryMenuAction(() => renameLibraryShortcutTab(tabIndex));
+          if (type === "workspace") await runLibraryMenuAction(() => renameLibraryWorkspaceFromTab(tabIndex));
+        };
+      }
+    }
+
+    function hideLibraryTabContextMenu() {
+      $("libraryTabContextMenu")?.classList.remove("open");
     }
 
     function handleLibraryKeydown(event) {
@@ -10683,36 +10814,32 @@ INDEX_HTML = """<!doctype html>
     }
 
     function setPrimaryView(view) {
-      document.querySelector(".app")?.classList.toggle("library-mode", view === "library");
+      const isLibrarySurface = view === "library" || view === "my-publications";
+      document.querySelector(".app")?.classList.toggle("library-mode", isLibrarySurface);
       $("libraryMode")?.classList.toggle("active", view === "library");
+      $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
-      $("sideLibraryMode")?.classList.toggle("active", view === "library");
+      $("sideLibraryMode")?.classList.toggle("active", isLibrarySurface);
       $("sideReportMode")?.classList.toggle("active", view === "report");
-      $("primaryViewSwitcher")?.classList.toggle("hidden", view === "report");
-      $("sidebarViewSwitcher")?.classList.toggle("open", view === "report");
+      $("primaryViewSwitcher")?.classList.remove("hidden");
+      $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-      $("topLibraryTools")?.classList.toggle("hidden", view !== "library");
+      updateLibrarySearchTools();
     }
 
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
     $("libraryMode").addEventListener("click", loadLibrary);
-    $("sideReportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
-      $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-    }));
-    $("sideLibraryMode").addEventListener("click", loadLibrary);
-    $("topLibraryLoader").addEventListener("click", openLibraryLoader);
-    $("libraryTab").addEventListener("click", () => {
-      loadLibrary().catch((error) => {
-        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-      });
-    });
-    $("myPublicationsTab").addEventListener("click", () => {
+    $("myPublicationsMode").addEventListener("click", () => {
       loadMyPublications().catch((error) => {
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
     });
+    $("sideReportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
+      $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }));
+    $("sideLibraryMode").addEventListener("click", loadLibrary);
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
@@ -10766,6 +10893,7 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") renderActiveLibraryTab();
       else renderReport();
     });
+    $("refreshReport").addEventListener("click", refreshCurrentReportDate);
     $("searchBox").addEventListener("input", (event) => {
       state.query = event.target.value;
       state.noMatchDates = new Set();
@@ -10814,9 +10942,13 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       hideLibraryContextMenu();
+      hideLibraryTabContextMenu();
       closeAnalysis();
     }, true);
-    window.addEventListener("click", hideLibraryContextMenu);
+    window.addEventListener("click", () => {
+      hideLibraryContextMenu();
+      hideLibraryTabContextMenu();
+    });
     window.addEventListener("resize", () => {
       if (state.mode === "library") resizeLibraryViewport();
     });
