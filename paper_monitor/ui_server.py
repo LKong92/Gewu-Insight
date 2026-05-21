@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
@@ -62,6 +63,7 @@ PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 RECENT_FETCH_REFRESH_DAYS = 14
 RECENT_FETCH_REFRESH_AFTER = timedelta(hours=6)
 ERROR_FETCH_RETRY_AFTER = timedelta(minutes=30)
+ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -132,6 +134,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/fetch-progress":
                 self.handle_fetch_progress(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/arxiv-daily-refresh":
+                self.handle_arxiv_daily_refresh()
                 return
             if parsed.path == "/api/library/import-folder/progress":
                 self.handle_library_import_folder_progress(parse_qs(parsed.query))
@@ -377,6 +382,39 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_fetch_progress(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or today_jst().isoformat()
         self.send_json({"date": selected, "progress": get_fetch_progress(selected)})
+
+    def handle_arxiv_daily_refresh(self) -> None:
+        selected_date = datetime.now().astimezone().date()
+        selected = selected_date.isoformat()
+        storage = Storage(self.configured_db_path)
+        try:
+            missing = missing_fetch_journals_for_date(storage, selected, [ARXIV_JOURNAL_NAME])
+        finally:
+            storage.close()
+        if ARXIV_JOURNAL_NAME not in missing:
+            self.send_json({"date": selected, "status": "skipped"})
+            return
+        if not try_start_fetch(selected):
+            self.send_json({"date": selected, "status": "active"})
+            return
+
+        def refresh_arxiv() -> None:
+            fetch_storage = Storage(self.configured_db_path)
+            try:
+                start_fetch_progress(selected, [ARXIV_JOURNAL_NAME])
+                fetch_one_arxiv_preprint_source(
+                    storage=fetch_storage,
+                    start_date=selected_date,
+                    end_date=selected_date,
+                    categories=ARXIV_DEFAULT_CATEGORIES,
+                )
+            finally:
+                finish_fetch_progress(selected)
+                finish_active_fetch(selected)
+                fetch_storage.close()
+
+        threading.Thread(target=refresh_arxiv, daemon=True).start()
+        self.send_json({"date": selected, "status": "started"})
 
     def handle_paper(self, query: dict[str, list[str]]) -> None:
         paper_id = first(query, "paper_id")
@@ -2268,12 +2306,17 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     selected_date = date.fromisoformat(selected)
     refresh_recent = selected_date >= today_jst() - timedelta(days=RECENT_FETCH_REFRESH_DAYS)
     now = datetime.now().astimezone()
+    arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
     fetched: set[str] = set()
     for row in rows:
         journal = row["journal"]
         if journal in fetched:
             continue
         status = row["status"]
+        if journal == ARXIV_JOURNAL_NAME:
+            if not arxiv_should_attempt(selected_date, row["finished_at"], status, now, arxiv_ready_at):
+                fetched.add(journal)
+            continue
         if status == "error":
             if refresh_recent and fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
                 fetched.add(journal)
@@ -2283,17 +2326,53 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
             continue
         if fetch_run_is_fresh(row["finished_at"], now, RECENT_FETCH_REFRESH_AFTER):
             fetched.add(journal)
-    return [journal for journal in journals if journal not in fetched]
+    missing = [journal for journal in journals if journal not in fetched]
+    if ARXIV_JOURNAL_NAME in missing and now < arxiv_ready_at:
+        missing.remove(ARXIV_JOURNAL_NAME)
+    return missing
 
 
-def fetch_run_is_fresh(finished_at: str, now: datetime, max_age: timedelta) -> bool:
+def arxiv_should_attempt(selected_date: date, finished_at: str, status: str, now: datetime, ready_at: datetime) -> bool:
+    if now < ready_at:
+        return False
+    finished = parse_fetch_finished_at(finished_at, now)
+    if not finished:
+        return True
+    if status == "error":
+        return now - finished > ERROR_FETCH_RETRY_AFTER
+    return finished < ready_at
+
+
+def arxiv_ready_time(selected_date: date) -> datetime:
+    eastern = ZoneInfo("America/New_York")
+    local_tz = datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
+    announcement_date = selected_date - timedelta(days=1)
+    announcement = datetime(
+        announcement_date.year,
+        announcement_date.month,
+        announcement_date.day,
+        20,
+        0,
+        tzinfo=eastern,
+    )
+    return announcement.astimezone(local_tz) + ARXIV_ANNOUNCEMENT_BUFFER
+
+
+def parse_fetch_finished_at(finished_at: str, now: datetime) -> datetime | None:
     try:
         finished = datetime.fromisoformat(finished_at)
     except (TypeError, ValueError):
-        return False
+        return None
     if finished.tzinfo is None:
         finished = finished.replace(tzinfo=now.tzinfo)
-    return now - finished.astimezone(now.tzinfo) <= max_age
+    return finished.astimezone(now.tzinfo)
+
+
+def fetch_run_is_fresh(finished_at: str, now: datetime, max_age: timedelta) -> bool:
+    finished = parse_fetch_finished_at(finished_at, now)
+    if not finished:
+        return False
+    return now - finished <= max_age
 
 
 def config_for_journals(config: AppConfig, journal_names: list[str]) -> AppConfig:
@@ -9528,6 +9607,9 @@ INDEX_HTML = """<!doctype html>
     Promise.resolve().then(loadLibrary).catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     });
+    window.setTimeout(() => {
+      fetch("/api/arxiv-daily-refresh").catch(() => {});
+    }, 1600);
     updateSidebarToggle();
     updateReportPanelToggle();
   </script>

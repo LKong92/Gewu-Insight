@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import date, datetime, time as datetime_time, timezone, tzinfo
+import threading
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -23,9 +24,13 @@ ARXIV_CONDENSED_MATTER_CATEGORIES = [
     {"code": "cond-mat.supr-con", "label": "Superconductivity"},
 ]
 ARXIV_CONDENSED_MATTER_CODES = [item["code"] for item in ARXIV_CONDENSED_MATTER_CATEGORIES]
-ARXIV_DEFAULT_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"]
+ARXIV_DISPLAY_DEFAULT_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"]
+ARXIV_DEFAULT_CATEGORIES = ARXIV_CONDENSED_MATTER_CODES
 ARXIV_API_TIMEOUT = 25
 ARXIV_API_MAX_RETRIES = 2
+ARXIV_REQUEST_INTERVAL = 3.2
+ARXIV_REQUEST_LOCK = threading.Lock()
+ARXIV_LAST_REQUEST_AT = 0.0
 
 ATOM_NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -46,6 +51,7 @@ def fetch_arxiv_condensed_matter(
     query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
 
     for page in range(max_pages):
+        wait_for_arxiv_rate_limit()
         response = request_with_retries(
             "GET",
             "https://export.arxiv.org/api/query",
@@ -67,6 +73,16 @@ def fetch_arxiv_condensed_matter(
         time.sleep(3)
 
     return papers
+
+
+def wait_for_arxiv_rate_limit() -> None:
+    global ARXIV_LAST_REQUEST_AT
+    with ARXIV_REQUEST_LOCK:
+        now = time.monotonic()
+        elapsed = now - ARXIV_LAST_REQUEST_AT
+        if elapsed < ARXIV_REQUEST_INTERVAL:
+            time.sleep(ARXIV_REQUEST_INTERVAL - elapsed)
+        ARXIV_LAST_REQUEST_AT = time.monotonic()
 
 
 def arxiv_query(categories: list[str], start_date: date, end_date: date) -> str:
