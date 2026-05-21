@@ -44,6 +44,60 @@ def fetch_openalex_journal(
     return papers
 
 
+def search_openalex_author_publications(
+    author_name: str,
+    *,
+    max_authors: int = 6,
+    per_author: int = 20,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    query = clean_text(author_name)
+    if not query:
+        return []
+    author_response = request_with_retries(
+        "GET",
+        "https://api.openalex.org/authors",
+        params={
+            "search": query,
+            "per-page": max(1, min(25, int(max_authors or 6))),
+            "mailto": os.getenv("OPENALEX_MAILTO", "your_email@example.com"),
+        },
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    author_ids = [
+        clean_text(item.get("id"))
+        for item in author_response.json().get("results", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for author_id in author_ids:
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params={
+                "filter": f"authorships.author.id:{author_id}",
+                "per-page": max(1, min(50, int(per_author or 20))),
+                "sort": "publication_date:desc",
+                "mailto": os.getenv("OPENALEX_MAILTO", "your_email@example.com"),
+            },
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        for item in response.json().get("results", []):
+            if not isinstance(item, dict):
+                continue
+            paper = normalize_openalex_item(item, "Unknown Journal")
+            key = paper.get("doi") or paper.get("paper_id")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            papers.append(paper)
+    return papers
+
+
 def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str, Any]:
     primary_location = item.get("primary_location") or {}
     source = primary_location.get("source") or {}

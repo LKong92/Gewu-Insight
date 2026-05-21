@@ -111,6 +111,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS paper_reads (
+  paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+  late_arrival_seen_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
@@ -806,6 +811,21 @@ class Storage:
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
             (str(key), str(value or ""), now_iso()),
+        )
+        self.conn.commit()
+
+    def mark_late_arrivals_seen(self, paper_ids: Iterable[str]) -> None:
+        ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
+        if not ids:
+            return
+        timestamp = now_iso()
+        self.conn.executemany(
+            """
+            INSERT INTO paper_reads (paper_id, late_arrival_seen_at)
+            VALUES (?, ?)
+            ON CONFLICT(paper_id) DO UPDATE SET late_arrival_seen_at = excluded.late_arrival_seen_at
+            """,
+            [(paper_id, timestamp) for paper_id in ids],
         )
         self.conn.commit()
 

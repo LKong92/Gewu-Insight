@@ -42,6 +42,7 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
 from .sources.crossref import normalize_crossref_item
+from .sources.openalex import search_openalex_author_publications
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
@@ -217,6 +218,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/delete-analysis":
                 self.handle_delete_analysis(payload)
+                return
+            if parsed.path == "/api/papers/late-arrivals/seen":
+                self.handle_mark_late_arrivals_seen(payload)
                 return
             if parsed.path == "/api/open-pdf":
                 self.handle_open_pdf(payload)
@@ -411,6 +415,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 end_date=selected,
                 journals=self.configured_journals,
             )
+            late_unread_ids = unread_late_arrival_paper_ids(storage, selected, self.configured_journals)
+            late_arrivals = late_arrivals_for_seen_date(storage, selected, self.configured_journals)
         finally:
             storage.close()
         papers = [paper for paper in papers if paper.get("section_allowed") != 0]
@@ -418,8 +424,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             {
                 "date": selected,
                 "journals": self.configured_journals,
-                "papers": [paper_to_api(paper) for paper in papers],
+                "papers": [
+                    paper_to_api(paper, late_arrival_unread=str(paper.get("paper_id") or "") in late_unread_ids)
+                    for paper in papers
+                ],
                 "journalCounts": count_by_journal(papers),
+                "lateArrivals": late_arrival_summaries(late_arrivals),
                 "fetched": fetched,
                 "forcedFetch": force_fetch,
                 "missingJournals": missing_journals,
@@ -574,7 +584,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "q is required")
             return
         try:
-            results = search_crossref_publications(search_text, kind=kind)
+            results = search_publications(search_text, kind=kind)
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Publication lookup failed: {exc}")
             return
@@ -721,6 +731,19 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"myName": my_name})
+
+    def handle_mark_late_arrivals_seen(self, payload: dict[str, Any]) -> None:
+        paper_ids = payload.get("paper_ids")
+        if not isinstance(paper_ids, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_ids must be a list")
+            return
+        clean_ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.mark_late_arrivals_seen(clean_ids)
+        finally:
+            storage.close()
+        self.send_json({"paper_ids": clean_ids})
 
     def handle_set_library_shortcut_tabs(self, payload: dict[str, Any]) -> None:
         index = int(payload.get("index") or 0)
@@ -1847,7 +1870,7 @@ def prepare_internal_page_html(html: str, base_url: str) -> str:
     return str(soup)
 
 
-def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
+def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) -> dict[str, Any]:
     section = paper.get("publisher_section") or "unknown"
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
@@ -1888,6 +1911,8 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "citation_label": citation_label(paper),
         "citation_metrics": citation_metrics(paper),
         "google_scholar_url": google_scholar_url(paper),
+        "late_arrival": paper_is_late_arrival(paper),
+        "late_arrival_unread": bool(late_arrival_unread),
         "bibtex": bibtex_entry(paper),
         "nature_reference": nature_reference(paper),
     }
@@ -2272,6 +2297,55 @@ def search_crossref_publications(
         seen.add(key)
         results.append(paper)
     return results
+
+
+def search_publications(search_text: str, *, kind: str = "auto") -> list[dict[str, Any]]:
+    query = clean_text(search_text)
+    if not query:
+        return []
+    search_kind = kind if kind in {"doi", "title", "author", "bibliographic"} else ("doi" if looks_like_doi(query) else "title")
+    if search_kind != "author":
+        return search_crossref_publications(query, kind=search_kind)
+
+    results: list[dict[str, Any]] = []
+    first_error: Exception | None = None
+    for lookup in [
+        lambda: search_crossref_publications(query, kind="author", rows=50),
+        lambda: search_openalex_author_publications(query, max_authors=6, per_author=20),
+    ]:
+        try:
+            results.extend(lookup())
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    merged = dedup_publication_search_results(results)
+    if merged or first_error is None:
+        return merged
+    raise first_error
+
+
+def dedup_publication_search_results(results: list[dict[str, Any]], *, limit: int = 80) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for paper in results:
+        key = publication_search_dedupe_key(paper)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(paper)
+        if len(merged) >= limit:
+            break
+    return merged
+
+
+def publication_search_dedupe_key(paper: dict[str, Any]) -> str:
+    doi = clean_text(paper.get("doi") or "").lower()
+    if doi:
+        return f"doi:{doi}"
+    title = " ".join(sorted(title_tokens(paper.get("title") or "")))
+    journal = clean_text(paper.get("journal") or "").lower()
+    year = clean_text(paper.get("publication_date") or "")[:4]
+    return f"title:{title}|journal:{journal}|year:{year}"
 
 
 def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 500) -> list[dict[str, Any]]:
@@ -2731,6 +2805,78 @@ def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
         journal = paper.get("journal") or "Unknown"
         counts[journal] = counts.get(journal, 0) + 1
     return counts
+
+
+def paper_first_seen_date(paper: dict[str, Any]) -> str:
+    return str(paper.get("first_seen_at") or "")[:10]
+
+
+def paper_is_late_arrival(paper: dict[str, Any]) -> bool:
+    publication_date = str(paper.get("publication_date") or "")[:10]
+    first_seen = paper_first_seen_date(paper)
+    return bool(publication_date and first_seen and first_seen > publication_date)
+
+
+def unread_late_arrival_paper_ids(storage: Storage, selected: str, journals: list[str]) -> set[str]:
+    if not journals:
+        return set()
+    placeholders = ", ".join(["?"] * len(journals))
+    rows = storage.conn.execute(
+        f"""
+        SELECT papers.paper_id
+        FROM papers
+        LEFT JOIN paper_reads ON paper_reads.paper_id = papers.paper_id
+        WHERE papers.publication_date = ?
+          AND length(papers.publication_date) = 10
+          AND substr(papers.first_seen_at, 1, 10) > papers.publication_date
+          AND papers.source IN ('crossref', 'openalex', 'arxiv')
+          AND papers.journal IN ({placeholders})
+          AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
+          AND paper_reads.late_arrival_seen_at IS NULL
+        """,
+        (selected, *journals),
+    ).fetchall()
+    return {str(row["paper_id"]) for row in rows}
+
+
+def late_arrivals_for_seen_date(storage: Storage, selected: str, journals: list[str]) -> list[dict[str, Any]]:
+    if not journals:
+        return []
+    placeholders = ", ".join(["?"] * len(journals))
+    rows = storage.conn.execute(
+        f"""
+        SELECT papers.*
+        FROM papers
+        LEFT JOIN paper_reads ON paper_reads.paper_id = papers.paper_id
+        WHERE substr(papers.first_seen_at, 1, 10) = ?
+          AND length(papers.publication_date) = 10
+          AND papers.publication_date < ?
+          AND papers.source IN ('crossref', 'openalex', 'arxiv')
+          AND papers.journal IN ({placeholders})
+          AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
+          AND paper_reads.late_arrival_seen_at IS NULL
+        ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
+        """,
+        (selected, selected, *journals),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def late_arrival_summaries(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for paper in papers:
+        publication_date = str(paper.get("publication_date") or "")[:10]
+        if not publication_date:
+            continue
+        summary = grouped.setdefault(
+            publication_date,
+            {"publication_date": publication_date, "count": 0, "journals": {}, "paper_ids": []},
+        )
+        summary["count"] += 1
+        summary["paper_ids"].append(str(paper.get("paper_id") or ""))
+        journal = paper.get("journal") or "Unknown Journal"
+        summary["journals"][journal] = int(summary["journals"].get(journal, 0)) + 1
+    return sorted(grouped.values(), key=lambda item: str(item["publication_date"]), reverse=True)
 
 
 def author_summary(paper: dict[str, Any]) -> list[str]:
@@ -3267,13 +3413,7 @@ def manual_refresh_journals_for_date(selected: str, journals: list[str]) -> list
     selected_date = date.fromisoformat(selected)
     if selected_date > today_jst():
         return []
-    if ARXIV_JOURNAL_NAME not in journals:
-        return list(journals)
-    now = datetime.now().astimezone()
-    arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
-    if now >= arxiv_ready_at:
-        return list(journals)
-    return [journal for journal in journals if journal != ARXIV_JOURNAL_NAME]
+    return list(journals)
 
 
 def journals_with_papers_for_date(storage: Storage, selected: str, journals: list[str]) -> set[str]:
@@ -4660,6 +4800,7 @@ INDEX_HTML = """<!doctype html>
     }
     .report-tabs.open { display: flex; }
     .journal-tab {
+      position: relative;
       flex: 0 0 auto;
       min-width: 132px;
       max-width: 260px;
@@ -4680,6 +4821,44 @@ INDEX_HTML = """<!doctype html>
     .journal-tab img { max-width: 180px; max-height: 24px; object-fit: contain; display: block; }
     .journal-tab-label { min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .journal-tab-count { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .late-arrivals {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      background: #eff6ff;
+      color: #1e3a8a;
+      font-size: 13px;
+    }
+    .late-arrivals strong { font-weight: 750; }
+    .late-arrival-link {
+      border: 0;
+      background: transparent;
+      color: #1d4ed8;
+      font-weight: 700;
+      padding: 0;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .late-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+      flex: 0 0 auto;
+    }
+    .journal-tab .late-dot {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 8px;
+      height: 8px;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+    }
     .library-controls {
       display: none;
       gap: 6px;
@@ -5813,11 +5992,23 @@ INDEX_HTML = """<!doctype html>
       padding-right: 0;
     }
     .paper {
+      position: relative;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 16px;
+    }
+    .paper.late-unread::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
     }
     .paper-layout { display: grid; gap: 14px; }
     .paper.with-figure .paper-layout { grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); align-items: start; }
@@ -6250,6 +6441,8 @@ INDEX_HTML = """<!doctype html>
       query: "",
       reportSequence: 0,
       reportCache: {},
+      lateArrivals: [],
+      markingLateArrivalIds: new Set(),
       fetchingDates: new Set(),
       pendingFetchDates: new Set(),
       noMatchDates: new Set(),
@@ -6452,6 +6645,7 @@ INDEX_HTML = """<!doctype html>
       state.journals = data.journals || state.journals;
       syncSelectedJournals();
       state.papers = data.papers || [];
+      state.lateArrivals = Array.isArray(data.lateArrivals) ? data.lateArrivals : [];
       renderSubjectFilters();
       renderFilters();
       if (state.mode === "library") {
@@ -7907,12 +8101,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryControls").classList.remove("open");
       setPrimaryView("report");
       $("reportTitle").textContent = `${state.selectedDate} Report`;
-      const query = state.query.trim().toLowerCase();
-      const filtered = state.papers.filter((paper) => {
-        const inJournal = state.selectedJournals.has(paper.journal);
-        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
-        return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && (!query || haystack.includes(query));
-      });
+      const filtered = reportVisiblePapers();
       const selectedFieldText = [...state.selectedFields]
         .map((field) => FIELD_LABELS[field] || field)
         .join(", ");
@@ -7922,6 +8111,7 @@ INDEX_HTML = """<!doctype html>
       root.style.height = "";
       root.style.minHeight = "";
       root.innerHTML = "";
+      renderLateArrivalsBanner(root);
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
       const fetchPending = reportFetchIsPending(state.selectedDate);
@@ -7951,9 +8141,35 @@ INDEX_HTML = """<!doctype html>
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
       activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      markVisibleLateArrivalsSeen(activePapers);
       if (!activePapers.length) {
         root.insertAdjacentHTML("beforeend", `<div class="empty">No papers in this source for this date.</div>`);
       }
+    }
+
+    function renderLateArrivalsBanner(root) {
+      const summaries = state.lateArrivals || [];
+      if (!summaries.length) return;
+      const banner = document.createElement("div");
+      banner.className = "late-arrivals";
+      const total = summaries.reduce((sum, item) => sum + Number(item.count || 0), 0);
+      const links = summaries.map((item) => {
+        const journals = Object.entries(item.journals || {})
+          .map(([journal, count]) => `${journal} ${count}`)
+          .join(", ");
+        return `<button class="late-arrival-link" type="button" data-late-date="${escapeAttr(item.publication_date)}">${escapeHtml(item.publication_date)}</button>${journals ? ` <span>${escapeHtml(journals)}</span>` : ""}`;
+      }).join(" · ");
+      banner.innerHTML = `<span class="late-dot" aria-hidden="true"></span><strong>${total} late arrival${total === 1 ? "" : "s"}</strong><span>newly fetched for earlier dates:</span>${links}`;
+      banner.querySelectorAll("[data-late-date]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          state.selectedDate = button.dataset.lateDate || state.selectedDate;
+          state.activeReportJournal = "";
+          updateReportRefreshButton();
+          renderCalendar();
+          await loadReport();
+        });
+      });
+      root.appendChild(banner);
     }
 
     function renderReportTabs(groups) {
@@ -7970,9 +8186,11 @@ INDEX_HTML = """<!doctype html>
         button.type = "button";
         button.title = group.journal;
         const logoUrl = journalLogoUrl(group.journal);
+        const hasUnreadLateArrival = group.papers.some((paper) => paper.late_arrival_unread);
         button.innerHTML = `
           <span class="journal-tab-label">${logoUrl ? `<img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(group.journal)} logo">` : escapeHtml(group.journal)}</span>
           <span class="journal-tab-count">${group.papers.length}</span>
+          ${hasUnreadLateArrival ? `<span class="late-dot" title="Unread late arrival"></span>` : ""}
         `;
         const logo = button.querySelector("img");
         if (logo) {
@@ -10979,7 +11197,7 @@ INDEX_HTML = """<!doctype html>
     function renderPaper(paper) {
       const article = document.createElement("article");
       const reserveFigure = state.showFigures && (paper.image_url || (paper.paper_id && !state.figureFailures.has(paper.paper_id)));
-      article.className = `paper${reserveFigure ? " with-figure" : ""}`;
+      article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}`;
       article.dataset.paperId = paper.paper_id;
       const authorText = authorLine(paper);
       const identifierText = paper.doi || paper.preprint_id || "no DOI";
@@ -11051,6 +11269,66 @@ INDEX_HTML = """<!doctype html>
         queuePaperFigureHydration(paper.paper_id);
       }
       return article;
+    }
+
+    function markVisibleLateArrivalsSeen(papers) {
+      const ids = (papers || [])
+        .filter((paper) => paper?.late_arrival_unread && !state.markingLateArrivalIds.has(paper.paper_id))
+        .map((paper) => paper.paper_id);
+      if (!ids.length) return;
+      ids.forEach((paperId) => state.markingLateArrivalIds.add(paperId));
+      window.setTimeout(async () => {
+        try {
+          const res = await fetch("/api/papers/late-arrivals/seen", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_ids: ids})
+          });
+          if (!res.ok) return;
+          updateLateArrivalSeenState(ids);
+          renderReportTabs(groupedReportPapers(reportVisiblePapers()));
+          document.querySelectorAll(".paper.late-unread").forEach((article) => {
+            if (ids.includes(article.dataset.paperId)) article.classList.remove("late-unread");
+          });
+        } finally {
+          ids.forEach((paperId) => state.markingLateArrivalIds.delete(paperId));
+        }
+      }, 1400);
+    }
+
+    function updateLateArrivalSeenState(paperIds) {
+      const seenIds = new Set(paperIds || []);
+      state.papers.forEach((paper) => {
+        if (seenIds.has(paper.paper_id)) paper.late_arrival_unread = false;
+      });
+      state.lateArrivals = (state.lateArrivals || [])
+        .map((item) => {
+          const remainingIds = (item.paper_ids || []).filter((paperId) => !seenIds.has(paperId));
+          return {...item, paper_ids: remainingIds, count: remainingIds.length};
+        })
+        .filter((item) => Number(item.count || 0) > 0);
+      Object.values(state.reportCache || {}).forEach((cached) => {
+        (cached?.papers || []).forEach((paper) => {
+          if (seenIds.has(paper.paper_id)) paper.late_arrival_unread = false;
+        });
+        if (Array.isArray(cached?.lateArrivals)) {
+          cached.lateArrivals = cached.lateArrivals
+            .map((item) => {
+              const remainingIds = (item.paper_ids || []).filter((paperId) => !seenIds.has(paperId));
+              return {...item, paper_ids: remainingIds, count: remainingIds.length};
+            })
+            .filter((item) => Number(item.count || 0) > 0);
+        }
+      });
+    }
+
+    function reportVisiblePapers() {
+      const query = state.query.trim().toLowerCase();
+      return state.papers.filter((paper) => {
+        const inJournal = state.selectedJournals.has(paper.journal);
+        const haystack = `${paper.title} ${paper.abstract} ${paper.doi} ${paper.preprint_id || ""} ${paper.preprint_category || ""} ${paper.journal} ${(paper.authors || []).join(" ")}`.toLowerCase();
+        return inJournal && preprintCategoryMatches(paper) && subjectMatches(paper) && (!query || haystack.includes(query));
+      });
     }
 
     function reportFigureMarkup(paper) {
