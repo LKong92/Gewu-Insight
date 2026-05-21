@@ -1281,7 +1281,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         data, content_type = pdf_page_thumbnail(requested, page_number, size=size)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "public, max-age=86400")
+        if size <= 360:
+            self.send_header("Cache-Control", "public, max-age=86400")
+        else:
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -2547,25 +2550,28 @@ def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
 
 
 def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tuple[bytes, str]:
+    persistent_cache = size <= 360
     cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}".encode("utf-8")).hexdigest()
     thumb_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
-    if thumb_path.exists():
+    if persistent_cache and thumb_path.exists():
         return thumb_path.read_bytes(), "image/png"
     data = single_page_pdf_bytes(path, page_number)
     if data:
         PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         page_pdf = PDF_THUMB_CACHE_DIR / f"{cache_key}.pdf"
+        output_path = thumb_path if persistent_cache else PDF_THUMB_CACHE_DIR / f"{cache_key}.tmp.png"
         page_pdf.write_bytes(data)
         try:
             subprocess.run(
-                ["sips", "-s", "format", "png", "-Z", str(size), str(page_pdf), "--out", str(thumb_path)],
+                ["sips", "-s", "format", "png", "-Z", str(size), str(page_pdf), "--out", str(output_path)],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=20,
             )
-            if thumb_path.exists():
-                return thumb_path.read_bytes(), "image/png"
+            if output_path.exists():
+                image_data = output_path.read_bytes()
+                return image_data, "image/png"
         except Exception:
             pass
         finally:
@@ -2573,6 +2579,11 @@ def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tupl
                 page_pdf.unlink()
             except OSError:
                 pass
+            if not persistent_cache:
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="156" viewBox="0 0 120 156">'
         '<rect x="10" y="8" width="100" height="140" rx="7" fill="#fff" stroke="#d0d5dd"/>'
@@ -7909,7 +7920,10 @@ INDEX_HTML = """<!doctype html>
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          selectLibraryEntry(parentFolderId, type, id, {extendRange: event.shiftKey});
+          selectLibraryEntry(parentFolderId, type, id, {
+            extendRange: event.shiftKey,
+            revealChildColumn: type === "folder" && !event.shiftKey
+          });
         });
         row.addEventListener("dblclick", () => {
           if (row.dataset.libraryType === "folder") focusLibraryFolder(Number(row.dataset.libraryId));
@@ -8046,6 +8060,7 @@ INDEX_HTML = """<!doctype html>
       const entry = {type, id: Number(id)};
       if (options.extendRange) setLibraryRangeSelection(parentFolderId, entry);
       else setLibraryColumnSelection(parentFolderId, entry);
+      if (options.revealChildColumn) requestLibraryColumnReveal(parentFolderId, "right");
       renderLibrary();
       refreshLibraryQuickLookForSelection();
     }
@@ -9453,10 +9468,14 @@ INDEX_HTML = """<!doctype html>
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
       if (state.libraryQuickLookOpen) {
+        event.preventDefault();
+        event.stopPropagation();
         closeLibraryQuickLook();
         return;
       }
       if ($("internalBrowser").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
         closeInternalBrowser();
         return;
       }
