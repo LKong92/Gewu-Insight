@@ -4927,6 +4927,8 @@ INDEX_HTML = """<!doctype html>
       noMatchDates: new Set(),
       fetchProgress: {},
       progressPollers: {},
+      fetchSnapshotPolls: {},
+      fetchSnapshotInflight: {},
       fetchCompletionWatchers: new Set(),
       logoRequests: {},
       figureRequests: {},
@@ -5109,7 +5111,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReport();
       if ((data.missingJournals || []).length && !state.papers.length) {
-        $("papers").innerHTML = `<div class="empty">Fetching papers for this date in the background. You can keep browsing other dates.</div>`;
+        $("papers").innerHTML = fetchProgressMarkup(selectedDate);
       }
     }
 
@@ -5126,7 +5128,7 @@ INDEX_HTML = """<!doctype html>
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
-      startProgressPolling(selectedDate);
+      await startProgressPolling(selectedDate);
       renderCalendar();
       renderReportIfActive(selectedDate);
       try {
@@ -5213,6 +5215,8 @@ INDEX_HTML = """<!doctype html>
     function finishFetchUi(selectedDate) {
       setPendingFetchDate(selectedDate, false);
       state.fetchingDates.delete(selectedDate);
+      delete state.fetchSnapshotPolls[selectedDate];
+      delete state.fetchSnapshotInflight[selectedDate];
       stopProgressPolling(selectedDate);
       renderCalendar();
       renderReportIfActive(selectedDate);
@@ -5311,11 +5315,35 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (data.progress) {
           state.fetchProgress[selectedDate] = data.progress;
-          if (state.fetchingDates.has(selectedDate)) renderReportIfActive(selectedDate);
+          if (state.fetchingDates.has(selectedDate)) {
+            renderReportIfActive(selectedDate);
+            refreshReportSnapshotDuringFetch(selectedDate);
+          }
         }
         return data.progress || null;
       } catch (error) {
         return null;
+      }
+    }
+
+    async function refreshReportSnapshotDuringFetch(selectedDate) {
+      if (selectedDate !== state.selectedDate || state.mode === "library") return;
+      const now = Date.now();
+      const last = state.fetchSnapshotPolls[selectedDate] || 0;
+      if (state.fetchSnapshotInflight[selectedDate] || now - last < 1200) return;
+      state.fetchSnapshotPolls[selectedDate] = now;
+      state.fetchSnapshotInflight[selectedDate] = true;
+      try {
+        const data = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+        updateCalendarCountFromReport(selectedDate, data);
+        state.reportCache[selectedDate] = data;
+        if (selectedDate === state.selectedDate && state.mode !== "library") {
+          applyReportData(selectedDate, data, state.reportSequence);
+        }
+      } catch (error) {
+        // Keep the progress UI alive; the completion watcher will surface persistent errors.
+      } finally {
+        delete state.fetchSnapshotInflight[selectedDate];
       }
     }
 
