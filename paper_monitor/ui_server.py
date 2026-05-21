@@ -298,12 +298,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             rows = storage.conn.execute(
                 """
-                SELECT monitor_date, journal, COUNT(*) AS count
+                SELECT publication_date, journal, COUNT(*) AS count
                 FROM papers
-                WHERE monitor_date LIKE ?
+                WHERE publication_date LIKE ?
                   AND (section_allowed IS NULL OR section_allowed != 0)
-                GROUP BY monitor_date, journal
-                ORDER BY monitor_date ASC, journal ASC
+                GROUP BY publication_date, journal
+                ORDER BY publication_date ASC, journal ASC
                 """,
                 (prefix + "%",),
             ).fetchall()
@@ -312,7 +312,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
         counts: dict[str, dict[str, int]] = {}
         for row in rows:
-            day = row["monitor_date"]
+            day = row["publication_date"]
             counts.setdefault(day, {})[row["journal"]] = int(row["count"] or 0)
 
         self.send_json(
@@ -361,7 +361,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 start_date=selected,
                 end_date=selected,
                 journals=self.configured_journals,
-                date_field="monitor_date",
             )
         finally:
             storage.close()
@@ -1500,7 +1499,6 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
         "journal": paper.get("journal") or "",
-        "monitor_date": paper.get("monitor_date") or paper.get("publication_date") or "",
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
         "url": paper.get("url") or paper.get("landing_url") or "",
@@ -8810,7 +8808,7 @@ INDEX_HTML = """<!doctype html>
       if (!paper) return;
       const reportIndex = state.papers.findIndex((item) => item.paper_id === paperId);
       if (reportIndex >= 0) state.papers[reportIndex] = paper;
-      const cachedReport = state.reportCache[paper.monitor_date || paper.publication_date];
+      const cachedReport = state.reportCache[paper.publication_date];
       const cachedIndex = (cachedReport?.papers || []).findIndex((item) => item.paper_id === paperId);
       if (cachedIndex >= 0) cachedReport.papers[cachedIndex] = paper;
       state.libraryItems.forEach((item) => {

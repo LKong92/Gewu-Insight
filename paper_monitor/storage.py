@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,7 +18,6 @@ CREATE TABLE IF NOT EXISTS papers (
   doi TEXT,
   title TEXT NOT NULL,
   journal TEXT NOT NULL,
-  monitor_date TEXT,
   publication_date TEXT,
   abstract TEXT,
   abstract_source TEXT,
@@ -192,10 +190,6 @@ class Storage:
         if "image_url" not in columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
             self.conn.commit()
-        if "monitor_date" not in columns:
-            self.conn.execute("ALTER TABLE papers ADD COLUMN monitor_date TEXT")
-            self.conn.commit()
-            self._backfill_monitor_date()
         for column, column_type in {
             "source_path": "TEXT",
             "original_relative_path": "TEXT",
@@ -216,7 +210,6 @@ class Storage:
                 self.conn.commit()
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_source_path ON papers(source_path, size_bytes)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_import_batch ON papers(import_batch_id)")
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_monitor_date ON papers(monitor_date, journal)")
         self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
@@ -282,7 +275,6 @@ class Storage:
         timestamp = now_iso()
         payload = dict(paper)
         payload.setdefault("first_seen_at", timestamp)
-        payload["monitor_date"] = infer_monitor_date(payload, payload.get("first_seen_at") or timestamp)
         payload["last_seen_at"] = timestamp
         payload["raw_json"] = json.dumps(payload.get("raw") or {}, ensure_ascii=False)
         payload["section_allowed"] = _bool_to_int(payload.get("section_allowed"))
@@ -293,7 +285,6 @@ class Storage:
                 "doi",
                 "title",
                 "journal",
-                "monitor_date",
                 "publication_date",
                 "abstract",
                 "abstract_source",
@@ -312,9 +303,6 @@ class Storage:
                 if key == "publication_date" and payload.get("source") == "arxiv" and value not in (None, ""):
                     merged[key] = value
                     continue
-                if key == "monitor_date" and value not in (None, ""):
-                    merged[key] = value
-                    continue
                 if key == "section_allowed" and value is not None:
                     merged[key] = value
                     continue
@@ -330,7 +318,6 @@ class Storage:
             "doi",
             "title",
             "journal",
-            "monitor_date",
             "publication_date",
             "abstract",
             "abstract_source",
@@ -360,7 +347,6 @@ class Storage:
             "doi",
             "title",
             "journal",
-            "monitor_date",
             "publication_date",
             "abstract",
             "abstract_source",
@@ -428,17 +414,14 @@ class Storage:
         start_date: str | None = None,
         end_date: str | None = None,
         journals: Iterable[str] | None = None,
-        date_field: str = "publication_date",
     ) -> list[dict[str, Any]]:
-        if date_field not in {"publication_date", "monitor_date"}:
-            raise ValueError("date_field must be publication_date or monitor_date")
         clauses = []
         params: list[Any] = []
         if start_date:
-            clauses.append(f"{date_field} >= ?")
+            clauses.append("publication_date >= ?")
             params.append(start_date)
         if end_date:
-            clauses.append(f"{date_field} <= ?")
+            clauses.append("publication_date <= ?")
             params.append(end_date)
         journal_list = list(journals or [])
         if journal_list:
@@ -451,24 +434,11 @@ class Storage:
             f"""
             SELECT * FROM papers
             {where}
-            ORDER BY {date_field} DESC, journal ASC, title ASC
+            ORDER BY publication_date DESC, journal ASC, title ASC
             """,
             params,
         ).fetchall()
         return [dict(row) for row in rows]
-
-    def _backfill_monitor_date(self) -> None:
-        rows = self.conn.execute(
-            """
-            SELECT paper_id, source, publication_date, first_seen_at
-            FROM papers
-            WHERE monitor_date IS NULL OR monitor_date = ''
-            """
-        ).fetchall()
-        for row in rows:
-            monitor_date = infer_monitor_date(dict(row), row["first_seen_at"])
-            self.conn.execute("UPDATE papers SET monitor_date = ? WHERE paper_id = ?", (monitor_date, row["paper_id"]))
-        self.conn.commit()
 
     def update_download_status(
         self,
@@ -1188,28 +1158,6 @@ def _bool_to_int(value: Any) -> int | None:
     if value is None:
         return None
     return 1 if bool(value) else 0
-
-
-def infer_monitor_date(paper: dict[str, Any], first_seen_at: str | None = None) -> str:
-    explicit = str(paper.get("monitor_date") or "").strip()
-    if explicit:
-        return explicit
-    publication_date = str(paper.get("publication_date") or "").strip()
-    if len(publication_date) != 10:
-        return publication_date
-    if str(paper.get("journal") or "").lower() == "arxiv" or str(paper.get("source") or "").lower() == "arxiv":
-        return publication_date
-    seen_date = str(first_seen_at or paper.get("first_seen_at") or "").strip()[:10]
-    if len(seen_date) != 10:
-        return publication_date
-    try:
-        published = date.fromisoformat(publication_date)
-        seen = date.fromisoformat(seen_date)
-    except ValueError:
-        return publication_date
-    if (seen - published).days == 1:
-        return seen.isoformat()
-    return publication_date
 
 
 def _is_blank_existing(key: str, value: Any) -> bool:
