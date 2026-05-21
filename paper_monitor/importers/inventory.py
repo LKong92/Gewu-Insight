@@ -29,6 +29,11 @@ SPREADSHEET_EXTENSIONS = {".xls", ".xlsx", ".csv", ".tsv", ".numbers"}
 ARCHIVE_EXTENSIONS = {".zip", ".tar", ".gz", ".bz2", ".7z", ".rar"}
 DOI_PATTERN = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.I)
 ARXIV_PATTERN = re.compile(r"(?:arxiv[:_\s-]*)?(\d{4}\.\d{4,5})(?:v\d+)?", re.I)
+PDF_FRONT_MATTER_PAGE_LIMIT = 1
+
+
+class ImportCancelled(RuntimeError):
+    pass
 
 
 def build_inventory_from_folder(
@@ -50,17 +55,67 @@ def build_inventory_from_folder(
         current_path = Path(current)
         relative_dir = "" if current_path == root else current_path.relative_to(root).as_posix()
         directories.append({"path": str(current_path), "relative_path": relative_dir})
-        emit_progress(progress_callback, stage="scan", message=f"Entering {relative_dir or root.name}", current=scanned, total=None)
+        emit_progress(
+            progress_callback,
+            stage="scan",
+            message=f"Entering {relative_dir or root.name}",
+            current=scanned,
+            total=None,
+            files_scanned=scanned,
+            directories_scanned=len(directories),
+        )
         for filename in filenames:
             path = current_path / filename
             try:
-                files.append(scan_inventory_file(path, root, parse_pdfs=parse_pdfs))
+                if parse_pdfs and path.suffix.lower() == ".pdf":
+                    rel = path.relative_to(root).as_posix()
+                    emit_progress(
+                        progress_callback,
+                        stage="scan",
+                        message=f"Reading first PDF page for DOI: {rel}",
+                        current=scanned,
+                        total=None,
+                        files_scanned=scanned,
+                        directories_scanned=len(directories),
+                    )
+                record = scan_inventory_file(path, root, parse_pdfs=parse_pdfs)
+                files.append(record)
+                if parse_pdfs and record.get("kind") == "pdf":
+                    rel = str(record.get("relative_path") or path.relative_to(root).as_posix())
+                    doi = clean_text(record.get("doi"))
+                    message = f"DOI extracted: {doi} from {rel}" if doi else f"No DOI extracted from first PDF page: {rel}"
+                    emit_progress(
+                        progress_callback,
+                        stage="scan",
+                        message=message,
+                        current=scanned + 1,
+                        total=None,
+                        files_scanned=scanned + 1,
+                        directories_scanned=len(directories),
+                    )
             except Exception as exc:
                 files.append(scan_error_record(path, root, exc))
                 scan_errors.append({"path": str(path), "error": str(exc)})
             scanned += 1
+            emit_progress(
+                progress_callback,
+                stage="scan",
+                message="",
+                current=scanned,
+                total=None,
+                files_scanned=scanned,
+                directories_scanned=len(directories),
+            )
             if scanned == 1 or scanned % 100 == 0:
-                emit_progress(progress_callback, stage="scan", message=f"Scanned {scanned} files", current=scanned, total=None)
+                emit_progress(
+                    progress_callback,
+                    stage="scan",
+                    message=f"Scanned {scanned} files",
+                    current=scanned,
+                    total=None,
+                    files_scanned=scanned,
+                    directories_scanned=len(directories),
+                )
     summary = inventory_summary(root, directories, files, scan_errors)
     inventory = {"summary": summary, "directories": directories, "files": files}
     if output_path:
@@ -122,6 +177,9 @@ def import_library_inventory(
     result["source_root"] = clean_text(summary.get("root"))
     result["inventory_summary"] = summary
     result["total_files"] = len(files)
+    result["pdf_doi_extracted_count"] = int_or_zero(summary.get("pdf_doi_extracted_count"))
+    result["pdf_doi_missing_count"] = int_or_zero(summary.get("pdf_doi_missing_count"))
+    result["pdfs_without_doi"] = summary.get("pdfs_without_doi") if isinstance(summary.get("pdfs_without_doi"), list) else []
     result["real_import_supported"] = True
     library_target_root = Path(target_root)
     result["copy_target_root"] = str(library_target_root)
@@ -180,6 +238,8 @@ def empty_result(
         "skipped_system_metadata": 0,
         "mac_aliases_found": 0,
         "missing_source_files": 0,
+        "pdf_doi_extracted_count": 0,
+        "pdf_doi_missing_count": 0,
         "doi_duplicates": 0,
         "arxiv_duplicates": 0,
         "path_duplicates": 0,
@@ -203,6 +263,7 @@ def empty_result(
         "resources_to_import": [],
         "aliases": [],
         "missing_sources": [],
+        "pdfs_without_doi": [],
         "duplicate_dois": [],
         "duplicate_arxiv_ids": [],
         "duplicate_paths": [],
@@ -227,6 +288,7 @@ def evaluate_files(
     emit_progress(progress_callback, stage="dry-run", message=f"Planning import for {total} records", current=0, total=total)
 
     for index, raw in enumerate(files):
+        emit_progress(progress_callback, stage="dry-run", message="", current=index + 1, total=total)
         if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
             emit_progress(
                 progress_callback,
@@ -349,6 +411,7 @@ def execute_import(
 
     try:
         for index, raw in enumerate(files):
+            emit_progress(progress_callback, stage="import", message="", current=index + 1, total=total)
             if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
                 emit_progress(
                     progress_callback,
@@ -444,6 +507,9 @@ def execute_import(
             result["warnings"].append(f"Skipping unsupported record kind={kind or 'unknown'} import_as={import_as or 'unknown'}: {source_path}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="completed")
         emit_progress(progress_callback, stage="import", message="Import complete", current=total, total=total)
+    except ImportCancelled:
+        finish_import_batch(storage, batch_id=batch_id, result=result, status="cancelled")
+        raise
     except Exception as exc:
         result["errors"].append(f"Import failed: {exc}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="failed")
@@ -623,11 +689,20 @@ def emit_progress(
     message: str,
     current: int | None = None,
     total: int | None = None,
+    files_scanned: int | None = None,
+    directories_scanned: int | None = None,
 ) -> None:
     if not progress_callback:
         return
     try:
-        progress_callback({"stage": stage, "message": message, "current": current, "total": total})
+        event = {"stage": stage, "message": message, "current": current, "total": total}
+        if files_scanned is not None:
+            event["files_scanned"] = files_scanned
+        if directories_scanned is not None:
+            event["directories_scanned"] = directories_scanned
+        progress_callback(event)
+    except ImportCancelled:
+        raise
     except Exception:
         return
 
@@ -681,7 +756,7 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
         metadata["title"] = title
         metadata["authors"] = split_pdf_authors(author)
         pieces = []
-        for page in reader.pages[:3]:
+        for page in reader.pages[:PDF_FRONT_MATTER_PAGE_LIMIT]:
             try:
                 pieces.append(page.extract_text() or "")
             except Exception:
@@ -760,6 +835,8 @@ def inventory_summary(
     files: list[dict[str, Any]],
     scan_errors: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    pdf_records = [item for item in files if item.get("kind") == "pdf" and item.get("import_as") == PAPER_CANDIDATE_IMPORT_AS]
+    pdfs_without_doi = [compact_inventory_record(item) for item in pdf_records if not clean_text(item.get("doi"))]
     return {
         "root": str(root),
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -767,11 +844,26 @@ def inventory_summary(
         "file_count": len(files),
         "pdf_count": sum(1 for item in files if item.get("kind") == "pdf"),
         "doi_count": sum(1 for item in files if item.get("doi")),
+        "pdf_doi_extracted_count": sum(1 for item in pdf_records if clean_text(item.get("doi"))),
+        "pdf_doi_missing_count": len(pdfs_without_doi),
+        "pdfs_without_doi": pdfs_without_doi[:500],
         "arxiv_count": sum(1 for item in files if item.get("arxiv_id")),
         "alias_count": sum(1 for item in files if item.get("kind") == "mac_alias"),
         "scan_error_count": len(scan_errors or []),
         "scan_errors": (scan_errors or [])[:200],
         "recorded_only_count": sum(1 for item in files if item.get("import_as") != "paper_candidate"),
+    }
+
+
+def compact_inventory_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_path": clean_text(record.get("source_path") or record.get("path")),
+        "relative_path": clean_text(record.get("relative_path")),
+        "filename": clean_text(record.get("filename")),
+        "kind": clean_text(record.get("kind")),
+        "import_as": clean_text(record.get("import_as")),
+        "parse_status": clean_text(record.get("parse_status")),
+        "parse_error": clean_text(record.get("parse_error")),
     }
 
 
@@ -1270,6 +1362,11 @@ def int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def int_or_zero(value: Any) -> int:
+    parsed = int_or_none(value)
+    return parsed if parsed is not None else 0
 
 
 def append_limited(target: list[Any], value: Any, limit: int) -> None:

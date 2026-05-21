@@ -42,6 +42,33 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         path.write_bytes(content)
         return path
 
+    def write_text_pdf(self, relative_path: str, text: str) -> Path:
+        path = self.root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        content = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+        ]
+        body = b"%PDF-1.4\n"
+        offsets = [0]
+        for index, obj in enumerate(objects, start=1):
+            offsets.append(len(body))
+            body += f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
+        xref_offset = len(body)
+        xref = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
+        xref += b"".join(f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets[1:])
+        trailer = (
+            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+        path.write_bytes(body + xref + trailer)
+        return path
+
     def run_dry(self, records: list[dict]) -> dict:
         report_path = self.root / "report.json"
         return import_library_inventory(
@@ -332,6 +359,58 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(record["kind"], "pdf")
         self.assertEqual(record["parse_status"], "not_parsed")
         self.assertEqual(record["doi"], "10.1234/example")
+
+    def test_build_inventory_reads_pdf_front_matter_for_doi_by_default(self) -> None:
+        scan_root = self.root / "front-matter-scan"
+        pdf = self.write_text_pdf(
+            "front-matter-scan/topic/title-page.pdf",
+            "Title page DOI 10.1234/frontmatter.test",
+        )
+        events: list[dict] = []
+
+        inventory = build_inventory_from_folder(scan_root, progress_callback=events.append)
+
+        records = {item["relative_path"]: item for item in inventory["files"]}
+        record = records[pdf.relative_to(scan_root).as_posix()]
+        self.assertEqual(record["doi"], "10.1234/frontmatter.test")
+        self.assertEqual(record["doi_source"], "pdf_text_pypdf")
+        self.assertEqual(inventory["summary"]["pdf_doi_extracted_count"], 1)
+        self.assertEqual(inventory["summary"]["pdf_doi_missing_count"], 0)
+        self.assertTrue(
+            any("Reading first PDF page for DOI" in str(event.get("message") or "") for event in events)
+        )
+        self.assertTrue(
+            any("DOI extracted: 10.1234/frontmatter.test" in str(event.get("message") or "") for event in events)
+        )
+
+    def test_build_inventory_reports_pdfs_without_doi(self) -> None:
+        scan_root = self.root / "missing-doi-scan"
+        pdf = self.write_text_pdf("missing-doi-scan/topic/no-doi.pdf", "Title page without identifier")
+        inventory_path = self.root / "missing-doi-inventory.json"
+        events: list[dict] = []
+
+        inventory = build_inventory_from_folder(scan_root, output_path=inventory_path, progress_callback=events.append)
+
+        self.assertEqual(inventory["summary"]["pdf_doi_extracted_count"], 0)
+        self.assertEqual(inventory["summary"]["pdf_doi_missing_count"], 1)
+        self.assertEqual(inventory["summary"]["pdfs_without_doi"][0]["relative_path"], pdf.relative_to(scan_root).as_posix())
+        self.assertTrue(
+            any("No DOI extracted from first PDF page" in str(event.get("message") or "") for event in events)
+        )
+
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "missing-doi-report.json",
+            target_root=self.root / "copied",
+        )
+        self.assertEqual(result["pdf_doi_extracted_count"], 0)
+        self.assertEqual(result["pdf_doi_missing_count"], 1)
+        self.assertEqual(result["pdfs_without_doi"][0]["relative_path"], pdf.relative_to(scan_root).as_posix())
 
     def test_folder_import_can_name_library_shortcut_by_filename(self) -> None:
         pdf = self.touch("topic/original-name.pdf", b"%PDF fixture")

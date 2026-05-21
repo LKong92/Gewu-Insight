@@ -7,6 +7,7 @@ from io import BytesIO
 import json
 import mimetypes
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -36,7 +37,7 @@ from .config import (
 )
 from .download import download_paper
 from .http import request_with_retries
-from .importers.inventory import build_inventory_from_folder, import_library_inventory
+from .importers.inventory import ImportCancelled, build_inventory_from_folder, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
@@ -318,6 +319,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/import-folder/start":
                 self.handle_start_library_import_folder(payload)
+                return
+            if parsed.path == "/api/library/import-folder/stop":
+                self.handle_stop_library_import_folder(payload)
+                return
+            if parsed.path == "/api/library/import-folder/delete":
+                self.handle_delete_library_import_folder_job(payload)
                 return
             if parsed.path == "/api/library/import-folder":
                 self.handle_library_import_folder(payload)
@@ -850,15 +857,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if copy_mode not in {"copy", "link"}:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
             return
-        dry_run = bool(payload.get("dry_run"))
-        job_id = create_library_import_job(folder_path=folder_path, copy_mode=copy_mode, dry_run=dry_run)
+        job_id = create_library_import_job(folder_path=folder_path, copy_mode=copy_mode)
         thread = threading.Thread(
             target=run_library_import_job,
             kwargs={
                 "job_id": job_id,
                 "folder_path": folder_path,
                 "copy_mode": copy_mode,
-                "dry_run": dry_run,
                 "db_path": self.configured_db_path,
             },
             daemon=True,
@@ -873,6 +878,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
             return
         self.send_json({"job": job})
+
+    def handle_stop_library_import_folder(self, payload: dict[str, Any]) -> None:
+        job_id = str(payload.get("job_id") or "")
+        job = request_stop_library_import_job(job_id)
+        if not job:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
+            return
+        self.send_json({"job": job})
+
+    def handle_delete_library_import_folder_job(self, payload: dict[str, Any]) -> None:
+        job_id = str(payload.get("job_id") or "")
+        storage = Storage(self.configured_db_path)
+        try:
+            result = delete_library_import_job_data(storage, job_id)
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"delete_result": result, **snapshot})
 
     def handle_library_import_folder(self, payload: dict[str, Any]) -> None:
         folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
@@ -891,13 +917,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if copy_mode not in {"copy", "link"}:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
             return
-        dry_run = bool(payload.get("dry_run"))
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(folder_path.name or "library-folder", 60)
         inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
-        report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-{'dry-run' if dry_run else 'import'}-{timestamp}.json"
+        report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
         try:
-            build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=False)
+            build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True)
             storage = Storage(self.configured_db_path)
             try:
                 result = import_library_inventory(
@@ -905,7 +930,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     copy_mode=copy_mode,
                     preserve_folders=True,
                     dedupe_by=("doi", "arxiv", "path"),
-                    dry_run=dry_run,
+                    dry_run=False,
                     storage=storage,
                     report_path=report_path,
                     library_item_name="filename",
@@ -1897,6 +1922,8 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "skipped_system_metadata",
         "mac_aliases_found",
         "missing_source_files",
+        "pdf_doi_extracted_count",
+        "pdf_doi_missing_count",
         "doi_duplicates",
         "arxiv_duplicates",
         "duplicate_paper_candidates",
@@ -1910,6 +1937,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     summary["warnings"] = (result.get("warnings") or [])[:20]
     summary["warning_count"] = len(result.get("warnings") or [])
     summary["missing_sources"] = result.get("missing_sources") or []
+    summary["pdfs_without_doi"] = result.get("pdfs_without_doi") or []
     summary["aliases"] = result.get("aliases") or []
     summary["duplicate_dois"] = result.get("duplicate_dois") or []
     summary["duplicate_arxiv_ids"] = result.get("duplicate_arxiv_ids") or []
@@ -1981,8 +2009,15 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         if paper.get("paper_id")
         and looks_like_doi(normalize_publication_doi(str(paper.get("doi") or "")))
     )
+    if job_id:
+        if total:
+            log_library_import_job(job_id, f"Refreshing Details metadata from DOI for {total} imported papers")
+        else:
+            log_library_import_job(job_id, "No imported papers with DOI were found for Details metadata refresh")
     current = 0
     for paper in papers:
+        if job_id and library_import_cancel_requested(job_id):
+            raise ImportCancelled("Import stopped by user")
         paper_id = clean_text(paper.get("paper_id") or "")
         doi = normalize_publication_doi(str(paper.get("doi") or ""))
         if not paper_id or not doi or paper_id in seen or not looks_like_doi(doi):
@@ -1992,6 +2027,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         if job_id:
             percent = max(0, min(99, round((current / total) * 100))) if total else 0
             update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
+            log_library_import_job(job_id, f"Refreshing Details metadata from DOI {current} / {total}: {doi}")
         stored_paper = storage.get_paper(paper_id)
         before = dict(stored_paper or {})
         refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
@@ -2852,7 +2888,7 @@ def get_fetch_progress(selected: str) -> dict[str, Any] | None:
         return dict(progress) if progress else None
 
 
-def create_library_import_job(*, folder_path: Path, copy_mode: str, dry_run: bool) -> str:
+def create_library_import_job(*, folder_path: Path, copy_mode: str) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     with LIBRARY_IMPORT_JOBS_LOCK:
@@ -2862,7 +2898,7 @@ def create_library_import_job(*, folder_path: Path, copy_mode: str, dry_run: boo
             "stage": "queued",
             "folder_path": str(folder_path),
             "copy_mode": copy_mode,
-            "dry_run": dry_run,
+            "dry_run": False,
             "started_at": now,
             "finished_at": "",
             "current": 0,
@@ -2872,6 +2908,9 @@ def create_library_import_job(*, folder_path: Path, copy_mode: str, dry_run: boo
             "result": None,
             "inventory_path": "",
             "error": "",
+            "cancel_requested": False,
+            "scan_files": 0,
+            "scan_dirs": 0,
         }
     return job_id
 
@@ -2889,7 +2928,7 @@ def get_library_import_job(job_id: str | None) -> dict[str, Any] | None:
             if report:
                 job["result"] = report
         snapshot = dict(job)
-        snapshot["logs"] = list(job.get("logs") or [])[-300:]
+        snapshot["logs"] = list(job.get("logs") or [])[-20000:]
         return snapshot
 
 
@@ -2901,6 +2940,27 @@ def update_library_import_job(job_id: str, **updates: Any) -> None:
         job.update(updates)
 
 
+def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        job = LIBRARY_IMPORT_JOBS.get(job_id)
+        if not job:
+            return None
+        if job.get("status") not in {"completed", "failed", "cancelled", "deleted"}:
+            job["cancel_requested"] = True
+            job["status"] = "stopping"
+            job["stage"] = "stopping"
+        snapshot = dict(job)
+        snapshot["logs"] = list(job.get("logs") or [])[-300:]
+    log_library_import_job(job_id, "Stop requested. The loader will stop at the next safe checkpoint.", level="warn")
+    return get_library_import_job(job_id)
+
+
+def library_import_cancel_requested(job_id: str) -> bool:
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        job = LIBRARY_IMPORT_JOBS.get(job_id)
+        return bool(job and job.get("cancel_requested"))
+
+
 def log_library_import_job(job_id: str, message: str, *, level: str = "info") -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     with LIBRARY_IMPORT_JOBS_LOCK:
@@ -2909,24 +2969,29 @@ def log_library_import_job(job_id: str, message: str, *, level: str = "info") ->
             return
         logs = job.setdefault("logs", [])
         logs.append({"time": stamp, "level": level, "message": message})
-        if len(logs) > 500:
-            del logs[:-500]
+        if len(logs) > 20000:
+            del logs[:-20000]
 
 
 def library_import_progress_callback(job_id: str):
     def progress(event: dict[str, Any]) -> None:
+        if library_import_cancel_requested(job_id):
+            raise ImportCancelled("Import stopped by user")
         current = event.get("current")
         total = event.get("total")
         percent = 0
         if isinstance(current, int) and isinstance(total, int) and total > 0:
             percent = max(0, min(100, round((current / total) * 100)))
-        update_library_import_job(
-            job_id,
-            stage=event.get("stage") or "running",
-            current=current or 0,
-            total=total or 0,
-            percent=percent,
-        )
+        updates = {
+            "stage": event.get("stage") or "running",
+            "current": current or 0,
+            "total": total or 0,
+            "percent": percent,
+        }
+        if event.get("stage") == "scan":
+            updates["scan_files"] = int(event.get("files_scanned") or 0)
+            updates["scan_dirs"] = int(event.get("directories_scanned") or 0)
+        update_library_import_job(job_id, **updates)
         message = clean_text(event.get("message"))
         if message:
             log_library_import_job(job_id, message)
@@ -2934,17 +2999,17 @@ def library_import_progress_callback(job_id: str):
     return progress
 
 
-def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dry_run: bool, db_path: Path) -> None:
+def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db_path: Path) -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = safe_slug(folder_path.name or "library-folder", 60)
     inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
-    report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-{'dry-run' if dry_run else 'import'}-{timestamp}.json"
+    report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
     update_library_import_job(job_id, status="running", stage="scan", inventory_path=str(inventory_path))
     log_library_import_job(job_id, f"Source folder: {folder_path}")
-    log_library_import_job(job_id, f"Mode: {'dry-run' if dry_run else 'import'} / {copy_mode}")
+    log_library_import_job(job_id, f"Mode: import / {copy_mode}")
     try:
-        build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=False, progress_callback=progress)
+        build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True, progress_callback=progress)
         log_library_import_job(job_id, f"Inventory written: {inventory_path}")
         storage = Storage(db_path)
         try:
@@ -2953,16 +3018,15 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
                 copy_mode=copy_mode,
                 preserve_folders=True,
                 dedupe_by=("doi", "arxiv", "path"),
-                dry_run=dry_run,
+                dry_run=False,
                 storage=storage,
                 report_path=report_path,
                 library_item_name="filename",
                 progress_callback=progress,
             )
-            if not dry_run:
-                refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
-                if refreshed:
-                    log_library_import_job(job_id, f"Refreshed DOI metadata for {refreshed} imported papers")
+            refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
+            if refreshed:
+                log_library_import_job(job_id, f"Refreshed DOI metadata for {refreshed} imported papers")
         finally:
             storage.close()
         summary = summarize_import_result(result)
@@ -2973,6 +3037,8 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
             (
                 f"Done: {summary.get('created_papers', 0)} created, "
                 f"{summary.get('updated_papers', 0)} updated, "
+                f"{summary.get('pdf_doi_extracted_count', 0)} DOI found, "
+                f"{summary.get('pdf_doi_missing_count', 0)} no DOI, "
                 f"{summary.get('doi_metadata_refreshed', 0)} DOI metadata refreshed, "
                 f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
                 f"{summary.get('reused_existing_files', 0)} reused, "
@@ -2987,6 +3053,15 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
             finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             percent=100,
             result=summary,
+        )
+    except ImportCancelled as exc:
+        log_library_import_job(job_id, str(exc) or "Import stopped by user", level="warn")
+        update_library_import_job(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         )
     except Exception as exc:
         log_library_import_job(job_id, f"Loader failed: {exc}", level="error")
@@ -3009,6 +3084,135 @@ def load_import_report_summary(report_path: Any) -> dict[str, Any] | None:
         return summarize_import_result(data) if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, Any]:
+    job = get_library_import_job(job_id)
+    if not job:
+        job = {
+            "job_id": "",
+            "status": "failed",
+            "stage": "failed",
+            "inventory_path": "",
+            "result": {},
+        }
+    if job.get("status") not in {"completed", "failed", "cancelled", "deleted"}:
+        raise ValueError("Stop the import before deleting it.")
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    batch_id = clean_text(result.get("import_batch_id"))
+    batch = None
+    if batch_id:
+        batch = storage.conn.execute("SELECT * FROM inventory_import_batches WHERE id = ?", (batch_id,)).fetchone()
+    if not batch:
+        batch = storage.conn.execute(
+            "SELECT * FROM inventory_import_batches ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        batch_id = clean_text(batch["id"] if batch else "")
+    if not batch_id:
+        deleted_paths = []
+        for path_value in [job.get("inventory_path"), result.get("report_path")]:
+            path_text = clean_text(path_value)
+            if delete_import_path(path_text, ROOT / "reports" / "imports"):
+                deleted_paths.append(path_text)
+        with LIBRARY_IMPORT_JOBS_LOCK:
+            live_job = LIBRARY_IMPORT_JOBS.get(job_id)
+            if live_job:
+                live_job["status"] = "deleted"
+                live_job["stage"] = "deleted"
+                live_job["result"] = None
+                live_job["cancel_requested"] = True
+        log_library_import_job(job_id, "Deleted loader scan files", level="warn")
+        return {
+            "batch_id": "",
+            "deleted_papers": 0,
+            "deleted_resources": 0,
+            "deleted_folders": 0,
+            "deleted_paths": deleted_paths,
+        }
+
+    started_at = clean_text(batch["started_at"] if batch else "")
+    paper_count = storage.conn.execute(
+        "SELECT COUNT(*) AS count FROM papers WHERE import_batch_id = ?",
+        (batch_id,),
+    ).fetchone()["count"]
+    resource_count = storage.conn.execute(
+        "SELECT COUNT(*) AS count FROM resources WHERE import_batch_id = ?",
+        (batch_id,),
+    ).fetchone()["count"]
+    storage.conn.execute("DELETE FROM resources WHERE import_batch_id = ?", (batch_id,))
+    storage.conn.execute("DELETE FROM papers WHERE import_batch_id = ?", (batch_id,))
+    storage.conn.execute("DELETE FROM inventory_import_batches WHERE id = ?", (batch_id,))
+    deleted_folders = cleanup_empty_import_folders(storage, started_at)
+    storage.conn.commit()
+
+    deleted_paths: list[str] = []
+    copy_target = clean_text(result.get("copy_target_root")) or str(DEFAULT_LIBRARY_IMPORT_DIR / batch_id)
+    if delete_import_path(copy_target, DEFAULT_LIBRARY_IMPORT_DIR):
+        deleted_paths.append(copy_target)
+    for path_value in [job.get("inventory_path"), result.get("report_path")]:
+        if delete_import_path(clean_text(path_value), ROOT / "reports" / "imports"):
+            deleted_paths.append(clean_text(path_value))
+
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        live_job = LIBRARY_IMPORT_JOBS.get(job_id)
+        if live_job:
+            live_job["status"] = "deleted"
+            live_job["stage"] = "deleted"
+            live_job["result"] = None
+            live_job["cancel_requested"] = True
+    log_library_import_job(job_id, f"Deleted import batch {batch_id}", level="warn")
+    return {
+        "batch_id": batch_id,
+        "deleted_papers": int(paper_count or 0),
+        "deleted_resources": int(resource_count or 0),
+        "deleted_folders": deleted_folders,
+        "deleted_paths": deleted_paths,
+    }
+
+
+def cleanup_empty_import_folders(storage: Storage, started_at: str) -> int:
+    if not started_at:
+        return 0
+    deleted = 0
+    while True:
+        rows = storage.conn.execute(
+            """
+            SELECT folder.id
+            FROM library_folders AS folder
+            LEFT JOIN library_folders AS child ON child.parent_id = folder.id
+            LEFT JOIN library_items AS item ON item.folder_id = folder.id
+            WHERE folder.id NOT IN (1)
+              AND folder.created_at >= ?
+              AND child.id IS NULL
+              AND item.id IS NULL
+            """,
+            (started_at,),
+        ).fetchall()
+        if not rows:
+            return deleted
+        for row in rows:
+            storage.conn.execute("DELETE FROM library_folders WHERE id = ?", (int(row["id"]),))
+            deleted += 1
+
+
+def delete_import_path(path_value: str, allowed_root: Path) -> bool:
+    if not path_value:
+        return False
+    try:
+        path = Path(path_value).expanduser().resolve()
+        root = allowed_root.resolve()
+    except OSError:
+        return False
+    if not is_allowed_file(path, [root]) or not path.exists():
+        return False
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
@@ -4925,10 +5129,19 @@ INDEX_HTML = """<!doctype html>
     }
     .loader-form {
       display: grid;
-      grid-template-columns: minmax(280px, 1fr) 90px auto auto auto;
+      grid-template-columns: minmax(280px, 1fr) 90px auto auto 104px;
+      grid-template-areas:
+        "path mode choose run stop"
+        "path mode choose run delete";
       gap: 8px;
       align-items: center;
     }
+    .loader-form input { grid-area: path; }
+    .loader-form select { grid-area: mode; }
+    #libraryChooseFolder { grid-area: choose; }
+    #libraryRunImport { grid-area: run; }
+    #libraryStopImport { grid-area: stop; width: 104px; min-height: 30px; align-self: end; }
+    #libraryDeleteImport { grid-area: delete; width: 104px; min-height: 30px; align-self: start; }
     .loader-form input,
     .loader-form select {
       min-height: 36px;
@@ -4964,7 +5177,13 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
       gap: 12px;
     }
+    .loader-console-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
     .loader-console {
+      height: 100%;
       min-height: 0;
       overflow: auto;
       border: 1px solid #1f2937;
@@ -4973,13 +5192,82 @@ INDEX_HTML = """<!doctype html>
       color: #e5e7eb;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
-      line-height: 1.45;
-      padding: 12px;
-      white-space: pre-wrap;
+      line-height: 1.25;
+      padding: 8px;
+      white-space: normal;
       user-select: text;
     }
-    .loader-line.error { color: #fecaca; }
-    .loader-line.warn { color: #fde68a; }
+    .loader-line {
+      display: grid;
+      grid-template-columns: 56px 112px minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+      padding: 3px 5px;
+      border-left: 3px solid transparent;
+      border-radius: 5px;
+      line-height: 1.22;
+    }
+    .loader-line + .loader-line { margin-top: 2px; }
+    .loader-line.file-start { margin-top: 9px; }
+    .loader-line.folder-enter { margin-top: 13px; margin-bottom: 5px; }
+    .loader-line.enter { margin-top: 13px; margin-bottom: 5px; }
+    .loader-line:first-child { margin-top: 0; }
+    .loader-line.scan { color: #bfdbfe; border-left-color: #60a5fa; background: rgba(96, 165, 250, 0.08); }
+    .loader-line.doi-ok { color: #bbf7d0; border-left-color: #22c55e; background: rgba(34, 197, 94, 0.10); }
+    .loader-line.doi-missing { color: #fde68a; border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+    .loader-line.metadata { color: #ddd6fe; border-left-color: #a78bfa; background: rgba(167, 139, 250, 0.10); }
+    .loader-line.import { color: #bae6fd; border-left-color: #38bdf8; background: rgba(56, 189, 248, 0.08); }
+    .loader-line.enter { color: #fed7aa; border-left-color: #f97316; background: rgba(249, 115, 22, 0.10); }
+    .loader-line.file { color: #d1d5db; border-left-color: #9ca3af; background: rgba(156, 163, 175, 0.08); }
+    .loader-line.done { color: #ccfbf1; border-left-color: #14b8a6; background: rgba(20, 184, 166, 0.12); }
+    .loader-line.error { color: #fecaca; border-left-color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+    .loader-line.warn { color: #fde68a; border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+    .loader-badge {
+      display: inline-flex;
+      justify-content: center;
+      min-width: 50px;
+      padding: 1px 5px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.10);
+      color: currentColor;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.5;
+      text-transform: uppercase;
+    }
+    .loader-time { color: #9ca3af; font-variant-numeric: tabular-nums; }
+    .loader-message { min-width: 0; overflow-wrap: anywhere; }
+    .loader-message {
+      white-space: pre-wrap;
+    }
+    .loader-token-doi {
+      color: #ffffff;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 4px;
+      padding: 0 3px;
+    }
+    .loader-jump-latest {
+      position: absolute;
+      right: 16px;
+      bottom: 14px;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(15, 23, 42, 0.86);
+      color: #e5e7eb;
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      line-height: 1;
+      z-index: 4;
+    }
+    .loader-jump-latest.open { display: flex; }
+    .loader-jump-latest:hover { border-color: #93c5fd; color: #bfdbfe; }
     .loader-result {
       color: var(--muted);
       font-size: 12px;
@@ -5728,7 +6016,10 @@ INDEX_HTML = """<!doctype html>
       .paper-head { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
-      .loader-form { grid-template-columns: 1fr; }
+      .loader-form {
+        grid-template-columns: 1fr;
+        grid-template-areas: "path" "mode" "choose" "run" "stop" "delete";
+      }
       .loader-main { grid-template-columns: 1fr; }
       .library-quicklook { top: 24px; left: 4vw; width: 92vw; height: 70vh; }
       .library-quicklook-body { grid-template-columns: 78px minmax(0, 1fr); }
@@ -5918,6 +6209,8 @@ INDEX_HTML = """<!doctype html>
       libraryImportJob: null,
       libraryImportPoller: null,
       libraryImportMissingIndex: 0,
+      libraryImportMissingDoiIndex: 0,
+      libraryImportFollowLatest: true,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -7837,7 +8130,10 @@ INDEX_HTML = """<!doctype html>
       const job = state.libraryImportJob || {};
       const result = state.libraryImportLastResult || job.result || null;
       const percent = Number(job.percent || 0);
-      const status = state.libraryImportStatus || (job.status ? `${job.status} · ${job.stage || ""}` : "Idle");
+      const status = state.libraryImportStatus || loaderStatusText(job);
+      const previousConsole = $("libraryLoaderConsole");
+      const consoleWasAtBottom = isLoaderConsoleAtBottom(previousConsole);
+      const previousConsoleScrollTop = previousConsole?.scrollTop || 0;
       root.innerHTML = `
         <div class="loader-panel">
           <div class="loader-head">
@@ -7854,8 +8150,9 @@ INDEX_HTML = """<!doctype html>
               <option value="link"${state.libraryImportCopyMode === "link" ? " selected" : ""}>Link</option>
             </select>
             <button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>
-            <button class="smallbtn" id="libraryDryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Dry Run</button>
             <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Import</button>
+            <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>Stop Import</button>
+            <button class="smallbtn danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>
           </div>
           <div class="loader-progress">
             <span id="libraryImportStatus">${escapeHtml(status)}</span>
@@ -7864,7 +8161,10 @@ INDEX_HTML = """<!doctype html>
           </div>
           ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
           <div class="loader-main">
-            <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
+            <div class="loader-console-wrap">
+              <div class="loader-console" id="libraryLoaderConsole">${loaderConsoleMarkup(job)}</div>
+              <button class="loader-jump-latest${state.libraryImportFollowLatest ? "" : " open"}" id="loaderJumpLatest" type="button" title="Jump to latest">↓</button>
+            </div>
             <aside class="loader-side" id="libraryLoaderSide">${loaderSideMarkup(result)}</aside>
           </div>
         </div>
@@ -7875,8 +8175,43 @@ INDEX_HTML = """<!doctype html>
         stopLibraryImportPolling();
         await loadLibrary();
       });
+      resumeLibraryImportPollingIfNeeded();
       const consoleEl = $("libraryLoaderConsole");
+      if (consoleEl) {
+        consoleEl.scrollTop = state.libraryImportFollowLatest || consoleWasAtBottom ? consoleEl.scrollHeight : previousConsoleScrollTop;
+        wireLoaderConsoleScroll(consoleEl);
+      }
+      $("loaderJumpLatest")?.addEventListener("click", jumpLoaderConsoleToLatest);
+    }
+
+    function loaderStatusText(job) {
+      if (!job?.status) return "Idle";
+      const base = `${job.status}${job.stage ? ` · ${job.stage}` : ""}`;
+      if (job.stage === "scan") {
+        return `${base} · ${job.scan_files || 0} files · ${job.scan_dirs || 0} folders`;
+      }
+      return base;
+    }
+
+    function isLoaderConsoleAtBottom(consoleEl) {
+      if (!consoleEl) return true;
+      return consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 20;
+    }
+
+    function wireLoaderConsoleScroll(consoleEl) {
+      consoleEl.addEventListener("scroll", () => {
+        const atBottom = isLoaderConsoleAtBottom(consoleEl);
+        state.libraryImportFollowLatest = atBottom;
+        $("loaderJumpLatest")?.classList.toggle("open", !atBottom);
+      }, {passive: true});
+      $("loaderJumpLatest")?.classList.toggle("open", !state.libraryImportFollowLatest);
+    }
+
+    function jumpLoaderConsoleToLatest() {
+      const consoleEl = $("libraryLoaderConsole");
+      state.libraryImportFollowLatest = true;
       if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+      $("loaderJumpLatest")?.classList.remove("open");
     }
 
     function loaderResultSummary(result) {
@@ -7885,6 +8220,8 @@ INDEX_HTML = """<!doctype html>
         `${result.updated_papers || 0} updated`,
         `${result.resources_or_attachments_to_import || 0} resources/attachments`,
         `${result.reused_existing_files || 0} reused`,
+        `${result.pdf_doi_extracted_count || 0} DOI found`,
+        `${result.pdf_doi_missing_count || 0} no DOI`,
         `${result.skipped || 0} skipped`,
         `${result.missing_source_files || 0} missing`,
         result.report_path ? `Report: ${result.report_path}` : ""
@@ -7893,21 +8230,78 @@ INDEX_HTML = """<!doctype html>
 
     function loaderConsoleMarkup(job) {
       const logs = Array.isArray(job.logs) ? job.logs : [];
-      if (!logs.length) return escapeHtml("Ready. Choose a folder, then run Dry Run before Import.");
+      if (!logs.length) return escapeHtml("Ready. Choose a folder, then run Import.");
       return logs.map((entry) => {
-        const level = entry.level || "info";
+        const message = entry.message || "";
+        const kind = loaderLogKind(entry);
+        const groupClass = loaderLogGroupClass(message);
+        const label = loaderLogLabel(kind);
         const time = String(entry.time || "").split("T").pop() || "";
-        return `<div class="loader-line ${escapeAttr(level)}">[${escapeHtml(time)}] ${escapeHtml(entry.message || "")}</div>`;
+        return `
+          <div class="loader-line ${escapeAttr(kind)} ${escapeAttr(groupClass)}">
+            <span class="loader-badge">${escapeHtml(label)}</span>
+            <span class="loader-time">${escapeHtml(time)}</span>
+            <span class="loader-message">${loaderLogMessageMarkup(message)}</span>
+          </div>
+        `;
       }).join("");
+    }
+
+    function loaderLogGroupClass(message) {
+      const text = String(message || "");
+      if (text.startsWith("Entering ")) return "folder-enter";
+      if (text.startsWith("Reading first PDF page")) return "file-start";
+      return "";
+    }
+
+    function loaderLogKind(entry) {
+      const level = String(entry.level || "info");
+      const message = String(entry.message || "");
+      if (level === "error" || /failed|error/i.test(message)) return "error";
+      if (level === "warn" || /warning/i.test(message)) return "warn";
+      if (message.startsWith("DOI extracted:")) return "doi-ok";
+      if (message.startsWith("No DOI extracted")) return "doi-missing";
+      if (message.startsWith("Refreshing Details metadata")) return "metadata";
+      if (message.startsWith("Stop requested") || message.includes("stopped by user")) return "warn";
+      if (message.startsWith("Deleted import batch")) return "warn";
+      if (message.startsWith("Importing") || message.startsWith("Imported/checkpoint")) return "import";
+      if (message.startsWith("Entering ")) return "enter";
+      if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
+      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Mode:")) return "file";
+      if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for")) return "done";
+      return "info";
+    }
+
+    function loaderLogLabel(kind) {
+      return {
+        "doi-ok": "DOI",
+        "doi-missing": "NO DOI",
+        metadata: "META",
+        import: "IMPORT",
+        enter: "ENTER",
+        scan: "SCAN",
+        file: "FILE",
+        done: "DONE",
+        error: "ERROR",
+        warn: "WARN",
+        info: "INFO"
+      }[kind] || "INFO";
+    }
+
+    function loaderLogMessageMarkup(message) {
+      const escaped = escapeHtml(message || "");
+      return escaped.replace(/(10\.\d{4,9}\/[^\s<]+)/gi, '<span class="loader-token-doi">$1</span>');
     }
 
     function loaderSideMarkup(result) {
       if (!result) {
         return `
           <h3>Result Guide</h3>
-          <p>Run Dry Run first. After a loader job finishes, this panel explains each number and lists missing files.</p>
+          <p>After an import finishes, this panel explains each number and lists files that need attention.</p>
           <div class="loader-metric"><strong>Created</strong><span>new paper records.</span></div>
           <div class="loader-metric"><strong>Updated</strong><span>existing paper records matched by DOI, arXiv, or source path.</span></div>
+          <div class="loader-metric"><strong>DOI found</strong><span>PDF files where the loader extracted a DOI from the first page or filename.</span></div>
+          <div class="loader-metric"><strong>No DOI</strong><span>PDF files that did not expose a DOI during the loader scan.</span></div>
           <div class="loader-metric"><strong>Resources</strong><span>PDF attachments plus non-PDF resource files.</span></div>
           <div class="loader-metric"><strong>Skipped</strong><span>system metadata and macOS aliases; source files are not deleted.</span></div>
           <div class="loader-metric"><strong>Missing</strong><span>paths recorded in the scan but not readable during import.</span></div>
@@ -7916,15 +8310,31 @@ INDEX_HTML = """<!doctype html>
       const missing = Array.isArray(result.missing_sources) ? result.missing_sources : [];
       const selectedIndex = Math.max(0, Math.min(Number(state.libraryImportMissingIndex || 0), Math.max(0, missing.length - 1)));
       const selected = missing[selectedIndex] || null;
+      const missingDoi = Array.isArray(result.pdfs_without_doi) ? result.pdfs_without_doi : [];
+      const doiIndex = Math.max(0, Math.min(Number(state.libraryImportMissingDoiIndex || 0), Math.max(0, missingDoi.length - 1)));
+      const selectedDoi = missingDoi[doiIndex] || null;
       return `
         <h3>Result Guide</h3>
         <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Journal Monitor.</span></div>
         <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known papers matched and refreshed instead of duplicated.</span></div>
+        <div class="loader-metric"><strong>${result.pdf_doi_extracted_count || 0} DOI found</strong><span>PDF files where the loader found a DOI from the first page or filename.</span></div>
+        <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI</strong><span>PDF files imported by path identity because no DOI was extracted.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
         <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Journal Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
         <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
         <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>
+        <h3 style="margin-top:12px;">PDFs Without DOI</h3>
+        ${missingDoi.length ? `
+          <div class="loader-missing-tools">
+            <select id="loaderMissingDoiSelect">
+              ${missingDoi.map((item, index) => `<option value="${index}"${index === doiIndex ? " selected" : ""}>${escapeHtml(`${index + 1}. ${item.filename || item.relative_path || item.source_path || "PDF without DOI"}`)}</option>`).join("")}
+            </select>
+            <button class="smallbtn" id="loaderRevealMissingDoi" type="button">Show in Finder</button>
+          </div>
+          <div class="loader-missing-path">${escapeHtml(selectedDoi?.source_path || "")}</div>
+          ${selectedDoi?.parse_status ? `<div class="loader-missing-path">Parse: ${escapeHtml(selectedDoi.parse_status)}${selectedDoi.parse_error ? ` · ${escapeHtml(selectedDoi.parse_error)}` : ""}</div>` : ""}
+        ` : `<p>All scanned PDF paper candidates had a DOI.</p>`}
         <h3 style="margin-top:12px;">Missing Files</h3>
         ${missing.length ? `
           <div class="loader-missing-tools">
@@ -7944,7 +8354,16 @@ INDEX_HTML = """<!doctype html>
         state.libraryImportMissingIndex = Number(select.value || 0);
         renderLibraryLoader();
       });
+      const doiSelect = $("loaderMissingDoiSelect");
+      doiSelect?.addEventListener("change", () => {
+        state.libraryImportMissingDoiIndex = Number(doiSelect.value || 0);
+        renderLibraryLoader();
+      });
       $("loaderRevealMissing")?.addEventListener("click", () => revealSelectedMissingFile().catch((error) => {
+        state.libraryImportStatus = error.message || "Could not open Finder";
+        renderLibraryLoader();
+      }));
+      $("loaderRevealMissingDoi")?.addEventListener("click", () => revealSelectedMissingDoiFile().catch((error) => {
         state.libraryImportStatus = error.message || "Could not open Finder";
         renderLibraryLoader();
       }));
@@ -7956,6 +8375,21 @@ INDEX_HTML = """<!doctype html>
       const item = missing[Number(state.libraryImportMissingIndex || 0)];
       const path = item?.source_path || "";
       if (!path) throw new Error("No missing file selected");
+      const res = await fetch("/api/reveal-path", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path})
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || "Could not open Finder");
+    }
+
+    async function revealSelectedMissingDoiFile() {
+      const result = state.libraryImportLastResult || state.libraryImportJob?.result || {};
+      const missing = Array.isArray(result.pdfs_without_doi) ? result.pdfs_without_doi : [];
+      const item = missing[Number(state.libraryImportMissingDoiIndex || 0)];
+      const path = item?.source_path || "";
+      if (!path) throw new Error("No PDF without DOI selected");
       const res = await fetch("/api/reveal-path", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -8092,6 +8526,8 @@ INDEX_HTML = """<!doctype html>
       const summary = result ? [
         `${result.created_papers || 0} create`,
         `${result.updated_papers || 0} update`,
+        `${result.pdf_doi_extracted_count || 0} DOI`,
+        `${result.pdf_doi_missing_count || 0} no DOI`,
         `${result.resources_or_attachments_to_import || 0} resources`,
         `${result.skipped || 0} skipped`,
         `${result.missing_source_files || 0} missing`,
@@ -8101,10 +8537,12 @@ INDEX_HTML = """<!doctype html>
       const statusClass = result?.errors?.length ? " err" : (result ? " ok" : "");
       statusEl.textContent = status;
       statusEl.className = `toolbar-import-status${status ? " open" : ""}${statusClass}`;
-      ["libraryDryRunImport", "libraryRunImport"].forEach((id) => {
-        const button = $(id);
-        if (button) button.disabled = state.libraryImportBusy;
-      });
+      const runButton = $("libraryRunImport");
+      const stopButton = $("libraryStopImport");
+      const deleteButton = $("libraryDeleteImport");
+      if (runButton) runButton.disabled = state.libraryImportBusy;
+      if (stopButton) stopButton.disabled = !state.libraryImportBusy;
+      if (deleteButton) deleteButton.disabled = state.libraryImportBusy;
     }
 
     function wireLibraryImportTools() {
@@ -8121,8 +8559,9 @@ INDEX_HTML = """<!doctype html>
         state.libraryImportCopyMode = copyMode.value;
       });
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
-      $("libraryDryRunImport")?.addEventListener("click", () => runLibraryFolderImport(true));
-      $("libraryRunImport")?.addEventListener("click", () => runLibraryFolderImport(false));
+      $("libraryRunImport")?.addEventListener("click", runLibraryFolderImport);
+      $("libraryStopImport")?.addEventListener("click", stopLibraryFolderImport);
+      $("libraryDeleteImport")?.addEventListener("click", deleteLibraryFolderImport);
     }
 
     async function chooseLibraryImportFolder() {
@@ -8133,13 +8572,13 @@ INDEX_HTML = """<!doctype html>
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not choose folder");
         state.libraryImportPath = data.path || "";
-        state.libraryImportStatus = "Folder selected. Run Dry Run before importing.";
+        state.libraryImportStatus = "Folder selected. Ready to import.";
         state.libraryImportLastResult = null;
         renderLibraryLoader();
       });
     }
 
-    async function runLibraryFolderImport(dryRun) {
+    async function runLibraryFolderImport() {
       const path = ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
       const copyMode = $("libraryImportCopyMode")?.value || state.libraryImportCopyMode || "copy";
       if (!path) {
@@ -8152,7 +8591,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryImportBusy = true;
       state.libraryImportPath = path;
       state.libraryImportCopyMode = copyMode;
-      state.libraryImportStatus = dryRun ? "Starting dry-run loader..." : "Starting import loader...";
+      state.libraryImportStatus = "Starting import loader...";
       state.libraryImportLastResult = null;
       state.libraryImportJob = {status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
       renderLibraryLoader();
@@ -8160,7 +8599,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({folder_path: path, copy_mode: copyMode, dry_run: dryRun})
+          body: JSON.stringify({folder_path: path, copy_mode: copyMode})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start loader");
@@ -8177,6 +8616,78 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function stopLibraryFolderImport() {
+      if (!state.libraryImportJobId || !state.libraryImportBusy) return;
+      state.libraryImportStatus = "Stopping import at the next safe checkpoint...";
+      renderLibraryLoader();
+      try {
+        const res = await fetch("/api/library/import-folder/stop", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({job_id: state.libraryImportJobId})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not stop import");
+        state.libraryImportJob = data.job || state.libraryImportJob;
+        startLibraryImportPolling();
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Could not stop import";
+        renderLibraryLoader();
+      }
+    }
+
+    async function deleteLibraryFolderImport() {
+      if (state.libraryImportBusy) return;
+      state.libraryImportStatus = "Deleting import batch...";
+      appendLibraryImportLog("Deleting import batch and copied local files...", "warn");
+      renderLibraryLoader();
+      try {
+        const res = await fetch("/api/library/import-folder/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({job_id: state.libraryImportJobId})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not delete import");
+        applyLibrarySnapshot(data);
+        const deleted = data.delete_result || {};
+        state.libraryImportBusy = false;
+        state.libraryImportJobId = "";
+        if (!state.libraryImportJob) {
+          state.libraryImportJob = {status: "deleted", stage: "deleted", logs: [], percent: 100};
+        }
+        state.libraryImportJob.status = "deleted";
+        state.libraryImportJob.stage = "deleted";
+        state.libraryImportJob.percent = 100;
+        state.libraryImportLastResult = null;
+        state.libraryImportStatus = `Deleted import: ${deleted.deleted_papers || 0} papers, ${deleted.deleted_resources || 0} resources, ${deleted.deleted_folders || 0} folders`;
+        appendLibraryImportLog(state.libraryImportStatus, "warn");
+        if (Array.isArray(deleted.deleted_paths) && deleted.deleted_paths.length) {
+          appendLibraryImportLog(`Deleted local paths: ${deleted.deleted_paths.join(", ")}`, "warn");
+        }
+        renderLibraryLoader();
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Could not delete import";
+        appendLibraryImportLog(state.libraryImportStatus, "error");
+        renderLibraryLoader();
+      }
+    }
+
+    function appendLibraryImportLog(message, level = "info") {
+      if (!state.libraryImportJob) {
+        state.libraryImportJob = {
+          status: state.libraryImportStatus || "running",
+          stage: "local",
+          logs: [],
+          percent: 0
+        };
+      }
+      const logs = Array.isArray(state.libraryImportJob.logs) ? state.libraryImportJob.logs : [];
+      logs.push({time: new Date().toISOString(), level, message});
+      if (logs.length > 500) logs.splice(0, logs.length - 500);
+      state.libraryImportJob.logs = logs;
+    }
+
     function startLibraryImportPolling() {
       stopLibraryImportPolling();
       if (!state.libraryImportJobId) return;
@@ -8190,6 +8701,13 @@ INDEX_HTML = """<!doctype html>
       state.libraryImportPoller = null;
     }
 
+    function resumeLibraryImportPollingIfNeeded() {
+      if (!state.libraryImportJobId || state.libraryImportPoller) return;
+      const status = state.libraryImportJob?.status || "";
+      if (["completed", "failed", "cancelled", "deleted"].includes(status)) return;
+      startLibraryImportPolling();
+    }
+
     async function refreshLibraryImportJob() {
       if (!state.libraryImportJobId) return;
       try {
@@ -8198,12 +8716,12 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Could not read loader progress");
         const job = data.job || {};
         state.libraryImportJob = job;
-        state.libraryImportStatus = `${job.status || "running"}${job.stage ? ` · ${job.stage}` : ""}`;
+        state.libraryImportStatus = loaderStatusText(job);
         if (job.result) state.libraryImportLastResult = job.result;
-        if (["completed", "failed"].includes(job.status)) {
+        if (["completed", "failed", "cancelled", "deleted"].includes(job.status)) {
           state.libraryImportBusy = false;
           stopLibraryImportPolling();
-          if (job.status === "completed" && !job.dry_run) {
+          if (job.status === "completed") {
             const libraryRes = await fetch("/api/library");
             const libraryData = await libraryRes.json();
             if (libraryRes.ok) applyLibrarySnapshot(libraryData);
@@ -10405,6 +10923,7 @@ INDEX_HTML = """<!doctype html>
           requestLibraryColumnReveal(parentId, "left");
         }
         renderLibrary();
+        refreshLibraryQuickLookForSelection();
         return true;
       }
       if (key === "ArrowRight") {
