@@ -60,8 +60,6 @@ LIBRARY_WORKSPACE_TAB_COUNT = 3
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
-RECENT_FETCH_REFRESH_DAYS = 14
-RECENT_FETCH_REFRESH_AFTER = timedelta(hours=6)
 ERROR_FETCH_RETRY_AFTER = timedelta(minutes=30)
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 
@@ -2304,7 +2302,6 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
         (selected, selected, *journals),
     ).fetchall()
     selected_date = date.fromisoformat(selected)
-    refresh_recent = selected_date >= today_jst() - timedelta(days=RECENT_FETCH_REFRESH_DAYS)
     now = datetime.now().astimezone()
     arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
     fetched: set[str] = set()
@@ -2318,14 +2315,10 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
                 fetched.add(journal)
             continue
         if status == "error":
-            if refresh_recent and fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
+            if fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
                 fetched.add(journal)
             continue
-        if not refresh_recent:
-            fetched.add(journal)
-            continue
-        if fetch_run_is_fresh(row["finished_at"], now, RECENT_FETCH_REFRESH_AFTER):
-            fetched.add(journal)
+        fetched.add(journal)
     missing = [journal for journal in journals if journal not in fetched]
     if ARXIV_JOURNAL_NAME in missing and now < arxiv_ready_at:
         missing.remove(ARXIV_JOURNAL_NAME)
