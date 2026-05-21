@@ -3963,17 +3963,17 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       overflow: auto;
       display: grid;
-      padding: 18px;
-      background: #68717c;
+      padding: 0;
+      background: #fff;
     }
     .library-pdf-frame {
       width: 100%;
       height: 100%;
       min-height: 0;
       border: 0;
-      border-radius: 4px;
+      border-radius: 0;
       background: #fff;
-      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.25);
+      box-shadow: none;
     }
     .library-quicklook-placeholder {
       min-height: 100%;
