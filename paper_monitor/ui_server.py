@@ -9754,6 +9754,19 @@ INDEX_HTML = """<!doctype html>
       if (current !== state.libraryQuickLookPage) updateLibraryQuickLookActivePage(current);
     }
 
+    function nativePdfAnnotatorAvailable() {
+      return Boolean(window.webkit?.messageHandlers?.openPdfAnnotator);
+    }
+
+    function openNativePdfAnnotator(path, options = {}) {
+      if (!nativePdfAnnotatorAvailable() || !path) return false;
+      window.webkit.messageHandlers.openPdfAnnotator.postMessage({
+        path,
+        toggle: Boolean(options.toggle)
+      });
+      return true;
+    }
+
     async function loadLibraryQuickLookInfo(path) {
       try {
         const res = await fetch(`/api/pdf-info?path=${encodeURIComponent(path)}`);
@@ -9771,6 +9784,15 @@ INDEX_HTML = """<!doctype html>
 
     function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
+      if (!options.webFallback && openNativePdfAnnotator(paper.merged_pdf_path, options)) {
+        closeLibraryQuickLook();
+        const status = $("libraryDetailStatus");
+        if (status && !options.silent) {
+          status.textContent = "PDF preview open";
+          status.className = "library-detail-status ok";
+        }
+        return;
+      }
       if (options.toggle && state.libraryQuickLookOpen && paper.merged_pdf_path === state.libraryQuickLookPath) {
         closeLibraryQuickLook();
         return;
