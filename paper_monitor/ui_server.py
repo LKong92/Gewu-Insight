@@ -62,6 +62,9 @@ LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_SHORTCUT_TAB_COUNT = 5
 LIBRARY_WORKSPACE_TAB_COUNT = 3
+LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
+LIBRARY_NAMING_RULES = {"title", "citation"}
+DEFAULT_LIBRARY_NAMING_RULE = "citation"
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -175,6 +178,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library":
                 self.handle_library(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/settings/library-naming":
+                self.handle_get_library_naming_rule()
+                return
             if parsed.path == "/api/my-publications":
                 self.handle_my_publications(parse_qs(parsed.query))
                 return
@@ -239,6 +245,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
+                return
+            if parsed.path == "/api/settings/library-naming":
+                self.handle_set_library_naming_rule(payload)
                 return
             if parsed.path == "/api/library/items/rename":
                 self.handle_rename_library_item(payload)
@@ -959,6 +968,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
             item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+            if item and not item.get("display_name"):
+                naming_rule = library_naming_rule(storage)
+                item = storage.rename_library_item(
+                    item_id=int(item["id"]),
+                    name=default_library_item_display_name(paper, rule=naming_rule),
+                )
             snapshot = library_snapshot(storage)
         finally:
             storage.close()
@@ -967,6 +982,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             "folder": library_folder_to_api(target_folder) if target_folder else None,
             **snapshot,
         })
+
+    def handle_get_library_naming_rule(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            rule = library_naming_rule(storage)
+        finally:
+            storage.close()
+        self.send_json({"rule": rule})
+
+    def handle_set_library_naming_rule(self, payload: dict[str, Any]) -> None:
+        rule = str(payload.get("rule") or "").strip().lower()
+        if rule not in LIBRARY_NAMING_RULES:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Naming rule must be title or citation")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(LIBRARY_NAMING_RULE_SETTING, rule)
+        finally:
+            storage.close()
+        self.send_json({"rule": rule})
 
     def handle_rename_library_item(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or 0)
@@ -1957,6 +1992,20 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "trashed_at": item.get("trashed_at") or "",
         "paper": paper_to_api(paper),
     }
+
+
+def library_naming_rule(storage: Storage) -> str:
+    rule = storage.get_setting(LIBRARY_NAMING_RULE_SETTING, DEFAULT_LIBRARY_NAMING_RULE).strip().lower()
+    return rule if rule in LIBRARY_NAMING_RULES else DEFAULT_LIBRARY_NAMING_RULE
+
+
+def default_library_item_display_name(paper: dict[str, Any], *, rule: str = DEFAULT_LIBRARY_NAMING_RULE) -> str:
+    if rule == "title":
+        label = paper.get("title") or citation_label(paper) or "Untitled paper"
+    else:
+        label = citation_label(paper) or paper.get("title") or "Untitled paper"
+    label = re.sub(r"^(.+?) et al\.(\s+)", r"\1\2", clean_text(label))
+    return re.sub(r"\s+", "_", label).strip("_") or "Untitled_paper"
 
 
 def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
@@ -8855,7 +8904,7 @@ INDEX_HTML = """<!doctype html>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
-          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Refresh PDF</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           <button class="action danger" data-action="remove-library-paper">Remove from Library</button>
@@ -8917,7 +8966,7 @@ INDEX_HTML = """<!doctype html>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
-          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Refresh PDF</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
         </div>

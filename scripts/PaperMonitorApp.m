@@ -7,6 +7,8 @@
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
+@property(nonatomic, strong) NSMenuItem *titleNamingItem;
+@property(nonatomic, strong) NSMenuItem *citationNamingItem;
 @end
 
 @implementation PaperMonitorDelegate
@@ -119,6 +121,20 @@
     [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
     editMenuItem.submenu = editMenu;
 
+    NSMenuItem *settingMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:settingMenuItem];
+    NSMenu *settingMenu = [[NSMenu alloc] initWithTitle:@"Setting"];
+    NSMenuItem *namingRuleMenuItem = [[NSMenuItem alloc] initWithTitle:@"Naming Rule" action:nil keyEquivalent:@""];
+    NSMenu *namingRuleMenu = [[NSMenu alloc] initWithTitle:@"Naming Rule"];
+    self.titleNamingItem = [namingRuleMenu addItemWithTitle:@"Use Title" action:@selector(useTitleNamingRule:) keyEquivalent:@""];
+    self.titleNamingItem.target = self;
+    self.citationNamingItem = [namingRuleMenu addItemWithTitle:@"Use Citation" action:@selector(useCitationNamingRule:) keyEquivalent:@""];
+    self.citationNamingItem.target = self;
+    self.citationNamingItem.state = NSControlStateValueOn;
+    namingRuleMenuItem.submenu = namingRuleMenu;
+    [settingMenu addItem:namingRuleMenuItem];
+    settingMenuItem.submenu = settingMenu;
+
     NSApp.mainMenu = mainMenu;
 }
 
@@ -208,6 +224,58 @@
 
 - (void)loadApp {
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];
+    [self refreshLibraryNamingRuleMenu];
+}
+
+- (void)useTitleNamingRule:(id)sender {
+    [self setLibraryNamingRule:@"title"];
+}
+
+- (void)useCitationNamingRule:(id)sender {
+    [self setLibraryNamingRule:@"citation"];
+}
+
+- (void)updateLibraryNamingRuleMenu:(NSString *)rule {
+    BOOL useTitle = [rule isEqualToString:@"title"];
+    self.titleNamingItem.state = useTitle ? NSControlStateValueOn : NSControlStateValueOff;
+    self.citationNamingItem.state = useTitle ? NSControlStateValueOff : NSControlStateValueOn;
+}
+
+- (void)setLibraryNamingRule:(NSString *)rule {
+    [self updateLibraryNamingRuleMenu:rule];
+    NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/settings/library-naming"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = [[NSString stringWithFormat:@"{\"rule\":\"%@\"}", rule] dataUsingEncoding:NSUTF8StringEncoding];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error) {
+            return;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateLibraryNamingRuleMenu:rule];
+        });
+    }] resume];
+}
+
+- (void)refreshLibraryNamingRuleMenu {
+    NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/settings/library-naming"];
+    NSURLRequest *request = [NSURLRequest requestWithURL:endpoint];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error || !data) {
+            return;
+        }
+        NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        NSString *rule = [payload isKindOfClass:[NSDictionary class]] ? payload[@"rule"] : nil;
+        if (![rule isKindOfClass:[NSString class]]) {
+            return;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateLibraryNamingRuleMenu:rule];
+        });
+    }] resume];
 }
 
 - (void)presentStartupFailure:(NSString *)message {
