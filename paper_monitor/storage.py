@@ -447,6 +447,50 @@ class Storage:
         )
         self.conn.commit()
 
+    def start_fetch_run(
+        self,
+        *,
+        monitor_type: str,
+        source: str,
+        journal: str | None,
+        window_start: str,
+        window_end: str,
+        started_at: str,
+    ) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO fetch_runs (
+              monitor_type, source, journal, window_start, window_end, status,
+              records_found, message, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                monitor_type,
+                source,
+                journal,
+                window_start,
+                window_end,
+                "running",
+                0,
+                "",
+                started_at,
+                started_at,
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def finish_fetch_run(self, fetch_run_id: int, *, status: str, records_found: int, message: str = "") -> None:
+        self.conn.execute(
+            """
+            UPDATE fetch_runs
+            SET status = ?, records_found = ?, message = ?, finished_at = ?
+            WHERE id = ?
+            """,
+            (status, int(records_found), message, now_iso(), int(fetch_run_id)),
+        )
+        self.conn.commit()
+
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM papers WHERE paper_id = ?", (paper_id,)).fetchone()
         return dict(row) if row else None

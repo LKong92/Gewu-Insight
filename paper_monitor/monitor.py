@@ -60,94 +60,96 @@ def fetch_one_journal(
     enrich: bool,
 ) -> dict[str, Any]:
     started_at = now_iso()
-    collected: list[dict[str, Any]] = []
-    source_counts: dict[str, int] = {}
-
-    crossref_result = _run_source(
-        storage=storage,
-        source="crossref",
-        journal_name=journal.name,
-        start_date=start_date,
-        end_date=end_date,
-        record_success=False,
-        fetch=lambda: fetch_crossref_journal(
-            journal_name=journal.name,
-            issns=journal.issns,
-            start_date=start_date,
-            end_date=end_date,
-        ),
-    )
-    crossref_items = crossref_result["papers"]
-    source_counts["crossref"] = len(crossref_items)
-    collected.extend(crossref_items)
-    source_statuses = {"crossref": crossref_result["status"]}
-    source_errors = 1 if crossref_result["status"] == "error" else 0
-    source_attempts = 1
-
-    if journal.openalex_source_id:
-        openalex_result = _run_source(
-            storage=storage,
-            source="openalex",
-            journal_name=journal.name,
-            start_date=start_date,
-            end_date=end_date,
-            record_success=False,
-            fetch=lambda: fetch_openalex_journal(
-                journal_name=journal.name,
-                source_id=journal.openalex_source_id or "",
-                start_date=start_date,
-                end_date=end_date,
-            ),
-        )
-        openalex_items = openalex_result["papers"]
-        source_counts["openalex"] = len(openalex_items)
-        collected.extend(openalex_items)
-        source_statuses["openalex"] = openalex_result["status"]
-        source_errors += 1 if openalex_result["status"] == "error" else 0
-        source_attempts += 1
-
-    policy = config.section_policies.get(journal.section_policy, {})
-    saved = 0
-    blocked = 0
-    for paper in dedup_by_id(collected):
-        apply_fast_section_hints(paper, journal)
-        if enrich and not journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
-            paper = enrich_from_landing_page(
-                paper,
-                section_policy=policy,
-                keep_unknown=config.keep_unknown_sections,
-            )
-        elif paper.get("section_allowed") is None:
-            paper["section_allowed"] = config.keep_unknown_sections
-        if enrich and journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
-            paper = enrich_image_from_landing_page(paper)
-
-        if paper.get("section_allowed") is False:
-            blocked += 1
-
-        storage.upsert_paper(paper)
-        saved += 1
-
-    storage.record_fetch_run(
+    fetch_run_id = storage.start_fetch_run(
         monitor_type="journal",
         source="journal",
         journal=journal.name,
         window_start=start_date.isoformat(),
         window_end=end_date.isoformat(),
-        status=journal_fetch_status(saved=saved, source_errors=source_errors, source_attempts=source_attempts),
-        records_found=saved,
         started_at=started_at,
-        message="",
     )
+    collected: list[dict[str, Any]] = []
+    source_counts: dict[str, int] = {}
+    saved = 0
+    try:
+        crossref_result = _run_source(
+            storage=storage,
+            source="crossref",
+            journal_name=journal.name,
+            start_date=start_date,
+            end_date=end_date,
+            record_success=False,
+            fetch=lambda: fetch_crossref_journal(
+                journal_name=journal.name,
+                issns=journal.issns,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+        )
+        crossref_items = crossref_result["papers"]
+        source_counts["crossref"] = len(crossref_items)
+        collected.extend(crossref_items)
+        source_statuses = {"crossref": crossref_result["status"]}
+        source_errors = 1 if crossref_result["status"] == "error" else 0
+        source_attempts = 1
 
-    return {
-        "source_counts": source_counts,
-        "source_statuses": source_statuses,
-        "source_attempts": source_attempts,
-        "source_errors": source_errors,
-        "saved": saved,
-        "blocked_by_section": blocked,
-    }
+        if journal.openalex_source_id:
+            openalex_result = _run_source(
+                storage=storage,
+                source="openalex",
+                journal_name=journal.name,
+                start_date=start_date,
+                end_date=end_date,
+                record_success=False,
+                fetch=lambda: fetch_openalex_journal(
+                    journal_name=journal.name,
+                    source_id=journal.openalex_source_id or "",
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
+            )
+            openalex_items = openalex_result["papers"]
+            source_counts["openalex"] = len(openalex_items)
+            collected.extend(openalex_items)
+            source_statuses["openalex"] = openalex_result["status"]
+            source_errors += 1 if openalex_result["status"] == "error" else 0
+            source_attempts += 1
+
+        policy = config.section_policies.get(journal.section_policy, {})
+        blocked = 0
+        for paper in dedup_by_id(collected):
+            apply_fast_section_hints(paper, journal)
+            if enrich and not journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
+                paper = enrich_from_landing_page(
+                    paper,
+                    section_policy=policy,
+                    keep_unknown=config.keep_unknown_sections,
+                )
+            elif paper.get("section_allowed") is None:
+                paper["section_allowed"] = config.keep_unknown_sections
+            if enrich and journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
+                paper = enrich_image_from_landing_page(paper)
+
+            if paper.get("section_allowed") is False:
+                blocked += 1
+
+            storage.upsert_paper(paper)
+            saved += 1
+
+        status = journal_fetch_status(saved=saved, source_errors=source_errors, source_attempts=source_attempts)
+        storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message="")
+
+        return {
+            "source_counts": source_counts,
+            "source_statuses": source_statuses,
+            "source_attempts": source_attempts,
+            "source_errors": source_errors,
+            "saved": saved,
+            "blocked_by_section": blocked,
+        }
+    except Exception as exc:
+        storage.finish_fetch_run(fetch_run_id, status="error", records_found=saved, message=str(exc))
+        raise
 
 
 def fetch_one_arxiv_preprint_source(
@@ -158,6 +160,16 @@ def fetch_one_arxiv_preprint_source(
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
     selected_categories = categories or ARXIV_DEFAULT_CATEGORIES
+    started_at = now_iso()
+    fetch_run_id = storage.start_fetch_run(
+        monitor_type="journal",
+        source="arxiv",
+        journal=ARXIV_JOURNAL_NAME,
+        window_start=start_date.isoformat(),
+        window_end=end_date.isoformat(),
+        started_at=started_at,
+    )
+    saved = 0
     arxiv_result = _run_source(
         storage=storage,
         source="arxiv",
@@ -165,31 +177,25 @@ def fetch_one_arxiv_preprint_source(
         start_date=start_date,
         end_date=end_date,
         record_success=False,
+        record_error=False,
         fetch=lambda: fetch_arxiv_condensed_matter(
             start_date=start_date,
             end_date=end_date,
             categories=selected_categories,
         ),
     )
-    saved = 0
     for paper in dedup_by_id(arxiv_result["papers"]):
         paper["publisher_section"] = paper.get("publisher_section") or "preprint"
         paper["section_allowed"] = True
         storage.upsert_paper(paper)
         saved += 1
 
-    if arxiv_result["status"] != "error":
-        storage.record_fetch_run(
-            monitor_type="journal",
-            source="arxiv",
-            journal=ARXIV_JOURNAL_NAME,
-            window_start=start_date.isoformat(),
-            window_end=end_date.isoformat(),
-            status=arxiv_result["status"],
-            records_found=saved,
-            started_at=arxiv_result["started_at"],
-            message=arxiv_result.get("message") or "",
-        )
+    storage.finish_fetch_run(
+        fetch_run_id,
+        status=arxiv_result["status"],
+        records_found=saved,
+        message=arxiv_result.get("message") or "",
+    )
 
     return {
         "source_counts": {"arxiv": len(arxiv_result["papers"])},
@@ -317,6 +323,7 @@ def _run_source(
     end_date: date,
     fetch,
     record_success: bool = True,
+    record_error: bool = True,
 ) -> dict[str, Any]:
     started_at = now_iso()
     try:
@@ -337,17 +344,18 @@ def _run_source(
         return {"papers": papers, "status": status, "message": "", "started_at": started_at}
     except Exception as exc:
         message = str(exc)
-        storage.record_fetch_run(
-            monitor_type="journal",
-            source=source,
-            journal=journal_name,
-            window_start=start_date.isoformat(),
-            window_end=end_date.isoformat(),
-            status="error",
-            records_found=0,
-            started_at=started_at,
-            message=message,
-        )
+        if record_error:
+            storage.record_fetch_run(
+                monitor_type="journal",
+                source=source,
+                journal=journal_name,
+                window_start=start_date.isoformat(),
+                window_end=end_date.isoformat(),
+                status="error",
+                records_found=0,
+                started_at=started_at,
+                message=message,
+            )
         return {"papers": [], "status": "error", "message": message, "started_at": started_at}
 
 

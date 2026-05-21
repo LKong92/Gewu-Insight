@@ -68,9 +68,8 @@ DEFAULT_LIBRARY_NAMING_RULE = "citation"
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
-ERROR_FETCH_RETRY_AFTER = timedelta(minutes=30)
-RECENT_JOURNAL_REFRESH_AFTER = timedelta(minutes=90)
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
+INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -368,7 +367,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             selected_date = date.fromisoformat(selected)
             missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
-            sources_to_fetch = self.configured_journals if force_fetch else missing_journals
+            sources_to_fetch = manual_refresh_journals_for_date(selected, self.configured_journals) if force_fetch else missing_journals
             if (force_fetch or auto_fetch) and selected_date <= today_jst() and sources_to_fetch and try_start_fetch(selected):
                 storage.close()
                 fetch_storage = None
@@ -2907,23 +2906,26 @@ def load_import_report_summary(report_path: Any) -> dict[str, Any] | None:
 
 
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
+    selected_date = date.fromisoformat(selected)
+    if selected_date > today_jst():
+        return []
     if not journals:
         return []
     placeholders = ", ".join(["?"] * len(journals))
     rows = storage.conn.execute(
         f"""
-        SELECT journal, status, records_found, finished_at
+        SELECT journal, source, status, records_found, started_at, finished_at
         FROM fetch_runs
         WHERE monitor_type = 'journal'
           AND window_start <= ?
           AND window_end >= ?
-          AND status IN ('success', 'empty', 'error')
+          AND status IN ('success', 'empty', 'error', 'running')
+          AND source IN ('journal', 'arxiv')
           AND journal IN ({placeholders})
         ORDER BY finished_at DESC, id DESC
         """,
         (selected, selected, *journals),
     ).fetchall()
-    selected_date = date.fromisoformat(selected)
     now = datetime.now().astimezone()
     arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
     fetched: set[str] = journals_with_papers_for_date(storage, selected, journals)
@@ -2932,21 +2934,36 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
         if journal in fetched:
             continue
         status = row["status"]
+        if status == "running":
+            if is_fetch_active(selected) and not running_fetch_is_stale(row["started_at"], row["finished_at"], now):
+                fetched.add(journal)
+            continue
         if journal == ARXIV_JOURNAL_NAME:
-            if not arxiv_should_attempt(selected_date, row["finished_at"], status, now, arxiv_ready_at):
+            if now < arxiv_ready_at:
                 fetched.add(journal)
-            continue
-        if status == "error":
-            if fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
-                fetched.add(journal)
-            continue
-        if recent_empty_journal_date_needs_refresh(selected_date, status, int(row["records_found"] or 0), row["finished_at"], now):
+                continue
+            if fetch_finished_before(row["finished_at"], now, arxiv_ready_at):
+                continue
+            fetched.add(journal)
             continue
         fetched.add(journal)
     missing = [journal for journal in journals if journal not in fetched]
     if ARXIV_JOURNAL_NAME in missing and now < arxiv_ready_at:
         missing.remove(ARXIV_JOURNAL_NAME)
     return missing
+
+
+def manual_refresh_journals_for_date(selected: str, journals: list[str]) -> list[str]:
+    selected_date = date.fromisoformat(selected)
+    if selected_date > today_jst():
+        return []
+    if ARXIV_JOURNAL_NAME not in journals:
+        return list(journals)
+    now = datetime.now().astimezone()
+    arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
+    if now >= arxiv_ready_at:
+        return list(journals)
+    return [journal for journal in journals if journal != ARXIV_JOURNAL_NAME]
 
 
 def journals_with_papers_for_date(storage: Storage, selected: str, journals: list[str]) -> set[str]:
@@ -2966,39 +2983,11 @@ def journals_with_papers_for_date(storage: Storage, selected: str, journals: lis
     return {row["journal"] for row in rows}
 
 
-def recent_empty_journal_date_needs_refresh(
-    selected_date: date,
-    status: str,
-    records_found: int,
-    finished_at: str,
-    now: datetime,
-) -> bool:
-    if status == "success" or records_found > 0:
-        return False
-    if status != "empty":
-        return False
-    local_today = today_jst()
-    if selected_date != local_today:
-        return False
-    return not fetch_run_is_fresh(finished_at, now, RECENT_JOURNAL_REFRESH_AFTER)
-
-
 def journal_fetch_start_date(selected_date: date) -> date:
     local_today = today_jst()
     if selected_date >= local_today:
         return selected_date - timedelta(days=1)
     return selected_date
-
-
-def arxiv_should_attempt(selected_date: date, finished_at: str, status: str, now: datetime, ready_at: datetime) -> bool:
-    if now < ready_at:
-        return False
-    finished = parse_fetch_finished_at(finished_at, now)
-    if not finished:
-        return True
-    if status == "error":
-        return now - finished > ERROR_FETCH_RETRY_AFTER
-    return finished < ready_at
 
 
 def arxiv_ready_time(selected_date: date) -> datetime:
@@ -3016,21 +3005,26 @@ def arxiv_ready_time(selected_date: date) -> datetime:
     return announcement.astimezone(local_tz) + ARXIV_ANNOUNCEMENT_BUFFER
 
 
-def parse_fetch_finished_at(finished_at: str, now: datetime) -> datetime | None:
+def parse_fetch_time(value: str, now: datetime) -> datetime | None:
     try:
-        finished = datetime.fromisoformat(finished_at)
+        parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
-    if finished.tzinfo is None:
-        finished = finished.replace(tzinfo=now.tzinfo)
-    return finished.astimezone(now.tzinfo)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=now.tzinfo)
+    return parsed.astimezone(now.tzinfo)
 
 
-def fetch_run_is_fresh(finished_at: str, now: datetime, max_age: timedelta) -> bool:
-    finished = parse_fetch_finished_at(finished_at, now)
-    if not finished:
-        return False
-    return now - finished <= max_age
+def running_fetch_is_stale(started_at: str, finished_at: str, now: datetime) -> bool:
+    started = parse_fetch_time(started_at, now) or parse_fetch_time(finished_at, now)
+    if not started:
+        return True
+    return now - started > INTERRUPTED_FETCH_RESUME_AFTER
+
+
+def fetch_finished_before(finished_at: str, now: datetime, threshold: datetime) -> bool:
+    finished = parse_fetch_time(finished_at, now)
+    return not finished or finished < threshold
 
 
 def config_for_journals(config: AppConfig, journal_names: list[str]) -> AppConfig:
@@ -5851,6 +5845,24 @@ INDEX_HTML = """<!doctype html>
       return `${year}-${month}-${day}`;
     }
 
+    function todayIsoDate() {
+      return localIsoDate(new Date());
+    }
+
+    function isFutureDateIso(value) {
+      return String(value || "") > todayIsoDate();
+    }
+
+    function updateReportRefreshButton() {
+      const button = $("refreshReport");
+      if (!button) return;
+      const disabled = isFutureDateIso(state.selectedDate) || state.fetchingDates.has(state.selectedDate);
+      button.disabled = disabled;
+      button.title = isFutureDateIso(state.selectedDate)
+        ? "Future dates cannot be refreshed"
+        : "Refresh papers for this date";
+    }
+
     function timeZoneParts(value, timeZone) {
       const parts = new Intl.DateTimeFormat("en-US", {
         timeZone,
@@ -5962,6 +5974,7 @@ INDEX_HTML = """<!doctype html>
       const showLoading = options.showLoading !== false;
       const selectedDate = state.selectedDate;
       const sequence = ++state.reportSequence;
+      updateReportRefreshButton();
       const cached = state.reportCache[selectedDate];
       if (cached) {
         setPendingFetchDate(selectedDate, reportStillFetching(cached));
@@ -6031,6 +6044,7 @@ INDEX_HTML = """<!doctype html>
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
       state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
+      updateReportRefreshButton();
       await startProgressPolling(selectedDate);
       renderCalendar();
       renderReportIfActive(selectedDate);
@@ -6052,14 +6066,10 @@ INDEX_HTML = """<!doctype html>
           return;
         }
         if ((data.missingJournals || []).length) {
-          const retryData = await retryMissingSources(selectedDate, data);
-          if (retryData) {
-            updateCalendarCountFromReport(selectedDate, retryData);
-            state.reportCache[selectedDate] = retryData;
-            if (selectedDate === state.selectedDate) {
-              const sequence = ++state.reportSequence;
-              applyReportData(selectedDate, retryData, sequence);
-            }
+          setPendingFetchDate(selectedDate, false);
+          if (selectedDate === state.selectedDate) {
+            const sequence = ++state.reportSequence;
+            applyReportData(selectedDate, data, sequence);
           }
           return;
         }
@@ -6090,6 +6100,7 @@ INDEX_HTML = """<!doctype html>
 
     function refreshCurrentReportDate() {
       const selectedDate = state.selectedDate;
+      if (isFutureDateIso(selectedDate) || state.fetchingDates.has(selectedDate)) return;
       state.noMatchDates.delete(selectedDate);
       state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""};
       refreshMissingDateInBackground(selectedDate, {forceFetch: true});
@@ -6131,6 +6142,7 @@ INDEX_HTML = """<!doctype html>
       stopProgressPolling(selectedDate);
       renderCalendar();
       renderReportIfActive(selectedDate);
+      updateReportRefreshButton();
     }
 
     function watchFetchCompletion(selectedDate) {
@@ -6155,36 +6167,6 @@ INDEX_HTML = """<!doctype html>
           finishFetchUi(selectedDate);
         }
       })();
-    }
-
-    async function retryMissingSources(selectedDate, initialData) {
-      let current = initialData;
-      for (let attempt = 0; attempt < 2 && (current.missingJournals || []).length; attempt += 1) {
-        setPendingFetchDate(selectedDate, true);
-        state.fetchingDates.add(selectedDate);
-        state.fetchProgress[selectedDate] = {
-          active: true,
-          completed: 0,
-          total: (current.missingJournals || []).length,
-          percent: 0,
-          currentJournal: (current.missingJournals || [])[0] || ""
-        };
-        await startProgressPolling(selectedDate);
-        renderReportIfActive(selectedDate);
-        current = await fetchJson(`/api/report?date=${selectedDate}`, 20 * 60 * 1000);
-        updateCalendarCountFromReport(selectedDate, current);
-        state.reportCache[selectedDate] = current;
-        if (current.fetchActive && (current.missingJournals || []).length) {
-          await waitForDateFetchToFinish(selectedDate);
-          current = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
-        }
-      }
-      setPendingFetchDate(selectedDate, false);
-      state.fetchingDates.delete(selectedDate);
-      await refreshFetchProgress(selectedDate);
-      stopProgressPolling(selectedDate);
-      renderCalendar();
-      return current;
     }
 
     function updateCalendarCountFromReport(selectedDate, data) {
@@ -7222,16 +7204,23 @@ INDEX_HTML = """<!doctype html>
         const total = Object.values(state.counts[iso] || {}).reduce((sum, value) => sum + value, 0);
         const isFetching = state.fetchingDates.has(iso);
         const hasNoMatch = state.noMatchDates.has(iso);
+        const isFuture = isFutureDateIso(iso);
         const button = document.createElement("button");
-        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${hasNoMatch ? " no-match" : ""}`;
+        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${hasNoMatch ? " no-match" : ""}${isFuture ? " future" : ""}`;
+        button.disabled = isFuture;
         button.innerHTML = `<span class="daynum">${day}</span>${
           isFetching
             ? `<span class="fetching-dot" title="Fetching"></span>`
             : `<span class="count">${total || ""}</span>`
         }`;
+        if (isFuture) {
+          root.appendChild(button);
+          continue;
+        }
         button.addEventListener("click", async () => {
           state.selectedDate = iso;
           state.activeReportJournal = "";
+          updateReportRefreshButton();
           renderCalendar();
           await loadReport();
         });
@@ -10987,6 +10976,7 @@ INDEX_HTML = """<!doctype html>
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
       updateLibrarySearchTools();
+      updateReportRefreshButton();
     }
 
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
