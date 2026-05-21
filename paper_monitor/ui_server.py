@@ -9,6 +9,7 @@ import mimetypes
 import re
 import subprocess
 import threading
+import time
 import uuid
 import webbrowser
 from datetime import date, datetime, timedelta
@@ -44,6 +45,10 @@ from .sources.publisher import enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
 from .time_utils import today_jst
+
+
+class GoogleScholarBlockedError(RuntimeError):
+    pass
 
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
@@ -258,6 +263,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/my-publications/import-scholar":
                 self.handle_import_google_scholar_publications(payload)
+                return
+            if parsed.path == "/api/my-publications/reimport":
+                self.handle_reimport_my_publication(payload)
                 return
             if parsed.path == "/api/my-publications/star":
                 self.handle_star_my_publication(payload)
@@ -564,29 +572,31 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not profile_url:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Google Scholar profile URL is required")
             return
-        limit = max(1, min(1000, int(payload.get("limit") or 500)))
+        limit = max(1, min(1000, int(payload.get("limit") or 250)))
         try:
             candidates = fetch_google_scholar_profile_publications(profile_url, limit=limit)
+        except GoogleScholarBlockedError as exc:
+            self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+            return
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar import failed: {exc}")
             return
         storage = Storage(self.configured_db_path)
         imported = 0
         skipped = 0
-        unresolved: list[str] = []
+        errors: list[str] = []
         try:
             for candidate in candidates:
-                doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
-                if not doi_candidate:
+                title = ((candidate.get("paper") or {}).get("title") or candidate.get("title") or "")
+                try:
+                    normalized = paper_from_publication_candidate(candidate)
+                    storage.upsert_paper(normalized)
+                    storage.add_my_publication(paper_id=normalized["paper_id"])
+                    imported += 1
+                except Exception as exc:
                     skipped += 1
-                    title = ((candidate.get("paper") or {}).get("title") or candidate.get("title") or "")
-                    if title:
-                        unresolved.append(str(title))
-                    continue
-                normalized = paper_from_publication_candidate(doi_candidate)
-                storage.upsert_paper(normalized)
-                storage.add_my_publication(paper_id=normalized["paper_id"])
-                imported += 1
+                    if len(errors) < 5:
+                        errors.append(f"{title or 'Untitled'}: {exc}")
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
@@ -595,10 +605,37 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "imported": imported,
                 "seen": len(candidates),
                 "skipped": skipped,
-                "unresolved": unresolved[:20],
+                "errors": errors,
                 "publications": publications,
             }
         )
+
+    def handle_reimport_my_publication(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        if not publication_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "publication_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.get_my_publication(publication_id=publication_id)
+            if not publication:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+                return
+            candidate = publication_to_reimport_candidate(publication)
+            doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
+            if not doi_candidate:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI match found for this publication")
+                return
+            normalized = paper_from_publication_candidate(doi_candidate)
+            storage.upsert_paper(normalized)
+            replaced = storage.replace_my_publication_paper(publication_id=publication_id, paper_id=normalized["paper_id"])
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Reimport failed: {exc}")
+            return
+        finally:
+            storage.close()
+        self.send_json({"publication": my_publication_to_api(replaced), "publications": publications})
 
     def handle_star_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1766,6 +1803,21 @@ def publication_candidate_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def publication_to_reimport_candidate(publication: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(publication)
+    paper = {
+        "title": publication.get("title") or "",
+        "journal": publication.get("journal") or "",
+        "publication_date": publication.get("publication_date") or raw.get("year") or "",
+        "doi": publication.get("doi") or "",
+        "url": publication.get("url") or publication.get("landing_url") or "",
+        "landing_url": publication.get("landing_url") or publication.get("url") or "",
+        "source": publication.get("source") or "manual",
+        "raw": raw,
+    }
+    return {"paper": paper, "raw": raw}
+
+
 def paper_from_publication_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else paper.get("raw")
@@ -1796,24 +1848,46 @@ def paper_from_publication_candidate(candidate: dict[str, Any]) -> dict[str, Any
     }
 
 
-def search_crossref_publications(search_text: str, *, kind: str = "auto") -> list[dict[str, Any]]:
+def search_crossref_publications(
+    search_text: str,
+    *,
+    kind: str = "auto",
+    rows: int = 12,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
     query = clean_text(search_text)
     detected = "doi" if looks_like_doi(query) else "title"
-    search_kind = kind if kind in {"doi", "title", "author"} else detected
+    search_kind = kind if kind in {"doi", "title", "author", "bibliographic"} else detected
     if search_kind == "doi":
         doi = normalize_publication_doi(query)
-        response = request_with_retries("GET", f"https://api.crossref.org/works/{quote(doi, safe='')}", timeout=20)
+        response = request_with_retries(
+            "GET",
+            f"https://api.crossref.org/works/{quote(doi, safe='')}",
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         item = response.json().get("message", {})
         if not item:
             return []
         return [normalize_crossref_item(item, clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal")]
 
-    params: dict[str, Any] = {"rows": 12, "sort": "published", "order": "desc"}
+    params: dict[str, Any] = {"rows": max(1, min(50, int(rows or 12)))}
     if search_kind == "author":
         params["query.author"] = query
+        params["sort"] = "published"
+        params["order"] = "desc"
+    elif search_kind == "bibliographic":
+        params["query.bibliographic"] = query
     else:
         params["query.title"] = query
-    response = request_with_retries("GET", "https://api.crossref.org/works", params=params, timeout=20)
+    response = request_with_retries(
+        "GET",
+        "https://api.crossref.org/works",
+        params=params,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
     items = response.json().get("message", {}).get("items", [])
     results: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1834,21 +1908,32 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
     user_id = google_scholar_user_id(profile_url)
     if not user_id:
         raise ValueError("Paste a Google Scholar profile URL that contains a user id")
-    page_size = 100
+    page_size = 50
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for start in range(0, limit, page_size):
-        response = request_with_retries(
-            "GET",
-            "https://scholar.google.com/citations",
-            params={"user": user_id, "hl": "en", "cstart": start, "pagesize": min(page_size, limit - start)},
-            headers={"Accept-Language": "en-US,en;q=0.9"},
-            timeout=25,
-            max_retries=1,
-        )
+        if start:
+            time.sleep(1.2)
+        try:
+            response = request_with_retries(
+                "GET",
+                "https://scholar.google.com/citations",
+                params={"user": user_id, "hl": "en", "cstart": start, "pagesize": min(page_size, limit - start)},
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://scholar.google.com/",
+                },
+                timeout=20,
+                max_retries=1,
+            )
+        except RuntimeError as exc:
+            if is_google_scholar_block_error(exc):
+                raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
+            raise
         html = response.text
-        if "unusual traffic" in html.lower() or "recaptcha" in html.lower():
-            raise RuntimeError("Google Scholar is asking for verification. Try again later or open the profile in a browser first.")
+        if is_google_scholar_block_page(html, response.url):
+            raise GoogleScholarBlockedError(google_scholar_block_message())
         soup = BeautifulSoup(html, "html.parser")
         rows = soup.select("tr.gsc_a_tr")
         if not rows:
@@ -1879,31 +1964,89 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
     return candidates
 
 
+def is_google_scholar_block_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return "too many requests" in text or "sorry/index" in text or "google.com/sorry" in text
+
+
+def is_google_scholar_block_page(html: str, url: str = "") -> bool:
+    text = f"{url}\n{html[:5000]}".lower()
+    return (
+        "google.com/sorry" in text
+        or "/sorry/index" in text
+        or "unusual traffic" in text
+        or "recaptcha" in text
+    )
+
+
+def google_scholar_block_message() -> str:
+    return (
+        "Google Scholar is temporarily blocking automated profile import. "
+        "Wait a while before trying again, or open the Scholar profile in your browser first; "
+        "the app will not keep retrying because that usually extends the block."
+    )
+
+
 def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     title = clean_text(paper.get("title") or "")
     year = clean_text(paper.get("publication_date") or "")
     if not title:
         return None
-    try:
-        results = search_crossref_publications(title, kind="title")
-    except Exception:
+    queries = [scholar_bibliographic_query(candidate), title]
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, query in enumerate(query for query in queries if query):
+        kind = "bibliographic" if index == 0 and query != title else "title"
+        try:
+            candidates = search_crossref_publications(query, kind=kind, rows=20, timeout=10, max_retries=1)
+        except Exception:
+            continue
+        for result in candidates:
+            key = clean_text(result.get("doi") or result.get("paper_id") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            results.append(result)
+    if not results:
         return None
     scored: list[tuple[float, dict[str, Any]]] = []
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    scholar_journal = clean_text(paper.get("journal") or raw.get("venue") or "")
+    scholar_journal_tokens = title_tokens(scholar_journal)
     for result in results:
         doi = clean_text(result.get("doi") or "")
         if not doi:
             continue
         result_title = clean_text(result.get("title") or "")
         score = title_similarity(title, result_title)
+        result_journal_tokens = title_tokens(result.get("journal") or "")
+        if scholar_journal_tokens and result_journal_tokens and scholar_journal_tokens & result_journal_tokens:
+            score += 0.04
         result_year = publication_year(result)
-        if year and result_year and year[:4] != result_year[:4]:
-            score -= 0.12
+        if year and result_year:
+            if year[:4] == result_year[:4]:
+                score += 0.04
+            else:
+                score -= 0.12
         scored.append((score, result))
     if not scored:
         return None
     score, result = max(scored, key=lambda item: item[0])
-    return result if score >= 0.82 else None
+    return result if score >= 0.76 else None
+
+
+def scholar_bibliographic_query(candidate: dict[str, Any]) -> str:
+    paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    authors = raw.get("authors") if isinstance(raw.get("authors"), list) else []
+    parts = [
+        clean_text(paper.get("title") or ""),
+        " ".join(clean_text(author) for author in authors[:3] if clean_text(author)),
+        clean_text(raw.get("venue") or paper.get("journal") or ""),
+        clean_text(paper.get("publication_date") or raw.get("year") or ""),
+    ]
+    return " ".join(part for part in parts if part)
 
 
 def title_similarity(left: str, right: str) -> float:
@@ -3978,17 +4121,19 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
     }
     .library-search-tools {
-      margin-left: auto;
+      margin-left: 4px;
       display: none;
       align-items: center;
       gap: 6px;
-      min-width: min(360px, 100%);
+      flex: 0 0 260px;
+      max-width: 260px;
+      min-width: 210px;
     }
     .library-search-tools.open { display: flex; }
     .library-search-wrap {
       position: relative;
-      flex: 1 1 220px;
-      min-width: 160px;
+      flex: 1 1 auto;
+      min-width: 0;
     }
     .library-search-wrap::before {
       content: "";
@@ -5183,10 +5328,12 @@ INDEX_HTML = """<!doctype html>
       {key: "date", label: "Date", defaultWidth: 120, minWidth: 92, maxWidth: 180},
       {key: "id", label: "ID", defaultWidth: 230, minWidth: 140, maxWidth: 520},
       {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200},
+      {key: "reimport", label: "", defaultWidth: 96, minWidth: 82, maxWidth: 150},
       {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140}
     ];
     const LIBRARY_SHORTCUT_TAB_COUNT = 5;
     const LIBRARY_WORKSPACE_TAB_COUNT = 3;
+    let librarySearchTimer = 0;
     const state = {
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
@@ -7354,6 +7501,25 @@ INDEX_HTML = """<!doctype html>
       count.textContent = state.query.trim() ? `${results} match${results === 1 ? "" : "es"}` : "";
     }
 
+    function commitLibrarySearch(value) {
+      window.clearTimeout(librarySearchTimer);
+      librarySearchTimer = 0;
+      if (state.mode !== "library" || ["loader", "my-publications"].includes(state.libraryTab || "")) return;
+      const nextQuery = String(value || "");
+      if (state.query === nextQuery) {
+        updateLibrarySearchTools();
+        return;
+      }
+      state.query = nextQuery;
+      clearLibraryRangeSelection();
+      renderActiveLibraryTab();
+    }
+
+    function scheduleLibrarySearch(value) {
+      window.clearTimeout(librarySearchTimer);
+      librarySearchTimer = window.setTimeout(() => commitLibrarySearch(value), 450);
+    }
+
     function renderLibraryShortcutTabs() {
       const root = $("libraryShortcutTabs");
       if (!root) return;
@@ -7542,7 +7708,7 @@ INDEX_HTML = """<!doctype html>
                   <tr>${myPublicationHeaderMarkup()}</tr>
                 </thead>
                 <tbody>
-                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="6"><div class="empty">No publications yet.</div></td></tr>`}
+                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="${MY_PUBLICATION_COLUMNS.length}"><div class="empty">No publications yet.</div></td></tr>`}
                 </tbody>
               </table>
             </div>
@@ -7597,6 +7763,7 @@ INDEX_HTML = """<!doctype html>
           <td>${escapeHtml(paper.publication_date || "")}</td>
           <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
           <td>${escapeHtml(paper.title || "Untitled paper")}</td>
+          <td><button class="action" type="button" data-action="reimport-publication">Reimport</button></td>
           <td><button class="action danger" type="button" data-action="delete-publication">Delete</button></td>
         </tr>
       `;
@@ -7812,14 +7979,13 @@ INDEX_HTML = """<!doctype html>
         const entry = result.type === "folder" ? libraryFolderById(result.id) : libraryItemById(result.id);
         return entry ? librarySearchResultRowMarkup(result.type, entry, result.parentFolderId, result.path) : "";
       }).join("");
-      const trimmed = results.length > visibleResults.length
-        ? `<div class="empty">${results.length - visibleResults.length} more matches hidden. Refine the search.</div>`
-        : "";
+      const header = results.length > visibleResults.length
+        ? `Search Results · Showing ${visibleResults.length} of ${results.length}`
+        : `Search Results${results.length ? ` · ${results.length}` : ""}`;
       root.innerHTML = `
-        <div class="library-pane-header">Search Results</div>
+        <div class="library-pane-header">${escapeHtml(header)}</div>
         <div class="library-search-results-body">
           ${rows || `<div class="empty">No Library matches for "${escapeHtml(state.query.trim())}".</div>`}
-          ${trimmed}
         </div>
       `;
     }
@@ -8210,7 +8376,7 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]')) return;
+          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="reimport-publication"]')) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
         });
         row.addEventListener("dragstart", (event) => {
@@ -8245,6 +8411,14 @@ INDEX_HTML = """<!doctype html>
           const row = button.closest(".my-publications-row");
           const publicationId = Number(row?.dataset.publicationId || 0);
           if (publicationId) await deleteMyPublication(publicationId);
+        });
+      });
+      shell.querySelectorAll('[data-action="reimport-publication"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const row = button.closest(".my-publications-row");
+          const publicationId = Number(row?.dataset.publicationId || 0);
+          if (publicationId) await reimportMyPublication(publicationId);
         });
       });
       shell.querySelectorAll('[data-action="add-publication-result"]').forEach((button) => {
@@ -8326,6 +8500,27 @@ INDEX_HTML = """<!doctype html>
         state.myPublicationSelectionId = Number(rows[0]?.id || 0);
       }
       state.myPublicationSearchStatus = "Publication deleted.";
+      renderMyPublications();
+      refreshLibraryQuickLookForSelection();
+    }
+
+    async function reimportMyPublication(publicationId) {
+      state.myPublicationSearchStatus = "Reimporting this publication by DOI...";
+      renderMyPublications();
+      const res = await fetch("/api/my-publications/reimport", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({publication_id: publicationId})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        state.myPublicationSearchStatus = data.error || "Could not reimport this publication";
+        renderMyPublications();
+        return;
+      }
+      applyMyPublications(data);
+      state.myPublicationSelectionId = Number(data.publication?.id || state.myPublicationSelectionId || 0);
+      state.myPublicationSearchStatus = "Publication reimported by DOI.";
       renderMyPublications();
       refreshLibraryQuickLookForSelection();
     }
@@ -8442,7 +8637,8 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
         applyMyPublications(data);
         const skipped = Number(data.skipped || 0);
-        state.myPublicationSearchStatus = `${data.imported || 0} DOI-matched publications imported from Google Scholar${skipped ? ` · ${skipped} without DOI match skipped` : ""}.`;
+        const imported = Number(data.imported || 0);
+        state.myPublicationSearchStatus = `${imported} publication${imported === 1 ? "" : "s"} imported from Google Scholar${skipped ? ` · ${skipped} skipped` : ""}. Use Reimport to refresh a row by DOI.`;
         if (input) input.value = "";
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Google Scholar import failed";
@@ -10044,11 +10240,13 @@ INDEX_HTML = """<!doctype html>
       else renderReport();
     });
     $("librarySearchBox").addEventListener("input", (event) => {
-      state.query = event.target.value;
-      clearLibraryRangeSelection();
-      renderActiveLibraryTab();
+      scheduleLibrarySearch(event.target.value);
+    });
+    $("librarySearchBox").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") commitLibrarySearch(event.target.value);
     });
     $("clearLibrarySearch").addEventListener("click", () => {
+      window.clearTimeout(librarySearchTimer);
       state.query = "";
       $("librarySearchBox").value = "";
       clearLibraryRangeSelection();

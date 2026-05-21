@@ -768,6 +768,47 @@ class Storage:
         ).fetchone()
         return dict(row) if row else {}
 
+    def get_my_publication(self, *, publication_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT my_publications.*, papers.*
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            WHERE my_publications.id = ?
+            """,
+            (int(publication_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def replace_my_publication_paper(self, *, publication_id: int, paper_id: str) -> dict[str, Any]:
+        publication_id = int(publication_id)
+        paper_id = str(paper_id)
+        timestamp = now_iso()
+        current = self.conn.execute("SELECT * FROM my_publications WHERE id = ?", (publication_id,)).fetchone()
+        if not current:
+            return {}
+        existing = self.conn.execute(
+            "SELECT * FROM my_publications WHERE paper_id = ? AND id != ?",
+            (paper_id, publication_id),
+        ).fetchone()
+        if existing:
+            starred = max(int(current["starred"] or 0), int(existing["starred"] or 0))
+            sort_order = min(int(current["sort_order"] or 0), int(existing["sort_order"] or 0))
+            self.conn.execute(
+                "UPDATE my_publications SET starred = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+                (starred, sort_order, timestamp, int(existing["id"])),
+            )
+            self.conn.execute("DELETE FROM my_publications WHERE id = ?", (publication_id,))
+            self.conn.commit()
+            publication_id = int(existing["id"])
+        else:
+            self.conn.execute(
+                "UPDATE my_publications SET paper_id = ?, updated_at = ? WHERE id = ?",
+                (paper_id, timestamp, publication_id),
+            )
+            self.conn.commit()
+        return self.get_my_publication(publication_id=publication_id) or {}
+
     def delete_my_publication(self, *, publication_id: int) -> None:
         self.conn.execute("DELETE FROM my_publications WHERE id = ?", (int(publication_id),))
         self.conn.commit()
