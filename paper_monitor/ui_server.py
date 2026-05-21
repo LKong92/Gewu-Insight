@@ -3563,6 +3563,7 @@ INDEX_HTML = """<!doctype html>
     }
     .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .toolbar-actions.hidden { display: none; }
+    .app.library-mode #reportToolbarActions { display: none; }
     .toolbar-import {
       display: none;
       align-items: center;
@@ -4766,7 +4767,7 @@ INDEX_HTML = """<!doctype html>
         <section class="report-column">
           <div class="toolbar">
             <div class="view-switcher" id="primaryViewSwitcher">
-              <button class="view-switch" id="libraryMode" type="button">Library</button>
+              <button class="view-switch active" id="libraryMode" type="button">Library</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
             </div>
             <div class="top-tools hidden" id="topLibraryTools">
@@ -4774,7 +4775,7 @@ INDEX_HTML = """<!doctype html>
               <button class="loader-tool-tab" id="topLibraryLoader" type="button">Loader</button>
             </div>
             <h2 id="reportTitle"></h2>
-            <div class="toolbar-actions" id="reportToolbarActions">
+            <div class="toolbar-actions hidden" id="reportToolbarActions">
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
             </div>
