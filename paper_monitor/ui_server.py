@@ -3134,6 +3134,7 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 10px;
       text-align: left;
+      animation: fetchPanelPulse 1.8s ease-in-out infinite;
     }
     .fetch-progress-head {
       display: flex;
@@ -3143,7 +3144,17 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
     }
     .fetch-progress strong { color: var(--ink); font-weight: 600; }
+    .fetch-progress-percent {
+      display: inline-block;
+      min-width: 44px;
+      text-align: right;
+      color: var(--accent);
+      font-weight: 700;
+      transform-origin: center;
+      animation: fetchPercentPulse 1.35s ease-in-out infinite;
+    }
     .fetch-progress-track {
+      position: relative;
       height: 8px;
       border-radius: 999px;
       background: rgba(23, 100, 59, 0.12);
@@ -3154,6 +3165,14 @@ INDEX_HTML = """<!doctype html>
       border-radius: inherit;
       background: var(--accent);
       transition: width 180ms ease;
+    }
+    .fetch-progress-track::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.42), transparent);
+      transform: translateX(-100%);
+      animation: fetchTrackSweep 1.55s ease-in-out infinite;
     }
     .arxiv-countdown {
       border: 1px solid rgba(15, 107, 110, 0.24);
@@ -3173,6 +3192,19 @@ INDEX_HTML = """<!doctype html>
     @keyframes fetchingPulse {
       0%, 100% { opacity: 0.35; transform: scale(0.86); }
       50% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes fetchPanelPulse {
+      0%, 100% { border-color: rgba(15, 107, 110, 0.15); }
+      50% { border-color: rgba(15, 107, 110, 0.28); }
+    }
+    @keyframes fetchPercentPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.08); }
+    }
+    @keyframes fetchTrackSweep {
+      0% { transform: translateX(-100%); opacity: 0; }
+      35% { opacity: 1; }
+      100% { transform: translateX(100%); opacity: 0; }
     }
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .filter-title { font-size: 13px; color: var(--muted); }
@@ -5335,7 +5367,7 @@ INDEX_HTML = """<!doctype html>
         if (data.progress) {
           state.fetchProgress[selectedDate] = data.progress;
           if (state.fetchingDates.has(selectedDate)) {
-            renderReportIfActive(selectedDate);
+            updateFetchProgressDisplay(selectedDate);
             refreshReportSnapshotDuringFetch(selectedDate);
           }
         }
@@ -5343,6 +5375,20 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         return null;
       }
+    }
+
+    function updateFetchProgressDisplay(selectedDate) {
+      if (!reportIsActiveForDate(selectedDate)) return;
+      const root = $("papers");
+      let panel = root.querySelector("[data-fetch-progress]");
+      if (!panel) {
+        root.insertAdjacentHTML("afterbegin", fetchProgressMarkup(selectedDate));
+        panel = root.querySelector("[data-fetch-progress]");
+      }
+      const progress = normalizedFetchProgress(selectedDate);
+      panel.querySelector('[data-role="fetch-percent"]').textContent = `${progress.percent}%`;
+      panel.querySelector('[data-role="fetch-bar"]').style.width = `${progress.percent}%`;
+      panel.querySelector('[data-role="fetch-detail"]').textContent = progress.detail;
     }
 
     async function refreshReportSnapshotDuringFetch(selectedDate) {
@@ -5357,13 +5403,32 @@ INDEX_HTML = """<!doctype html>
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         if (selectedDate === state.selectedDate && state.mode !== "library") {
-          applyReportData(selectedDate, data, state.reportSequence);
+          const previousSignature = reportPaperListSignature(state.papers);
+          const nextSignature = reportPaperListSignature(data.papers || []);
+          if (nextSignature !== previousSignature) {
+            applyReportData(selectedDate, data, state.reportSequence);
+          } else {
+            state.journals = data.journals || state.journals;
+            state.papers = data.papers || state.papers;
+            updateFetchProgressDisplay(selectedDate);
+          }
         }
       } catch (error) {
         // Keep the progress UI alive; the completion watcher will surface persistent errors.
       } finally {
         delete state.fetchSnapshotInflight[selectedDate];
       }
+    }
+
+    function reportPaperListSignature(papers) {
+      return (papers || [])
+        .map((paper) => [
+          paper.paper_id || "",
+          paper.image_url || "",
+          paper.download_status || "",
+          paper.analysis_status || ""
+        ].join(":"))
+        .join("|");
     }
 
     async function loadLibrary() {
@@ -6556,21 +6621,26 @@ INDEX_HTML = """<!doctype html>
     }
 
     function fetchProgressMarkup(selectedDate) {
+      const progress = normalizedFetchProgress(selectedDate);
+      return `
+        <div class="empty fetch-progress" data-fetch-progress="${escapeAttr(selectedDate)}">
+          <div class="fetch-progress-head">
+            <strong>Fetching recent papers in the background. You can keep browsing other dates.</strong>
+            <span class="fetch-progress-percent" data-role="fetch-percent">${progress.percent}%</span>
+          </div>
+          <div class="fetch-progress-track"><div class="fetch-progress-bar" data-role="fetch-bar" style="width:${progress.percent}%"></div></div>
+          <div data-role="fetch-detail">${escapeHtml(progress.detail)}</div>
+        </div>
+      `;
+    }
+
+    function normalizedFetchProgress(selectedDate) {
       const progress = state.fetchProgress[selectedDate] || {};
       const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
       const completed = Number(progress.completed || 0);
       const total = Number(progress.total || 0);
       const detail = total ? `${completed} / ${total} sources completed` : "Preparing fetch";
-      return `
-        <div class="empty fetch-progress">
-          <div class="fetch-progress-head">
-            <strong>Fetching recent papers in the background. You can keep browsing other dates.</strong>
-            <span>${percent}%</span>
-          </div>
-          <div class="fetch-progress-track"><div class="fetch-progress-bar" style="width:${percent}%"></div></div>
-          <div>${detail}</div>
-        </div>
-      `;
+      return {percent, completed, total, detail};
     }
 
     function renderLibraryLoader() {
