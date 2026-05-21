@@ -61,6 +61,7 @@ QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ERROR_FETCH_RETRY_AFTER = timedelta(minutes=30)
+RECENT_JOURNAL_REFRESH_AFTER = timedelta(minutes=90)
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 
 
@@ -1419,6 +1420,7 @@ def fetch_missing_sources_for_date(
 
     if journal_names:
         fetch_config = config_for_journals(config, journal_names)
+        journal_start_date = journal_fetch_start_date(selected_date)
 
         def update_journal_progress(journal: str, journal_completed: int, _journal_total: int) -> None:
             update_fetch_progress(selected, journal=journal, completed=completed + journal_completed, total=total)
@@ -1426,7 +1428,7 @@ def fetch_missing_sources_for_date(
         run_journal_monitor(
             config=fetch_config,
             storage=storage,
-            start_date=selected_date,
+            start_date=journal_start_date,
             end_date=selected_date,
             enrich=True,
             progress_callback=update_journal_progress,
@@ -2318,11 +2320,27 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
             if fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
                 fetched.add(journal)
             continue
+        if recent_journal_date_needs_refresh(selected_date, row["finished_at"], now):
+            continue
         fetched.add(journal)
     missing = [journal for journal in journals if journal not in fetched]
     if ARXIV_JOURNAL_NAME in missing and now < arxiv_ready_at:
         missing.remove(ARXIV_JOURNAL_NAME)
     return missing
+
+
+def recent_journal_date_needs_refresh(selected_date: date, finished_at: str, now: datetime) -> bool:
+    local_today = today_jst()
+    if selected_date < local_today - timedelta(days=1):
+        return False
+    return not fetch_run_is_fresh(finished_at, now, RECENT_JOURNAL_REFRESH_AFTER)
+
+
+def journal_fetch_start_date(selected_date: date) -> date:
+    local_today = today_jst()
+    if selected_date >= local_today:
+        return selected_date - timedelta(days=1)
+    return selected_date
 
 
 def arxiv_should_attempt(selected_date: date, finished_at: str, status: str, now: datetime, ready_at: datetime) -> bool:
@@ -6545,7 +6563,7 @@ INDEX_HTML = """<!doctype html>
       return `
         <div class="empty fetch-progress">
           <div class="fetch-progress-head">
-            <strong>Fetching papers for this date in the background. You can keep browsing other dates.</strong>
+            <strong>Fetching recent papers in the background. You can keep browsing other dates.</strong>
             <span>${percent}%</span>
           </div>
           <div class="fetch-progress-track"><div class="fetch-progress-bar" style="width:${percent}%"></div></div>
