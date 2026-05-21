@@ -59,6 +59,7 @@ def fetch_one_journal(
     end_date: date,
     enrich: bool,
 ) -> dict[str, Any]:
+    started_at = now_iso()
     collected: list[dict[str, Any]] = []
     source_counts: dict[str, int] = {}
 
@@ -68,6 +69,7 @@ def fetch_one_journal(
         journal_name=journal.name,
         start_date=start_date,
         end_date=end_date,
+        record_success=False,
         fetch=lambda: fetch_crossref_journal(
             journal_name=journal.name,
             issns=journal.issns,
@@ -89,6 +91,7 @@ def fetch_one_journal(
             journal_name=journal.name,
             start_date=start_date,
             end_date=end_date,
+            record_success=False,
             fetch=lambda: fetch_openalex_journal(
                 journal_name=journal.name,
                 source_id=journal.openalex_source_id or "",
@@ -125,6 +128,18 @@ def fetch_one_journal(
         storage.upsert_paper(paper)
         saved += 1
 
+    storage.record_fetch_run(
+        monitor_type="journal",
+        source="journal",
+        journal=journal.name,
+        window_start=start_date.isoformat(),
+        window_end=end_date.isoformat(),
+        status=journal_fetch_status(saved=saved, source_errors=source_errors, source_attempts=source_attempts),
+        records_found=saved,
+        started_at=started_at,
+        message="",
+    )
+
     return {
         "source_counts": source_counts,
         "source_statuses": source_statuses,
@@ -149,6 +164,7 @@ def fetch_one_arxiv_preprint_source(
         journal_name=ARXIV_JOURNAL_NAME,
         start_date=start_date,
         end_date=end_date,
+        record_success=False,
         fetch=lambda: fetch_arxiv_condensed_matter(
             start_date=start_date,
             end_date=end_date,
@@ -161,6 +177,19 @@ def fetch_one_arxiv_preprint_source(
         paper["section_allowed"] = True
         storage.upsert_paper(paper)
         saved += 1
+
+    if arxiv_result["status"] != "error":
+        storage.record_fetch_run(
+            monitor_type="journal",
+            source="arxiv",
+            journal=ARXIV_JOURNAL_NAME,
+            window_start=start_date.isoformat(),
+            window_end=end_date.isoformat(),
+            status=arxiv_result["status"],
+            records_found=saved,
+            started_at=arxiv_result["started_at"],
+            message=arxiv_result.get("message") or "",
+        )
 
     return {
         "source_counts": {"arxiv": len(arxiv_result["papers"])},
@@ -287,23 +316,25 @@ def _run_source(
     start_date: date,
     end_date: date,
     fetch,
+    record_success: bool = True,
 ) -> dict[str, Any]:
     started_at = now_iso()
     try:
         papers = fetch()
         status = "success" if papers else "empty"
-        storage.record_fetch_run(
-            monitor_type="journal",
-            source=source,
-            journal=journal_name,
-            window_start=start_date.isoformat(),
-            window_end=end_date.isoformat(),
-            status=status,
-            records_found=len(papers),
-            started_at=started_at,
-            message="",
-        )
-        return {"papers": papers, "status": status, "message": ""}
+        if record_success:
+            storage.record_fetch_run(
+                monitor_type="journal",
+                source=source,
+                journal=journal_name,
+                window_start=start_date.isoformat(),
+                window_end=end_date.isoformat(),
+                status=status,
+                records_found=len(papers),
+                started_at=started_at,
+                message="",
+            )
+        return {"papers": papers, "status": status, "message": "", "started_at": started_at}
     except Exception as exc:
         message = str(exc)
         storage.record_fetch_run(
@@ -317,4 +348,10 @@ def _run_source(
             started_at=started_at,
             message=message,
         )
-        return {"papers": [], "status": "error", "message": message}
+        return {"papers": [], "status": "error", "message": message, "started_at": started_at}
+
+
+def journal_fetch_status(*, saved: int, source_errors: int, source_attempts: int) -> str:
+    if source_attempts and source_errors >= source_attempts:
+        return "error"
+    return "success" if saved else "empty"
