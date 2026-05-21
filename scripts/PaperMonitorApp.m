@@ -133,6 +133,9 @@
     self.citationNamingItem.state = NSControlStateValueOn;
     namingRuleMenuItem.submenu = namingRuleMenu;
     [settingMenu addItem:namingRuleMenuItem];
+    [settingMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Web Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
+    clearCacheItem.target = self;
     settingMenuItem.submenu = settingMenu;
 
     NSApp.mainMenu = mainMenu;
@@ -276,6 +279,48 @@
             [self updateLibraryNamingRuleMenu:rule];
         });
     }] resume];
+}
+
+- (void)clearWebCache:(id)sender {
+    NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/cache/clear-web"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSString *message = @"Could not clear the WebKit cache.";
+        if (!error && data) {
+            NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([payload isKindOfClass:[NSDictionary class]]) {
+                long long removed = [payload[@"removed_bytes"] longLongValue];
+                NSInteger files = [payload[@"removed_files"] integerValue];
+                message = [NSString stringWithFormat:@"Removed %@ from %ld cache files.", [self humanSize:removed], (long)files];
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"Web cache cleared";
+            alert.informativeText = message;
+            alert.alertStyle = error ? NSAlertStyleWarning : NSAlertStyleInformational;
+            [alert addButtonWithTitle:@"OK"];
+            [alert beginSheetModalForWindow:self.window completionHandler:nil];
+        });
+    }] resume];
+}
+
+- (NSString *)humanSize:(long long)bytes {
+    double value = (double)bytes;
+    NSArray<NSString *> *units = @[@"B", @"KB", @"MB", @"GB", @"TB"];
+    NSInteger index = 0;
+    while (value >= 1024.0 && index < (NSInteger)units.count - 1) {
+        value /= 1024.0;
+        index += 1;
+    }
+    if (index == 0) {
+        return [NSString stringWithFormat:@"%lld %@", bytes, units[index]];
+    }
+    return [NSString stringWithFormat:@"%.1f %@", value, units[index]];
 }
 
 - (void)presentStartupFailure:(NSString *)message {

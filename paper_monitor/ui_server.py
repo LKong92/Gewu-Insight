@@ -70,6 +70,9 @@ QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
+WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
+WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -107,6 +110,8 @@ def run_ui_server(
 ) -> None:
     config = load_config()
     journals = configured_source_names(config)
+    threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
+    threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -247,6 +252,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/library-naming":
                 self.handle_set_library_naming_rule(payload)
+                return
+            if parsed.path == "/api/cache/clear-web":
+                self.handle_clear_web_cache(payload)
                 return
             if parsed.path == "/api/library/items/rename":
                 self.handle_rename_library_item(payload)
@@ -1002,6 +1010,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"rule": rule})
 
+    def handle_clear_web_cache(self, payload: dict[str, Any]) -> None:
+        result = clear_webkit_network_cache()
+        self.send_json(result)
+
     def handle_rename_library_item(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or 0)
         name = str(payload.get("name") or "")
@@ -1627,6 +1639,100 @@ def configured_source_names(config: AppConfig) -> list[str]:
         if preprint not in names:
             names.append(preprint)
     return names
+
+
+def cache_file_entries(root: Path) -> tuple[int, list[tuple[float, int, Path]]]:
+    if not root.exists():
+        return 0, []
+    total = 0
+    entries: list[tuple[float, int, Path]] = []
+    for path in root.rglob("*"):
+        try:
+            if path.is_symlink() or not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        size = int(stat.st_size)
+        total += size
+        entries.append((float(stat.st_mtime), size, path))
+    entries.sort(key=lambda item: item[0])
+    return total, entries
+
+
+def prune_empty_cache_dirs(root: Path) -> None:
+    if not root.exists():
+        return
+    for path in sorted((item for item in root.rglob("*") if item.is_dir()), key=lambda item: len(item.parts), reverse=True):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def trim_webkit_network_cache_if_needed() -> dict[str, Any]:
+    before, entries = cache_file_entries(WEBKIT_NETWORK_CACHE_DIR)
+    if before <= WEBKIT_CACHE_MAX_BYTES:
+        return {
+            "status": "skipped",
+            "path": str(WEBKIT_NETWORK_CACHE_DIR),
+            "before_bytes": before,
+            "after_bytes": before,
+            "removed_bytes": 0,
+            "removed_files": 0,
+            "errors": [],
+        }
+    return prune_cache_files(
+        root=WEBKIT_NETWORK_CACHE_DIR,
+        entries=entries,
+        before=before,
+        target_bytes=WEBKIT_CACHE_TARGET_BYTES,
+    )
+
+
+def clear_webkit_network_cache() -> dict[str, Any]:
+    before, entries = cache_file_entries(WEBKIT_NETWORK_CACHE_DIR)
+    return prune_cache_files(root=WEBKIT_NETWORK_CACHE_DIR, entries=entries, before=before, target_bytes=0)
+
+
+def clear_pdf_thumbnail_cache() -> dict[str, Any]:
+    before, entries = cache_file_entries(PDF_THUMB_CACHE_DIR)
+    return prune_cache_files(root=PDF_THUMB_CACHE_DIR, entries=entries, before=before, target_bytes=0)
+
+
+def prune_cache_files(
+    *,
+    root: Path,
+    entries: list[tuple[float, int, Path]],
+    before: int,
+    target_bytes: int,
+) -> dict[str, Any]:
+    current = before
+    removed_files = 0
+    removed_bytes = 0
+    errors: list[str] = []
+    for _mtime, size, path in entries:
+        if current <= target_bytes:
+            break
+        try:
+            path.unlink()
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+        current -= size
+        removed_bytes += size
+        removed_files += 1
+    prune_empty_cache_dirs(root)
+    after, _entries = cache_file_entries(root)
+    return {
+        "status": "trimmed" if removed_files else "skipped",
+        "path": str(root),
+        "before_bytes": before,
+        "after_bytes": after,
+        "removed_bytes": removed_bytes,
+        "removed_files": removed_files,
+        "errors": errors[:20],
+    }
 
 
 def fetch_missing_sources_for_date(
@@ -3313,16 +3419,12 @@ def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
 
 
 def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tuple[bytes, str]:
-    persistent_cache = size <= 360
-    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}".encode("utf-8")).hexdigest()
-    thumb_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
-    if persistent_cache and thumb_path.exists():
-        return thumb_path.read_bytes(), "image/png"
+    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}:{uuid.uuid4().hex}".encode("utf-8")).hexdigest()
     data = single_page_pdf_bytes(path, page_number)
     if data:
         PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         page_pdf = PDF_THUMB_CACHE_DIR / f"{cache_key}.pdf"
-        output_path = thumb_path if persistent_cache else PDF_THUMB_CACHE_DIR / f"{cache_key}.tmp.png"
+        output_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
         page_pdf.write_bytes(data)
         try:
             subprocess.run(
@@ -3342,11 +3444,10 @@ def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tupl
                 page_pdf.unlink()
             except OSError:
                 pass
-            if not persistent_cache:
-                try:
-                    output_path.unlink()
-                except OSError:
-                    pass
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="156" viewBox="0 0 120 156">'
         '<rect x="10" y="8" width="100" height="140" rx="7" fill="#fff" stroke="#d0d5dd"/>'
