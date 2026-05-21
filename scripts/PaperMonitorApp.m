@@ -1,7 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, WKUIDelegate>
+@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
@@ -25,6 +25,19 @@
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
+    return NO;
+}
+
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    [sender orderOut:nil];
+    return NO;
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
+    if (!flag) {
+        [self.window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+    }
     return YES;
 }
 
@@ -49,6 +62,7 @@
                     backing:NSBackingStoreBuffered
                       defer:NO];
     self.window.title = @"";
+    self.window.delegate = self;
     self.window.titleVisibility = NSWindowTitleHidden;
     self.window.titlebarAppearsTransparent = YES;
     self.window.minSize = NSMakeSize(980, 680);
