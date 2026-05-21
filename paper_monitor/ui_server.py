@@ -256,6 +256,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/add":
                 self.handle_add_my_publication(payload)
                 return
+            if parsed.path == "/api/my-publications/import-scholar":
+                self.handle_import_google_scholar_publications(payload)
+                return
             if parsed.path == "/api/my-publications/star":
                 self.handle_star_my_publication(payload)
                 return
@@ -552,6 +555,36 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_import_google_scholar_publications(self, payload: dict[str, Any]) -> None:
+        profile_url = str(payload.get("url") or "").strip()
+        if not profile_url:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Google Scholar profile URL is required")
+            return
+        limit = max(1, min(1000, int(payload.get("limit") or 500)))
+        try:
+            candidates = fetch_google_scholar_profile_publications(profile_url, limit=limit)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar import failed: {exc}")
+            return
+        storage = Storage(self.configured_db_path)
+        imported = 0
+        try:
+            for candidate in candidates:
+                normalized = paper_from_publication_candidate(candidate)
+                storage.upsert_paper(normalized)
+                storage.add_my_publication(paper_id=normalized["paper_id"])
+                imported += 1
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json(
+            {
+                "imported": imported,
+                "seen": len(candidates),
+                "publications": publications,
+            }
+        )
 
     def handle_star_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1761,6 +1794,128 @@ def search_crossref_publications(search_text: str, *, kind: str = "auto") -> lis
     return results
 
 
+def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    user_id = google_scholar_user_id(profile_url)
+    if not user_id:
+        raise ValueError("Paste a Google Scholar profile URL that contains a user id")
+    page_size = 100
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for start in range(0, limit, page_size):
+        response = request_with_retries(
+            "GET",
+            "https://scholar.google.com/citations",
+            params={"user": user_id, "hl": "en", "cstart": start, "pagesize": min(page_size, limit - start)},
+            headers={"Accept-Language": "en-US,en;q=0.9"},
+            timeout=25,
+            max_retries=1,
+        )
+        html = response.text
+        if "unusual traffic" in html.lower() or "recaptcha" in html.lower():
+            raise RuntimeError("Google Scholar is asking for verification. Try again later or open the profile in a browser first.")
+        soup = BeautifulSoup(html, "html.parser")
+        rows = soup.select("tr.gsc_a_tr")
+        if not rows:
+            if start == 0:
+                raise RuntimeError("No publication rows were found on this Scholar profile")
+            break
+        before = len(candidates)
+        for row in rows:
+            candidate = google_scholar_row_to_publication(row)
+            if not candidate:
+                continue
+            paper = candidate["paper"]
+            key = "|".join(
+                [
+                    clean_text(paper.get("title") or "").lower(),
+                    clean_text(paper.get("journal") or "").lower(),
+                    clean_text(paper.get("publication_date") or ""),
+                ]
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+            if len(candidates) >= limit:
+                break
+        if len(candidates) >= limit or len(rows) < page_size or len(candidates) == before:
+            break
+    return candidates
+
+
+def google_scholar_user_id(profile_url: str) -> str:
+    parsed = urlparse(profile_url)
+    host = parsed.netloc.lower()
+    if "scholar.google." not in host:
+        return ""
+    query = parse_qs(parsed.query)
+    return clean_text((query.get("user") or [""])[0])
+
+
+def google_scholar_row_to_publication(row: Any) -> dict[str, Any] | None:
+    title_el = row.select_one("a.gsc_a_at")
+    title = clean_text(title_el.get_text(" ") if title_el else "")
+    if not title:
+        return None
+    detail_lines = [clean_text(item.get_text(" ")) for item in row.select(".gs_gray")]
+    detail_lines = [line for line in detail_lines if line]
+    year = clean_text(row.select_one(".gsc_a_y span").get_text(" ") if row.select_one(".gsc_a_y span") else "")
+    venue = detail_lines[1] if len(detail_lines) > 1 else (detail_lines[0] if detail_lines else "")
+    venue_parts = google_scholar_venue_parts(venue)
+    journal = venue_parts.get("journal") or google_scholar_journal_from_venue(venue)
+    href = clean_text(title_el.get("href") if title_el else "")
+    url = urljoin("https://scholar.google.com", href) if href else ""
+    paper = {
+        "title": title,
+        "journal": journal or "Unknown Journal",
+        "publication_date": year,
+        "url": url,
+        "landing_url": url,
+        "source": "google-scholar",
+        "type": "scholar-profile-item",
+        "type_crossref": "scholar-profile-item",
+        "raw": {
+            "source": "google-scholar",
+            "authors": google_scholar_author_names(detail_lines[0] if detail_lines else ""),
+            "venue": venue,
+            "volume": venue_parts.get("volume") or "",
+            "page": venue_parts.get("page") or "",
+            "year": year,
+            "url": url,
+        },
+    }
+    paper["paper_id"] = paper_id_from_publication("", title, paper["journal"], year)
+    return publication_candidate_to_api(paper)
+
+
+def google_scholar_journal_from_venue(venue: str) -> str:
+    text = clean_text(venue)
+    if not text:
+        return ""
+    return re.split(r"\s{2,}|,\s*(?:vol\.?\s*)?\d|\s+\d+\s*(?:\(|,|$)", text, maxsplit=1, flags=re.I)[0].strip(" ,")
+
+
+def google_scholar_venue_parts(venue: str) -> dict[str, str]:
+    text = clean_text(venue)
+    if not text:
+        return {}
+    match = re.match(
+        r"^(?P<journal>.+?)\s+(?P<volume>\d+[A-Za-z]?)\s*(?:\([^)]*\))?\s*,\s*(?P<page>[A-Za-z]?\d+(?:[-–]\d+)?)",
+        text,
+    )
+    if not match:
+        return {"journal": google_scholar_journal_from_venue(text)}
+    return {
+        "journal": clean_text(match.group("journal")),
+        "volume": clean_text(match.group("volume")),
+        "page": clean_text(match.group("page")).replace("–", "-"),
+    }
+
+
+def google_scholar_author_names(value: str) -> list[str]:
+    return [name for name in [clean_author_name(part) for part in re.split(r"\s*,\s*", value)] if name]
+
+
 def first_crossref_text(value: Any) -> str:
     if isinstance(value, list) and value:
         return clean_text(value[0])
@@ -1910,7 +2065,7 @@ def initials_from_given_names(value: str) -> str:
 
 def full_author_names(paper: dict[str, Any]) -> list[str]:
     raw = parse_raw_json(paper)
-    return authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw)
+    return authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_google_scholar(raw)
 
 
 def author_last_name(name: str) -> str:
@@ -1986,7 +2141,7 @@ def count_by_journal(papers: list[dict[str, Any]]) -> dict[str, int]:
 
 def author_summary(paper: dict[str, Any]) -> list[str]:
     raw = parse_raw_json(paper)
-    names = authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw)
+    names = authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_google_scholar(raw)
     if len(names) <= 6:
         return names
     return names[:3] + ["…"] + names[-3:]
@@ -2020,6 +2175,13 @@ def authors_from_crossref(raw: dict[str, Any]) -> list[str]:
 
 def authors_from_arxiv(raw: dict[str, Any]) -> list[str]:
     return dedup_names([clean_author_name(str(name)) for name in raw.get("authors") or [] if name])
+
+
+def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
+    authors = raw.get("authors") or []
+    if isinstance(authors, str):
+        authors = re.split(r"\s*,\s*", authors)
+    return dedup_names([clean_author_name(str(name)) for name in authors if name])
 
 
 def preprint_identifier(paper: dict[str, Any]) -> str:
@@ -3893,6 +4055,7 @@ INDEX_HTML = """<!doctype html>
       flex-wrap: wrap;
     }
     .my-publications-tools.open { display: flex; }
+    .scholar-profile-input { width: min(320px, 45vw); }
     .my-publications-panel {
       min-width: 0;
       min-height: 0;
@@ -4830,6 +4993,8 @@ INDEX_HTML = """<!doctype html>
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
               <input class="search" id="publicationSearchBox" placeholder="DOI or title">
               <button class="smallbtn" id="addMyPublication" type="button">Add</button>
+              <input class="search scholar-profile-input" id="scholarProfileUrl" placeholder="Google Scholar profile URL" type="url">
+              <button class="smallbtn" id="importScholarProfile" type="button">Import Scholar</button>
               <select class="search" id="myPublicationSort" title="Sort publications">
                 <option value="time">Time</option>
                 <option value="highlight">Highlight</option>
@@ -8075,6 +8240,30 @@ INDEX_HTML = """<!doctype html>
       renderMyPublications();
     }
 
+    async function importGoogleScholarProfile() {
+      const input = $("scholarProfileUrl");
+      const url = (input?.value || "").trim();
+      if (!url) return;
+      state.myPublicationSearchStatus = "Importing Google Scholar profile...";
+      state.myPublicationSearchResults = [];
+      renderMyPublications();
+      try {
+        const res = await fetch("/api/my-publications/import-scholar", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
+        applyMyPublications(data);
+        state.myPublicationSearchStatus = `${data.imported || 0} publications imported from Google Scholar.`;
+        if (input) input.value = "";
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Google Scholar import failed";
+      }
+      renderMyPublications();
+    }
+
     function handleMyPublicationKeydown(event, key) {
       const rows = sortedMyPublications();
       if (!rows.length) return true;
@@ -9612,10 +9801,17 @@ INDEX_HTML = """<!doctype html>
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
+    $("importScholarProfile").addEventListener("click", importGoogleScholarProfile);
     $("publicationSearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         searchMyPublications("auto");
+      }
+    });
+    $("scholarProfileUrl").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        importGoogleScholarProfile();
       }
     });
     $("myPublicationName").addEventListener("change", () => saveMyPublicationName().catch(() => {}));
