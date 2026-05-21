@@ -41,7 +41,7 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
 from .sources.crossref import normalize_crossref_item
-from .sources.publisher import enrich_image_from_landing_page
+from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
 from .time_utils import today_jst
@@ -255,6 +255,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/remove-paper":
                 self.handle_remove_paper_from_library(payload)
                 return
+            if parsed.path == "/api/library/refresh-metadata":
+                self.handle_refresh_library_metadata(payload)
+                return
             if parsed.path == "/api/library/paste":
                 self.handle_paste_library_entry(payload)
                 return
@@ -281,6 +284,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/shortcut-tabs":
                 self.handle_set_library_shortcut_tabs(payload)
+                return
+            if parsed.path == "/api/library/shortcut-tabs/rename":
+                self.handle_rename_library_shortcut_tab(payload)
                 return
             if parsed.path == "/api/library/workspace-tabs/rename":
                 self.handle_rename_library_workspace_tab(payload)
@@ -707,6 +713,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json(snapshot)
 
+    def handle_rename_library_shortcut_tab(self, payload: dict[str, Any]) -> None:
+        index = int(payload.get("index") or 0)
+        if index < 0 or index >= LIBRARY_SHORTCUT_TAB_COUNT:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "shortcut index is out of range")
+            return
+        label = " ".join(str(payload.get("label") or "").split()) or f"Shortcut {index + 1}"
+        storage = Storage(self.configured_db_path)
+        try:
+            shortcuts = library_shortcut_tabs(storage)
+            current = shortcuts[index] if index < len(shortcuts) else {}
+            shortcuts[index] = {
+                "folder_id": int(current.get("folder_id") or 0),
+                "label": label[:80],
+            }
+            storage.set_setting("library_shortcut_tabs", json.dumps(shortcuts, ensure_ascii=False))
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
     def handle_rename_library_workspace_tab(self, payload: dict[str, Any]) -> None:
         index = int(payload.get("index") or 0)
         if index < 0 or index >= LIBRARY_WORKSPACE_TAB_COUNT:
@@ -925,6 +951,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
+            paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
             item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
             snapshot = library_snapshot(storage)
         finally:
@@ -1092,6 +1119,34 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_refresh_library_metadata(self, payload: dict[str, Any]) -> None:
+        paper_id = str(payload.get("paper_id") or "")
+        doi = normalize_publication_doi(str(payload.get("doi") or ""))
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        if not doi or not looks_like_doi(doi):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid DOI is required")
+            return
+        try:
+            normalized = publication_metadata_from_doi(doi)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"DOI lookup failed: {exc}")
+            return
+        if not normalized:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "No publication found for this DOI")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.refresh_paper_metadata(paper_id, normalized)
+            if not paper:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json({"paper": paper_to_api(paper), **snapshot})
 
     def handle_paste_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -1669,6 +1724,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "doi_duplicates",
         "arxiv_duplicates",
         "duplicate_paper_candidates",
+        "doi_metadata_refreshed",
         "report_path",
         "copy_target_root",
         "import_batch_id",
@@ -1682,6 +1738,94 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     summary["duplicate_dois"] = result.get("duplicate_dois") or []
     summary["duplicate_arxiv_ids"] = result.get("duplicate_arxiv_ids") or []
     return summary
+
+
+def publication_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: int = 3) -> dict[str, Any] | None:
+    doi = normalize_publication_doi(doi)
+    if not doi or not looks_like_doi(doi):
+        return None
+    candidates = search_crossref_publications(doi, kind="doi", timeout=timeout, max_retries=max_retries)
+    if not candidates:
+        return None
+    normalized = paper_from_publication_candidate(candidates[0])
+    return enrich_from_landing_page(dict(normalized), {}, True)
+
+
+def refresh_paper_metadata_from_doi_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    doi: str = "",
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    normalized_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
+    if not paper_id or not normalized_doi or not looks_like_doi(normalized_doi):
+        return paper
+    try:
+        normalized = publication_metadata_from_doi(normalized_doi, timeout=timeout, max_retries=max_retries)
+    except Exception:
+        return paper
+    if not normalized:
+        return paper
+    refreshed = storage.refresh_paper_metadata(paper_id, normalized)
+    return refreshed or paper
+
+
+def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None) -> int:
+    batch_id = clean_text(result.get("import_batch_id") or "")
+    if batch_id:
+        rows = storage.conn.execute(
+            """
+            SELECT *
+            FROM papers
+            WHERE import_batch_id = ?
+              AND doi IS NOT NULL
+              AND doi != ''
+            ORDER BY original_relative_path ASC, title ASC
+            """,
+            (batch_id,),
+        ).fetchall()
+        papers = [dict(row) for row in rows]
+    else:
+        plans = list(result.get("papers_to_create") or []) + list(result.get("papers_to_update") or [])
+        papers = [
+            {"paper_id": plan.get("paper_id"), "doi": plan.get("doi")}
+            for plan in plans
+            if isinstance(plan, dict)
+        ]
+    refreshed_count = 0
+    seen: set[str] = set()
+    total = sum(
+        1
+        for paper in papers
+        if paper.get("paper_id")
+        and looks_like_doi(normalize_publication_doi(str(paper.get("doi") or "")))
+    )
+    current = 0
+    for paper in papers:
+        paper_id = clean_text(paper.get("paper_id") or "")
+        doi = normalize_publication_doi(str(paper.get("doi") or ""))
+        if not paper_id or not doi or paper_id in seen or not looks_like_doi(doi):
+            continue
+        seen.add(paper_id)
+        current += 1
+        if job_id:
+            percent = max(0, min(99, round((current / total) * 100))) if total else 0
+            update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
+        stored_paper = storage.get_paper(paper_id)
+        before = dict(stored_paper or {})
+        refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
+        if refreshed and refreshed != before:
+            refreshed_count += 1
+            if job_id:
+                label = clean_text(refreshed.get("title") or doi)
+                log_library_import_job(job_id, f"Refreshed DOI metadata: {label}")
+    result["doi_metadata_refreshed"] = refreshed_count
+    return refreshed_count
 
 
 def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
@@ -2625,6 +2769,10 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
                 library_item_name="filename",
                 progress_callback=progress,
             )
+            if not dry_run:
+                refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
+                if refreshed:
+                    log_library_import_job(job_id, f"Refreshed DOI metadata for {refreshed} imported papers")
         finally:
             storage.close()
         summary = summarize_import_result(result)
@@ -2635,6 +2783,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, dr
             (
                 f"Done: {summary.get('created_papers', 0)} created, "
                 f"{summary.get('updated_papers', 0)} updated, "
+                f"{summary.get('doi_metadata_refreshed', 0)} DOI metadata refreshed, "
                 f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
                 f"{summary.get('reused_existing_files', 0)} reused, "
                 f"{summary.get('skipped', 0)} skipped"
@@ -3884,6 +4033,7 @@ INDEX_HTML = """<!doctype html>
     }
     .app.library-mode .report-column {
       padding-right: 0;
+      overflow: visible;
     }
     .workspace.report-collapsed .report-column { display: none; }
     .workspace-toggle, .workspace-resizer { display: none; }
@@ -4109,7 +4259,7 @@ INDEX_HTML = """<!doctype html>
       display: none;
       gap: 6px;
       align-items: center;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       margin: -8px 0 18px;
     }
     .library-controls.open { display: flex; }
@@ -4197,55 +4347,115 @@ INDEX_HTML = """<!doctype html>
       padding: 0 13px;
       cursor: pointer;
       font-weight: 650;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     #libraryTab,
     #myPublicationsTab {
       flex: 0 0 auto;
     }
     #libraryShortcutTabs {
-      display: grid;
-      grid-template-columns: repeat(5, 92px) repeat(3, 86px);
-      grid-template-rows: 34px;
-      align-items: center;
-      column-gap: 6px;
-      flex: 0 0 auto;
       min-width: 0;
+    }
+    .library-tab-rail {
+      --library-vertical-tab-length: 82px;
+      --library-vertical-tab-thickness: 32px;
+      width: 30px;
+      min-width: 30px;
+      min-height: 0;
+      height: 100%;
+      position: relative;
+      background: transparent;
+      padding: 0;
+      overflow-x: visible;
+      overflow-y: auto;
+      scrollbar-width: none;
+    }
+    .library-tab-rail::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+    .library-tab-rail-inner {
+      position: relative;
+      width: 30px;
+      height: var(--library-rail-height, 900px);
+    }
+    .library-tab-rail .library-tab {
+      position: absolute;
+      left: 0;
+      top: calc(var(--tab-top, 0px) + var(--library-vertical-tab-length));
+      width: var(--library-vertical-tab-length);
+      height: var(--library-vertical-tab-thickness);
+      box-sizing: border-box;
+      min-height: var(--library-vertical-tab-thickness);
+      max-width: none;
+      padding: 0 10px;
+      justify-content: center;
+      text-align: center;
+      font-size: 12px;
+      box-shadow: none;
+      overflow: visible;
+      transform: rotate(-90deg);
+      transform-origin: left top;
+      border-radius: 13px 13px 0 0;
+      border: 0;
+    }
+    .library-tab-label {
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .library-tab.active {
       border-color: var(--accent);
       color: var(--accent-strong);
       box-shadow: inset 0 0 0 1px var(--accent);
     }
+    .library-tab-rail .library-tab.active {
+      color: var(--ink);
+      background: #fff;
+      box-shadow: none;
+      z-index: 2;
+    }
+    .library-tab-rail .library-tab.active::before,
+    .library-tab-rail .library-tab.active::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      width: 18px;
+      height: 18px;
+      pointer-events: none;
+    }
+    .library-tab-rail .library-tab.active::before {
+      left: -18px;
+      background: radial-gradient(circle at 0 0, transparent 18px, #fff 19px);
+    }
+    .library-tab-rail .library-tab.active::after {
+      right: -18px;
+      background: radial-gradient(circle at 100% 0, transparent 18px, #fff 19px);
+    }
     .library-tab.shortcut-tab {
-      width: 100%;
       background: #fff8d7;
       border-color: #eadc99;
-      min-height: 34px;
-      padding: 0 7px;
-      font-size: 12px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
-    .shortcut-tab-0 { grid-column: 1; grid-row: 1; }
-    .shortcut-tab-1 { grid-column: 2; grid-row: 1; }
-    .shortcut-tab-2 { grid-column: 3; grid-row: 1; }
-    .shortcut-tab-3 { grid-column: 4; grid-row: 1; }
-    .shortcut-tab-4 { grid-column: 5; grid-row: 1; }
+    .library-tab.shortcut-tab.active {
+      background: #fff2b8;
+      border-color: #d7bd55;
+    }
     .library-tab.workspace-tab {
-      width: 100%;
       background: #eaf8df;
       border-color: #c4e3b1;
-      min-height: 34px;
-      padding: 0 7px;
-      font-size: 12px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
-    .workspace-tab-0 { grid-column: 6; grid-row: 1; }
-    .workspace-tab-1 { grid-column: 7; grid-row: 1; }
-    .workspace-tab-2 { grid-column: 8; grid-row: 1; }
+    .library-tab.workspace-tab.active {
+      background: #dcf1cf;
+      border-color: #9dca82;
+    }
+    .library-tab-rail .library-tab.shortcut-tab.active,
+    .library-tab-rail .library-tab.workspace-tab.active {
+      background: #fff;
+    }
     .loader-tool-tab {
       display: inline-flex;
       align-items: center;
@@ -4580,14 +4790,42 @@ INDEX_HTML = """<!doctype html>
     }
     .library-shell {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      gap: 12px;
+      grid-template-columns: 30px minmax(0, 1fr) minmax(260px, 340px);
+      column-gap: 0;
+      row-gap: 12px;
       align-items: stretch;
       height: 100%;
       max-height: 100%;
       min-height: 0;
-      overflow: hidden;
+      margin-left: -30px;
+      width: calc(100% + 30px);
+      overflow: visible;
       outline: none;
+    }
+    .library-main-area {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .library-main-area > .library-columns,
+    .library-main-area > .library-search-results {
+      grid-row: 2;
+    }
+    .library-shell > .library-pane {
+      margin-left: 12px;
+    }
+    .my-publications-shell {
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+      column-gap: 12px;
+      margin-left: 0;
+      width: 100%;
+      overflow: hidden;
+    }
+    .my-publications-shell > .library-pane {
+      margin-left: 0;
     }
     .library-columns {
       min-width: 0;
@@ -4806,6 +5044,34 @@ INDEX_HTML = """<!doctype html>
     .library-detail dl { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 10px; margin: 12px 0; }
     .library-detail dt { color: var(--muted); }
     .library-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .library-detail-title {
+      color: var(--ink);
+      font-weight: 650;
+      line-height: 1.35;
+    }
+    .library-detail-doi {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .library-detail-doi input {
+      min-width: 0;
+      flex: 1 1 auto;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 8px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .library-detail-doi button {
+      flex: 0 0 auto;
+      min-height: 28px;
+    }
+    .library-file-line {
+      display: block;
+      margin-bottom: 4px;
+    }
     .library-detail-figure {
       margin: 10px 0 12px;
       border: 1px solid var(--line);
@@ -4962,7 +5228,7 @@ INDEX_HTML = """<!doctype html>
     .papers.library-view {
       display: block;
       height: 100%;
-      overflow: hidden;
+      overflow: visible;
       padding-right: 0;
     }
     .paper {
@@ -5240,7 +5506,6 @@ INDEX_HTML = """<!doctype html>
           <div class="library-controls" id="libraryControls">
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
-            <span id="libraryShortcutTabs"></span>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
                 <input class="search" id="librarySearchBox" placeholder="Search Library" type="search">
@@ -5372,6 +5637,8 @@ INDEX_HTML = """<!doctype html>
       libraryRangeAnchor: null,
       libraryRangeFolderId: 0,
       libraryRangeSelectionKeys: new Set(),
+      librarySearchCache: {key: "", results: []},
+      librarySearchVersion: 0,
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
       libraryColumnWidths: {},
@@ -5956,6 +6223,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
+      clearLibrarySearchCache();
+      state.librarySearchVersion += 1;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
       const displayRootId = libraryDisplayRootId();
@@ -6037,13 +6306,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryFolderItems(folderId) {
-      const query = state.query.trim().toLowerCase();
+      const query = state.query.trim();
       return libraryFolderItemsRaw(folderId)
         .filter((item) => {
           if (!query) return true;
-          const paper = item.paper || {};
-          const haystack = `${item.display_name || ""} ${paper.citation_label || ""} ${paper.title || ""} ${paper.abstract || ""} ${paper.doi || ""} ${paper.journal || ""} ${(paper.authors || []).join(" ")}`.toLowerCase();
-          return haystack.includes(query);
+          return librarySearchMatches(libraryItemSearchHaystack(item), query);
         });
     }
 
@@ -6069,9 +6336,9 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryEntriesForFolder(folderId) {
-      const query = state.query.trim().toLowerCase();
+      const query = state.query.trim();
       const folders = libraryChildFolders(folderId)
-        .filter((folder) => !query || (folder.name || "").toLowerCase().includes(query))
+        .filter((folder) => !query || librarySearchMatches(`${folder.name || ""} ${libraryFolderPath(folder.id)}`, query))
         .map((folder) => ({type: "folder", id: Number(folder.id)}));
       const items = libraryFolderItems(folderId)
         .map((item) => ({type: "item", id: Number(item.id)}));
@@ -6082,20 +6349,148 @@ INDEX_HTML = """<!doctype html>
       return Boolean(state.query.trim()) && !["loader", "my-publications"].includes(state.libraryTab || "");
     }
 
+    function clearLibrarySearchCache() {
+      state.librarySearchCache = {key: "", results: []};
+    }
+
+    function librarySearchCacheKey(query, displayRootId) {
+      return [
+        state.librarySearchVersion,
+        Number(displayRootId || 0),
+        librarySearchNormalize(query),
+        state.libraryTab || ""
+      ].join("|");
+    }
+
     function libraryItemSearchHaystack(item) {
       const paper = item.paper || {};
+      const doiValues = [
+        paper.doi,
+        paper.nature_reference?.doi,
+        paper.url,
+        paper.landing_url,
+        paper.google_scholar_url
+      ].filter(Boolean);
       return [
         item.display_name,
+        paper.original_filename,
+        paper.original_relative_path,
+        paper.original_parent_relative_path,
+        paper.source_path,
+        paper.merged_pdf_path,
+        paper.main_pdf_path,
+        paper.pdf_url,
         paper.citation_label,
+        paper.nature_reference?.authors,
+        paper.nature_reference?.title,
+        paper.nature_reference?.journal,
+        paper.nature_reference?.volume,
+        paper.nature_reference?.pages,
+        paper.nature_reference?.year,
+        paper.nature_reference?.doi,
         paper.title,
         paper.abstract,
         paper.doi,
         paper.preprint_id,
+        paper.preprint_category,
+        ...(Array.isArray(paper.preprint_categories) ? paper.preprint_categories : []),
         paper.journal,
         paper.publication_date,
+        paper.bibtex,
+        ...doiValues.map((value) => libraryDoiSearchKey(value)),
         ...(Array.isArray(paper.authors) ? paper.authors : []),
         ...(Array.isArray(paper.full_authors) ? paper.full_authors : [])
       ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function librarySearchMatches(haystack, query) {
+      const normalizedHaystack = librarySearchNormalize(haystack);
+      const normalizedQuery = librarySearchNormalize(query);
+      if (!normalizedQuery) return true;
+      if (normalizedHaystack.includes(normalizedQuery)) return true;
+      const compactQuery = libraryDoiSearchKey(query);
+      if (compactQuery && libraryDoiSearchKey(haystack).includes(compactQuery)) return true;
+      const queryTokens = librarySearchTokens(normalizedQuery).filter((token) => token.length > 1);
+      if (!queryTokens.length) return normalizedHaystack.includes(normalizedQuery);
+      const haystackTokens = librarySearchTokens(normalizedHaystack);
+      if (!haystackTokens.length) return false;
+      const longQueryTokens = queryTokens.filter((token) => token.length >= 4);
+      const haystackTokenSet = new Set(haystackTokens.flatMap((token) => librarySearchTokenVariants(token)));
+      let matched = 0;
+      queryTokens.forEach((token) => {
+        if (librarySearchTokenMatches(token, haystackTokens, haystackTokenSet, normalizedHaystack, longQueryTokens.length)) matched += 1;
+      });
+      const required = queryTokens.length <= 2 ? queryTokens.length : Math.max(2, Math.ceil(queryTokens.length * 0.66));
+      return matched >= required;
+    }
+
+    function librarySearchNormalize(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function libraryDoiSearchKey(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/https?:\/\/(dx\.)?doi\.org\//g, "")
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    function librarySearchTokens(value) {
+      return librarySearchNormalize(value).split(" ").filter(Boolean);
+    }
+
+    function librarySearchTokenVariants(token) {
+      const variants = new Set([token]);
+      const suffixes = ["ations", "ation", "ments", "ment", "ities", "ity", "ions", "ion", "tion", "ing", "ed", "es", "s"];
+      suffixes.forEach((suffix) => {
+        if (token.length > suffix.length + 3 && token.endsWith(suffix)) {
+          variants.add(token.slice(0, -suffix.length));
+        }
+      });
+      return [...variants].filter((item) => item.length > 1);
+    }
+
+    function librarySearchTokenMatches(queryToken, haystackTokens, haystackTokenSet, normalizedHaystack, longQueryTokenCount = 0) {
+      const queryVariants = librarySearchTokenVariants(queryToken);
+      if (queryVariants.some((variant) => normalizedHaystack.includes(variant) || haystackTokenSet.has(variant))) return true;
+      if (queryToken.length < 4 || longQueryTokenCount > 8) return false;
+      const comparableTokens = haystackTokens.filter((token) => (
+        token.length >= 4
+        && Math.abs(token.length - queryToken.length) <= 3
+        && token[0] === queryToken[0]
+      )).slice(0, 80);
+      return queryVariants.some((variant) => comparableTokens.some((token) => {
+        if (token.length < 3) return false;
+        if ((token.includes(variant) || variant.includes(token)) && Math.min(token.length, variant.length) >= 4) return true;
+        const maxDistance = variant.length <= 4 ? 1 : (variant.length <= 8 ? 2 : 3);
+        if (Math.abs(token.length - variant.length) > maxDistance) return false;
+        return libraryEditDistanceWithin(variant, token, maxDistance);
+      }));
+    }
+
+    function libraryEditDistanceWithin(left, right, limit) {
+      if (left === right) return true;
+      if (Math.abs(left.length - right.length) > limit) return false;
+      let previous = Array.from({length: right.length + 1}, (_, index) => index);
+      for (let i = 1; i <= left.length; i += 1) {
+        const current = [i];
+        let rowBest = current[0];
+        for (let j = 1; j <= right.length; j += 1) {
+          const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+          const value = Math.min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost);
+          current[j] = value;
+          if (value < rowBest) rowBest = value;
+        }
+        if (rowBest > limit) return false;
+        previous = current;
+      }
+      return previous[right.length] <= limit;
     }
 
     function libraryFolderPath(folderId) {
@@ -6128,17 +6523,19 @@ INDEX_HTML = """<!doctype html>
     }
 
     function librarySearchResults() {
-      const query = state.query.trim().toLowerCase();
+      const query = state.query.trim();
       if (!query) return [];
       const displayRootId = libraryDisplayRootId();
+      const cacheKey = librarySearchCacheKey(query, displayRootId);
+      if (state.librarySearchCache.key === cacheKey) return state.librarySearchCache.results;
       const folderIds = libraryDescendantFolderIds(displayRootId);
       const results = [];
       state.libraryFolders
         .filter((folder) => folderIds.has(Number(folder.id)) && Number(folder.id) !== Number(displayRootId))
         .forEach((folder) => {
           const path = libraryFolderPath(folder.id);
-          const haystack = `${folder.name || ""} ${path}`.toLowerCase();
-          if (haystack.includes(query)) {
+          const haystack = `${folder.name || ""} ${path}`;
+          if (librarySearchMatches(haystack, query)) {
             results.push({
               type: "folder",
               id: Number(folder.id),
@@ -6151,8 +6548,8 @@ INDEX_HTML = """<!doctype html>
         .filter((item) => folderIds.has(Number(item.folder_id)))
         .forEach((item) => {
           const folderPath = libraryFolderPath(item.folder_id);
-          const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`.toLowerCase();
-          if (haystack.includes(query)) {
+          const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`;
+          if (librarySearchMatches(haystack, query)) {
             results.push({
               type: "item",
               id: Number(item.id),
@@ -6161,7 +6558,7 @@ INDEX_HTML = """<!doctype html>
             });
           }
         });
-      return results.sort((a, b) => {
+      results.sort((a, b) => {
         const typeDelta = (a.type === "folder" ? 0 : 1) - (b.type === "folder" ? 0 : 1);
         if (typeDelta) return typeDelta;
         const left = a.type === "folder"
@@ -6172,6 +6569,8 @@ INDEX_HTML = """<!doctype html>
           : (libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "");
         return String(left).localeCompare(String(right)) || Number(a.id) - Number(b.id);
       });
+      state.librarySearchCache = {key: cacheKey, results};
+      return results;
     }
 
     function libraryVisibleEntries() {
@@ -6577,6 +6976,47 @@ INDEX_HTML = """<!doctype html>
       state.libraryActiveFolderId = state.librarySelection.id;
       state.libraryCurrentFolderId = state.librarySelection.id;
       renderLibrary();
+    }
+
+    async function refreshLibraryMetadataFromDoi(paper) {
+      if (!paper?.paper_id) return;
+      const input = $("libraryDetailDoiInput");
+      const doi = String(input?.value || "").trim();
+      const status = $("libraryDetailStatus");
+      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      if (!doi) {
+        if (status) {
+          status.textContent = "Enter a DOI first.";
+          status.className = "library-detail-status err";
+        }
+        input?.focus({preventScroll: true});
+        return;
+      }
+      buttons.forEach((button) => button.disabled = true);
+      if (status) {
+        status.textContent = "Refreshing metadata from DOI...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/library/refresh-metadata", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id, doi})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
+        applyLibrarySnapshot(data);
+        updatePaperState(paper.paper_id, data.paper);
+        state.figureFailures.delete(paper.paper_id);
+        if (state.libraryTab === "my-publications") renderMyPublications();
+        else renderLibrary();
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Could not refresh metadata";
+          status.className = "library-detail-status err";
+        }
+        buttons.forEach((button) => button.disabled = false);
+      }
     }
 
     function syncSelectedJournals() {
@@ -7247,10 +7687,13 @@ INDEX_HTML = """<!doctype html>
       root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
-          ${workspaceToolsMarkup()}
-          ${librarySearchIsActive()
-            ? `<div class="library-search-results" id="librarySearchResults"></div>`
-            : `<div class="library-columns" id="libraryColumns"></div>`}
+          <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
+          <div class="library-main-area">
+            ${workspaceToolsMarkup()}
+            ${librarySearchIsActive()
+              ? `<div class="library-search-results" id="librarySearchResults"></div>`
+              : `<div class="library-columns" id="libraryColumns"></div>`}
+          </div>
           <aside class="library-pane">
             <div class="library-pane-header">Details</div>
             <div class="library-detail" id="libraryDetail"></div>
@@ -7267,6 +7710,7 @@ INDEX_HTML = """<!doctype html>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
       `;
+      renderLibraryShortcutTabs();
       resizeLibraryViewport();
       if (librarySearchIsActive()) renderLibrarySearchResults();
       else renderLibraryColumns();
@@ -7474,7 +7918,8 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryTabs() {
       $("libraryControls").classList.add("open");
       setPrimaryView("library");
-      $("libraryTab")?.classList.toggle("active", state.libraryTab === "library");
+      const inLibraryFilesystem = state.libraryTab === "library" || state.libraryTab?.startsWith("shortcut-") || state.libraryTab?.startsWith("workspace-");
+      $("libraryTab")?.classList.toggle("active", inLibraryFilesystem);
       $("myPublicationsTab")?.classList.toggle("active", state.libraryTab === "my-publications");
       $("topLibraryLoader")?.classList.toggle("active", state.libraryTab === "loader");
       renderLibraryShortcutTabs();
@@ -7526,14 +7971,25 @@ INDEX_HTML = """<!doctype html>
       const shortcutTabs = Array.from({length: LIBRARY_SHORTCUT_TAB_COUNT}, (_, index) => {
         const assigned = Boolean(Number(state.libraryShortcutTabs[index]?.folder_id || 0));
         const label = libraryShortcutLabel(index);
-        return `<button class="library-tab shortcut-tab shortcut-tab-${index}${state.libraryTab === `shortcut-${index}` ? " active" : ""}" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}">${escapeHtml(label)}</button>`;
+        return `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${index * 92}px" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}"><span class="library-tab-label">${escapeHtml(label)}</span></button>`;
       }).join("");
       const workspaceTabs = Array.from({length: LIBRARY_WORKSPACE_TAB_COUNT}, (_, index) => (
-        `<button class="library-tab workspace-tab workspace-tab-${index}${state.libraryTab === `workspace-${index}` ? " active" : ""}" type="button" data-workspace-tab="${index}" title="${escapeAttr(libraryWorkspaceLabel(index))}">${escapeHtml(libraryWorkspaceLabel(index))}</button>`
+        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${(LIBRARY_SHORTCUT_TAB_COUNT + index) * 92 + 14}px" type="button" data-workspace-tab="${index}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
       )).join("");
-      root.innerHTML = shortcutTabs + workspaceTabs;
+      const railHeight = (LIBRARY_SHORTCUT_TAB_COUNT + LIBRARY_WORKSPACE_TAB_COUNT) * 92 + 14;
+      root.innerHTML = `
+        <div class="library-tab-rail-inner" style="--library-rail-height:${railHeight}px">
+          ${shortcutTabs}
+          ${workspaceTabs}
+        </div>
+      `;
       root.querySelectorAll("[data-shortcut-tab]").forEach((button) => {
         button.addEventListener("click", () => openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
+        button.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          runLibraryMenuAction(() => renameLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
+        });
         button.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
@@ -7553,6 +8009,11 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelectorAll("[data-workspace-tab]").forEach((button) => {
         button.addEventListener("click", () => openLibraryWorkspaceTab(Number(button.dataset.workspaceTab || 0)));
+        button.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          runLibraryMenuAction(() => renameLibraryWorkspaceFromTab(Number(button.dataset.workspaceTab || 0)));
+        });
       });
     }
 
@@ -7584,6 +8045,22 @@ INDEX_HTML = """<!doctype html>
       await openLibraryShortcutTab(index);
     }
 
+    async function renameLibraryShortcutTab(index) {
+      const current = libraryShortcutLabel(index);
+      const label = window.prompt("Rename shortcut", current);
+      if (label === null) return;
+      const res = await fetch("/api/library/shortcut-tabs/rename", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({index, label})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not rename shortcut");
+      applyLibrarySnapshot(data);
+      if (state.libraryTab === `shortcut-${index}`) state.libraryTab = `shortcut-${index}`;
+      renderLibrary();
+    }
+
     async function openLibraryWorkspaceTab(index) {
       if (!state.libraryWorkspaceTabs.length) {
         const res = await fetch("/api/library");
@@ -7602,8 +8079,8 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
-    async function renameLibraryWorkspace(index) {
-      const label = $("workspaceNameInput")?.value || `Space ${index + 1}`;
+    async function renameLibraryWorkspace(index, labelOverride = null) {
+      const label = labelOverride === null ? ($("workspaceNameInput")?.value || `Space ${index + 1}`) : labelOverride;
       const res = await fetch("/api/library/workspace-tabs/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -7615,6 +8092,13 @@ INDEX_HTML = """<!doctype html>
       state.workspaceStatus = "Space renamed.";
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
+    }
+
+    async function renameLibraryWorkspaceFromTab(index) {
+      const current = libraryWorkspaceLabel(index);
+      const label = window.prompt("Rename space", current);
+      if (label === null) return;
+      await renameLibraryWorkspace(index, label);
     }
 
     async function addLibraryWorkspaceDoi(index) {
@@ -7902,6 +8386,25 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function updateLibrarySearchActiveRow() {
+      const root = $("librarySearchResults");
+      if (!root) return;
+      const selectedKey = libraryEntryKey(state.librarySelection);
+      root.querySelectorAll(".library-row").forEach((row) => {
+        const rowKey = libraryEntryKey({type: row.dataset.libraryType, id: Number(row.dataset.libraryId || 0)});
+        row.classList.toggle("active", rowKey === selectedKey);
+      });
+    }
+
+    function selectLibrarySearchEntry(parentFolderId, type, id) {
+      const entry = {type, id: Number(id)};
+      setLibraryColumnSelection(parentFolderId, entry);
+      renderLibraryDetail();
+      updateLibrarySearchActiveRow();
+      revealLibrarySearchSelection();
+      refreshLibraryQuickLookForSelection();
+    }
+
     function startLibraryColumnResize(event, folderId) {
       const column = event.currentTarget.closest(".library-column");
       if (!column || !folderId) return;
@@ -8079,12 +8582,44 @@ INDEX_HTML = """<!doctype html>
 
     function libraryDetailAbstractMarkup(paper) {
       const abstract = String(paper?.abstract || "").trim();
-      if (!abstract) return "";
       return `
         <section class="library-detail-abstract">
           <strong>Abstract</strong>
-          <p>${escapeHtml(abstract)}</p>
+          <p>${escapeHtml(abstract || "No abstract available.")}</p>
         </section>
+      `;
+    }
+
+    function libraryDetailDoiMarkup(paper) {
+      const value = paper?.doi || "";
+      return `
+        <div class="library-detail-doi">
+          <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI">
+          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI">Refresh</button>
+        </div>
+      `;
+    }
+
+    function libraryDetailFilesMarkup(paper) {
+      const lines = [];
+      if (paper?.merged_pdf_path) lines.push(`<span class="library-file-line">PDF: ${escapeHtml(paper.merged_pdf_path)}</span>`);
+      else lines.push(`<span class="library-file-line">PDF: No local PDF</span>`);
+      if (paper?.pdf_url) lines.push(`<span class="library-file-line">Source PDF: ${escapeHtml(paper.pdf_url)}</span>`);
+      return lines.join("");
+    }
+
+    function libraryDetailMetadataMarkup(paper, authors) {
+      return `
+        <dl>
+          <dt>Title</dt><dd class="library-detail-title">${escapeHtml(paper.title || "Untitled paper")}</dd>
+          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
+          <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
+          <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
+          <dt>DOI</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
+          <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
+          <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
+          <dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>
+        </dl>
       `;
     }
 
@@ -8181,20 +8716,13 @@ INDEX_HTML = """<!doctype html>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Refresh PDF</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           <button class="action danger" data-action="remove-library-paper">Remove from Library</button>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
-        <dl>
-          <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
-          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
-          <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
-          <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
-          <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
-          <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
-          <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
-        </dl>
+        ${libraryDetailMetadataMarkup(paper, authors)}
         ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
         <div class="library-reference-head">
@@ -8210,6 +8738,11 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
+      root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
+      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
+      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="remove-library-paper"]')?.addEventListener("click", async () => {
@@ -8245,19 +8778,12 @@ INDEX_HTML = """<!doctype html>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Refresh PDF</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
-        <dl>
-          <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
-          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
-          <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
-          <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
-          <dt>DOI</dt><dd>${escapeHtml(paper.doi || paper.preprint_id || "")}</dd>
-          <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
-          <dt>PDF</dt><dd>${escapeHtml(paper.merged_pdf_path || "No local PDF")}</dd>
-        </dl>
+        ${libraryDetailMetadataMarkup(paper, authors)}
         ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
         <div class="library-reference-head">
@@ -8273,6 +8799,11 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
+      root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
+      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
+      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -8712,6 +9243,10 @@ INDEX_HTML = """<!doctype html>
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+          if (librarySearchIsActive()) {
+            selectLibrarySearchEntry(parentFolderId, type, id);
+            return;
+          }
           selectLibraryEntry(parentFolderId, type, id, {
             extendRange: event.shiftKey,
             revealChildColumn: type === "folder" && !event.shiftKey
@@ -8900,26 +9435,26 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function downloadLibraryPdf(paper) {
+    async function downloadLibraryPdf(paper, options = {}) {
       if (!paper?.paper_id) return;
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
       buttons.forEach((button) => button.disabled = true);
       if (status) {
-        status.textContent = "Downloading PDF...";
+        status.textContent = options.force ? "Refreshing PDF..." : "Downloading PDF...";
         status.className = "library-detail-status";
       }
       try {
         const res = await fetch("/api/download", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id})
+          body: JSON.stringify({paper_id: paper.paper_id, force: Boolean(options.force)})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "download failed");
         updatePaperState(paper.paper_id, data.paper);
         if (status) {
-          status.textContent = "PDF downloaded";
+          status.textContent = options.force ? "PDF refreshed" : "PDF downloaded";
           status.className = "library-detail-status ok";
         }
         if (state.libraryTab === "my-publications") renderMyPublications();
@@ -9411,9 +9946,7 @@ INDEX_HTML = """<!doctype html>
           ? fallback
           : Math.max(0, Math.min(results.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
         const next = results[nextIndex];
-        setLibraryColumnSelection(next.parentFolderId, next);
-        renderLibrary();
-        refreshLibraryQuickLookForSelection();
+        selectLibrarySearchEntry(next.parentFolderId, next.type, next.id);
         return true;
       }
       if (key === "ArrowLeft") {

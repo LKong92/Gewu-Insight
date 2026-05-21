@@ -375,6 +375,43 @@ class Storage:
         self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
         self.conn.commit()
 
+    def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any]) -> dict[str, Any] | None:
+        existing = self.get_paper(paper_id)
+        if not existing:
+            return None
+        timestamp = now_iso()
+        raw_json = json.dumps(paper.get("raw") or {}, ensure_ascii=False)
+        updates = {
+            "doi": paper.get("doi") or existing.get("doi"),
+            "title": paper.get("title") or existing.get("title"),
+            "journal": paper.get("journal") or existing.get("journal"),
+            "publication_date": paper.get("publication_date") or existing.get("publication_date"),
+            "abstract": paper.get("abstract") or existing.get("abstract"),
+            "abstract_source": paper.get("abstract_source") or existing.get("abstract_source"),
+            "url": paper.get("url") or existing.get("url"),
+            "landing_url": paper.get("landing_url") or paper.get("url") or existing.get("landing_url"),
+            "pdf_url": paper.get("pdf_url") or existing.get("pdf_url"),
+            "source": paper.get("source") or existing.get("source"),
+            "type": paper.get("type") or existing.get("type"),
+            "type_crossref": paper.get("type_crossref") or existing.get("type_crossref"),
+            "publisher_section": paper.get("publisher_section") or existing.get("publisher_section"),
+            "section_allowed": paper.get("section_allowed"),
+            "last_seen_at": timestamp,
+            "raw_json": raw_json,
+            "image_url": paper.get("image_url") or "",
+        }
+        if updates["section_allowed"] is None:
+            updates["section_allowed"] = existing.get("section_allowed")
+        else:
+            updates["section_allowed"] = _bool_to_int(updates["section_allowed"])
+        columns = list(updates.keys())
+        assignments = ", ".join([f"{column} = ?" for column in columns])
+        values = [updates[column] for column in columns]
+        values.append(str(paper_id))
+        self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
+        self.conn.commit()
+        return self.get_paper(paper_id)
+
     def record_fetch_run(
         self,
         *,
