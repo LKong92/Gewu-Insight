@@ -2454,7 +2454,7 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     placeholders = ", ".join(["?"] * len(journals))
     rows = storage.conn.execute(
         f"""
-        SELECT journal, status, finished_at
+        SELECT journal, status, records_found, finished_at
         FROM fetch_runs
         WHERE monitor_type = 'journal'
           AND window_start <= ?
@@ -2468,7 +2468,7 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     selected_date = date.fromisoformat(selected)
     now = datetime.now().astimezone()
     arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
-    fetched: set[str] = set()
+    fetched: set[str] = journals_with_papers_for_date(storage, selected, journals)
     for row in rows:
         journal = row["journal"]
         if journal in fetched:
@@ -2482,7 +2482,7 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
             if fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
                 fetched.add(journal)
             continue
-        if recent_journal_date_needs_refresh(selected_date, row["finished_at"], now):
+        if recent_empty_journal_date_needs_refresh(selected_date, status, int(row["records_found"] or 0), row["finished_at"], now):
             continue
         fetched.add(journal)
     missing = [journal for journal in journals if journal not in fetched]
@@ -2491,7 +2491,34 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     return missing
 
 
-def recent_journal_date_needs_refresh(selected_date: date, finished_at: str, now: datetime) -> bool:
+def journals_with_papers_for_date(storage: Storage, selected: str, journals: list[str]) -> set[str]:
+    if not journals:
+        return set()
+    placeholders = ", ".join(["?"] * len(journals))
+    rows = storage.conn.execute(
+        f"""
+        SELECT DISTINCT journal
+        FROM papers
+        WHERE publication_date = ?
+          AND (section_allowed IS NULL OR section_allowed != 0)
+          AND journal IN ({placeholders})
+        """,
+        (selected, *journals),
+    ).fetchall()
+    return {row["journal"] for row in rows}
+
+
+def recent_empty_journal_date_needs_refresh(
+    selected_date: date,
+    status: str,
+    records_found: int,
+    finished_at: str,
+    now: datetime,
+) -> bool:
+    if status == "success" or records_found > 0:
+        return False
+    if status != "empty":
+        return False
     local_today = today_jst()
     if selected_date < local_today - timedelta(days=1):
         return False
