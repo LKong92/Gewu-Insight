@@ -265,6 +265,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/delete":
                 self.handle_delete_my_publication(payload)
                 return
+            if parsed.path == "/api/my-publications/reorder":
+                self.handle_reorder_my_publications(payload)
+                return
             if parsed.path == "/api/my-publications/name":
                 self.handle_set_my_publication_name(payload)
                 return
@@ -569,9 +572,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         imported = 0
+        skipped = 0
+        unresolved: list[str] = []
         try:
             for candidate in candidates:
-                normalized = paper_from_publication_candidate(candidate)
+                doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
+                if not doi_candidate:
+                    skipped += 1
+                    title = ((candidate.get("paper") or {}).get("title") or candidate.get("title") or "")
+                    if title:
+                        unresolved.append(str(title))
+                    continue
+                normalized = paper_from_publication_candidate(doi_candidate)
                 storage.upsert_paper(normalized)
                 storage.add_my_publication(paper_id=normalized["paper_id"])
                 imported += 1
@@ -582,6 +594,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             {
                 "imported": imported,
                 "seen": len(candidates),
+                "skipped": skipped,
+                "unresolved": unresolved[:20],
                 "publications": publications,
             }
         )
@@ -601,6 +615,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             storage.delete_my_publication(publication_id=publication_id)
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publications": publications})
+
+    def handle_reorder_my_publications(self, payload: dict[str, Any]) -> None:
+        publication_ids: list[int] = []
+        for item in payload.get("publication_ids") or []:
+            try:
+                publication_id = int(item)
+            except (TypeError, ValueError):
+                continue
+            if publication_id:
+                publication_ids.append(publication_id)
+        storage = Storage(self.configured_db_path)
+        try:
+            existing_order = [int(row["id"]) for row in storage.list_my_publications()]
+            existing = set(existing_order)
+            ordered = [publication_id for publication_id in publication_ids if publication_id in existing]
+            ordered.extend(publication_id for publication_id in existing_order if publication_id not in ordered)
+            storage.reorder_my_publications(ordered)
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
@@ -1712,6 +1747,7 @@ def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "id": int(row.get("id") or 0),
         "paper_id": row.get("paper_id") or "",
         "starred": bool(row.get("starred")),
+        "sort_order": int(row.get("sort_order") or 0),
         "created_at": row.get("created_at") or "",
         "updated_at": row.get("updated_at") or "",
         "paper": paper_to_api(row),
@@ -1841,6 +1877,51 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
         if len(candidates) >= limit or len(rows) < page_size or len(candidates) == before:
             break
     return candidates
+
+
+def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    title = clean_text(paper.get("title") or "")
+    year = clean_text(paper.get("publication_date") or "")
+    if not title:
+        return None
+    try:
+        results = search_crossref_publications(title, kind="title")
+    except Exception:
+        return None
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for result in results:
+        doi = clean_text(result.get("doi") or "")
+        if not doi:
+            continue
+        result_title = clean_text(result.get("title") or "")
+        score = title_similarity(title, result_title)
+        result_year = publication_year(result)
+        if year and result_year and year[:4] != result_year[:4]:
+            score -= 0.12
+        scored.append((score, result))
+    if not scored:
+        return None
+    score, result = max(scored, key=lambda item: item[0])
+    return result if score >= 0.82 else None
+
+
+def title_similarity(left: str, right: str) -> float:
+    left_tokens = title_tokens(left)
+    right_tokens = title_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = len(left_tokens & right_tokens)
+    return (2 * overlap) / (len(left_tokens) + len(right_tokens))
+
+
+def title_tokens(value: str) -> set[str]:
+    stop_words = {"a", "an", "and", "for", "in", "of", "on", "the", "to", "with"}
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", clean_text(value).lower())
+        if len(token) > 1 and token not in stop_words
+    }
 
 
 def google_scholar_user_id(profile_url: str) -> str:
@@ -4188,6 +4269,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-row:hover { background: #f8fafc; }
     .my-publications-row.active { background: #e8f3f4; }
+    .my-publications-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
     .my-publications-id em { font-style: italic; }
     .my-publications-id strong { font-weight: 750; color: var(--ink); }
     .star-button {
@@ -5029,6 +5111,7 @@ INDEX_HTML = """<!doctype html>
               <input class="search scholar-profile-input" id="scholarProfileUrl" placeholder="Google Scholar profile URL" type="url">
               <button class="smallbtn" id="importScholarProfile" type="button">Import Scholar</button>
               <select class="search" id="myPublicationSort" title="Sort publications">
+                <option value="manual">Manual</option>
                 <option value="time">Time</option>
                 <option value="highlight">Highlight</option>
               </select>
@@ -5160,7 +5243,7 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookFrameRect: null,
       myPublications: [],
       myPublicationSelectionId: 0,
-      myPublicationSort: "time",
+      myPublicationSort: "manual",
       myPublicationSearchResults: [],
       myPublicationSearchStatus: "",
       myPublicationName: "",
@@ -5705,6 +5788,11 @@ INDEX_HTML = """<!doctype html>
         if (state.myPublicationSort === "highlight") {
           const starDelta = Number(Boolean(b.starred)) - Number(Boolean(a.starred));
           if (starDelta) return starDelta;
+        }
+        if (state.myPublicationSort === "manual") {
+          const sortDelta = Number(a.sort_order || 0) - Number(b.sort_order || 0);
+          if (sortDelta) return sortDelta;
+          return Number(a.id || 0) - Number(b.id || 0);
         }
         const dateDelta = String(b.paper?.publication_date || "").localeCompare(String(a.paper?.publication_date || ""));
         if (dateDelta) return dateDelta;
@@ -7247,7 +7335,7 @@ INDEX_HTML = """<!doctype html>
       const nameInput = $("myPublicationName");
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
       const sortSelect = $("myPublicationSort");
-      if (sortSelect) sortSelect.value = state.myPublicationSort || "time";
+      if (sortSelect) sortSelect.value = state.myPublicationSort || "manual";
       updateToolbarLibraryImport();
       updateLibrarySearchTools();
     }
@@ -7436,7 +7524,8 @@ INDEX_HTML = """<!doctype html>
       const rows = sortedMyPublications();
       const selected = myPublicationById(state.myPublicationSelectionId) || rows[0] || null;
       if (selected) state.myPublicationSelectionId = Number(selected.id);
-      $("summary").textContent = `${state.myPublications.length} publications · Sort: ${state.myPublicationSort === "highlight" ? "Highlight" : "Time"}`;
+      const sortLabel = state.myPublicationSort === "highlight" ? "Highlight" : (state.myPublicationSort === "time" ? "Time" : "Manual");
+      $("summary").textContent = `${state.myPublications.length} publications · Sort: ${sortLabel}`;
       const root = $("papers");
       root.classList.add("library-view");
       root.innerHTML = `
@@ -7502,7 +7591,7 @@ INDEX_HTML = """<!doctype html>
       const paper = entry.paper || {};
       const active = Number(entry.id) === Number(state.myPublicationSelectionId);
       return `
-        <tr class="my-publications-row${active ? " active" : ""}" data-publication-id="${Number(entry.id)}">
+        <tr class="my-publications-row${active ? " active" : ""}" data-publication-id="${Number(entry.id)}" draggable="true">
           <td><button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button></td>
           <td>${index + 1}</td>
           <td>${escapeHtml(paper.publication_date || "")}</td>
@@ -8124,6 +8213,22 @@ INDEX_HTML = """<!doctype html>
           if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]')) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
         });
+        row.addEventListener("dragstart", (event) => {
+          event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
+          event.dataTransfer?.setData("application/x-my-publication-id", row.dataset.publicationId || "");
+        });
+        row.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          row.classList.add("drag-over");
+        });
+        row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+        row.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          row.classList.remove("drag-over");
+          const draggedId = Number(event.dataTransfer?.getData("application/x-my-publication-id") || event.dataTransfer?.getData("text/plain") || 0);
+          const targetId = Number(row.dataset.publicationId || 0);
+          if (draggedId && targetId && draggedId !== targetId) await reorderMyPublications(draggedId, targetId);
+        });
       });
       shell.querySelectorAll('[data-action="toggle-publication-star"]').forEach((button) => {
         button.addEventListener("click", async (event) => {
@@ -8225,6 +8330,38 @@ INDEX_HTML = """<!doctype html>
       refreshLibraryQuickLookForSelection();
     }
 
+    async function reorderMyPublications(draggedId, targetId) {
+      const rows = sortedMyPublications();
+      const ids = rows.map((entry) => Number(entry.id));
+      const from = ids.indexOf(Number(draggedId));
+      const to = ids.indexOf(Number(targetId));
+      if (from < 0 || to < 0 || from === to) return;
+      const [movedId] = ids.splice(from, 1);
+      ids.splice(from < to ? to - 1 : to, 0, movedId);
+      state.myPublicationSort = "manual";
+      state.myPublications = ids
+        .map((id, index) => {
+          const entry = myPublicationById(id);
+          return entry ? {...entry, sort_order: index} : null;
+        })
+        .filter(Boolean);
+      renderMyPublications();
+      const res = await fetch("/api/my-publications/reorder", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({publication_ids: ids})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        state.myPublicationSearchStatus = data.error || "Could not reorder publications";
+        renderMyPublications();
+        return;
+      }
+      applyMyPublications(data);
+      state.myPublicationSearchStatus = "Publication order updated.";
+      renderMyPublications();
+    }
+
     async function saveMyPublicationName() {
       const value = $("myPublicationName")?.value || "";
       const res = await fetch("/api/my-publications/name", {
@@ -8304,7 +8441,8 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
         applyMyPublications(data);
-        state.myPublicationSearchStatus = `${data.imported || 0} publications imported from Google Scholar.`;
+        const skipped = Number(data.skipped || 0);
+        state.myPublicationSearchStatus = `${data.imported || 0} DOI-matched publications imported from Google Scholar${skipped ? ` · ${skipped} without DOI match skipped` : ""}.`;
         if (input) input.value = "";
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Google Scholar import failed";
@@ -9874,7 +10012,7 @@ INDEX_HTML = """<!doctype html>
       }
     });
     $("myPublicationSort").addEventListener("change", (event) => {
-      state.myPublicationSort = event.target.value === "highlight" ? "highlight" : "time";
+      state.myPublicationSort = ["manual", "time", "highlight"].includes(event.target.value) ? event.target.value : "manual";
       renderMyPublications();
     });
     $("toggleSidebar").addEventListener("click", () => {

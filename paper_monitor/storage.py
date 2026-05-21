@@ -115,12 +115,13 @@ CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
   starred INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(paper_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starred, id);
+CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starred, sort_order, id);
 
 CREATE TABLE IF NOT EXISTS inventory_import_batches (
   id TEXT PRIMARY KEY,
@@ -231,6 +232,11 @@ class Storage:
         if "trashed_at" not in library_folder_columns:
             self.conn.execute("ALTER TABLE library_folders ADD COLUMN trashed_at TEXT")
             self.conn.commit()
+        my_publication_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(my_publications)").fetchall()}
+        if "sort_order" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
+            self._backfill_my_publication_sort_order()
 
     def _ensure_library_root(self) -> None:
         timestamp = now_iso()
@@ -724,13 +730,14 @@ class Storage:
 
     def add_my_publication(self, *, paper_id: str) -> dict[str, Any]:
         timestamp = now_iso()
+        sort_order = self.next_my_publication_sort_order()
         self.conn.execute(
             """
-            INSERT INTO my_publications (paper_id, starred, created_at, updated_at)
-            VALUES (?, 0, ?, ?)
+            INSERT INTO my_publications (paper_id, starred, sort_order, created_at, updated_at)
+            VALUES (?, 0, ?, ?, ?)
             ON CONFLICT(paper_id) DO UPDATE SET updated_at = excluded.updated_at
             """,
-            (str(paper_id), timestamp, timestamp),
+            (str(paper_id), sort_order, timestamp, timestamp),
         )
         self.conn.commit()
         row = self.conn.execute(
@@ -765,16 +772,42 @@ class Storage:
         self.conn.execute("DELETE FROM my_publications WHERE id = ?", (int(publication_id),))
         self.conn.commit()
 
+    def reorder_my_publications(self, publication_ids: list[int]) -> None:
+        timestamp = now_iso()
+        for index, publication_id in enumerate(publication_ids):
+            self.conn.execute(
+                "UPDATE my_publications SET sort_order = ?, updated_at = ? WHERE id = ?",
+                (index, timestamp, int(publication_id)),
+            )
+        self.conn.commit()
+
     def list_my_publications(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
             SELECT my_publications.*, papers.*
             FROM my_publications
             JOIN papers ON papers.paper_id = my_publications.paper_id
-            ORDER BY papers.publication_date DESC, papers.title ASC
+            ORDER BY my_publications.sort_order ASC, my_publications.id ASC
             """
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def next_my_publication_sort_order(self) -> int:
+        row = self.conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM my_publications").fetchone()
+        return int(row["next_order"] or 0)
+
+    def _backfill_my_publication_sort_order(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT my_publications.id
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            ORDER BY papers.publication_date DESC, papers.title ASC, my_publications.id ASC
+            """
+        ).fetchall()
+        for index, row in enumerate(rows):
+            self.conn.execute("UPDATE my_publications SET sort_order = ? WHERE id = ?", (index, row["id"]))
+        self.conn.commit()
 
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
         row = self.conn.execute(
