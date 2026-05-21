@@ -4033,6 +4033,7 @@ INDEX_HTML = """<!doctype html>
       pointer-events: auto;
     }
     .library-quicklook.open { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .library-quicklook.compact.open { grid-template-rows: auto minmax(0, 1fr); }
     .library-quicklook-title {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -4069,6 +4070,10 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       background: #eef1f5;
     }
+    .library-quicklook.compact .library-quicklook-body {
+      display: block;
+      background: #fff;
+    }
     .library-quicklook-thumbs {
       min-height: 0;
       overflow-y: auto;
@@ -4076,6 +4081,7 @@ INDEX_HTML = """<!doctype html>
       padding: 10px 8px;
       background: #f8fafc;
     }
+    .library-quicklook.compact .library-quicklook-thumbs { display: none; }
     .library-page-thumb {
       width: 76px;
       min-height: 98px;
@@ -4175,6 +4181,40 @@ INDEX_HTML = """<!doctype html>
     }
     .library-quicklook-placeholder-icon { font-size: 42px; line-height: 1; }
     .library-quicklook-placeholder-title { max-width: 108px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .library-quicklook.compact .library-quicklook-pages {
+      display: block;
+      overflow: hidden;
+      background: #fff;
+    }
+    .library-quicklook.compact .library-quicklook-placeholder {
+      min-height: 0;
+      padding: 13px 14px;
+      color: var(--ink);
+      text-align: left;
+    }
+    .library-quicklook.compact .library-quicklook-placeholder-card {
+      width: 100%;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      place-items: center start;
+      gap: 10px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      padding: 0;
+    }
+    .library-quicklook.compact .library-quicklook-placeholder-icon {
+      color: var(--muted);
+      font-size: 22px;
+    }
+    .library-quicklook.compact .library-quicklook-placeholder-title {
+      max-width: none;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+    }
     .library-quicklook-resize {
       position: absolute;
       right: 0;
@@ -4184,6 +4224,7 @@ INDEX_HTML = """<!doctype html>
       cursor: nwse-resize;
       background: linear-gradient(135deg, transparent 0 45%, rgba(102, 112, 133, 0.5) 46% 52%, transparent 53% 100%);
     }
+    .library-quicklook.compact .library-quicklook-resize { display: none; }
     .workspace {
       --note-width: 460px;
       display: grid;
@@ -9461,7 +9502,7 @@ INDEX_HTML = """<!doctype html>
       if (key === " ") {
         const paper = selectedMyPublicationPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
-        else if (state.libraryQuickLookOpen) showLibraryQuickLookPlaceholder();
+        else showLibraryQuickLookPlaceholder({open: true});
         return true;
       }
       if (!["ArrowUp", "ArrowDown"].includes(key)) return false;
@@ -9823,7 +9864,7 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
-        overlay.classList.remove("open");
+        overlay.classList.remove("open", "compact");
         overlay.setAttribute("aria-hidden", "true");
       }
       if (pages) pages.innerHTML = "";
@@ -9846,15 +9887,32 @@ INDEX_HTML = """<!doctype html>
       };
     }
 
-    function applyLibraryQuickLookFrame(frameRect = null) {
+    function defaultLibraryQuickLookCompactFrame() {
+      const title = $("libraryQuickLookTitle");
+      const current = $("libraryQuickLook")?.getBoundingClientRect();
+      const base = state.libraryQuickLookFrameRect || (current?.width ? current : defaultLibraryQuickLookFrame());
+      const width = Math.max(240, Math.min(340, Math.round(window.innerWidth * 0.24)));
+      const titleHeight = Math.max(34, Math.round(title?.getBoundingClientRect().height || 42));
+      const height = titleHeight + 54;
+      return {
+        left: Math.round(Math.max(12, Math.min(base.left, window.innerWidth - width - 12))),
+        top: Math.round(Math.max(50, Math.min(base.top, window.innerHeight - height - 12))),
+        width,
+        height
+      };
+    }
+
+    function applyLibraryQuickLookFrame(frameRect = null, options = {}) {
       const overlay = $("libraryQuickLook");
       if (!overlay) return;
       const rect = frameRect || state.libraryQuickLookFrameRect || defaultLibraryQuickLookFrame();
-      const width = Math.max(320, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
-      const height = Math.max(300, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
+      const minWidth = options.compact ? 220 : 320;
+      const minHeight = options.compact ? 74 : 300;
+      const width = Math.max(minWidth, Math.min(rect.width, Math.max(2200, window.innerWidth * 1.8)));
+      const height = Math.max(minHeight, Math.min(rect.height, Math.max(2000, window.innerHeight * 1.8)));
       const left = Math.max(80 - width, Math.min(rect.left, window.innerWidth - 80));
       const top = Math.max(36 - height, Math.min(rect.top, window.innerHeight - 36));
-      state.libraryQuickLookFrameRect = {left, top, width, height};
+      if (options.persist !== false) state.libraryQuickLookFrameRect = {left, top, width, height};
       overlay.style.left = `${left}px`;
       overlay.style.top = `${top}px`;
       overlay.style.width = `${width}px`;
@@ -9879,13 +9937,14 @@ INDEX_HTML = """<!doctype html>
       return {icon: "□", title: "No Preview", type: "Library"};
     }
 
-    function showLibraryQuickLookPlaceholder() {
-      if (!state.libraryQuickLookOpen) return;
+    function showLibraryQuickLookPlaceholder(options = {}) {
+      if (!state.libraryQuickLookOpen && !options.open) return;
       const overlay = $("libraryQuickLook");
       const title = $("libraryQuickLookTitle");
       const pages = $("libraryQuickLookPages");
       if (!overlay || !pages) return;
       const placeholder = selectedLibraryQuickLookPlaceholder();
+      state.libraryQuickLookOpen = true;
       state.libraryQuickLookPath = "";
       state.libraryQuickLookUrl = "";
       state.libraryQuickLookPage = 1;
@@ -9901,9 +9960,9 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
       `;
-      overlay.classList.add("open");
+      overlay.classList.add("open", "compact");
       overlay.setAttribute("aria-hidden", "false");
-      applyLibraryQuickLookFrame();
+      applyLibraryQuickLookFrame(defaultLibraryQuickLookCompactFrame(), {compact: true, persist: false});
     }
 
     function setLibraryQuickLookPage(page) {
@@ -10039,6 +10098,7 @@ INDEX_HTML = """<!doctype html>
         loadLibraryQuickLookInfo(paper.merged_pdf_path);
       }
       if (title) title.textContent = paper.citation_label || paper.title || "PDF Preview";
+      overlay.classList.remove("compact");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
       if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
@@ -10057,7 +10117,8 @@ INDEX_HTML = """<!doctype html>
       const overlay = $("libraryQuickLook");
       if (!overlay || event.target.closest("button")) return;
       event.preventDefault();
-      state.libraryQuickLookManualFrame = true;
+      const isCompact = overlay.classList.contains("compact");
+      if (!isCompact) state.libraryQuickLookManualFrame = true;
       const rect = overlay.getBoundingClientRect();
       const startX = event.clientX;
       const startY = event.clientY;
@@ -10069,7 +10130,7 @@ INDEX_HTML = """<!doctype html>
           top: startTop + moveEvent.clientY - startY,
           width: rect.width,
           height: rect.height
-        });
+        }, isCompact ? {compact: true, persist: false} : {});
       };
       const stop = () => {
         window.removeEventListener("pointermove", move);
@@ -10313,6 +10374,7 @@ INDEX_HTML = """<!doctype html>
       if (key === " ") {
         const paper = selectedLibraryPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
+        else showLibraryQuickLookPlaceholder({open: true});
         return true;
       }
       if (key === "Enter") {
