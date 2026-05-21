@@ -11,7 +11,7 @@ import subprocess
 import threading
 import uuid
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -59,6 +59,9 @@ LIBRARY_WORKSPACE_TAB_COUNT = 3
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
+RECENT_FETCH_REFRESH_DAYS = 14
+RECENT_FETCH_REFRESH_AFTER = timedelta(hours=6)
+ERROR_FETCH_RETRY_AFTER = timedelta(minutes=30)
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -1395,6 +1398,7 @@ def fetch_missing_sources_for_date(
         completed += len(journal_names)
 
     if ARXIV_JOURNAL_NAME in missing_sources:
+        update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
         fetch_one_arxiv_preprint_source(
             storage=storage,
             start_date=selected_date,
@@ -2250,18 +2254,46 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     placeholders = ", ".join(["?"] * len(journals))
     rows = storage.conn.execute(
         f"""
-        SELECT DISTINCT journal
+        SELECT journal, status, finished_at
         FROM fetch_runs
         WHERE monitor_type = 'journal'
           AND window_start <= ?
           AND window_end >= ?
-          AND status IN ('success', 'empty')
+          AND status IN ('success', 'empty', 'error')
           AND journal IN ({placeholders})
+        ORDER BY finished_at DESC, id DESC
         """,
         (selected, selected, *journals),
     ).fetchall()
-    fetched = {row["journal"] for row in rows}
+    selected_date = date.fromisoformat(selected)
+    refresh_recent = selected_date >= today_jst() - timedelta(days=RECENT_FETCH_REFRESH_DAYS)
+    now = datetime.now().astimezone()
+    fetched: set[str] = set()
+    for row in rows:
+        journal = row["journal"]
+        if journal in fetched:
+            continue
+        status = row["status"]
+        if status == "error":
+            if refresh_recent and fetch_run_is_fresh(row["finished_at"], now, ERROR_FETCH_RETRY_AFTER):
+                fetched.add(journal)
+            continue
+        if not refresh_recent:
+            fetched.add(journal)
+            continue
+        if fetch_run_is_fresh(row["finished_at"], now, RECENT_FETCH_REFRESH_AFTER):
+            fetched.add(journal)
     return [journal for journal in journals if journal not in fetched]
+
+
+def fetch_run_is_fresh(finished_at: str, now: datetime, max_age: timedelta) -> bool:
+    try:
+        finished = datetime.fromisoformat(finished_at)
+    except (TypeError, ValueError):
+        return False
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=now.tzinfo)
+    return now - finished.astimezone(now.tzinfo) <= max_age
 
 
 def config_for_journals(config: AppConfig, journal_names: list[str]) -> AppConfig:
@@ -4601,7 +4633,7 @@ INDEX_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="app library-mode sidebar-collapsed">
     <aside class="sidebar">
       <div class="brand">
         <div class="sidebar-view-switcher" id="sidebarViewSwitcher">
@@ -4812,7 +4844,7 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchStatus: "",
       myPublicationName: "",
       myPublicationColumnWidths: {},
-      mode: "report",
+      mode: "library",
       activeReportJournal: "",
       noteWidth: 460,
       query: "",

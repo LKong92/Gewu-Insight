@@ -22,6 +22,8 @@ def request_with_retries(
     params: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
     timeout: int = TIMEOUT,
+    max_retries: int = MAX_RETRIES,
+    retry_sleep: float = RETRY_SLEEP,
     stream: bool = False,
 ) -> requests.Response:
     merged_headers = {"User-Agent": USER_AGENT}
@@ -29,7 +31,7 @@ def request_with_retries(
         merged_headers.update(headers)
 
     last_error: Exception | None = None
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, max_retries + 1):
         try:
             response = requests.request(
                 method,
@@ -41,7 +43,8 @@ def request_with_retries(
                 allow_redirects=True,
             )
             if response.status_code == 429:
-                time.sleep(RETRY_SLEEP * attempt)
+                last_error = RuntimeError(f"HTTP 429 Too Many Requests for {response.url}")
+                time.sleep(retry_sleep * attempt)
                 continue
             response.raise_for_status()
             return response
@@ -51,9 +54,9 @@ def request_with_retries(
                 status = exc.response.status_code
                 if status != 429 and status < 500:
                     raise
-            if attempt == MAX_RETRIES:
+            if attempt == max_retries:
                 raise
-            time.sleep(RETRY_SLEEP * attempt)
+            time.sleep(retry_sleep * attempt)
     if last_error:
         raise last_error
     raise RuntimeError("request_with_retries failed unexpectedly")

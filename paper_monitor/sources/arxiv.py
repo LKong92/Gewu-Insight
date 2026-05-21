@@ -24,7 +24,8 @@ ARXIV_CONDENSED_MATTER_CATEGORIES = [
 ]
 ARXIV_CONDENSED_MATTER_CODES = [item["code"] for item in ARXIV_CONDENSED_MATTER_CATEGORIES]
 ARXIV_DEFAULT_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"]
-ARXIV_API_TIMEOUT = 90
+ARXIV_API_TIMEOUT = 25
+ARXIV_API_MAX_RETRIES = 2
 
 ATOM_NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -56,6 +57,7 @@ def fetch_arxiv_condensed_matter(
                 "sortOrder": "descending",
             },
             timeout=ARXIV_API_TIMEOUT,
+            max_retries=ARXIV_API_MAX_RETRIES,
         )
         root = ET.fromstring(response.content)
         entries = root.findall("atom:entry", ATOM_NS)
