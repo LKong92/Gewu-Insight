@@ -210,6 +210,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/open-pdf":
                 self.handle_open_pdf(payload)
                 return
+            if parsed.path == "/api/open-native-file":
+                self.handle_open_native_file(payload)
+                return
             if parsed.path == "/api/quick-look":
                 self.handle_quick_look(payload)
                 return
@@ -1250,6 +1253,29 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
         self.send_json({"status": "opened", "path": str(requested)})
 
+    def handle_open_native_file(self, payload: dict[str, Any]) -> None:
+        raw_path = str(payload.get("path") or "")
+        mode = str(payload.get("mode") or "open")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(raw_path).expanduser().resolve()
+        if not requested.exists():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Native file not found")
+            return
+        if mode == "folder":
+            target = requested if requested.is_dir() else requested.parent
+            subprocess.run(["open", str(target)], check=True)
+            self.send_json({"status": "opened", "path": str(requested), "opened_path": str(target), "mode": "folder"})
+            return
+        if requested.is_dir():
+            subprocess.run(["open", str(requested)], check=True)
+        elif requested.suffix.lower() == ".pdf":
+            subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
+        else:
+            subprocess.run(["open", str(requested)], check=True)
+        self.send_json({"status": "opened", "path": str(requested), "mode": "open"})
+
     def handle_quick_look(self, payload: dict[str, Any]) -> None:
         raw_path = str(payload.get("path") or "")
         if not raw_path:
@@ -1659,6 +1685,8 @@ def prepare_internal_page_html(html: str, base_url: str) -> str:
 def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     section = paper.get("publisher_section") or "unknown"
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
+    main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
+    source_path = existing_path_or_empty(paper.get("source_path") or "")
     analysis_path = existing_path_or_empty(paper.get("analysis_path") or "")
     return {
         "paper_id": paper.get("paper_id") or "",
@@ -1676,6 +1704,11 @@ def paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "download_message": paper.get("download_message") or "",
         "merged_pdf_path": merged_pdf,
         "merged_pdf_url": file_url(merged_pdf),
+        "main_pdf_path": main_pdf,
+        "source_path": source_path,
+        "original_relative_path": paper.get("original_relative_path") or "",
+        "original_parent_relative_path": paper.get("original_parent_relative_path") or "",
+        "original_filename": paper.get("original_filename") or "",
         "analysis_status": paper.get("analysis_status") or "not_started",
         "analysis_path": analysis_path,
         "analysis_url": file_url(analysis_path),
@@ -7786,6 +7819,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
           <button type="button" data-action="rename-entry">Rename</button>
+          <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="copy-entry">Copy</button>
           <button type="button" data-action="paste-entry">Paste</button>
@@ -8806,6 +8840,7 @@ INDEX_HTML = """<!doctype html>
             <dt>Type</dt><dd>Folder</dd>
             <dt>Contains</dt><dd>${folders} folders · ${items} papers</dd>
           </dl>
+          <div class="library-detail-status" id="libraryDetailStatus"></div>
         `;
         return;
       }
@@ -9357,7 +9392,14 @@ INDEX_HTML = """<!doctype html>
           });
         });
         row.addEventListener("dblclick", () => {
-          if (row.dataset.libraryType === "folder") focusLibraryFolder(Number(row.dataset.libraryId));
+          const id = Number(row.dataset.libraryId);
+          if (row.dataset.libraryType === "folder") {
+            focusLibraryFolder(id);
+            return;
+          }
+          if (row.dataset.libraryType === "item") {
+            openNativeLibraryEntry("item", id);
+          }
         });
         row.addEventListener("dragstart", (event) => {
           if (row.getAttribute("draggable") === "false") {
@@ -9529,6 +9571,67 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "open failed");
         if (status) {
           status.textContent = "PDF opened in Preview";
+          status.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message;
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    function libraryNativeItemPath(item) {
+      const paper = item?.paper || {};
+      return paper.merged_pdf_path || paper.main_pdf_path || paper.source_path || "";
+    }
+
+    function libraryNativeFolderPath(folderId) {
+      const folderIds = libraryDescendantFolderIds(folderId);
+      const items = state.libraryItems
+        .filter((item) => folderIds.has(Number(item.folder_id || 0)))
+        .sort((a, b) => compareLibraryOrder(a, b, "display_name"));
+      const pdfItem = items.find((item) => item?.paper?.merged_pdf_path || item?.paper?.main_pdf_path);
+      const sourceItem = items.find((item) => item?.paper?.source_path);
+      return libraryNativeItemPath(pdfItem || sourceItem || null);
+    }
+
+    function libraryNativeTargetForEntry(entryType, entryId) {
+      if (entryType === "item") {
+        return {path: libraryNativeItemPath(libraryItemById(entryId)), mode: "open"};
+      }
+      if (entryType === "folder") {
+        return {path: libraryNativeFolderPath(entryId), mode: "folder"};
+      }
+      return {path: "", mode: "open"};
+    }
+
+    async function openNativeLibraryEntry(entryType, entryId) {
+      const target = libraryNativeTargetForEntry(entryType, entryId);
+      const status = $("libraryDetailStatus");
+      if (!target.path) {
+        if (status) {
+          status.textContent = entryType === "folder"
+            ? "No native file was found inside this folder."
+            : "No native file path is available for this item.";
+          status.className = "library-detail-status err";
+        }
+        return;
+      }
+      if (status) {
+        status.textContent = target.mode === "folder" ? "Opening native folder in Finder..." : "Opening native file...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/open-native-file", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(target)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "open failed");
+        if (status) {
+          status.textContent = target.mode === "folder" ? "Native folder opened in Finder" : "Native file opened";
           status.className = "library-detail-status ok";
         }
       } catch (error) {
@@ -9754,19 +9857,6 @@ INDEX_HTML = """<!doctype html>
       if (current !== state.libraryQuickLookPage) updateLibraryQuickLookActivePage(current);
     }
 
-    function nativePdfAnnotatorAvailable() {
-      return Boolean(window.webkit?.messageHandlers?.openPdfAnnotator);
-    }
-
-    function openNativePdfAnnotator(path, options = {}) {
-      if (!nativePdfAnnotatorAvailable() || !path) return false;
-      window.webkit.messageHandlers.openPdfAnnotator.postMessage({
-        path,
-        toggle: Boolean(options.toggle)
-      });
-      return true;
-    }
-
     async function loadLibraryQuickLookInfo(path) {
       try {
         const res = await fetch(`/api/pdf-info?path=${encodeURIComponent(path)}`);
@@ -9784,15 +9874,6 @@ INDEX_HTML = """<!doctype html>
 
     function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
-      if (!options.webFallback && openNativePdfAnnotator(paper.merged_pdf_path, options)) {
-        closeLibraryQuickLook();
-        const status = $("libraryDetailStatus");
-        if (status && !options.silent) {
-          status.textContent = "PDF preview open";
-          status.className = "library-detail-status ok";
-        }
-        return;
-      }
       if (options.toggle && state.libraryQuickLookOpen && paper.merged_pdf_path === state.libraryQuickLookPath) {
         closeLibraryQuickLook();
         return;
@@ -9955,6 +10036,7 @@ INDEX_HTML = """<!doctype html>
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
+      const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -9997,6 +10079,15 @@ INDEX_HTML = """<!doctype html>
         recoverButton.onclick = async () => {
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => recoverLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0)));
+        };
+      }
+      if (openNativeButton) {
+        openNativeButton.style.display = hasEntry ? "" : "none";
+        openNativeButton.onclick = async () => {
+          const type = menu.dataset.entryType;
+          const id = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await openNativeLibraryEntry(type, id);
         };
       }
       if (pasteButton) {
