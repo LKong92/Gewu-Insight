@@ -3656,7 +3656,7 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       padding-right: 18px;
       display: grid;
-      grid-template-rows: auto auto auto auto minmax(0, 1fr);
+      grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
     }
     .app.library-mode .report-column {
       padding-right: 0;
@@ -3846,6 +3846,11 @@ INDEX_HTML = """<!doctype html>
     }
     .summary { color: var(--muted); font-size: 14px; margin: -8px 0 18px; }
     .summary:empty { display: none; }
+    .fetch-progress-host {
+      display: none;
+      margin: -6px 0 12px;
+    }
+    .fetch-progress-host.open { display: block; }
     .report-tabs {
       display: none;
       gap: 8px;
@@ -5004,6 +5009,7 @@ INDEX_HTML = """<!doctype html>
           </div>
           <div class="summary" id="summary"></div>
           <div class="report-tabs" id="reportTabs"></div>
+          <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="library-controls" id="libraryControls">
             <button class="library-tab active" id="libraryTab" type="button">Library</button>
             <button class="library-tab" id="myPublicationsTab" type="button">My Publications</button>
@@ -5326,6 +5332,7 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         if (selectedDate !== state.selectedDate || sequence !== state.reportSequence) return;
         if (state.mode !== "library") setPrimaryView("report");
+        clearFetchProgressDisplay();
         $("summary").textContent = "Local data is busy";
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       }
@@ -5338,6 +5345,7 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = "Loading local data...";
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
+      clearFetchProgressDisplay();
       $("papers").innerHTML = `<div class="empty">Loading papers for this date...</div>`;
     }
 
@@ -5354,7 +5362,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReport();
       if ((data.missingJournals || []).length && !state.papers.length) {
-        $("papers").innerHTML = fetchProgressMarkup(selectedDate);
+        updateFetchProgressDisplay(selectedDate);
       }
     }
 
@@ -5571,16 +5579,24 @@ INDEX_HTML = """<!doctype html>
 
     function updateFetchProgressDisplay(selectedDate) {
       if (!reportIsActiveForDate(selectedDate)) return;
-      const root = $("papers");
+      const root = $("fetchProgressHost");
+      root.classList.add("open");
       let panel = root.querySelector("[data-fetch-progress]");
       if (!panel) {
-        root.insertAdjacentHTML("afterbegin", fetchProgressMarkup(selectedDate));
+        root.innerHTML = fetchProgressMarkup(selectedDate);
         panel = root.querySelector("[data-fetch-progress]");
       }
       const progress = normalizedFetchProgress(selectedDate);
       panel.querySelector('[data-role="fetch-percent"]').textContent = `${progress.percent}%`;
       panel.querySelector('[data-role="fetch-bar"]').style.width = `${progress.percent}%`;
       panel.querySelector('[data-role="fetch-detail"]').textContent = progress.detail;
+    }
+
+    function clearFetchProgressDisplay() {
+      const root = $("fetchProgressHost");
+      if (!root) return;
+      root.classList.remove("open");
+      root.innerHTML = "";
     }
 
     async function refreshReportSnapshotDuringFetch(selectedDate) {
@@ -6648,7 +6664,9 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       const fetchPending = reportFetchIsPending(state.selectedDate);
       if (fetchPending) {
-        root.innerHTML = fetchProgressMarkup(state.selectedDate);
+        updateFetchProgressDisplay(state.selectedDate);
+      } else {
+        clearFetchProgressDisplay();
       }
       const groups = groupedReportPapers(filtered);
       if (!groups.length && fetchPending) {
@@ -6839,6 +6857,7 @@ INDEX_HTML = """<!doctype html>
       state.mode = "library";
       state.libraryTab = "loader";
       stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
       renderLibraryTabs();
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
@@ -6981,6 +7000,7 @@ INDEX_HTML = """<!doctype html>
       state.mode = "library";
       if (!state.libraryTab?.startsWith("shortcut-") && !state.libraryTab?.startsWith("workspace-")) state.libraryTab = "library";
       stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
       renderLibraryTabs();
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
@@ -7408,6 +7428,7 @@ INDEX_HTML = """<!doctype html>
       state.mode = "library";
       state.libraryTab = "my-publications";
       stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
       renderLibraryTabs();
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
