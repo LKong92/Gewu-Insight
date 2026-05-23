@@ -71,6 +71,27 @@
       "openalex_source_id": "S137042341",
       "section_policy": "science",
       "skip_landing_enrichment": true
+    },
+    {
+      "name": "Nature Communications",
+      "issns": [
+        "2041-1723"
+      ],
+      "openalex_source_id": "S64187185",
+      "section_policy": "science",
+      "skip_landing_enrichment": true,
+      "logo_url": "https://media.springernature.com/full/nature-cms/uploads/product/ncomms/header-7001f06bc3fe2437048388e9f2f44215.svg"
+    },
+    {
+      "name": "Nature Photonics",
+      "issns": [
+        "1749-4885",
+        "1749-4893"
+      ],
+      "openalex_source_id": "S120392215",
+      "section_policy": "science",
+      "skip_landing_enrichment": true,
+      "logo_url": "https://media.springernature.com/full/nature-cms/uploads/product/nphoton/header-310d06b045328f70fcc40e14da42c0ca.svg"
     }
   ],
   "section_policies": {
@@ -122,6 +143,23 @@
     }
   },
   "journal_history": [
+    {
+      "name": "Nature Photonics",
+      "issns": [
+        "1749-4885",
+        "1749-4893"
+      ],
+      "openalex_source_id": "S120392215",
+      "logo_url": "https://media.springernature.com/full/nature-cms/uploads/product/nphoton/header-310d06b045328f70fcc40e14da42c0ca.svg"
+    },
+    {
+      "name": "Nature Communications",
+      "issns": [
+        "2041-1723"
+      ],
+      "openalex_source_id": "S64187185",
+      "logo_url": "https://media.springernature.com/full/nature-cms/uploads/product/ncomms/header-7001f06bc3fe2437048388e9f2f44215.svg"
+    },
     {
       "name": "Advanced Materials",
       "issns": [
