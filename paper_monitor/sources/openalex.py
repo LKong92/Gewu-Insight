@@ -173,12 +173,15 @@ def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str
     url = f"https://doi.org/{doi}" if doi else landing_url or pdf_url or clean_text(item.get("id"))
     abstract = clean_text(item.get("abstract")) or rebuild_abstract(item.get("abstract_inverted_index"))
     paper_id = make_paper_id(doi, title, journal_name, publication_date)
+    preferred_journal = normalize_openalex_journal_name(journal_name)
+    source_journal = normalize_openalex_journal_name(source.get("display_name"))
+    journal = preferred_journal if preferred_journal and preferred_journal.lower() != "unknown journal" else source_journal or preferred_journal
 
     return {
         "paper_id": paper_id,
         "doi": doi,
         "title": title,
-        "journal": clean_text(source.get("display_name")) or journal_name,
+        "journal": journal or "Unknown Journal",
         "publication_date": publication_date,
         "abstract": abstract,
         "abstract_source": "metadata" if abstract else "missing",
@@ -192,6 +195,41 @@ def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str
         "section_allowed": None,
         "raw": item,
     }
+
+
+PHYSICAL_REVIEW_JOURNAL_NAMES = {
+    "physical review a": "Physical Review A",
+    "physical review b": "Physical Review B",
+    "physical review c": "Physical Review C",
+    "physical review d": "Physical Review D",
+    "physical review e": "Physical Review E",
+    "physical review letters": "Physical Review Letters",
+    "physical review x": "Physical Review X",
+    "physical review applied": "Physical Review Applied",
+    "physical review fluids": "Physical Review Fluids",
+    "physical review materials": "Physical Review Materials",
+    "physical review research": "Physical Review Research",
+    "reviews of modern physics": "Reviews of Modern Physics",
+}
+
+
+def normalize_openalex_journal_name(value: Any) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    parts = [clean_text(part).strip(" .") for part in text.split("/") if clean_text(part).strip(" .")]
+    if len(parts) > 1:
+        normalized_parts = {journal_name_key(part) for part in parts}
+        if len(normalized_parts) == 1:
+            text = parts[-1]
+    key = journal_name_key(text)
+    if key in PHYSICAL_REVIEW_JOURNAL_NAMES:
+        return PHYSICAL_REVIEW_JOURNAL_NAMES[key]
+    return clean_text(text)
+
+
+def journal_name_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
 
 
 def rebuild_abstract(inverted_index: dict[str, list[int]] | None) -> str:

@@ -43,7 +43,7 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, strip_arxiv_version
 from .sources.crossref import normalize_crossref_item
-from .sources.openalex import normalize_openalex_item, search_openalex_author_publications
+from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
@@ -77,6 +77,12 @@ ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
 DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
+COMMENT_REPORT_MAX_OPENALEX_PAGES = 10
+COMMENT_REPORT_OPENALEX_PER_PAGE = 100
+COMMENT_REPORT_LIST_LIMIT = 200
+COMMENT_REPORT_CONTEXT_LIMIT = 100
+COMMENT_REPORT_UNMATCHED_CONTEXT_LIMIT = 100
+COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
@@ -2206,6 +2212,7 @@ def publication_metrics_metadata_from_doi(
     if not doi or not looks_like_doi(doi) or (doi_is_likely_data_repository(doi) and not allow_data_repository):
         return None
     crossref_count: int | None = None
+    crossref_journal = ""
     try:
         crossref = publication_metadata_from_doi(
             doi,
@@ -2213,6 +2220,8 @@ def publication_metrics_metadata_from_doi(
             max_retries=max_retries,
             allow_data_repository=allow_data_repository,
         )
+        if isinstance(crossref, dict):
+            crossref_journal = normalize_openalex_journal_name(crossref.get("journal") or "")
         crossref_raw = crossref.get("raw") if isinstance(crossref, dict) else {}
         if isinstance(crossref_raw, dict):
             crossref_count = int_or_none(crossref_raw.get("is-referenced-by-count"))
@@ -2228,7 +2237,8 @@ def publication_metrics_metadata_from_doi(
         )
         item = response.json()
         if isinstance(item, dict) and item.get("id"):
-            journal = clean_text(((item.get("primary_location") or {}).get("source") or {}).get("display_name")) or "Unknown Journal"
+            source_journal = normalize_openalex_journal_name(((item.get("primary_location") or {}).get("source") or {}).get("display_name"))
+            journal = crossref_journal or source_journal or "Unknown Journal"
             normalized = normalize_openalex_item(item, journal)
             raw = normalized.setdefault("raw", {})
             if isinstance(raw, dict) and crossref_count is not None:
@@ -3803,9 +3813,13 @@ def semantic_scholar_summary(paper: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_my_publication_comments_report(publication: dict[str, Any]) -> tuple[str, Path, int]:
-    citing_papers = fetch_openalex_citing_papers(publication, max_pages=10, per_page=100)
+    citing_papers = fetch_openalex_citing_papers(
+        publication,
+        max_pages=COMMENT_REPORT_MAX_OPENALEX_PAGES,
+        per_page=COMMENT_REPORT_OPENALEX_PER_PAGE,
+    )
     try:
-        context_snippets = fetch_semantic_scholar_citation_contexts(publication, limit=30)
+        context_snippets = fetch_semantic_scholar_citation_contexts(publication, limit=COMMENT_REPORT_CONTEXT_LIMIT)
     except Exception:
         context_snippets = []
     content = my_publication_comments_markdown(publication, citing_papers, context_snippets)
@@ -3944,6 +3958,7 @@ def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: in
                     "citing_year": year,
                     "citing_url": url,
                     "citing_last_author": citing_last_author,
+                    "citing_citation_count": int_or_none(citing.get("citationCount")) or 0,
                     "intents": [clean_text(str(value)) for value in intents if clean_text(str(value))],
                     "is_influential": bool(item.get("isInfluential")),
                     "source": "Semantic Scholar citation contexts",
@@ -3970,6 +3985,175 @@ def trim_citation_context(text: str, *, max_chars: int = 260) -> str:
     return text[: max_chars - 1].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
 
 
+POSITIVE_COMMENT_TERMS = [
+    ("important", 2),
+    ("significant", 2),
+    ("key", 2),
+    ("central", 2),
+    ("crucial", 2),
+    ("notable", 2),
+    ("elegant", 2),
+    ("strong evidence", 3),
+    ("direct evidence", 3),
+    ("robust", 2),
+    ("revealed", 2),
+    ("demonstrated", 2),
+    ("showed", 1),
+    ("established", 3),
+    ("enabled", 2),
+    ("opened", 2),
+]
+
+STRONGEST_COMMENT_TERMS = [
+    ("first", 3),
+    ("seminal", 5),
+    ("landmark", 5),
+    ("pioneering", 5),
+    ("breakthrough", 5),
+    ("major advance", 5),
+    ("compelling", 4),
+    ("unambiguous", 4),
+    ("definitive", 4),
+    ("smoking gun", 5),
+    ("paradigm", 4),
+    ("widely", 2),
+    ("opened", 3),
+]
+
+CRITICAL_COMMENT_TERMS = [
+    ("however", 1),
+    ("although", 1),
+    ("but", 1),
+    ("limitation", 4),
+    ("limited", 2),
+    ("unclear", 4),
+    ("controvers", 4),
+    ("debate", 3),
+    ("challenge", 3),
+    ("question", 3),
+    ("not sufficient", 4),
+    ("cannot", 3),
+    ("failed", 4),
+    ("lack", 3),
+    ("ambiguous", 4),
+    ("inconsistent", 4),
+    ("discrep", 4),
+    ("not reproduc", 5),
+    ("alternative explanation", 5),
+    ("caution", 4),
+    ("artifact", 5),
+    ("spurious", 5),
+]
+
+
+def citation_context_score(text: str, weighted_terms: list[tuple[str, int]]) -> int:
+    haystack = clean_text(text).lower()
+    return sum(weight for term, weight in weighted_terms if term in haystack)
+
+
+def ranked_citation_contexts(
+    snippets: list[dict[str, Any]],
+    *,
+    kind: str,
+    limit: int = COMMENT_REPORT_HIGHLIGHT_LIMIT,
+) -> list[dict[str, Any]]:
+    ranked: list[tuple[int, int, int, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for snippet in snippets:
+        context = clean_text(snippet.get("context") or "")
+        if not context:
+            continue
+        key = normalized_title_key(f"{snippet.get('citing_title') or ''} {context}")
+        if key in seen:
+            continue
+        seen.add(key)
+        intents = [clean_text(str(value)).lower() for value in snippet.get("intents") or [] if clean_text(str(value))]
+        if kind == "critical":
+            score = citation_context_score(context, CRITICAL_COMMENT_TERMS)
+            min_score = 3
+        elif kind == "strongest":
+            score = citation_context_score(context, STRONGEST_COMMENT_TERMS) + citation_context_score(context, POSITIVE_COMMENT_TERMS)
+            if snippet.get("is_influential"):
+                score += 3
+            if "result" in intents:
+                score += 1
+            min_score = 4
+        else:
+            score = citation_context_score(context, POSITIVE_COMMENT_TERMS)
+            if snippet.get("is_influential"):
+                score += 1
+            if "result" in intents:
+                score += 1
+            min_score = 2
+        if score < min_score:
+            continue
+        ranked.append((score, int_or_none(snippet.get("citing_citation_count")) or 0, int_or_none(snippet.get("citing_year")) or 0, snippet))
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    return [snippet for *_prefix, snippet in ranked[:limit]]
+
+
+def citation_context_highlight_markdown(snippets: list[dict[str, Any]]) -> list[str]:
+    sections = [
+        (
+            "Most Positive Citation Comments",
+            "positive",
+            ranked_citation_contexts(snippets, kind="positive"),
+            "No clearly positive citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
+        ),
+        (
+            "Strongest Praise / Impact Comments",
+            "strongest",
+            ranked_citation_contexts(snippets, kind="strongest"),
+            "No clearly high-praise citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
+        ),
+        (
+            "Critical / Cautionary Comments",
+            "critical",
+            ranked_citation_contexts(snippets, kind="critical"),
+            "No clearly critical citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
+        ),
+    ]
+    lines = ["## Citation Comment Highlights", ""]
+    if not snippets:
+        lines.extend([
+            "Semantic Scholar did not return citation-context sentences for this paper, so no comment highlights can be ranked.",
+            "",
+        ])
+        return lines
+    for heading, label, ranked, empty_text in sections:
+        lines.extend([f"### {heading}", ""])
+        if not ranked:
+            lines.extend([empty_text, ""])
+            continue
+        for index, snippet in enumerate(ranked, start=1):
+            lines.extend(citation_context_summary_item(snippet, index=index, label=label))
+    return lines
+
+
+def citation_context_summary_item(snippet: dict[str, Any], *, index: int, label: str) -> list[str]:
+    title = clean_text(snippet.get("citing_title") or "Untitled citing paper")
+    url = clean_text(snippet.get("citing_url") or "")
+    title_text = f"[{title}]({url})" if url else title
+    source = " ".join(
+        part for part in [
+            clean_text(snippet.get("citing_venue") or ""),
+            clean_text(snippet.get("citing_year") or ""),
+        ]
+        if part
+    ) or "Unknown source"
+    citations = int_or_none(snippet.get("citing_citation_count"))
+    lines = [
+        f"**{index}. {title_text}**",
+        "",
+        f"- Last author: {clean_text(snippet.get('citing_last_author') or '') or 'Unavailable'}",
+        f"- Source: {source}{f' · citing paper citations: {citations}' if citations is not None else ''}",
+        "",
+        f"> [{label}] {clean_text(snippet.get('context') or '')}",
+        "",
+    ]
+    return lines
+
+
 def my_publication_comments_markdown(
     publication: dict[str, Any],
     citing_papers: list[dict[str, Any]],
@@ -3983,7 +4167,7 @@ def my_publication_comments_markdown(
         citing_papers,
         key=lambda row: int_or_none(parse_raw_json(row).get("cited_by_count")) or 0,
         reverse=True,
-    )[:60]
+    )[:COMMENT_REPORT_LIST_LIMIT]
     lines = [
         f"# Citation Comments Report",
         "",
@@ -4001,16 +4185,22 @@ def my_publication_comments_markdown(
             "This report lists papers that cite the target paper. When available, colored boxes show citation-context "
             "sentences returned by Semantic Scholar."
         ),
+        (
+            f"OpenAlex fetches up to {COMMENT_REPORT_MAX_OPENALEX_PAGES * COMMENT_REPORT_OPENALEX_PER_PAGE} citing papers; "
+            f"this report lists up to {COMMENT_REPORT_LIST_LIMIT} citing papers sorted by citing-paper citation count. "
+            f"Semantic Scholar citation contexts are fetched separately, up to {COMMENT_REPORT_CONTEXT_LIMIT} context sentences."
+        ),
         "",
         "## Summary",
         "",
         f"- Citing papers fetched: {len(citing_papers)}",
         f"- Citation-context excerpts fetched: {len(context_snippets)}",
+        f"- Citing papers listed below: {len(top_examples)}",
         f"- OpenAlex/Crossref citation count in stored metadata: {source_count if source_count is not None else 'Unavailable'}",
         "",
-        "## Citing Papers",
-        "",
     ]
+    lines.extend(citation_context_highlight_markdown(context_snippets))
+    lines.extend(["## Citing Papers", ""])
     if not top_examples:
         lines.append("No citing papers were returned by OpenAlex.")
     for index, paper in enumerate(top_examples, start=1):
@@ -4041,7 +4231,7 @@ def my_publication_comments_markdown(
     ]
     if remaining_contexts:
         lines.extend(["## Citation Contexts Without OpenAlex Match", ""])
-        for index, snippet in enumerate(remaining_contexts[:20], start=1):
+        for index, snippet in enumerate(remaining_contexts[:COMMENT_REPORT_UNMATCHED_CONTEXT_LIMIT], start=1):
             title = clean_text(snippet.get("citing_title") or "Untitled citing paper")
             url = clean_text(snippet.get("citing_url") or "")
             title_text = f"[{title}]({url})" if url else title
@@ -4054,6 +4244,9 @@ def my_publication_comments_markdown(
                 f"> [{primary_citation_intent(snippet)}] {clean_text(snippet.get('context') or '')}",
                 "",
             ])
+        if len(remaining_contexts) > COMMENT_REPORT_UNMATCHED_CONTEXT_LIMIT:
+            lines.append(f"... {len(remaining_contexts) - COMMENT_REPORT_UNMATCHED_CONTEXT_LIMIT} more unmatched citation contexts not shown.")
+            lines.append("")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -6872,32 +7065,33 @@ INDEX_HTML = """<!doctype html>
       background: #fbfcfe;
     }
     .publication-search-status {
+      position: relative;
+      overflow: hidden;
       color: var(--muted);
       font-size: 12px;
-      min-height: 24px;
+      min-height: 22px;
       border-radius: 7px;
-      padding: 5px 8px;
-      transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+      padding: 4px 8px;
+      transition: color 240ms ease, background-color 240ms ease;
     }
     .publication-search-status.live {
-      color: #124a5c;
-      background: linear-gradient(90deg, rgba(14, 116, 144, 0.08), rgba(14, 116, 144, 0.18), rgba(14, 116, 144, 0.08));
-      background-size: 220% 100%;
-      animation: statusFlow 1.35s linear infinite;
+      color: #3e6470;
+      background: rgba(14, 116, 144, 0.035);
     }
-    .publication-search-status.pulse {
-      animation: statusPulse 520ms ease-out, statusFlow 1.35s linear infinite;
-    }
-    .publication-search-status:not(.live).pulse {
-      animation: statusPulse 520ms ease-out;
-    }
-    @keyframes statusPulse {
-      0% { background-color: rgba(14, 116, 144, 0.22); box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.26); }
-      100% { background-color: transparent; box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0); }
+    .publication-search-status.live::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent 0%, rgba(14, 116, 144, 0.03) 28%, rgba(14, 116, 144, 0.12) 50%, rgba(14, 116, 144, 0.03) 72%, transparent 100%);
+      background-size: 260% 100%;
+      animation: statusFlow 2.8s ease-in-out infinite;
+      opacity: 0.82;
     }
     @keyframes statusFlow {
-      0% { background-position: 0% 0; }
-      100% { background-position: 220% 0; }
+      0% { background-position: 120% 0; opacity: 0.42; }
+      45% { opacity: 0.9; }
+      100% { background-position: -120% 0; opacity: 0.42; }
     }
     .publication-search-results {
       display: grid;
@@ -8228,6 +8422,10 @@ INDEX_HTML = """<!doctype html>
     .analysis-body blockquote.context-methodology { border-left-color: #0f6b6e; background: #eaf7f5; }
     .analysis-body blockquote.context-result { border-left-color: #9b5de5; background: #f4edff; }
     .analysis-body blockquote.context-metadata { border-left-color: #d97706; background: #fff6e6; }
+    .analysis-body blockquote.context-positive { border-left-color: #0f766e; background: #edfafa; color: #174a43; }
+    .analysis-body blockquote.context-strongest { border-left-color: #7c3aed; background: #f5f0ff; color: #3f2a6f; }
+    .analysis-body blockquote.context-critical,
+    .analysis-body blockquote.context-cautionary { border-left-color: #b45309; background: #fff7ed; color: #6f3a12; }
     .analysis-body code {
       background: #eef2f7;
       border-radius: 4px;
@@ -8402,8 +8600,8 @@ INDEX_HTML = """<!doctype html>
       {key: "number", label: "No", defaultWidth: 48, minWidth: 40, maxWidth: 90, sortable: false},
       {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
       {key: "citation", label: "Citation", defaultWidth: 270, minWidth: 185, maxWidth: 560, sortable: true},
-      {key: "date", label: "Date", defaultWidth: 92, minWidth: 74, maxWidth: 130, sortable: true},
-      {key: "citations", label: "Cites", defaultWidth: 132, minWidth: 116, maxWidth: 190, sortable: true},
+      {key: "date", label: "Date", defaultWidth: 92, minWidth: 74, maxWidth: 130, sortable: true, defaultSortDir: "desc"},
+      {key: "citations", label: "Cites", defaultWidth: 132, minWidth: 116, maxWidth: 190, sortable: true, defaultSortDir: "desc"},
       {key: "comments", label: "", defaultWidth: 96, minWidth: 84, maxWidth: 140},
       {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140}
     ];
@@ -8475,6 +8673,7 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookPageCount: 0,
       libraryQuickLookManualFrame: false,
       libraryQuickLookFrameRect: null,
+      libraryQuickLookPdfHasFocus: false,
       myPublications: [],
       myPublicationSelectionId: 0,
       myPublicationSort: "manual",
@@ -8483,7 +8682,6 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchStatus: "",
       myPublicationSearchScrollTop: 0,
       myPublicationSearchToken: 0,
-      myPublicationLastStatusText: "",
       myPublicationMetricsRefreshing: false,
       myPublicationMetricsJobId: "",
       myPublicationAuthorCache: {},
@@ -11389,7 +11587,6 @@ INDEX_HTML = """<!doctype html>
       wireLibraryPaneTools();
       renderPublicationDetail();
       wireMyPublicationInteractions();
-      pulseMyPublicationSearchStatus();
       const restoredResults = $("publicationSearchResults");
       if (restoredResults) restoredResults.scrollTop = previousSearchScrollTop;
       const restoredTableWrap = document.querySelector(".my-publications-table-wrap");
@@ -11412,7 +11609,6 @@ INDEX_HTML = """<!doctype html>
       if (status) {
         status.textContent = myPublicationSearchStatusText();
         status.className = myPublicationSearchStatusClass();
-        pulseMyPublicationSearchStatus();
       }
     }
 
@@ -11427,17 +11623,6 @@ INDEX_HTML = """<!doctype html>
     function myPublicationSearchStatusIsLive(text = state.myPublicationSearchStatus) {
       if (state.myPublicationMetricsRefreshing) return true;
       return /\b(adding|building|deleting|refreshing|reimporting|resolving|retrying|searching|starting|stopping|updating)\b/i.test(String(text || ""));
-    }
-
-    function pulseMyPublicationSearchStatus() {
-      const status = document.querySelector(".publication-search-status");
-      if (!status) return;
-      const text = status.textContent || "";
-      if (text === state.myPublicationLastStatusText && !myPublicationSearchStatusIsLive(text)) return;
-      state.myPublicationLastStatusText = text;
-      status.classList.remove("pulse");
-      void status.offsetWidth;
-      status.classList.add("pulse");
     }
 
     function myPublicationSortLabel(key) {
@@ -12660,7 +12845,7 @@ INDEX_HTML = """<!doctype html>
         state.myPublicationSortDir = state.myPublicationSortDir === "desc" ? "asc" : "desc";
       } else {
         state.myPublicationSort = key;
-        state.myPublicationSortDir = "asc";
+        state.myPublicationSortDir = column.defaultSortDir || "asc";
       }
       renderMyPublications();
     }
@@ -13534,6 +13719,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookUrl = "";
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
+      state.libraryQuickLookPdfHasFocus = false;
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
       if (overlay) {
@@ -13622,6 +13808,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookUrl = "";
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
+      state.libraryQuickLookPdfHasFocus = false;
       if (title) title.textContent = placeholder.type;
       renderLibraryQuickLookThumbs(0);
       pages.onscroll = null;
@@ -13636,13 +13823,14 @@ INDEX_HTML = """<!doctype html>
       overlay.classList.add("open", "compact");
       overlay.setAttribute("aria-hidden", "false");
       applyLibraryQuickLookFrame(defaultLibraryQuickLookCompactFrame(), {compact: true, persist: false});
+      reclaimLibraryQuickLookFocus();
     }
 
     function setLibraryQuickLookPage(page) {
       const nextPage = Math.max(1, Math.min(Number(page || 1), state.libraryQuickLookPageCount || Number(page || 1)));
       updateLibraryQuickLookActivePage(nextPage);
       updateLibraryPdfFramePage(nextPage);
-      $("libraryShell")?.focus({preventScroll: true});
+      reclaimLibraryQuickLookFocus();
     }
 
     function updateLibraryQuickLookActivePage(page) {
@@ -13711,8 +13899,43 @@ INDEX_HTML = """<!doctype html>
       }
       const page = Math.max(1, Math.min(state.libraryQuickLookPage || 1, count));
       root.innerHTML = `<iframe class="library-pdf-frame" title="PDF preview" src="${escapeAttr(libraryPdfFrameUrl(page))}"></iframe>`;
+      wireLibraryQuickLookPdfFrame(root.querySelector(".library-pdf-frame"));
       root.scrollTop = 0;
       root.onscroll = null;
+    }
+
+    function wireLibraryQuickLookPdfFrame(frame) {
+      if (!frame) return;
+      const markPdfFocus = () => { state.libraryQuickLookPdfHasFocus = true; };
+      frame.addEventListener("focus", markPdfFocus);
+      frame.addEventListener("pointerdown", markPdfFocus);
+      frame.addEventListener("mousedown", markPdfFocus);
+      frame.addEventListener("load", () => {
+        try {
+          frame.contentWindow?.addEventListener("keydown", handleLibraryQuickLookPdfKeydown, true);
+        } catch (error) {
+          // Built-in PDF viewers may hide their document; top-level focus recovery still handles accessible focus.
+        }
+      });
+    }
+
+    function handleLibraryQuickLookPdfKeydown(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      reclaimLibraryQuickLookFocus();
+    }
+
+    function reclaimLibraryQuickLookFocus() {
+      state.libraryQuickLookPdfHasFocus = false;
+      window.focus();
+      $("libraryShell")?.focus({preventScroll: true});
+    }
+
+    function libraryQuickLookShouldReclaimFocus() {
+      if (!state.libraryQuickLookOpen) return false;
+      const active = document.activeElement;
+      return Boolean(state.libraryQuickLookPdfHasFocus || active?.classList?.contains("library-pdf-frame"));
     }
 
     function updateLibraryQuickLookPageFromScroll() {
@@ -13763,6 +13986,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookPath = paper.merged_pdf_path;
       state.libraryQuickLookUrl = pdfUrl;
+      state.libraryQuickLookPdfHasFocus = false;
       if (isNewPdf) {
         state.libraryQuickLookPage = 1;
         state.libraryQuickLookPageCount = 0;
@@ -13779,7 +14003,7 @@ INDEX_HTML = """<!doctype html>
       } else {
         applyLibraryQuickLookFrame();
       }
-      $("libraryShell")?.focus({preventScroll: true});
+      reclaimLibraryQuickLookFocus();
       if (status && !options.silent) {
         status.textContent = "PDF preview open";
         status.className = "library-detail-status ok";
@@ -13808,7 +14032,7 @@ INDEX_HTML = """<!doctype html>
       const stop = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", stop);
-        $("libraryShell")?.focus({preventScroll: true});
+        reclaimLibraryQuickLookFocus();
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", stop);
@@ -13834,7 +14058,7 @@ INDEX_HTML = """<!doctype html>
       const stop = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", stop);
-        $("libraryShell")?.focus({preventScroll: true});
+        reclaimLibraryQuickLookFocus();
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", stop);
@@ -15030,6 +15254,10 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryQuickLookOpen) {
         event.preventDefault();
         event.stopPropagation();
+        if (libraryQuickLookShouldReclaimFocus()) {
+          reclaimLibraryQuickLookFocus();
+          return;
+        }
         closeLibraryQuickLook();
         return;
       }
