@@ -2982,39 +2982,59 @@ def library_folder_to_api(folder: dict[str, Any]) -> dict[str, Any]:
 
 
 def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str, Any]:
-    return {
+    display_name = item.get("display_name") or ""
+    if clean_text(display_name) == clean_text(paper.get("title") or ""):
+        display_name = ""
+    result = {
         "id": int(item.get("id") or 0),
         "folder_id": int(item.get("folder_id") or 1),
         "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
-        "display_name": item.get("display_name") or "",
-        "sort_order": int(item.get("sort_order") or 0),
-        "original_folder_id": int(item["original_folder_id"]) if item.get("original_folder_id") is not None else None,
-        "trashed_at": item.get("trashed_at") or "",
         "paper": paper_to_library_summary_api(paper),
     }
+    if display_name:
+        result["display_name"] = display_name
+    sort_order = int(item.get("sort_order") or 0)
+    if sort_order:
+        result["sort_order"] = sort_order
+    if item.get("original_folder_id") is not None:
+        result["original_folder_id"] = int(item["original_folder_id"])
+    if item.get("trashed_at"):
+        result["trashed_at"] = item.get("trashed_at") or ""
+    return result
 
 
 def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
-    return {
+    summary = {
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
-        "journal": paper.get("journal") or "",
-        "publication_date": paper.get("publication_date") or "",
-        "doi": paper.get("doi") or "",
-        "download_status": paper.get("download_status") or "not_attempted",
-        "analysis_status": paper.get("analysis_status") or "not_started",
-        "merged_pdf_path": merged_pdf,
-        "main_pdf_path": main_pdf,
-        "source_path": source_path,
-        "original_relative_path": paper.get("original_relative_path") or "",
-        "original_filename": paper.get("original_filename") or "",
-        "preprint_id": preprint_identifier(paper),
-        "preprint_category": preprint_primary_category(paper),
         "full_detail": False,
     }
+    for key in ["journal", "publication_date", "doi"]:
+        value = paper.get(key) or ""
+        if value:
+            summary[key] = value
+    download_status = paper.get("download_status") or "not_attempted"
+    if download_status != "not_attempted":
+        summary["download_status"] = download_status
+    analysis_status = paper.get("analysis_status") or "not_started"
+    if analysis_status != "not_started":
+        summary["analysis_status"] = analysis_status
+    if merged_pdf:
+        summary["merged_pdf_path"] = merged_pdf
+    preprint_id = preprint_identifier(paper)
+    if preprint_id:
+        summary["preprint_id"] = preprint_id
+    preprint_category = preprint_primary_category(paper)
+    if preprint_category:
+        summary["preprint_category"] = preprint_category
+    if main_pdf and main_pdf != merged_pdf:
+        summary["main_pdf_path"] = main_pdf
+    if source_path and not merged_pdf and not main_pdf:
+        summary["source_path"] = source_path
+    return summary
 
 
 def library_naming_rule(storage: Storage) -> str:
@@ -10869,6 +10889,7 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchResults: [],
       myPublicationSearchStatus: "",
       myPublicationSearchScrollTop: 0,
+      myPublicationsLoaded: false,
       myPublicationSearchToken: 0,
       myPublicationMetricsRefreshing: false,
       myPublicationMetricsJobId: "",
@@ -11408,6 +11429,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryTab = "my-publications";
       setSidebarCollapsed(true);
       renderMyPublications();
+      if (state.myPublicationsLoaded) return;
       const res = await fetch("/api/my-publications");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load My Publications");
@@ -11436,6 +11458,7 @@ INDEX_HTML = """<!doctype html>
 
     function applyMyPublications(data) {
       state.myPublications = Array.isArray(data.publications) ? data.publications : [];
+      state.myPublicationsLoaded = true;
       state.myPublicationName = data.myName || state.myPublicationName || "";
       if (Object.prototype.hasOwnProperty.call(data || {}, "scholarProfile")) {
         state.myPublicationScholarProfile = data.scholarProfile && Object.keys(data.scholarProfile).length ? data.scholarProfile : null;
