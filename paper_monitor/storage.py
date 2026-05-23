@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS papers (
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
   raw_json TEXT,
+  semantic_scholar_json TEXT,
+  semantic_scholar_enriched_at TEXT,
   image_url TEXT,
   download_status TEXT NOT NULL DEFAULT 'not_attempted',
   download_message TEXT,
@@ -219,6 +221,13 @@ class Storage:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_source_path ON papers(source_path, size_bytes)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_import_batch ON papers(import_batch_id)")
         self.conn.commit()
+        paper_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
+        if "semantic_scholar_json" not in paper_columns:
+            self.conn.execute("ALTER TABLE papers ADD COLUMN semantic_scholar_json TEXT")
+            self.conn.commit()
+        if "semantic_scholar_enriched_at" not in paper_columns:
+            self.conn.execute("ALTER TABLE papers ADD COLUMN semantic_scholar_enriched_at TEXT")
+            self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
             self.conn.execute("ALTER TABLE library_items ADD COLUMN display_name TEXT")
@@ -422,6 +431,32 @@ class Storage:
         values = [updates[column] for column in columns]
         values.append(str(paper_id))
         self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
+        self.conn.commit()
+        return self.get_paper(paper_id)
+
+    def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any]) -> dict[str, Any] | None:
+        self.conn.execute(
+            """
+            UPDATE papers
+            SET semantic_scholar_json = ?,
+                semantic_scholar_enriched_at = ?
+            WHERE paper_id = ?
+            """,
+            (json.dumps(enrichment or {}, ensure_ascii=False), now_iso(), str(paper_id)),
+        )
+        self.conn.commit()
+        return self.get_paper(paper_id)
+
+    def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any]) -> dict[str, Any] | None:
+        self.conn.execute(
+            """
+            UPDATE papers
+            SET raw_json = ?,
+                last_seen_at = ?
+            WHERE paper_id = ?
+            """,
+            (json.dumps(raw or {}, ensure_ascii=False), now_iso(), str(paper_id)),
+        )
         self.conn.commit()
         return self.get_paper(paper_id)
 

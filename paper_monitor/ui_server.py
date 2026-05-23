@@ -8,6 +8,7 @@ import json
 import mimetypes
 import re
 import shutil
+import socketserver
 import subprocess
 import threading
 import time
@@ -40,7 +41,7 @@ from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, strip_arxiv_version
 from .sources.crossref import normalize_crossref_item
 from .sources.openalex import normalize_openalex_item, search_openalex_author_publications
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
@@ -57,6 +58,8 @@ FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
 LIBRARY_IMPORT_JOBS: dict[str, dict[str, Any]] = {}
 LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
+MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
+MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
@@ -77,6 +80,14 @@ DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
+
+
+class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
 
 
 def activate_native_app_later(delay: float = 0.25) -> None:
@@ -121,7 +132,7 @@ def run_ui_server(
         configured_db_path = db_path
         configured_journals = journals
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = FastLocalThreadingHTTPServer((host, port), Handler)
     url = f"http://{host}:{server.server_port}"
     print(f"Journal Monitor UI: {url}")
     if open_browser:
@@ -191,6 +202,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/my-publications":
                 self.handle_my_publications(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/my-publications/refresh-metrics/progress":
+                self.handle_my_publication_metrics_progress(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/publication-search":
                 self.handle_publication_search(parse_qs(parsed.query))
@@ -686,48 +700,39 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "candidate is required")
             return
         try:
-            doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
+            resolved_candidate = resolve_google_scholar_candidate_to_identifier(candidate)
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar DOI lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar identifier lookup failed: {exc}")
             return
-        if not doi_candidate:
+        if not resolved_candidate:
             self.send_json({"candidate": None})
             return
-        result = publication_candidate_to_api(doi_candidate)
-        result["match_status"] = "doi"
+        result = publication_candidate_to_api(resolved_candidate)
+        result["match_status"] = "doi" if result.get("doi") else "arxiv"
         result["scholar_title"] = ((candidate.get("paper") or {}).get("title") or candidate.get("scholar_title") or "")
         self.send_json({"candidate": result})
 
     def handle_refresh_my_publication_metrics(self, payload: dict[str, Any]) -> None:
-        storage = Storage(self.configured_db_path)
-        refreshed = 0
-        skipped = 0
-        errors: list[str] = []
-        try:
-            publications = storage.list_my_publications()
-            for publication in publications:
-                doi = normalize_publication_doi(str(publication.get("doi") or ""))
-                paper_id = clean_text(publication.get("paper_id") or "")
-                if not paper_id or not doi or not looks_like_doi(doi):
-                    skipped += 1
-                    continue
-                try:
-                    normalized = publication_metrics_metadata_from_doi(doi, timeout=16, max_retries=2)
-                    if not normalized:
-                        skipped += 1
-                        continue
-                    if storage.refresh_paper_metadata(paper_id, normalized):
-                        refreshed += 1
-                    else:
-                        skipped += 1
-                except Exception as exc:
-                    skipped += 1
-                    if len(errors) < 5:
-                        errors.append(f"{publication.get('title') or doi}: {exc}")
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
-        finally:
-            storage.close()
-        self.send_json({"publications": publications, "refreshed": refreshed, "skipped": skipped, "errors": errors})
+        active = active_my_publication_metrics_job()
+        if active:
+            self.send_json({"job_id": active["job_id"], "job": active})
+            return
+        job_id = create_my_publication_metrics_job()
+        thread = threading.Thread(
+            target=run_my_publication_metrics_job,
+            kwargs={"job_id": job_id, "db_path": self.configured_db_path},
+            daemon=True,
+        )
+        thread.start()
+        self.send_json({"job_id": job_id, "job": get_my_publication_metrics_job(job_id)})
+
+    def handle_my_publication_metrics_progress(self, query: dict[str, list[str]]) -> None:
+        job_id = first(query, "job_id") or first(query, "id")
+        job = get_my_publication_metrics_job(job_id)
+        if not job:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown metrics job")
+            return
+        self.send_json({"job": job})
 
     def handle_reimport_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -741,11 +746,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
                 return
             candidate = publication_to_reimport_candidate(publication)
-            doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
-            if not doi_candidate:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI match found for this publication")
+            identifier_candidate = resolve_google_scholar_candidate_to_identifier(candidate)
+            if not identifier_candidate:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI or arXiv match found for this publication")
                 return
-            normalized = paper_from_publication_candidate(doi_candidate)
+            normalized = paper_from_publication_candidate(identifier_candidate)
             storage.upsert_paper(normalized)
             replaced = storage.replace_my_publication_paper(publication_id=publication_id, paper_id=normalized["paper_id"])
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
@@ -929,23 +934,31 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if index < 0 or index >= LIBRARY_WORKSPACE_TAB_COUNT:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "space index is out of range")
             return
-        doi = normalize_publication_doi(str(payload.get("doi") or ""))
-        if not doi:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "DOI is required")
+        identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
+        doi = normalize_publication_doi(identifier)
+        arxiv_id = normalize_arxiv_identifier(identifier)
+        if not (doi and looks_like_doi(doi)) and not arxiv_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "DOI or arXiv ID is required")
             return
         try:
-            candidates = search_crossref_publications(doi, kind="doi")
+            if arxiv_id and not looks_like_doi(identifier):
+                paper = publication_metrics_metadata_from_arxiv_id(arxiv_id)
+            elif doi_is_likely_data_repository(doi):
+                paper = publication_metrics_metadata_from_doi(doi, allow_data_repository=True)
+            else:
+                candidates = search_crossref_publications(doi, kind="doi")
+                paper = paper_from_publication_candidate(candidates[0]) if candidates else None
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"DOI lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Identifier lookup failed: {exc}")
             return
-        if not candidates:
-            self.send_error_json(HTTPStatus.NOT_FOUND, "No publication found for this DOI")
+        if not paper:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "No publication found for this DOI or arXiv ID")
             return
         storage = Storage(self.configured_db_path)
         try:
-            paper = paper_from_publication_candidate(candidates[0])
             storage.upsert_paper(paper)
             paper_id = str(paper.get("paper_id") or "")
+            refresh_semantic_scholar_if_possible(storage, storage.get_paper(paper_id), timeout=8, max_retries=1)
             tabs = library_workspace_tabs(storage)
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
@@ -1340,26 +1353,50 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_refresh_library_metadata(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
-        doi = normalize_publication_doi(str(payload.get("doi") or ""))
+        identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
+        doi = normalize_publication_doi(identifier)
+        arxiv_id = normalize_arxiv_identifier(identifier)
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        if not doi or not looks_like_doi(doi):
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid DOI is required")
-            return
-        try:
-            normalized = publication_metadata_from_doi(doi)
-        except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"DOI lookup failed: {exc}")
-            return
-        if not normalized:
-            self.send_error_json(HTTPStatus.NOT_FOUND, "No publication found for this DOI")
+        if not (doi and looks_like_doi(doi)) and not arxiv_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid DOI or arXiv ID is required")
             return
         storage = Storage(self.configured_db_path)
         try:
-            paper = storage.refresh_paper_metadata(paper_id, normalized)
+            try:
+                if arxiv_id and not looks_like_doi(identifier):
+                    normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id)
+                    lookup_label = arxiv_id
+                    lookup_kind = "arXiv ID"
+                else:
+                    normalized = publication_metrics_metadata_from_doi(
+                        doi,
+                        allow_data_repository=doi_is_likely_data_repository(doi),
+                    )
+                    lookup_label = doi
+                    lookup_kind = "data DOI" if doi_is_likely_data_repository(doi) else "DOI"
+            except Exception as exc:
+                self.send_error_json(HTTPStatus.BAD_GATEWAY, f"{lookup_kind} metrics lookup failed: {exc}")
+                return
+            paper = None
+            if normalized:
+                paper = storage.refresh_paper_metadata(paper_id, normalized)
+            if not paper:
+                paper = storage.get_paper(paper_id)
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            semantic_lookup_paper = dict(paper)
+            if doi and looks_like_doi(doi):
+                semantic_lookup_paper["doi"] = doi
+            if arxiv_id:
+                raw = parse_raw_json(semantic_lookup_paper)
+                raw["arxiv_id"] = arxiv_id
+                semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
+            paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=12, max_retries=1) or paper
+            if not normalized and not parse_semantic_scholar_json(paper):
+                self.send_error_json(HTTPStatus.NOT_FOUND, f"No publication found for this {lookup_kind}: {lookup_label}")
                 return
             snapshot = library_snapshot(storage)
         finally:
@@ -2031,6 +2068,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "preprint_categories": preprint_categories(paper),
         "citation_label": citation_label(paper),
         "citation_metrics": citation_metrics(paper),
+        "semantic_scholar": semantic_scholar_summary(paper),
         "google_scholar_url": google_scholar_url(paper),
         "late_arrival": paper_is_late_arrival(paper),
         "late_arrival_unread": bool(late_arrival_unread),
@@ -2075,6 +2113,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "arxiv_duplicates",
         "duplicate_paper_candidates",
         "doi_metadata_refreshed",
+        "identifier_metadata_refreshed",
         "report_path",
         "copy_target_root",
         "import_batch_id",
@@ -2091,9 +2130,15 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def publication_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: int = 3) -> dict[str, Any] | None:
+def publication_metadata_from_doi(
+    doi: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+    allow_data_repository: bool = False,
+) -> dict[str, Any] | None:
     doi = normalize_publication_doi(doi)
-    if not doi or not looks_like_doi(doi):
+    if not doi or not looks_like_doi(doi) or (doi_is_likely_data_repository(doi) and not allow_data_repository):
         return None
     candidates = search_crossref_publications(doi, kind="doi", timeout=timeout, max_retries=max_retries)
     if not candidates:
@@ -2102,10 +2147,77 @@ def publication_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: i
     return enrich_from_landing_page(dict(normalized), {}, True)
 
 
-def publication_metrics_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: int = 3) -> dict[str, Any] | None:
+def publication_metadata_from_datacite_doi(
+    doi: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any] | None:
     doi = normalize_publication_doi(doi)
     if not doi or not looks_like_doi(doi):
         return None
+    response = request_with_retries(
+        "GET",
+        f"https://api.datacite.org/dois/{quote(doi, safe='')}",
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    data = response.json().get("data") or {}
+    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    if not attrs:
+        return None
+    titles = attrs.get("titles") if isinstance(attrs.get("titles"), list) else []
+    title = clean_text(next((item.get("title") for item in titles if isinstance(item, dict) and item.get("title")), ""))
+    descriptions = attrs.get("descriptions") if isinstance(attrs.get("descriptions"), list) else []
+    abstract = clean_text(next((item.get("description") for item in descriptions if isinstance(item, dict) and item.get("description")), ""))
+    year = clean_text(str(attrs.get("publicationYear") or ""))
+    publisher = clean_text(attrs.get("publisher") or "DataCite")
+    resource_type = attrs.get("types") if isinstance(attrs.get("types"), dict) else {}
+    creators = attrs.get("creators") if isinstance(attrs.get("creators"), list) else []
+    url = clean_text(attrs.get("url") or f"https://doi.org/{doi}")
+    return {
+        "paper_id": "doi_" + hashlib.sha1(doi.lower().encode("utf-8")).hexdigest()[:16],
+        "doi": doi,
+        "title": title or doi,
+        "journal": publisher or "DataCite",
+        "publication_date": year,
+        "abstract": abstract,
+        "abstract_source": "datacite" if abstract else "missing",
+        "url": url,
+        "landing_url": url,
+        "pdf_url": "",
+        "source": "datacite",
+        "type": clean_text(resource_type.get("resourceTypeGeneral") or "dataset").lower(),
+        "type_crossref": clean_text(resource_type.get("resourceTypeGeneral") or "dataset").lower(),
+        "publisher_section": "dataset",
+        "section_allowed": True,
+        "raw": {"datacite": attrs, "creators": creators, "doi": doi},
+    }
+
+
+def publication_metrics_metadata_from_doi(
+    doi: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+    allow_data_repository: bool = False,
+) -> dict[str, Any] | None:
+    doi = normalize_publication_doi(doi)
+    if not doi or not looks_like_doi(doi) or (doi_is_likely_data_repository(doi) and not allow_data_repository):
+        return None
+    crossref_count: int | None = None
+    try:
+        crossref = publication_metadata_from_doi(
+            doi,
+            timeout=timeout,
+            max_retries=max_retries,
+            allow_data_repository=allow_data_repository,
+        )
+        crossref_raw = crossref.get("raw") if isinstance(crossref, dict) else {}
+        if isinstance(crossref_raw, dict):
+            crossref_count = int_or_none(crossref_raw.get("is-referenced-by-count"))
+    except Exception:
+        crossref_count = None
     try:
         response = request_with_retries(
             "GET",
@@ -2117,10 +2229,250 @@ def publication_metrics_metadata_from_doi(doi: str, *, timeout: int = 20, max_re
         item = response.json()
         if isinstance(item, dict) and item.get("id"):
             journal = clean_text(((item.get("primary_location") or {}).get("source") or {}).get("display_name")) or "Unknown Journal"
-            return normalize_openalex_item(item, journal)
+            normalized = normalize_openalex_item(item, journal)
+            raw = normalized.setdefault("raw", {})
+            if isinstance(raw, dict) and crossref_count is not None:
+                raw["is-referenced-by-count"] = crossref_count
+            return normalized
     except Exception:
         pass
-    return publication_metadata_from_doi(doi, timeout=timeout, max_retries=max_retries)
+    if allow_data_repository:
+        try:
+            datacite = publication_metadata_from_datacite_doi(doi, timeout=timeout, max_retries=max_retries)
+            if datacite:
+                return datacite
+        except Exception:
+            pass
+    return publication_metadata_from_doi(
+        doi,
+        timeout=timeout,
+        max_retries=max_retries,
+        allow_data_repository=allow_data_repository,
+    )
+
+
+def publication_metrics_metadata_from_arxiv_id(
+    arxiv_id: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any] | None:
+    normalized_id = normalize_arxiv_identifier(arxiv_id)
+    if not normalized_id:
+        return None
+    paper = fetch_arxiv_by_id(normalized_id, timeout=timeout, max_retries=max_retries)
+    if not paper:
+        return None
+    raw = paper.setdefault("raw", {})
+    arxiv_doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if arxiv_doi and looks_like_doi(arxiv_doi) and not doi_is_likely_data_repository(arxiv_doi):
+        published = publication_metrics_metadata_from_doi(arxiv_doi, timeout=timeout, max_retries=max_retries)
+        if published:
+            return attach_arxiv_preprint_metadata(published, paper)
+    title = clean_text(paper.get("title") or "")
+    if title:
+        try:
+            response = request_with_retries(
+                "GET",
+                "https://api.openalex.org/works",
+                params={"search": title, "per-page": 1, "mailto": "your_email@example.com"},
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+            for item in response.json().get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                result_title = clean_text(item.get("title") or item.get("display_name") or "")
+                if normalized_title_key(result_title) != normalized_title_key(title) and title_similarity(title, result_title) < 0.88:
+                    continue
+                if openalex_item_is_likely_data_repository(item):
+                    continue
+                raw["openalex_id"] = clean_text(item.get("id") or "")
+                raw["id"] = clean_text(item.get("id") or "")
+                raw["cited_by_count"] = item.get("cited_by_count")
+                raw["counts_by_year"] = item.get("counts_by_year") or []
+                raw["openalex"] = item
+                if not paper.get("doi"):
+                    paper["doi"] = normalize_publication_doi(clean_text(item.get("doi") or ""))
+                doi = normalize_publication_doi(clean_text(item.get("doi") or ""))
+                if doi and looks_like_doi(doi) and not doi_is_likely_data_repository(doi):
+                    published = publication_metrics_metadata_from_doi(doi, timeout=timeout, max_retries=max_retries)
+                    if published:
+                        return attach_arxiv_preprint_metadata(published, paper)
+                break
+        except Exception:
+            pass
+    return paper
+
+
+def attach_arxiv_preprint_metadata(published: dict[str, Any], arxiv_paper: dict[str, Any]) -> dict[str, Any]:
+    result = dict(published)
+    raw = result.setdefault("raw", {})
+    arxiv_raw = arxiv_paper.get("raw") if isinstance(arxiv_paper.get("raw"), dict) else {}
+    arxiv_id = normalize_arxiv_identifier(str(arxiv_raw.get("arxiv_id") or arxiv_raw.get("versioned_arxiv_id") or arxiv_paper.get("paper_id") or ""))
+    preprint = {
+        "source": "arxiv",
+        "arxiv_id": arxiv_id,
+        "versioned_arxiv_id": clean_text(arxiv_raw.get("versioned_arxiv_id") or ""),
+        "title": clean_text(arxiv_paper.get("title") or ""),
+        "publication_date": clean_text(arxiv_paper.get("publication_date") or ""),
+        "url": clean_text(arxiv_paper.get("url") or arxiv_paper.get("landing_url") or ""),
+        "pdf_url": clean_text(arxiv_paper.get("pdf_url") or ""),
+        "raw": arxiv_raw,
+    }
+    raw["preprint"] = {key: value for key, value in preprint.items() if value not in ("", {}, [])}
+    if arxiv_id:
+        raw["arxiv_id"] = arxiv_id
+    if preprint.get("versioned_arxiv_id"):
+        raw["versioned_arxiv_id"] = preprint["versioned_arxiv_id"]
+    raw["published_doi"] = normalize_publication_doi(str(result.get("doi") or raw.get("DOI") or ""))
+    return result
+
+
+def semantic_scholar_enrichment_for_paper(
+    paper: dict[str, Any],
+    *,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    fields = (
+        "paperId,corpusId,externalIds,url,title,abstract,venue,year,referenceCount,citationCount,"
+        "influentialCitationCount,isOpenAccess,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,"
+        "publicationTypes,publicationDate,journal,authors,tldr"
+    )
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    arxiv_id = arxiv_identifier_for_paper(paper)
+    refs: list[str] = []
+    if arxiv_id and (paper.get("journal") or "").lower() == ARXIV_JOURNAL_NAME.lower():
+        refs.append(f"ARXIV:{arxiv_id}")
+    if doi and looks_like_doi(doi):
+        refs.append(f"DOI:{doi}")
+    if arxiv_id and f"ARXIV:{arxiv_id}" not in refs:
+        refs.append(f"ARXIV:{arxiv_id}")
+    for ref in refs:
+        data = semantic_scholar_enrichment_by_ref(ref, fields=fields, timeout=timeout, max_retries=max_retries)
+        if data:
+            return data
+    title = clean_text(paper.get("title") or "")
+    if not title:
+        return None
+    response = request_with_retries(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/paper/search",
+        params={"query": title, "limit": 1, "fields": fields},
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    for item in response.json().get("data") or []:
+        if isinstance(item, dict) and item.get("paperId"):
+            return item
+    return None
+
+
+def semantic_scholar_enrichment_by_ref(
+    ref: str,
+    *,
+    fields: str,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    if not clean_text(ref):
+        return None
+    try:
+        response = request_with_retries(
+            "GET",
+            f"https://api.semanticscholar.org/graph/v1/paper/{quote(ref, safe='')}",
+            params={"fields": fields},
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        data = response.json()
+        if isinstance(data, dict) and data.get("paperId"):
+            return data
+    except Exception:
+        return None
+    return None
+
+
+def refresh_semantic_scholar_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    if not paper_id:
+        return paper
+    try:
+        enrichment = semantic_scholar_enrichment_for_paper(paper, timeout=timeout, max_retries=max_retries)
+    except Exception:
+        return paper
+    if not enrichment:
+        return paper
+    updated = storage.update_semantic_scholar_enrichment(paper_id, enrichment) or paper
+    return refresh_preprint_citation_version_if_possible(storage, updated, timeout=timeout, max_retries=max_retries) or updated
+
+
+def refresh_preprint_citation_version_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    arxiv_id = arxiv_identifier_for_paper(paper)
+    if not paper_id or not doi or not arxiv_id:
+        return paper
+    fields = (
+        "paperId,corpusId,externalIds,url,title,abstract,venue,year,referenceCount,citationCount,"
+        "influentialCitationCount,isOpenAccess,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,"
+        "publicationTypes,publicationDate,journal,authors,tldr"
+    )
+    semantic = semantic_scholar_enrichment_by_ref(
+        f"ARXIV:{arxiv_id}",
+        fields=fields,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    if not semantic:
+        raw = ensure_raw_preprint_metadata(parse_raw_json(paper), arxiv_id)
+        stored = storage.update_paper_raw_json(paper_id, raw)
+        return stored or paper
+    raw = parse_raw_json(paper)
+    raw = ensure_raw_preprint_metadata(raw, arxiv_id)
+    versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
+    preprint = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
+    semantic_sources = preprint.get("sources") if isinstance(preprint.get("sources"), dict) else {}
+    semantic_sources["semantic_scholar"] = semantic
+    preprint["sources"] = semantic_sources
+    preprint["arxiv_id"] = arxiv_id
+    versions["preprint"] = preprint
+    raw["citation_versions"] = versions
+    stored = storage.update_paper_raw_json(paper_id, raw)
+    return stored or paper
+
+
+def ensure_raw_preprint_metadata(raw: dict[str, Any], arxiv_id: str) -> dict[str, Any]:
+    arxiv_id = normalize_arxiv_identifier(arxiv_id)
+    if not arxiv_id:
+        return raw
+    raw = dict(raw or {})
+    preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+    preprint = dict(preprint)
+    preprint.setdefault("source", "arxiv")
+    preprint["arxiv_id"] = arxiv_id
+    preprint.setdefault("url", f"https://arxiv.org/abs/{arxiv_id}")
+    preprint.setdefault("pdf_url", f"https://arxiv.org/pdf/{arxiv_id}")
+    raw["preprint"] = preprint
+    raw["arxiv_id"] = arxiv_id
+    return raw
 
 
 def refresh_paper_metadata_from_doi_if_possible(
@@ -2147,6 +2499,30 @@ def refresh_paper_metadata_from_doi_if_possible(
     return refreshed or paper
 
 
+def refresh_paper_metadata_from_arxiv_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    arxiv_id: str = "",
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    normalized_id = normalize_arxiv_identifier(arxiv_id or arxiv_identifier_for_paper(paper))
+    if not paper_id or not normalized_id:
+        return paper
+    try:
+        normalized = publication_metrics_metadata_from_arxiv_id(normalized_id, timeout=timeout, max_retries=max_retries)
+    except Exception:
+        return paper
+    if not normalized:
+        return paper
+    refreshed = storage.refresh_paper_metadata(paper_id, normalized)
+    return refreshed or paper
+
+
 def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None) -> int:
     batch_id = clean_text(result.get("import_batch_id") or "")
     if batch_id:
@@ -2155,8 +2531,6 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
             SELECT *
             FROM papers
             WHERE import_batch_id = ?
-              AND doi IS NOT NULL
-              AND doi != ''
             ORDER BY original_relative_path ASC, title ASC
             """,
             (batch_id,),
@@ -2165,46 +2539,56 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
     else:
         plans = list(result.get("papers_to_create") or []) + list(result.get("papers_to_update") or [])
         papers = [
-            {"paper_id": plan.get("paper_id"), "doi": plan.get("doi")}
+            {"paper_id": plan.get("paper_id"), "doi": plan.get("doi"), "arxiv_id": plan.get("arxiv_id")}
             for plan in plans
             if isinstance(plan, dict)
         ]
     refreshed_count = 0
     seen: set[str] = set()
-    total = sum(
-        1
-        for paper in papers
-        if paper.get("paper_id")
-        and looks_like_doi(normalize_publication_doi(str(paper.get("doi") or "")))
-    )
+    eligible: list[dict[str, Any]] = []
+    for paper in papers:
+        paper_id = clean_text(paper.get("paper_id") or "")
+        doi = normalize_publication_doi(str(paper.get("doi") or ""))
+        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
+        if paper_id and (looks_like_doi(doi) or arxiv_id):
+            eligible.append({"paper_id": paper_id, "doi": doi, "arxiv_id": arxiv_id})
+    total = len(eligible)
     if job_id:
         if total:
-            log_library_import_job(job_id, f"Refreshing Details metadata from DOI for {total} imported papers")
+            log_library_import_job(job_id, f"Refreshing Details metadata from DOI/arXiv for {total} imported papers")
         else:
-            log_library_import_job(job_id, "No imported papers with DOI were found for Details metadata refresh")
+            log_library_import_job(job_id, "No imported papers with DOI/arXiv ID were found for Details metadata refresh")
     current = 0
-    for paper in papers:
+    for paper in eligible:
         if job_id and library_import_cancel_requested(job_id):
             raise ImportCancelled("Import stopped by user")
         paper_id = clean_text(paper.get("paper_id") or "")
         doi = normalize_publication_doi(str(paper.get("doi") or ""))
-        if not paper_id or not doi or paper_id in seen or not looks_like_doi(doi):
+        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or ""))
+        if not paper_id or paper_id in seen:
             continue
         seen.add(paper_id)
         current += 1
+        identifier = doi if looks_like_doi(doi) else arxiv_id
+        identifier_kind = "DOI" if looks_like_doi(doi) else "arXiv"
         if job_id:
             percent = max(0, min(99, round((current / total) * 100))) if total else 0
             update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
-            log_library_import_job(job_id, f"Refreshing Details metadata from DOI {current} / {total}: {doi}")
+            log_library_import_job(job_id, f"Refreshing Details metadata from {identifier_kind} {current} / {total}: {identifier}")
         stored_paper = storage.get_paper(paper_id)
         before = dict(stored_paper or {})
-        refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
+        if looks_like_doi(doi):
+            refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
+        else:
+            refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, stored_paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
+        refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
         if refreshed and refreshed != before:
             refreshed_count += 1
             if job_id:
-                label = clean_text(refreshed.get("title") or doi)
-                log_library_import_job(job_id, f"Refreshed DOI metadata: {label}")
+                label = clean_text(refreshed.get("title") or identifier)
+                log_library_import_job(job_id, f"Refreshed {identifier_kind} metadata: {label}")
     result["doi_metadata_refreshed"] = refreshed_count
+    result["identifier_metadata_refreshed"] = refreshed_count
     return refreshed_count
 
 
@@ -2358,11 +2742,13 @@ def publication_candidate_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     candidate = dict(paper)
     if "raw_json" not in candidate:
         candidate["raw_json"] = json.dumps(candidate.get("raw") or {}, ensure_ascii=False)
+    raw = candidate.get("raw") or parse_raw_json(candidate)
     return {
         "paper_id": candidate.get("paper_id") or "",
         "doi": candidate.get("doi") or "",
         "paper": paper_to_api(candidate),
-        "raw": candidate.get("raw") or parse_raw_json(candidate),
+        "raw": raw,
+        "arxiv_id": normalize_arxiv_identifier(str(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")) if isinstance(raw, dict) else "",
     }
 
 
@@ -2391,8 +2777,9 @@ def paper_from_publication_candidate(candidate: dict[str, Any]) -> dict[str, Any
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
     title = clean_text(paper.get("title") or "(Untitled)")
     journal = clean_text(paper.get("journal") or "Unknown Journal")
+    arxiv_id = normalize_arxiv_identifier(str(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")) if isinstance(raw, dict) else ""
     return {
-        "paper_id": paper.get("paper_id") or paper_id_from_publication(doi, title, journal, publication_date),
+        "paper_id": paper.get("paper_id") or (f"arxiv_{safe_slug(arxiv_id, 90)}" if arxiv_id else paper_id_from_publication(doi, title, journal, publication_date)),
         "doi": doi,
         "title": title,
         "journal": journal,
@@ -2537,6 +2924,14 @@ def search_publications(search_text: str, *, kind: str = "auto") -> list[dict[st
     query = clean_text(search_text)
     if not query:
         return []
+    arxiv_id = normalize_arxiv_identifier(query)
+    if arxiv_id and not looks_like_doi(query):
+        paper = publication_metrics_metadata_from_arxiv_id(arxiv_id)
+        return [paper] if paper else []
+    doi = normalize_publication_doi(query)
+    if looks_like_doi(doi) and doi_is_likely_data_repository(doi):
+        paper = publication_metrics_metadata_from_doi(doi, allow_data_repository=True)
+        return [paper] if paper else []
     search_kind = kind if kind in {"doi", "title", "author", "bibliographic"} else ("doi" if looks_like_doi(query) else "title")
     if search_kind != "author":
         return search_crossref_publications(query, kind=search_kind)
@@ -2862,6 +3257,13 @@ def google_scholar_block_message() -> str:
     )
 
 
+def resolve_google_scholar_candidate_to_identifier(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
+    if doi_candidate:
+        return doi_candidate
+    return resolve_google_scholar_candidate_to_arxiv(candidate)
+
+
 def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[str, Any] | None:
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     title = clean_text(paper.get("title") or "")
@@ -2881,6 +3283,8 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
             key = clean_text(result.get("doi") or result.get("paper_id") or "")
             if not key or key in seen:
                 continue
+            if doi_is_likely_data_repository(result.get("doi") or ""):
+                continue
             seen.add(key)
             results.append(result)
     if not results:
@@ -2891,7 +3295,7 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
     scholar_journal_tokens = title_tokens(scholar_journal)
     for result in results:
         doi = clean_text(result.get("doi") or "")
-        if not doi:
+        if not doi or doi_is_likely_data_repository(doi):
             continue
         result_title = clean_text(result.get("title") or "")
         score = title_similarity(title, result_title)
@@ -2909,6 +3313,60 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
         return None
     score, result = max(scored, key=lambda item: item[0])
     return result if score >= 0.76 else None
+
+
+def resolve_google_scholar_candidate_to_arxiv(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+    title = clean_text(paper.get("title") or "")
+    year = clean_text(paper.get("publication_date") or raw.get("year") or "")
+    direct_candidates = [
+        paper.get("url"),
+        paper.get("landing_url"),
+        paper.get("pdf_url"),
+        raw.get("url"),
+        raw.get("venue"),
+        title,
+    ]
+    for value in direct_candidates:
+        arxiv_id = normalize_arxiv_identifier(str(value or ""))
+        if arxiv_id:
+            return publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=14, max_retries=1)
+    if not title:
+        return None
+    fields = "paperId,externalIds,title,year,venue,citationCount,url"
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": title, "limit": 5, "fields": fields},
+            timeout=14,
+            max_retries=1,
+        )
+    except Exception:
+        return None
+    scored: list[tuple[float, str]] = []
+    for item in response.json().get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        external_ids = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
+        arxiv_id = normalize_arxiv_identifier(str(external_ids.get("ArXiv") or external_ids.get("arXiv") or external_ids.get("ARXIV") or ""))
+        if not arxiv_id:
+            continue
+        score = title_similarity(title, clean_text(item.get("title") or ""))
+        item_year = clean_text(str(item.get("year") or ""))
+        if year and item_year:
+            if year[:4] == item_year[:4]:
+                score += 0.04
+            else:
+                score -= 0.10
+        scored.append((score, arxiv_id))
+    if not scored:
+        return None
+    score, arxiv_id = max(scored, key=lambda item: item[0])
+    if score < 0.78:
+        return None
+    return publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=14, max_retries=1)
 
 
 def scholar_bibliographic_query(candidate: dict[str, Any]) -> str:
@@ -3025,12 +3483,133 @@ def looks_like_doi(value: str) -> bool:
     return bool(re.search(r"\b10\.\d{4,9}/\S+", value, flags=re.I))
 
 
+def doi_is_likely_data_repository(value: str) -> bool:
+    doi = normalize_publication_doi(value)
+    if not doi:
+        return False
+    repository_patterns = [
+        r"^10\.5281/zenodo\b",
+        r"^10\.5281/",
+        r"^10\.6084/m9\.figshare\b",
+        r"^10\.5061/dryad\b",
+        r"^10\.17605/osf\.io\b",
+        r"^10\.17632/",
+    ]
+    return any(re.search(pattern, doi, flags=re.I) for pattern in repository_patterns)
+
+
+def openalex_item_is_likely_data_repository(item: dict[str, Any]) -> bool:
+    item_type = clean_text(item.get("type") or item.get("type_crossref") or "").lower()
+    if item_type in {"dataset", "data-set", "data"}:
+        return True
+    doi = normalize_publication_doi(clean_text(item.get("doi") or ""))
+    if doi_is_likely_data_repository(doi):
+        return True
+    primary = item.get("primary_location") if isinstance(item.get("primary_location"), dict) else {}
+    source = primary.get("source") if isinstance(primary.get("source"), dict) else {}
+    haystack = " ".join(
+        clean_text(str(value)).lower()
+        for value in [
+            item.get("doi"),
+            item.get("id"),
+            item.get("landing_page_url"),
+            primary.get("landing_page_url"),
+            source.get("display_name"),
+            source.get("host_organization_name"),
+        ]
+        if value
+    )
+    return any(name in haystack for name in ["zenodo", "figshare", "dryad", "osf.io", "mendeley data"])
+
+
 def normalize_publication_doi(value: str) -> str:
     doi = clean_text(value)
     doi = doi.removeprefix("https://doi.org/").removeprefix("http://doi.org/")
     match = re.search(r"10\.\d{4,9}/\S+", doi, flags=re.I)
     doi = match.group(0) if match else doi
     return doi.strip().rstrip(".,;").lower()
+
+
+def normalize_arxiv_identifier(value: str) -> str:
+    text = clean_text(value)
+    if not text:
+        return ""
+    text = unquote(text).strip().strip("<>")
+    text = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/", "", text, flags=re.I)
+    text = re.sub(r"\.pdf(?:[?#].*)?$", "", text, flags=re.I)
+    text = re.sub(r"^arxiv\s*:\s*", "", text, flags=re.I)
+    text = text.strip().strip(".,;")
+    old_style = re.search(r"\b([a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?\b", text, flags=re.I)
+    if old_style:
+        return strip_arxiv_version(old_style.group(1)).lower()
+    new_style = re.search(r"\b(\d{4}\.\d{4,5})(?:v\d+)?\b", text, flags=re.I)
+    return strip_arxiv_version(new_style.group(1)).lower() if new_style else ""
+
+
+def looks_like_arxiv_identifier(value: str) -> bool:
+    return bool(normalize_arxiv_identifier(value))
+
+
+def arxiv_identifier_for_paper(paper: dict[str, Any]) -> str:
+    raw = parse_raw_json(paper)
+    preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+    versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
+    preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
+    candidates = [
+        preprint.get("arxiv_id"),
+        preprint.get("versioned_arxiv_id"),
+        preprint_version.get("arxiv_id"),
+        raw.get("arxiv_id"),
+        raw.get("versioned_arxiv_id"),
+        raw.get("eprint"),
+        raw.get("arxiv"),
+        paper.get("preprint_id"),
+        paper.get("url"),
+        paper.get("landing_url"),
+        paper.get("pdf_url"),
+    ]
+    semantic = parse_semantic_scholar_json(paper)
+    external_ids = semantic.get("externalIds") if isinstance(semantic.get("externalIds"), dict) else {}
+    if isinstance(external_ids, dict):
+        candidates.extend([external_ids.get("ArXiv"), external_ids.get("arXiv"), external_ids.get("ARXIV")])
+    for candidate in candidates:
+        identifier = normalize_arxiv_identifier(str(candidate or ""))
+        if identifier:
+            return identifier
+    raw_identifier = arxiv_identifier_from_raw_values(raw)
+    if raw_identifier:
+        return raw_identifier
+    if (paper.get("journal") or "").lower() == ARXIV_JOURNAL_NAME.lower():
+        paper_id = clean_text(paper.get("paper_id") or "")
+        if paper_id.startswith("arxiv_"):
+            identifier = normalize_arxiv_identifier(paper_id.removeprefix("arxiv_").replace("_", "."))
+            if identifier:
+                return identifier
+    return ""
+
+
+def arxiv_identifier_from_raw_values(value: Any, *, depth: int = 0) -> str:
+    if depth > 5:
+        return ""
+    if isinstance(value, str):
+        return normalize_arxiv_identifier(value) if "arxiv" in value.lower() else ""
+    if isinstance(value, dict):
+        priority_keys = ["arxiv", "arxiv_id", "versioned_arxiv_id", "eprint", "externalIds", "ids", "url", "landing_page_url", "pdf_url"]
+        for key in priority_keys:
+            if key in value:
+                identifier = arxiv_identifier_from_raw_values(value.get(key), depth=depth + 1)
+                if identifier:
+                    return identifier
+        for item in value.values():
+            identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
+            if identifier:
+                return identifier
+    if isinstance(value, list):
+        for item in value:
+            identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
+            if identifier:
+                return identifier
+    return ""
 
 
 def paper_id_from_publication(doi: str, title: str, journal: str, publication_date: str) -> str:
@@ -3047,7 +3626,7 @@ def citation_label(paper: dict[str, Any]) -> str:
         lead = f"{lead} et al."
     journal = paper.get("journal") or "Unknown Journal"
     preprint_id = preprint_identifier(paper)
-    if preprint_id:
+    if preprint_id and journal.lower() == ARXIV_JOURNAL_NAME.lower():
         journal = f"{journal}:{preprint_id}"
     volume = paper_volume(paper)
     page = paper_page(paper)
@@ -3062,11 +3641,14 @@ def citation_label(paper: dict[str, Any]) -> str:
 
 def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
     raw = parse_raw_json(paper)
-    metrics: dict[str, Any] = {"source": "", "count": None, "by_year": []}
+    semantic = parse_semantic_scholar_json(paper)
+    sources: dict[str, Any] = {}
+    published_sources: dict[str, Any] = {}
+    preprint_sources: dict[str, Any] = {}
+    openalex_by_year: list[dict[str, int]] = []
+    openalex_count: int | None = None
     if "cited_by_count" in raw or raw.get("counts_by_year"):
-        metrics["source"] = "OpenAlex"
-        metrics["count"] = int_or_none(raw.get("cited_by_count"))
-        by_year = []
+        openalex_count = int_or_none(raw.get("cited_by_count"))
         for item in raw.get("counts_by_year") or []:
             if not isinstance(item, dict):
                 continue
@@ -3074,14 +3656,150 @@ def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
             count = int_or_none(item.get("cited_by_count", item.get("works_count")))
             if year is None or count is None:
                 continue
-            by_year.append({"year": year, "count": count})
-        metrics["by_year"] = sorted(by_year, key=lambda entry: entry["year"])
-        return metrics
+            openalex_by_year.append({"year": year, "count": count})
+        sources["openalex"] = {
+            "count": openalex_count,
+            "by_year": sorted(openalex_by_year, key=lambda entry: entry["year"]),
+        }
+        published_sources["openalex"] = sources["openalex"]
+    semantic_count = int_or_none(semantic.get("citationCount"))
+    semantic_influential = int_or_none(semantic.get("influentialCitationCount"))
+    if semantic:
+        sources["semantic_scholar"] = {
+            "count": semantic_count,
+            "influential_count": semantic_influential,
+            "paper_id": semantic.get("paperId") or "",
+            "url": semantic.get("url") or "",
+        }
+        published_sources["semantic_scholar"] = sources["semantic_scholar"]
     crossref_count = int_or_none(raw.get("is-referenced-by-count"))
     if crossref_count is not None:
-        metrics["source"] = "Crossref"
-        metrics["count"] = crossref_count
-    return metrics
+        sources["crossref"] = {"count": crossref_count}
+        published_sources["crossref"] = sources["crossref"]
+    versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
+    preprint = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
+    preprint_source_raw = preprint.get("sources") if isinstance(preprint.get("sources"), dict) else {}
+    preprint_semantic = preprint_source_raw.get("semantic_scholar") if isinstance(preprint_source_raw.get("semantic_scholar"), dict) else {}
+    if preprint_semantic:
+        preprint_sources["semantic_scholar"] = {
+            "count": int_or_none(preprint_semantic.get("citationCount")),
+            "influential_count": int_or_none(preprint_semantic.get("influentialCitationCount")),
+            "paper_id": preprint_semantic.get("paperId") or "",
+            "url": preprint_semantic.get("url") or "",
+        }
+    preprint_openalex = preprint_source_raw.get("openalex") if isinstance(preprint_source_raw.get("openalex"), dict) else {}
+    if preprint_openalex:
+        preprint_sources["openalex"] = {"count": int_or_none(preprint_openalex.get("cited_by_count"))}
+    semantic_cluster_count = semantic_count
+    semantic_preprint_merged = semantic_records_look_merged(semantic, preprint_semantic, preprint.get("arxiv_id") or raw.get("arxiv_id") or "")
+    if preprint_semantic and not semantic_preprint_merged:
+        preprint_semantic_count = int_or_none(preprint_semantic.get("citationCount"))
+        if preprint_semantic_count is not None:
+            semantic_cluster_count = max(semantic_cluster_count or 0, preprint_semantic_count)
+    published_count = max(
+        [
+            value
+            for value in [
+                int_or_none(published_sources.get("openalex", {}).get("count")),
+                int_or_none(published_sources.get("crossref", {}).get("count")),
+            ]
+            if value is not None
+        ],
+        default=None,
+    )
+    preprint_count = max(
+        [
+            value
+            for value in [
+                None if semantic_preprint_merged else int_or_none(preprint_sources.get("semantic_scholar", {}).get("count")),
+                int_or_none(preprint_sources.get("openalex", {}).get("count")),
+            ]
+            if value is not None
+        ],
+        default=None,
+    )
+    if published_count is None and preprint_count is None and semantic_cluster_count is None:
+        primary_count = None
+    else:
+        split_total = (published_count or 0) + (preprint_count or 0)
+        primary_count = max(split_total, semantic_cluster_count or 0)
+    primary_source = "Merged" if preprint_count is not None or semantic_cluster_count is not None else ""
+    if not primary_source:
+        for source_key, label in [("openalex", "OpenAlex"), ("semantic_scholar", "Semantic Scholar"), ("crossref", "Crossref")]:
+            value = sources.get(source_key, {}).get("count")
+            if value is not None:
+                primary_source = label
+                break
+    return {
+        "source": primary_source,
+        "count": primary_count,
+        "by_year": sources.get("openalex", {}).get("by_year", []),
+        "primary_source": primary_source,
+        "sources": sources,
+        "versions": {
+            "published": {"count": published_count, "sources": published_sources},
+            "preprint": {
+                "count": preprint_count,
+                "sources": preprint_sources,
+                "arxiv_id": preprint.get("arxiv_id") or raw.get("arxiv_id") or "",
+                "semantic_merged": semantic_preprint_merged,
+            },
+            "semantic_cluster": {"count": semantic_cluster_count, "merged_preprint": semantic_preprint_merged},
+        },
+    }
+
+
+def semantic_records_look_merged(semantic: dict[str, Any], preprint_semantic: dict[str, Any], arxiv_id: str = "") -> bool:
+    if not semantic or not preprint_semantic:
+        return False
+    if clean_text(semantic.get("paperId") or "") and clean_text(semantic.get("paperId") or "") == clean_text(preprint_semantic.get("paperId") or ""):
+        return True
+    if clean_text(str(semantic.get("corpusId") or "")) and clean_text(str(semantic.get("corpusId") or "")) == clean_text(str(preprint_semantic.get("corpusId") or "")):
+        return True
+    external_ids = semantic.get("externalIds") if isinstance(semantic.get("externalIds"), dict) else {}
+    semantic_arxiv = normalize_arxiv_identifier(str(external_ids.get("ArXiv") or external_ids.get("arXiv") or external_ids.get("ARXIV") or ""))
+    return bool(semantic_arxiv and arxiv_id and semantic_arxiv == normalize_arxiv_identifier(arxiv_id))
+
+
+def semantic_scholar_summary(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_semantic_scholar_json(paper)
+    if not raw:
+        return {}
+    tldr = raw.get("tldr") if isinstance(raw.get("tldr"), dict) else {}
+    journal = raw.get("journal") if isinstance(raw.get("journal"), dict) else {}
+    external_ids = raw.get("externalIds") if isinstance(raw.get("externalIds"), dict) else {}
+    open_access_pdf = raw.get("openAccessPdf") if isinstance(raw.get("openAccessPdf"), dict) else {}
+    authors = raw.get("authors") if isinstance(raw.get("authors"), list) else []
+    fields = raw.get("fieldsOfStudy") if isinstance(raw.get("fieldsOfStudy"), list) else []
+    s2_fields = raw.get("s2FieldsOfStudy") if isinstance(raw.get("s2FieldsOfStudy"), list) else []
+    return {
+        "paper_id": raw.get("paperId") or "",
+        "corpus_id": raw.get("corpusId") or "",
+        "external_ids": {clean_text(str(key)): clean_text(str(value)) for key, value in external_ids.items() if clean_text(str(value))},
+        "url": raw.get("url") or "",
+        "citation_count": int_or_none(raw.get("citationCount")),
+        "influential_citation_count": int_or_none(raw.get("influentialCitationCount")),
+        "reference_count": int_or_none(raw.get("referenceCount")),
+        "is_open_access": bool(raw.get("isOpenAccess")),
+        "open_access_pdf_url": clean_text(open_access_pdf.get("url") or ""),
+        "authors": [
+            clean_text(item.get("name") or "")
+            for item in authors
+            if isinstance(item, dict) and clean_text(item.get("name") or "")
+        ],
+        "fields_of_study": [clean_text(str(value)) for value in fields if clean_text(str(value))],
+        "s2_fields": [
+            clean_text(item.get("category") or item.get("source") or "")
+            for item in s2_fields
+            if isinstance(item, dict) and clean_text(item.get("category") or item.get("source") or "")
+        ],
+        "publication_types": [clean_text(str(value)) for value in (raw.get("publicationTypes") or []) if clean_text(str(value))],
+        "tldr": clean_text(tldr.get("text") or ""),
+        "venue": clean_text(raw.get("venue") or ""),
+        "year": clean_text(str(raw.get("year") or "")),
+        "journal_name": clean_text(journal.get("name") or ""),
+        "enriched_at": paper.get("semantic_scholar_enriched_at") or "",
+    }
 
 
 def build_my_publication_comments_report(publication: dict[str, Any]) -> tuple[str, Path, int]:
@@ -3180,9 +3898,13 @@ def openalex_work_id_for_paper(paper: dict[str, Any]) -> str:
 
 def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    if not doi:
+    arxiv_id = arxiv_identifier_for_paper(paper)
+    if doi:
+        paper_ref = quote(f"DOI:{doi}", safe="")
+    elif arxiv_id:
+        paper_ref = quote(f"ARXIV:{arxiv_id}", safe="")
+    else:
         return []
-    paper_ref = quote(f"DOI:{doi}", safe="")
     response = request_with_retries(
         "GET",
         f"https://api.semanticscholar.org/graph/v1/paper/{paper_ref}/citations",
@@ -3445,7 +4167,7 @@ def important_title_terms(title: str) -> list[str]:
 
 
 def google_scholar_url(paper: dict[str, Any]) -> str:
-    query = paper.get("doi") or paper.get("title") or ""
+    query = paper.get("doi") or arxiv_identifier_for_paper(paper) or paper.get("title") or ""
     return f"https://scholar.google.com/scholar?q={quote(query)}" if query else ""
 
 
@@ -3485,6 +4207,7 @@ def nature_reference(paper: dict[str, Any]) -> dict[str, str]:
         "pages": paper_page(paper),
         "year": publication_year(paper),
         "doi": clean_text(paper.get("doi") or ""),
+        "preprint_id": preprint_identifier(paper),
     }
 
 
@@ -3524,7 +4247,7 @@ def initials_from_given_names(value: str) -> str:
 
 def full_author_names(paper: dict[str, Any]) -> list[str]:
     raw = parse_raw_json(paper)
-    return authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_google_scholar(raw)
+    return authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_datacite(raw) or authors_from_google_scholar(raw)
 
 
 def author_last_name(name: str) -> str:
@@ -3684,7 +4407,7 @@ def late_arrival_summaries(papers: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def author_summary(paper: dict[str, Any]) -> list[str]:
     raw = parse_raw_json(paper)
-    names = authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_google_scholar(raw)
+    names = authors_from_openalex(raw) or authors_from_crossref(raw) or authors_from_arxiv(raw) or authors_from_datacite(raw) or authors_from_google_scholar(raw)
     if len(names) <= 6:
         return names
     return names[:3] + ["…"] + names[-3:]
@@ -3720,6 +4443,23 @@ def authors_from_arxiv(raw: dict[str, Any]) -> list[str]:
     return dedup_names([clean_author_name(str(name)) for name in raw.get("authors") or [] if name])
 
 
+def authors_from_datacite(raw: dict[str, Any]) -> list[str]:
+    datacite = raw.get("datacite") if isinstance(raw.get("datacite"), dict) else raw
+    creators = raw.get("creators") or datacite.get("creators") or []
+    names: list[str] = []
+    for item in creators:
+        if not isinstance(item, dict):
+            continue
+        name = clean_author_name(str(item.get("name") or ""))
+        if not name:
+            given = clean_author_name(str(item.get("givenName") or ""))
+            family = clean_author_name(str(item.get("familyName") or ""))
+            name = clean_author_name(" ".join(part for part in [given, family] if part))
+        if name:
+            names.append(name)
+    return dedup_names(names)
+
+
 def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
     authors = raw.get("authors") or []
     if isinstance(authors, str):
@@ -3729,21 +4469,31 @@ def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
 
 def preprint_identifier(paper: dict[str, Any]) -> str:
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        return ""
+        raw = parse_raw_json(paper)
+        preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+        versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
+        preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
+        return clean_text(preprint.get("arxiv_id") or preprint_version.get("arxiv_id") or raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
     raw = parse_raw_json(paper)
     return clean_text(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
 
 
 def preprint_categories(paper: dict[str, Any]) -> list[str]:
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        return []
+        raw = parse_raw_json(paper)
+        preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+        preprint_raw = preprint.get("raw") if isinstance(preprint.get("raw"), dict) else {}
+        return [clean_text(category) for category in preprint_raw.get("categories") or [] if clean_text(category)]
     raw = parse_raw_json(paper)
     return [clean_text(category) for category in raw.get("categories") or [] if clean_text(category)]
 
 
 def preprint_primary_category(paper: dict[str, Any]) -> str:
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        return ""
+        raw = parse_raw_json(paper)
+        preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+        preprint_raw = preprint.get("raw") if isinstance(preprint.get("raw"), dict) else {}
+        return clean_text(preprint_raw.get("primary_category") or "")
     raw = parse_raw_json(paper)
     primary = clean_text(raw.get("primary_category") or "")
     return primary or (preprint_categories(paper)[0] if preprint_categories(paper) else "")
@@ -3752,6 +4502,14 @@ def preprint_primary_category(paper: dict[str, Any]) -> str:
 def parse_raw_json(paper: dict[str, Any]) -> dict[str, Any]:
     try:
         raw = json.loads(paper.get("raw_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def parse_semantic_scholar_json(paper: dict[str, Any]) -> dict[str, Any]:
+    try:
+        raw = json.loads(paper.get("semantic_scholar_json") or "{}")
     except (TypeError, json.JSONDecodeError):
         return {}
     return raw if isinstance(raw, dict) else {}
@@ -3835,6 +4593,130 @@ def get_fetch_progress(selected: str) -> dict[str, Any] | None:
     with FETCH_PROGRESS_LOCK:
         progress = FETCH_PROGRESS.get(selected)
         return dict(progress) if progress else None
+
+
+def create_my_publication_metrics_job() -> str:
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with MY_PUBLICATION_METRICS_JOBS_LOCK:
+        MY_PUBLICATION_METRICS_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "started_at": now,
+            "finished_at": "",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            "refreshed": 0,
+            "skipped": 0,
+            "current_title": "",
+            "errors": [],
+            "publications": [],
+        }
+    return job_id
+
+
+def get_my_publication_metrics_job(job_id: str | None) -> dict[str, Any] | None:
+    if not job_id:
+        return None
+    with MY_PUBLICATION_METRICS_JOBS_LOCK:
+        job = MY_PUBLICATION_METRICS_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def active_my_publication_metrics_job() -> dict[str, Any] | None:
+    with MY_PUBLICATION_METRICS_JOBS_LOCK:
+        for job in reversed(list(MY_PUBLICATION_METRICS_JOBS.values())):
+            if job.get("status") in {"queued", "running"}:
+                return dict(job)
+    return None
+
+
+def update_my_publication_metrics_job(job_id: str, **updates: Any) -> None:
+    with MY_PUBLICATION_METRICS_JOBS_LOCK:
+        job = MY_PUBLICATION_METRICS_JOBS.get(job_id)
+        if job:
+            job.update(updates)
+
+
+def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
+    storage = Storage(db_path)
+    refreshed = 0
+    skipped = 0
+    errors: list[str] = []
+    try:
+        all_publications = storage.list_my_publications()
+        publications = [
+            publication
+            for publication in all_publications
+            if clean_text(publication.get("paper_id") or "")
+            and (
+                looks_like_doi(normalize_publication_doi(str(publication.get("doi") or "")))
+                or arxiv_identifier_for_paper(publication)
+            )
+        ]
+        total = len(publications)
+        update_my_publication_metrics_job(job_id, status="running", stage="metrics", total=total)
+        if not total:
+            skipped = len(all_publications)
+        for index, publication in enumerate(publications, start=1):
+            doi = normalize_publication_doi(str(publication.get("doi") or ""))
+            paper_id = clean_text(publication.get("paper_id") or "")
+            title = clean_text(publication.get("title") or doi)
+            update_my_publication_metrics_job(
+                job_id,
+                current=index,
+                current_title=title,
+                percent=max(1, min(99, round((index - 1) / max(1, total) * 100))),
+            )
+            try:
+                arxiv_id = arxiv_identifier_for_paper(publication)
+                if looks_like_doi(doi):
+                    normalized = publication_metrics_metadata_from_doi(doi, timeout=10, max_retries=1)
+                else:
+                    normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=10, max_retries=1)
+                updated = storage.refresh_paper_metadata(paper_id, normalized) if normalized else publication
+                enriched = refresh_semantic_scholar_if_possible(storage, updated, timeout=6, max_retries=1)
+                if normalized or (enriched and enriched.get("semantic_scholar_json")):
+                    refreshed += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                skipped += 1
+                if len(errors) < 8:
+                    errors.append(f"{title}: {exc}")
+            update_my_publication_metrics_job(
+                job_id,
+                current=index,
+                percent=max(1, min(99, round(index / max(1, total) * 100))),
+                refreshed=refreshed,
+                skipped=skipped,
+                errors=list(errors),
+            )
+        api_rows = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        update_my_publication_metrics_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            current=total,
+            percent=100,
+            refreshed=refreshed,
+            skipped=skipped,
+            errors=list(errors),
+            publications=api_rows,
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    except Exception as exc:
+        update_my_publication_metrics_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            errors=[str(exc)],
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    finally:
+        storage.close()
 
 
 def create_library_import_job(*, folder_path: Path, copy_mode: str) -> str:
@@ -3975,7 +4857,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
             )
             refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
             if refreshed:
-                log_library_import_job(job_id, f"Refreshed DOI metadata for {refreshed} imported papers")
+                log_library_import_job(job_id, f"Refreshed DOI/arXiv metadata for {refreshed} imported papers")
         finally:
             storage.close()
         summary = summarize_import_result(result)
@@ -3988,7 +4870,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
                 f"{summary.get('updated_papers', 0)} updated, "
                 f"{summary.get('pdf_doi_extracted_count', 0)} DOI found, "
                 f"{summary.get('pdf_doi_missing_count', 0)} no DOI, "
-                f"{summary.get('doi_metadata_refreshed', 0)} DOI metadata refreshed, "
+                f"{summary.get('doi_metadata_refreshed', 0)} DOI/arXiv metadata refreshed, "
                 f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
                 f"{summary.get('reused_existing_files', 0)} reused, "
                 f"{summary.get('skipped', 0)} skipped"
@@ -5989,7 +6871,34 @@ INDEX_HTML = """<!doctype html>
       padding: 10px 12px;
       background: #fbfcfe;
     }
-    .publication-search-status { color: var(--muted); font-size: 12px; }
+    .publication-search-status {
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 24px;
+      border-radius: 7px;
+      padding: 5px 8px;
+      transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    }
+    .publication-search-status.live {
+      color: #124a5c;
+      background: linear-gradient(90deg, rgba(14, 116, 144, 0.08), rgba(14, 116, 144, 0.18), rgba(14, 116, 144, 0.08));
+      background-size: 220% 100%;
+      animation: statusFlow 1.35s linear infinite;
+    }
+    .publication-search-status.pulse {
+      animation: statusPulse 520ms ease-out, statusFlow 1.35s linear infinite;
+    }
+    .publication-search-status:not(.live).pulse {
+      animation: statusPulse 520ms ease-out;
+    }
+    @keyframes statusPulse {
+      0% { background-color: rgba(14, 116, 144, 0.22); box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0.26); }
+      100% { background-color: transparent; box-shadow: inset 0 0 0 1px rgba(14, 116, 144, 0); }
+    }
+    @keyframes statusFlow {
+      0% { background-position: 0% 0; }
+      100% { background-position: 220% 0; }
+    }
     .publication-search-results {
       display: grid;
       gap: 8px;
@@ -6153,13 +7062,37 @@ INDEX_HTML = """<!doctype html>
     .my-publications-id .journal-name { color: #0f6b6e; font-style: italic; font-weight: 700; }
     .my-publications-id strong { font-weight: 750; color: var(--ink); }
     .my-publications-stats {
+      position: relative;
       display: grid;
       grid-template-columns: minmax(120px, 0.8fr) minmax(190px, 1.4fr) minmax(150px, 1fr) minmax(190px, 1.3fr);
       gap: 8px;
       border-top: 1px solid var(--line);
       background: #fbfcfe;
       padding: 8px 10px;
-      min-height: 118px;
+      height: var(--my-publications-stats-height, 136px);
+      min-height: 86px;
+      overflow: hidden;
+    }
+    .my-publications-stats-resizer {
+      position: absolute;
+      top: -5px;
+      left: 0;
+      right: 0;
+      height: 10px;
+      border: 0;
+      background: transparent;
+      cursor: row-resize;
+      z-index: 2;
+    }
+    .my-publications-stats-resizer::before {
+      content: "";
+      position: absolute;
+      left: 42%;
+      right: 42%;
+      top: 4px;
+      height: 2px;
+      border-radius: 999px;
+      background: #cbd5e1;
     }
     .my-publications-stat {
       min-width: 0;
@@ -6170,9 +7103,11 @@ INDEX_HTML = """<!doctype html>
       padding: 7px 9px;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     .my-publications-stat strong {
       display: block;
+      flex: 0 0 auto;
       color: var(--ink);
       font-size: 14px;
       line-height: 1.1;
@@ -6182,6 +7117,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-stat span {
       display: block;
+      flex: 0 0 auto;
       color: var(--muted);
       font-size: 11px;
       margin-top: 3px;
@@ -6191,9 +7127,11 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-stat-list {
       display: grid;
+      align-content: start;
       gap: 3px;
       margin-top: 6px;
-      max-height: 132px;
+      min-height: 0;
+      flex: 1 1 auto;
       overflow: auto;
       padding-right: 2px;
     }
@@ -6219,21 +7157,26 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
     }
     .publication-role-flags {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin: 8px 0 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      margin: 0;
+      max-width: 100%;
     }
     .publication-role-flag {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
       border: 1px solid var(--line);
-      border-radius: 7px;
+      border-radius: 6px;
       background: #fbfcfe;
-      padding: 7px 9px;
+      padding: 3px 5px;
       color: #344054;
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
     }
     .publication-role-flag input { margin: 0; }
     .star-button {
@@ -6911,6 +7854,105 @@ INDEX_HTML = """<!doctype html>
       background: var(--accent);
     }
     .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .citation-source-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .citation-version-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .citation-version-grid div {
+      border: 1px solid #e5e7eb;
+      border-radius: 7px;
+      padding: 8px 10px;
+      background: #fbfcfe;
+      min-width: 0;
+    }
+    .citation-version-grid b,
+    .citation-version-grid span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .citation-version-grid b { color: var(--muted); font-size: 11px; }
+    .citation-version-grid span { color: var(--ink); font-size: 20px; font-weight: 760; margin-top: 3px; }
+    .citation-preprint-sources {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #eef2f7;
+    }
+    .citation-preprint-sources > strong {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .citation-source-cell {
+      border: 1px solid #edf0f5;
+      border-radius: 6px;
+      padding: 6px 7px;
+      background: #fbfcfe;
+      min-width: 0;
+      text-align: left;
+      cursor: pointer;
+    }
+    .citation-source-cell:hover { border-color: #b9c7dd; background: #f6f9fe; }
+    .citation-source-cell.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .citation-source-cell b { display: block; color: var(--ink); font-size: 11px; }
+    .citation-source-cell span { color: var(--accent-strong); font-weight: 750; }
+    .semantic-panel {
+      display: none;
+      margin-top: 10px;
+      border-top: 1px solid #edf0f5;
+      padding-top: 9px;
+      color: #344054;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .citation-panel[data-active-citation-source="semantic_scholar"] .semantic-panel { display: block; }
+    .semantic-panel strong { color: var(--ink); }
+    .semantic-panel p { margin: 5px 0 0; }
+    .semantic-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .semantic-detail-row {
+      border: 1px solid #edf0f5;
+      border-radius: 6px;
+      background: #fbfcfe;
+      padding: 6px 7px;
+      min-width: 0;
+    }
+    .semantic-detail-row b {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+    .semantic-detail-row span {
+      display: block;
+      margin-top: 2px;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+    .semantic-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+    .semantic-tag {
+      border: 1px solid #d6e4ff;
+      border-radius: 999px;
+      background: #f4f7ff;
+      color: #315193;
+      padding: 2px 7px;
+      font-size: 11px;
+    }
+    a.semantic-tag:hover { text-decoration: none; border-color: #9bbcff; }
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
@@ -7291,8 +8333,8 @@ INDEX_HTML = """<!doctype html>
             <div class="my-publications-tools" id="myPublicationsTools">
               <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
-              <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Crossref">Refresh Metrics</button>
-              <input class="search" id="publicationSearchBox" placeholder="DOI or title">
+              <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Semantic Scholar/Crossref" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
+              <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
               <button class="smallbtn" id="addMyPublication" type="button">Add</button>
             </div>
           </div>
@@ -7441,7 +8483,11 @@ INDEX_HTML = """<!doctype html>
       myPublicationSearchStatus: "",
       myPublicationSearchScrollTop: 0,
       myPublicationSearchToken: 0,
+      myPublicationLastStatusText: "",
+      myPublicationMetricsRefreshing: false,
+      myPublicationMetricsJobId: "",
       myPublicationAuthorCache: {},
+      myPublicationStatsHeight: 136,
       myPublicationName: "",
       myPublicationColumnWidths: {},
       mode: "library",
@@ -8025,7 +9071,7 @@ INDEX_HTML = """<!doctype html>
           if (state.myPublicationSort === "title") return String(paper.title || "").toLowerCase();
           if (state.myPublicationSort === "citation") return myPublicationCitationSortText(paper).toLowerCase();
           if (state.myPublicationSort === "date") return String(paper.publication_date || "");
-          if (state.myPublicationSort === "citations") return Number(paper.citation_metrics?.count || 0);
+          if (state.myPublicationSort === "citations") return Number(myPublicationMaxCitationCount(paper) || 0);
           return Number(entry.sort_order || 0);
         };
         const left = value(a);
@@ -8831,12 +9877,12 @@ INDEX_HTML = """<!doctype html>
     async function refreshLibraryMetadataFromDoi(paper) {
       if (!paper?.paper_id) return;
       const input = $("libraryDetailDoiInput");
-      const doi = String(input?.value || "").trim();
+      const identifier = String(input?.value || "").trim();
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
-      if (!doi) {
+      if (!identifier) {
         if (status) {
-          status.textContent = "Enter a DOI first.";
+          status.textContent = "Enter a DOI or arXiv ID first.";
           status.className = "library-detail-status err";
         }
         input?.focus({preventScroll: true});
@@ -8844,14 +9890,14 @@ INDEX_HTML = """<!doctype html>
       }
       buttons.forEach((button) => button.disabled = true);
       if (status) {
-        status.textContent = "Refreshing metadata from DOI...";
+        status.textContent = "Refreshing metadata and metrics from identifier...";
         status.className = "library-detail-status";
       }
       try {
         const res = await fetch("/api/library/refresh-metadata", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id, doi})
+          body: JSON.stringify({paper_id: paper.paper_id, identifier})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
@@ -9562,7 +10608,7 @@ INDEX_HTML = """<!doctype html>
       if (message.startsWith("Entering ")) return "enter";
       if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
       if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Mode:")) return "file";
-      if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for")) return "done";
+      if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
       return "info";
     }
 
@@ -9795,9 +10841,9 @@ INDEX_HTML = """<!doctype html>
         <div class="workspace-tools">
           <input class="search" id="workspaceNameInput" value="${escapeAttr(libraryWorkspaceLabel(index))}" placeholder="Space name">
           <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
-          <input class="search" id="workspaceDoiInput" placeholder="DOI">
-          <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add DOI</button>
-          <span class="workspace-status" id="workspaceStatus">${escapeHtml(state.workspaceStatus || "This space works like Library. Add papers by DOI into its root.")}</span>
+          <input class="search" id="workspaceDoiInput" placeholder="DOI or arXiv ID">
+          <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
+          <span class="workspace-status" id="workspaceStatus">${escapeHtml(state.workspaceStatus || "This space works like Library. Add papers by DOI or arXiv ID into its root.")}</span>
         </div>
       `;
     }
@@ -10229,19 +11275,19 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function addLibraryWorkspaceDoi(index) {
-      const doi = $("workspaceDoiInput")?.value || "";
-      if (!doi.trim()) return;
-      state.workspaceStatus = "Looking up DOI...";
+      const identifier = $("workspaceDoiInput")?.value || "";
+      if (!identifier.trim()) return;
+      state.workspaceStatus = "Looking up identifier...";
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
       try {
         const res = await fetch("/api/library/workspace-tabs/add-doi", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({index, doi})
+          body: JSON.stringify({index, identifier})
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not add DOI");
+        if (!res.ok) throw new Error(data.error || "Could not add paper");
         applyLibrarySnapshot(data);
         const rootFolderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || libraryDisplayRootId());
         const added = state.libraryItems.find((item) => String(item.paper_id || "") === String(data.paper_id || "") && Number(item.folder_id) === rootFolderId);
@@ -10294,6 +11340,8 @@ INDEX_HTML = """<!doctype html>
       const previousSearchScrollTop = existingResults ? existingResults.scrollTop : Number(state.myPublicationSearchScrollTop || 0);
       const existingTableWrap = document.querySelector(".my-publications-table-wrap");
       const previousTableScrollTop = existingTableWrap ? existingTableWrap.scrollTop : 0;
+      const existingDetail = $("libraryDetail");
+      const previousDetailScrollTop = existingDetail ? existingDetail.scrollTop : 0;
       state.mode = "library";
       state.libraryTab = "my-publications";
       stopArxivUpdateCountdown();
@@ -10315,7 +11363,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-shell my-publications-shell" id="libraryShell" tabindex="0">
           <section class="my-publications-panel">
             <div class="my-publications-search">
-              <div class="publication-search-status">${escapeHtml(state.myPublicationSearchStatus || "Use DOI/title, or search by name with optional units: Name; Unit A; Unit B.")}</div>
+              <div class="${myPublicationSearchStatusClass()}">${escapeHtml(myPublicationSearchStatusText())}</div>
               <div class="publication-search-results" id="publicationSearchResults">${myPublicationSearchResultsMarkup()}</div>
             </div>
             <div class="my-publications-table-wrap">
@@ -10341,6 +11389,7 @@ INDEX_HTML = """<!doctype html>
       wireLibraryPaneTools();
       renderPublicationDetail();
       wireMyPublicationInteractions();
+      pulseMyPublicationSearchStatus();
       const restoredResults = $("publicationSearchResults");
       if (restoredResults) restoredResults.scrollTop = previousSearchScrollTop;
       const restoredTableWrap = document.querySelector(".my-publications-table-wrap");
@@ -10349,7 +11398,46 @@ INDEX_HTML = """<!doctype html>
           ? Number(options.tableScrollTop)
           : previousTableScrollTop;
       }
+      const restoredDetail = $("libraryDetail");
+      if (restoredDetail) {
+        restoredDetail.scrollTop = Number.isFinite(Number(options.detailScrollTop))
+          ? Number(options.detailScrollTop)
+          : previousDetailScrollTop;
+      }
       if (options.revealSelection) window.requestAnimationFrame(() => revealMyPublicationSelection());
+    }
+
+    function updateMyPublicationSearchStatusText() {
+      const status = document.querySelector(".publication-search-status");
+      if (status) {
+        status.textContent = myPublicationSearchStatusText();
+        status.className = myPublicationSearchStatusClass();
+        pulseMyPublicationSearchStatus();
+      }
+    }
+
+    function myPublicationSearchStatusText() {
+      return state.myPublicationSearchStatus || "Use DOI/arXiv/title, or search by name with optional units: Name; Unit A; Unit B.";
+    }
+
+    function myPublicationSearchStatusClass() {
+      return `publication-search-status${myPublicationSearchStatusIsLive() ? " live" : ""}`;
+    }
+
+    function myPublicationSearchStatusIsLive(text = state.myPublicationSearchStatus) {
+      if (state.myPublicationMetricsRefreshing) return true;
+      return /\b(adding|building|deleting|refreshing|reimporting|resolving|retrying|searching|starting|stopping|updating)\b/i.test(String(text || ""));
+    }
+
+    function pulseMyPublicationSearchStatus() {
+      const status = document.querySelector(".publication-search-status");
+      if (!status) return;
+      const text = status.textContent || "";
+      if (text === state.myPublicationLastStatusText && !myPublicationSearchStatusIsLive(text)) return;
+      state.myPublicationLastStatusText = text;
+      status.classList.remove("pulse");
+      void status.offsetWidth;
+      status.classList.add("pulse");
     }
 
     function myPublicationSortLabel(key) {
@@ -10415,45 +11503,48 @@ INDEX_HTML = """<!doctype html>
       const total = rows.length;
       const withDoi = rows.filter((entry) => entry.paper?.doi).length;
       const citationCounts = rows
-        .map((entry) => Number(entry.paper?.citation_metrics?.count))
+        .map((entry) => myPublicationMaxCitationCount(entry.paper))
         .filter((value) => Number.isFinite(value));
       const totalCites = citationCounts.reduce((sum, value) => sum + value, 0);
       const hIndex = myPublicationHIndex(citationCounts);
       const i10Index = citationCounts.filter((value) => value >= 10).length;
-      const citationSources = [...new Set(rows.map((entry) => entry.paper?.citation_metrics?.source || "").filter(Boolean))].join(", ");
       const journalCounts = countMyPublicationJournals(rows);
       const journals = new Set(journalCounts.map((entry) => entry.name));
       const listedFirstRows = rows.filter((entry) => myPublicationIsListedFirstAuthor(entry));
+      const soleFirstRows = listedFirstRows.filter((entry) => !entry.first_author);
       const firstAuthorRows = rows.filter((entry) => entry.first_author);
       const correspondingAuthorRows = rows.filter((entry) => entry.corresponding_author);
       return `
-        <div class="my-publications-stats">
+        <div class="my-publications-stats" style="--my-publications-stats-height:${Number(state.myPublicationStatsHeight || 136)}px">
+          <button class="my-publications-stats-resizer" type="button" data-action="resize-publication-stats" title="Resize statistics panel"></button>
           <div class="my-publications-stat">
-            <strong>${total}</strong>
-            <span>Publications · ${withDoi} with DOI</span>
+            <strong>${total} Publications</strong>
+            <span>${withDoi} with DOI</span>
             <div class="my-publications-stat-list">
               <div class="my-publications-stat-row"><b>H-index</b><em>${hIndex}</em></div>
               <div class="my-publications-stat-row"><b>i10-index</b><em>${i10Index}</em></div>
             </div>
           </div>
           <div class="my-publications-stat">
-            <strong>${journals.size || 0} journals</strong>
+            <strong>${journals.size || 0} Journals</strong>
             <span>Journal counts</span>
             <div class="my-publications-stat-list">${myPublicationStatsRows(journalCounts)}</div>
           </div>
           <div class="my-publications-stat">
-            <strong>${totalCites || "--"}</strong>
+            <strong>${totalCites || "--"} Cites</strong>
             <span>${citationCounts.length} papers with cites</span>
             <div class="my-publications-stat-list">
-              <div class="my-publications-stat-row"><b>Source</b><em>${escapeHtml(citationSources || "unavailable")}</em></div>
+              <div class="my-publications-stat-row"><b>Rule</b><em>Max per paper</em></div>
+              <div class="my-publications-stat-row"><b>Sources</b><em>OpenAlex / Semantic / Crossref</em></div>
               <div class="my-publications-stat-row"><b>Average</b><em>${citationCounts.length ? Math.round(totalCites / citationCounts.length) : "--"}</em></div>
             </div>
           </div>
           <div class="my-publications-stat">
-            <strong>${listedFirstRows.length} / ${firstAuthorRows.length} / ${correspondingAuthorRows.length}</strong>
-            <span>Author-list first / co-first / corresponding</span>
+            <strong>${listedFirstRows.length} / ${soleFirstRows.length} / ${firstAuthorRows.length} / ${correspondingAuthorRows.length} Major Papers</strong>
+            <span>First / solo 1st / co-1st / corr.</span>
             <div class="my-publications-stat-list">
               ${myPublicationRoleStatsRows("Author-list first", listedFirstRows)}
+              ${myPublicationRoleStatsRows("Solo first", soleFirstRows)}
               ${myPublicationRoleStatsRows("Co-first marked", firstAuthorRows)}
               ${myPublicationRoleStatsRows("Corresponding marked", correspondingAuthorRows)}
             </div>
@@ -10514,14 +11605,28 @@ INDEX_HTML = """<!doctype html>
     }
 
     function myPublicationCitationCountMarkup(paper) {
-      const value = paper?.citation_metrics?.count;
+      const value = myPublicationMaxCitationCount(paper);
       if (value === null || value === undefined || value === "") return "";
       return escapeHtml(value);
     }
 
+    function myPublicationMaxCitationCount(paper) {
+      const metrics = paper?.citation_metrics || {};
+      if (Number.isFinite(Number(metrics.count))) return Number(metrics.count);
+      const sources = metrics.sources || {};
+      const values = [
+        sources.openalex?.count,
+        sources.semantic_scholar?.count,
+        sources.crossref?.count
+      ]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value));
+      return values.length ? Math.max(...values) : null;
+    }
+
     function myPublicationIdMarkup(paper) {
       const ref = paper?.nature_reference || {};
-      if (paper?.preprint_id) {
+      if (paper?.preprint_id && String(paper?.journal || "").toLowerCase() === "arxiv") {
         return `<em>${escapeHtml(paper.journal || "arXiv")}</em>:${escapeHtml(paper.preprint_id)}`;
       }
       const journal = ref.journal || paper?.journal || "";
@@ -10571,7 +11676,7 @@ INDEX_HTML = """<!doctype html>
         const added = myPublicationCandidateAlreadyAdded(candidate);
         const matchLabel = candidate.match_status === "doi"
           ? "DOI match"
-          : (candidate.match_status === "resolving" ? "Resolving DOI" : (candidate.match_status === "scholar" ? "Scholar-only" : ""));
+          : (candidate.match_status === "arxiv" ? "arXiv match" : (candidate.match_status === "resolving" ? "Resolving identifier" : (candidate.match_status === "scholar" ? "Scholar-only" : "")));
         const meta = [matchLabel, paper.journal, paper.publication_date, paper.doi].filter(Boolean).join(" · ");
         const resolving = candidate.match_status === "resolving";
         const canRetry = candidate.match_status === "scholar";
@@ -10582,7 +11687,7 @@ INDEX_HTML = """<!doctype html>
               <span>${escapeHtml(meta)}</span>
             </div>
             <div class="publication-search-actions">
-              ${canRetry ? `<button class="smallbtn" type="button" data-action="retry-scholar-doi">Retry DOI</button>` : ""}
+              ${canRetry ? `<button class="smallbtn" type="button" data-action="retry-scholar-doi">Retry ID</button>` : ""}
               <button class="smallbtn" type="button" data-action="add-publication-result" ${added || resolving ? "disabled" : ""}>${added ? "Added" : "Add"}</button>
             </div>
           </div>
@@ -10911,11 +12016,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryDetailDoiMarkup(paper) {
-      const value = paper?.doi || "";
+      const value = paper?.doi || paper?.preprint_id || "";
       return `
         <div class="library-detail-doi">
-          <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI">
-          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI">Refresh</button>
+          <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI or arXiv ID">
+          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI or arXiv ID">Refresh</button>
         </div>
       `;
     }
@@ -10929,13 +12034,16 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryDetailMetadataMarkup(paper, authors) {
+      const preprintId = paper.preprint_id || "";
+      const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
       return `
         <dl>
           <dt>Title</dt><dd class="library-detail-title">${escapeHtml(paper.title || "Untitled paper")}</dd>
           <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
-          <dt>DOI</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
+          <dt>Identifier</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
+          ${preprintId && paper.doi ? `<dt>Preprint</dt><dd><span>arXiv:${escapeHtml(preprintId)}</span> <button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button></dd>` : ""}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           <dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>
@@ -11053,8 +12161,8 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
-        ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
+        ${libraryDetailAbstractMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
           <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
@@ -11074,6 +12182,10 @@ INDEX_HTML = """<!doctype html>
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
+        const url = event.currentTarget?.dataset?.preprintUrl || "";
+        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
+      });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="remove-library-paper"]')?.addEventListener("click", async () => {
         const status = $("libraryDetailStatus");
@@ -11086,6 +12198,7 @@ INDEX_HTML = """<!doctype html>
           }
         }
       });
+      wireCitationSourceSelector(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       hydrateLibraryDetailFigureIfNeeded(paper);
@@ -11151,15 +12264,15 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
-        </div>
-        <div class="publication-role-flags">
-          <label class="publication-role-flag"><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> First / co-first author</label>
-          <label class="publication-role-flag"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Corresponding / co-corresponding</label>
+          <span class="publication-role-flags">
+            <label class="publication-role-flag" title="First or co-first author"><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
+            <label class="publication-role-flag" title="Corresponding or co-corresponding author"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Co-corr.</label>
+          </span>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
-        ${libraryDetailAbstractMarkup(paper)}
         ${citationMetricsMarkup(paper)}
+        ${libraryDetailAbstractMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
           <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
@@ -11179,7 +12292,12 @@ INDEX_HTML = """<!doctype html>
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
+        const url = event.currentTarget?.dataset?.preprintUrl || "";
+        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
+      });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      wireCitationSourceSelector(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="toggle-first-author"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
@@ -11194,6 +12312,13 @@ INDEX_HTML = """<!doctype html>
       const count = rawCount === null || rawCount === undefined || rawCount === ""
         ? null
         : (Number.isFinite(Number(rawCount)) ? Number(rawCount) : null);
+      const sources = metrics.sources || {};
+      const versions = metrics.versions || {};
+      const publishedCount = versions.published?.count;
+      const preprintCount = versions.preprint?.count;
+      const semanticClusterCount = versions.semantic_cluster?.count;
+      const semanticMerged = Boolean(versions.semantic_cluster?.merged_preprint || versions.preprint?.semantic_merged);
+      const preprintId = versions.preprint?.arxiv_id || paper.preprint_id || "";
       const years = Array.isArray(metrics.by_year) ? metrics.by_year.filter((entry) => Number.isFinite(Number(entry.year)) && Number.isFinite(Number(entry.count))) : [];
       const max = Math.max(1, ...years.map((entry) => Number(entry.count)));
       const bars = years.length
@@ -11210,14 +12335,121 @@ INDEX_HTML = """<!doctype html>
           </div>`
         : `<div class="citation-empty">Yearly citation histogram unavailable.</div>`;
       return `
-        <section class="citation-panel">
+        <section class="citation-panel" data-active-citation-source="${escapeAttr(citationSourceKeyFromLabel(source))}">
           <div class="citation-summary">
-            <strong>${escapeHtml(source)} Citations</strong>
-            <span class="citation-count">${count === null ? "--" : escapeHtml(count)}</span>
+            <strong data-citation-title>${escapeHtml(source)} Citations</strong>
+            <span class="citation-count" data-citation-count>${count === null ? "--" : escapeHtml(count)}</span>
           </div>
+          ${publishedCount !== undefined || preprintCount !== undefined ? `
+            <div class="citation-version-grid">
+              <div><b>Published version</b><span>${publishedCount === null || publishedCount === undefined ? "--" : escapeHtml(publishedCount)}</span></div>
+              <div><b>${semanticMerged ? "Semantic Scholar cluster" : "Preprint version"}${preprintId ? ` · arXiv:${escapeHtml(preprintId)}` : ""}</b><span>${semanticMerged ? escapeHtml(semanticClusterCount ?? "--") : (preprintCount === null || preprintCount === undefined ? "--" : escapeHtml(preprintCount))}</span></div>
+            </div>
+          ` : ""}
+          <div class="citation-source-grid">
+            ${citationSourceCell("openalex", "OpenAlex", sources.openalex?.count, citationSourceKeyFromLabel(source))}
+            ${citationSourceCell("semantic_scholar", "Semantic Scholar", sources.semantic_scholar?.count, citationSourceKeyFromLabel(source), sources.semantic_scholar?.influential_count)}
+            ${citationSourceCell("crossref", "Crossref", sources.crossref?.count, citationSourceKeyFromLabel(source))}
+          </div>
+          ${preprintCount !== null && preprintCount !== undefined ? citationPreprintSourceGrid(versions.preprint?.sources || {}) : ""}
           ${bars}
+          ${semanticScholarMarkup(paper.semantic_scholar || {})}
         </section>
       `;
+    }
+
+    function citationPreprintSourceGrid(sources) {
+      return `
+        <div class="citation-preprint-sources">
+          <strong>Preprint sources</strong>
+          <div class="citation-source-grid">
+            ${citationSourceCell("preprint_semantic", "Semantic Scholar arXiv", sources.semantic_scholar?.count, "", sources.semantic_scholar?.influential_count)}
+            ${citationSourceCell("preprint_openalex", "OpenAlex arXiv", sources.openalex?.count, "")}
+          </div>
+        </div>
+      `;
+    }
+
+    function citationSourceCell(key, label, count, activeKey, extra = null) {
+      const value = count === null || count === undefined || count === "" ? "--" : count;
+      const suffix = extra === null || extra === undefined || extra === "" ? "" : ` · ${escapeHtml(extra)} influential`;
+      return `<button class="citation-source-cell${key === activeKey ? " active" : ""}" type="button" data-citation-source="${escapeAttr(key)}" data-citation-label="${escapeAttr(label)}" data-citation-count="${escapeAttr(value)}"><b>${escapeHtml(label)}</b><span>${escapeHtml(value)}</span>${suffix ? `<small>${suffix}</small>` : ""}</button>`;
+    }
+
+    function citationSourceKeyFromLabel(label) {
+      const normalized = String(label || "").toLowerCase();
+      if (normalized.includes("semantic")) return "semantic_scholar";
+      if (normalized.includes("crossref")) return "crossref";
+      return "openalex";
+    }
+
+    function wireCitationSourceSelector(root) {
+      root.querySelectorAll("[data-citation-source]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const panel = button.closest(".citation-panel");
+          if (!panel) return;
+          panel.dataset.activeCitationSource = button.dataset.citationSource || "";
+          panel.querySelectorAll("[data-citation-source]").forEach((cell) => cell.classList.toggle("active", cell === button));
+          const label = button.dataset.citationLabel || "Citation data";
+          const count = button.dataset.citationCount || "--";
+          const title = panel.querySelector("[data-citation-title]");
+          const counter = panel.querySelector("[data-citation-count]");
+          if (title) title.textContent = `${label} Citations`;
+          if (counter) counter.textContent = count;
+        });
+      });
+    }
+
+    function semanticScholarMarkup(semantic) {
+      if (!semantic || !Object.keys(semantic).length) return "";
+      const fields = [
+        ...(Array.isArray(semantic.fields_of_study) ? semantic.fields_of_study : []),
+        ...(Array.isArray(semantic.s2_fields) ? semantic.s2_fields : [])
+      ].filter(Boolean);
+      const types = Array.isArray(semantic.publication_types) ? semantic.publication_types : [];
+      const authors = Array.isArray(semantic.authors) ? semantic.authors : [];
+      const externalIds = semantic.external_ids && typeof semantic.external_ids === "object" ? semantic.external_ids : {};
+      const externalIdText = Object.entries(externalIds)
+        .filter(([, value]) => value)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(" · ");
+      const semanticRows = [
+        ["Citations", semantic.citation_count ?? "--"],
+        ["Influential", semantic.influential_citation_count ?? "--"],
+        ["References", semantic.reference_count ?? "--"],
+        ["Venue / Year", [semantic.venue || semantic.journal_name || "", semantic.year || ""].filter(Boolean).join(" · ") || "--"],
+        ["Paper ID", semantic.paper_id || "--"],
+        ["Corpus ID", semantic.corpus_id || "--"],
+        ["Open Access", semantic.is_open_access ? "Yes" : "No"],
+        ["External IDs", externalIdText || "--"],
+        ["Authors", authors.length ? compactList(authors, 6) : "--"],
+      ];
+      return `
+        <div class="semantic-panel">
+          <strong>Semantic Scholar Details</strong>
+          ${semantic.tldr ? `<p><b>TLDR</b> ${escapeHtml(semantic.tldr)}</p>` : ""}
+          <div class="semantic-detail-grid">
+            ${semanticRows.map(([label, value]) => `
+              <div class="semantic-detail-row">
+                <b>${escapeHtml(label)}</b>
+                <span>${escapeHtml(value)}</span>
+              </div>
+            `).join("")}
+          </div>
+          <div class="semantic-tags">
+            ${fields.map((field) => `<span class="semantic-tag">${escapeHtml(field)}</span>`).join("")}
+            ${types.map((type) => `<span class="semantic-tag">${escapeHtml(type)}</span>`).join("")}
+            ${semantic.url ? `<a class="semantic-tag" href="${escapeAttr(semantic.url)}" target="_blank" rel="noreferrer">Semantic Scholar</a>` : ""}
+            ${semantic.open_access_pdf_url ? `<a class="semantic-tag" href="${escapeAttr(semantic.open_access_pdf_url)}" target="_blank" rel="noreferrer">Open PDF</a>` : ""}
+          </div>
+        </div>
+      `;
+    }
+
+    function compactList(items, limit = 6) {
+      const list = (Array.isArray(items) ? items : []).filter(Boolean);
+      if (list.length <= limit) return list.join(", ");
+      return `${list.slice(0, limit).join(", ")}, ... +${list.length - limit}`;
     }
 
     function natureReferenceMarkup(paper) {
@@ -11362,6 +12594,7 @@ INDEX_HTML = """<!doctype html>
       shell.querySelectorAll("[data-publication-col]").forEach((handle) => {
         handle.addEventListener("pointerdown", (event) => startMyPublicationColumnResize(event, handle.dataset.publicationCol));
       });
+      shell.querySelector('[data-action="resize-publication-stats"]')?.addEventListener("pointerdown", startMyPublicationStatsResize);
       shell.querySelectorAll('.my-publications-sort-button[data-publication-sort]').forEach((button) => {
         button.addEventListener("click", (event) => {
           if (event.target.closest(".my-publications-col-resizer")) return;
@@ -11374,6 +12607,30 @@ INDEX_HTML = """<!doctype html>
         state.myPublicationSearchScrollTop = results.scrollTop;
       });
       shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+    }
+
+    function startMyPublicationStatsResize(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      const stats = event.currentTarget.closest(".my-publications-stats");
+      if (!stats) return;
+      const startY = event.clientY;
+      const startHeight = stats.getBoundingClientRect().height;
+      const move = (moveEvent) => {
+        const next = Math.max(86, Math.min(320, Math.round(startHeight + startY - moveEvent.clientY)));
+        state.myPublicationStatsHeight = next;
+        stats.style.setProperty("--my-publications-stats-height", `${next}px`);
+      };
+      const stop = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+      document.body.style.cursor = "row-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
     }
 
     function myPublicationDropPosition(row, event) {
@@ -11438,13 +12695,38 @@ INDEX_HTML = """<!doctype html>
     function selectMyPublication(id) {
       if (!myPublicationById(id)) return;
       state.myPublicationSelectionId = Number(id);
-      renderMyPublications();
+      updateMyPublicationActiveRow();
+      renderPublicationDetail();
       refreshLibraryQuickLookForSelection();
     }
 
-    function revealMyPublicationSelection() {
+    function updateMyPublicationActiveRow() {
+      const activeId = Number(state.myPublicationSelectionId || 0);
+      document.querySelectorAll(".my-publications-row").forEach((row) => {
+        row.classList.toggle("active", Number(row.dataset.publicationId || 0) === activeId);
+      });
+    }
+
+    function revealMyPublicationSelection(direction = "nearest") {
+      const wrap = document.querySelector(".my-publications-table-wrap");
       const row = document.querySelector(`.my-publications-row[data-publication-id="${Number(state.myPublicationSelectionId || 0)}"]`);
-      row?.scrollIntoView({block: "nearest"});
+      if (!wrap || !row) return;
+      const wrapRect = wrap.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const head = wrap.querySelector("thead");
+      const headerHeight = Math.ceil(head?.getBoundingClientRect().height || 0);
+      const padding = 7;
+      const top = wrapRect.top + headerHeight + padding;
+      const bottom = wrapRect.bottom - padding;
+      if (direction === "down") {
+        if (rowRect.bottom > bottom) wrap.scrollTop += rowRect.bottom - bottom;
+      } else if (direction === "up") {
+        if (rowRect.top < top) wrap.scrollTop -= top - rowRect.top;
+      } else if (rowRect.bottom > bottom) {
+        wrap.scrollTop += rowRect.bottom - bottom;
+      } else if (rowRect.top < top) {
+        wrap.scrollTop -= top - rowRect.top;
+      }
     }
 
     async function toggleMyPublicationStar(publication, starred) {
@@ -11558,10 +12840,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshMyPublicationMetrics() {
+      if (state.myPublicationMetricsRefreshing) return;
       const button = $("refreshMyPublicationMetrics");
-      state.myPublicationSearchStatus = "Refreshing citation metrics from OpenAlex/Crossref...";
+      state.myPublicationMetricsRefreshing = true;
+      state.myPublicationSearchStatus = "Refreshing citation metrics from OpenAlex/Semantic Scholar/Crossref...";
       if (button) button.disabled = true;
-      renderMyPublications();
+      updateMyPublicationSearchStatusText();
       try {
         const res = await fetch("/api/my-publications/refresh-metrics", {
           method: "POST",
@@ -11570,15 +12854,58 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metrics");
-        applyMyPublications(data);
-        const refreshed = Number(data.refreshed || 0);
-        const skipped = Number(data.skipped || 0);
-        state.myPublicationSearchStatus = `Metrics refreshed for ${refreshed} publication${refreshed === 1 ? "" : "s"}${skipped ? ` · ${skipped} skipped` : ""}.`;
+        const job = data.job || {};
+        state.myPublicationMetricsJobId = data.job_id || job.job_id || "";
+        state.myPublicationSearchStatus = myPublicationMetricsStatusText(job);
+        updateMyPublicationSearchStatusText();
+        await pollMyPublicationMetrics(state.myPublicationMetricsJobId);
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Could not refresh metrics";
+        updateMyPublicationSearchStatusText();
       } finally {
+        state.myPublicationMetricsRefreshing = false;
+        state.myPublicationMetricsJobId = "";
         if (button) button.disabled = false;
-        renderMyPublications();
+        updateMyPublicationSearchStatusText();
+      }
+    }
+
+    function myPublicationMetricsStatusText(job) {
+      const status = job?.status || "";
+      const current = Number(job?.current || 0);
+      const total = Number(job?.total || 0);
+      const refreshed = Number(job?.refreshed || 0);
+      const skipped = Number(job?.skipped || 0);
+      if (status === "completed") {
+        return `Metrics refreshed for ${refreshed} publication${refreshed === 1 ? "" : "s"}${skipped ? ` · ${skipped} skipped` : ""}.`;
+      }
+      if (status === "failed") return `Metrics refresh failed${job?.errors?.length ? ` · ${job.errors[0]}` : ""}`;
+      if (total) return `Refreshing metrics ${current} / ${total} · ${refreshed} updated${job?.current_title ? ` · ${job.current_title}` : ""}`;
+      return "Refreshing citation metrics from OpenAlex/Semantic Scholar/Crossref...";
+    }
+
+    async function pollMyPublicationMetrics(jobId) {
+      if (!jobId) return;
+      while (true) {
+        await sleep(1000);
+        const res = await fetch(`/api/my-publications/refresh-metrics/progress?job_id=${encodeURIComponent(jobId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not refresh metrics");
+        const job = data.job || {};
+        state.myPublicationSearchStatus = myPublicationMetricsStatusText(job);
+        if (["completed", "failed"].includes(job.status)) {
+          if (job.status === "failed") throw new Error(state.myPublicationSearchStatus);
+          const detailScrollTop = $("libraryDetail")?.scrollTop || 0;
+          const tableScrollTop = document.querySelector(".my-publications-table-wrap")?.scrollTop || 0;
+          if (Array.isArray(job.publications) && job.publications.length) {
+            applyMyPublications({publications: job.publications});
+            renderMyPublications({detailScrollTop, tableScrollTop});
+          } else {
+            updateMyPublicationSearchStatusText();
+          }
+          return;
+        }
+        updateMyPublicationSearchStatusText();
       }
     }
 
@@ -11738,7 +13065,7 @@ INDEX_HTML = """<!doctype html>
         state.myPublicationSearchResults = data.results || [];
         const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
         state.myPublicationSearchStatus = state.myPublicationSearchResults.length
-          ? `${state.myPublicationSearchResults.length} Scholar titles found. Resolving DOI matches...`
+          ? `${state.myPublicationSearchResults.length} Scholar titles found. Resolving DOI/arXiv matches...`
           : `No Scholar titles found${errorCount ? ` · ${errorCount} errors` : ""}.`;
         if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
         renderMyPublications();
@@ -11764,14 +13091,14 @@ INDEX_HTML = """<!doctype html>
         const unresolved = scholarOnlyIndexes();
         if (!unresolved.length) break;
         if (pass > 1) {
-          state.myPublicationSearchStatus = `${total} Scholar titles found · retrying ${unresolved.length} unresolved DOI lookup${unresolved.length === 1 ? "" : "s"}...`;
+          state.myPublicationSearchStatus = `${total} Scholar titles found · retrying ${unresolved.length} unresolved identifier lookup${unresolved.length === 1 ? "" : "s"}...`;
           renderMyPublications();
           await sleep(pass === 2 ? 1200 : 2200);
         }
         for (let attemptIndex = 0; attemptIndex < unresolved.length; attemptIndex += 1) {
           if (searchToken !== state.myPublicationSearchToken) return;
           const index = unresolved[attemptIndex];
-          state.myPublicationSearchStatus = `${total} Scholar titles found. ${pass > 1 ? "Retrying" : "Resolving"} DOI ${attemptIndex + 1} / ${unresolved.length}...`;
+          state.myPublicationSearchStatus = `${total} Scholar titles found. ${pass > 1 ? "Retrying" : "Resolving"} DOI/arXiv ${attemptIndex + 1} / ${unresolved.length}...`;
           await resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey);
         }
       }
@@ -11786,15 +13113,15 @@ INDEX_HTML = """<!doctype html>
         .filter((index) => index >= 0);
     }
 
-    function scholarDoiMatchCount() {
-      return state.myPublicationSearchResults.filter((candidate) => candidate?.match_status === "doi").length;
+    function scholarIdentifierMatchCount() {
+      return state.myPublicationSearchResults.filter((candidate) => ["doi", "arxiv"].includes(candidate?.match_status)).length;
     }
 
     function updateScholarResolutionStatus(stage = "") {
       const total = state.myPublicationSearchResults.length;
-      const matched = scholarDoiMatchCount();
+      const matched = scholarIdentifierMatchCount();
       const unresolved = scholarOnlyIndexes().length;
-      const prefix = `${total} Scholar titles found · ${matched} DOI matches · ${unresolved} Scholar-only`;
+      const prefix = `${total} Scholar titles found · ${matched} DOI/arXiv matches · ${unresolved} Scholar-only`;
       state.myPublicationSearchStatus = stage === "done" ? `${prefix}.` : prefix;
     }
 
@@ -11832,7 +13159,7 @@ INDEX_HTML = """<!doctype html>
       if (!state.myPublicationSearchResults[index]) return;
       const searchToken = ++state.myPublicationSearchToken;
       const authorCacheKey = myPublicationAuthorCacheKey($("myPublicationName")?.value || state.myPublicationName || "");
-      state.myPublicationSearchStatus = "Retrying DOI lookup for this Scholar title...";
+      state.myPublicationSearchStatus = "Retrying DOI/arXiv lookup for this Scholar title...";
       await resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey);
       updateScholarResolutionStatus("done");
       if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
@@ -11848,14 +13175,17 @@ INDEX_HTML = """<!doctype html>
         else showLibraryQuickLookPlaceholder({open: true});
         return true;
       }
-      if (!["ArrowUp", "ArrowDown"].includes(key)) return false;
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return false;
       const currentIndex = rows.findIndex((entry) => Number(entry.id) === Number(state.myPublicationSelectionId));
-      const fallback = key === "ArrowDown" ? 0 : rows.length - 1;
+      const movingDown = key === "ArrowDown" || key === "ArrowRight";
+      const fallback = movingDown ? 0 : rows.length - 1;
       const nextIndex = currentIndex < 0
         ? fallback
-        : Math.max(0, Math.min(rows.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+        : Math.max(0, Math.min(rows.length - 1, currentIndex + (movingDown ? 1 : -1)));
       state.myPublicationSelectionId = Number(rows[nextIndex].id);
-      renderMyPublications();
+      updateMyPublicationActiveRow();
+      renderPublicationDetail();
+      revealMyPublicationSelection(movingDown ? "down" : "up");
       refreshLibraryQuickLookForSelection();
       return true;
     }
@@ -12688,7 +14018,7 @@ INDEX_HTML = """<!doctype html>
       };
       const key = keyAliases[event.key] || event.key;
       if (state.libraryTab === "my-publications") {
-        const handled = ["ArrowUp", "ArrowDown", " "].includes(key);
+        const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key);
         if (!handled) return false;
         event.preventDefault();
         return handleMyPublicationKeydown(event, key);
@@ -12834,7 +14164,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
-              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page inside Journal Monitor">↗ Open</button>` : ""}
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open</button>` : ""}
               <button class="action" data-action="add-library" title="Add a shortcut to Library">Add to Library</button>
               <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
               <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>
@@ -12851,7 +14181,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
-      if (openPageButton) openPageButton.addEventListener("click", () => openInternalBrowser(paper.url, paper.title || "Publisher page"));
+      if (openPageButton) openPageButton.addEventListener("click", () => openUrlExternally(paper.url));
       article.querySelector('[data-action="add-library"]').addEventListener("click", () => addPaperToLibrary(article, paper.paper_id));
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
       article.querySelector('[data-action="analyze"]').addEventListener("click", () => runAction(article, paper.paper_id, "analyze"));
@@ -13031,10 +14361,15 @@ INDEX_HTML = """<!doctype html>
 
     async function openExternalBrowser() {
       if (!state.internalBrowserUrl) return;
-      await fetch("/api/open-url", {
+      await openUrlExternally(state.internalBrowserUrl);
+    }
+
+    async function openUrlExternally(url) {
+      if (!url) return;
+      return fetch("/api/open-url", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({url: state.internalBrowserUrl})
+        body: JSON.stringify({url, app: "Safari"})
       });
     }
 
@@ -13051,11 +14386,7 @@ INDEX_HTML = """<!doctype html>
         status.className = "library-detail-status";
       }
       try {
-        const res = await fetch("/api/open-url", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({url})
-        });
+        const res = await openUrlExternally(url);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "open failed");
         if (status) {

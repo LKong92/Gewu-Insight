@@ -76,6 +76,30 @@ def fetch_arxiv_condensed_matter(
     return papers
 
 
+def fetch_arxiv_by_id(
+    arxiv_id: str,
+    *,
+    timeout: int = ARXIV_API_TIMEOUT,
+    max_retries: int = ARXIV_API_MAX_RETRIES,
+) -> dict[str, Any] | None:
+    arxiv_id = strip_arxiv_version(clean_text(arxiv_id))
+    if not arxiv_id:
+        return None
+    wait_for_arxiv_rate_limit()
+    response = request_with_retries(
+        "GET",
+        "https://export.arxiv.org/api/query",
+        params={"id_list": arxiv_id, "max_results": 1},
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    root = ET.fromstring(response.content)
+    entries = root.findall("atom:entry", ATOM_NS)
+    if not entries:
+        return None
+    return normalize_arxiv_entry(entries[0])
+
+
 def wait_for_arxiv_rate_limit() -> None:
     global ARXIV_LAST_REQUEST_AT
     with ARXIV_REQUEST_LOCK:
