@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
   starred INTEGER NOT NULL DEFAULT 0,
+  first_author INTEGER NOT NULL DEFAULT 0,
+  corresponding_author INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -242,6 +244,12 @@ class Storage:
             self.conn.execute("ALTER TABLE my_publications ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             self.conn.commit()
             self._backfill_my_publication_sort_order()
+        if "first_author" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN first_author INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
+        if "corresponding_author" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN corresponding_author INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
 
     def _ensure_library_root(self) -> None:
         timestamp = now_iso()
@@ -869,6 +877,34 @@ class Storage:
         ).fetchone()
         return dict(row) if row else {}
 
+    def set_my_publication_roles(
+        self,
+        *,
+        publication_id: int,
+        first_author: bool,
+        corresponding_author: bool,
+    ) -> dict[str, Any]:
+        self.conn.execute(
+            """
+            UPDATE my_publications
+            SET first_author = ?,
+                corresponding_author = ?,
+                starred = CASE WHEN ? OR ? THEN 1 ELSE starred END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                1 if first_author else 0,
+                1 if corresponding_author else 0,
+                1 if first_author else 0,
+                1 if corresponding_author else 0,
+                now_iso(),
+                int(publication_id),
+            ),
+        )
+        self.conn.commit()
+        return self.get_my_publication(publication_id=int(publication_id)) or {}
+
     def get_my_publication(self, *, publication_id: int) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
@@ -894,10 +930,16 @@ class Storage:
         ).fetchone()
         if existing:
             starred = max(int(current["starred"] or 0), int(existing["starred"] or 0))
+            first_author = max(int(current["first_author"] or 0), int(existing["first_author"] or 0))
+            corresponding_author = max(int(current["corresponding_author"] or 0), int(existing["corresponding_author"] or 0))
             sort_order = min(int(current["sort_order"] or 0), int(existing["sort_order"] or 0))
             self.conn.execute(
-                "UPDATE my_publications SET starred = ?, sort_order = ?, updated_at = ? WHERE id = ?",
-                (starred, sort_order, timestamp, int(existing["id"])),
+                """
+                UPDATE my_publications
+                SET starred = ?, first_author = ?, corresponding_author = ?, sort_order = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (starred, first_author, corresponding_author, sort_order, timestamp, int(existing["id"])),
             )
             self.conn.execute("DELETE FROM my_publications WHERE id = ?", (publication_id,))
             self.conn.commit()

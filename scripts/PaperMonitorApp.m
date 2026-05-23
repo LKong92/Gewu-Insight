@@ -1,7 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate>
+@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
@@ -9,6 +9,9 @@
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
+@property(nonatomic) BOOL windowDragging;
+@property(nonatomic) NSPoint windowDragStartPoint;
+@property(nonatomic) NSRect windowDragStartFrame;
 @end
 
 @implementation PaperMonitorDelegate
@@ -51,6 +54,9 @@
 
 - (void)createWindow {
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+    [userContentController addScriptMessageHandler:self name:@"windowDrag"];
+    configuration.userContentController = userContentController;
     self.webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
 
@@ -80,6 +86,40 @@
     dispatch_async(dispatch_get_main_queue(), ^{
         [self positionTrafficLightButtons];
     });
+}
+
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+    NSDictionary *payload = (NSDictionary *)message.body;
+    NSString *type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : @"";
+    NSNumber *screenXNumber = [payload[@"screenX"] isKindOfClass:[NSNumber class]] ? payload[@"screenX"] : nil;
+    NSNumber *screenYNumber = [payload[@"screenY"] isKindOfClass:[NSNumber class]] ? payload[@"screenY"] : nil;
+    if (!screenXNumber || !screenYNumber) {
+        return;
+    }
+    NSPoint point = NSMakePoint(screenXNumber.doubleValue, screenYNumber.doubleValue);
+    if ([type isEqualToString:@"begin"]) {
+        self.windowDragging = YES;
+        self.windowDragStartPoint = point;
+        self.windowDragStartFrame = self.window.frame;
+        return;
+    }
+    if ([type isEqualToString:@"end"] || [type isEqualToString:@"cancel"]) {
+        self.windowDragging = NO;
+        return;
+    }
+    if (![type isEqualToString:@"move"] || !self.windowDragging) {
+        return;
+    }
+    CGFloat dx = point.x - self.windowDragStartPoint.x;
+    CGFloat dy = point.y - self.windowDragStartPoint.y;
+    NSRect frame = self.windowDragStartFrame;
+    frame.origin.x += dx;
+    frame.origin.y -= dy;
+    [self.window setFrame:frame display:YES];
 }
 
 - (void)positionTrafficLightButtons {
@@ -145,9 +185,10 @@
     NSString *html = @"<!doctype html>"
         "<html><head><meta charset='utf-8'><style>"
         "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
-        ".card{padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
+        ".card{display:flex;align-items:center;gap:16px;padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
+        ".icon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#0f6b6e,#d7b46a);color:white;font-size:22px;font-weight:800;box-shadow:0 10px 22px rgba(15,107,110,.22);}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><strong>Starting Daico...</strong>Preparing the local reading workspace.</div></body></html>";
+        "</style></head><body><div class='card'><div class='icon'>D</div><div><strong>Starting Daico...</strong>Preparing the local reading workspace.</div></div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 

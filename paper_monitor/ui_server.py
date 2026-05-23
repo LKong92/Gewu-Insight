@@ -42,7 +42,7 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME
 from .sources.crossref import normalize_crossref_item
-from .sources.openalex import search_openalex_author_publications
+from .sources.openalex import normalize_openalex_item, search_openalex_author_publications
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, safe_slug
@@ -72,6 +72,8 @@ QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
+LATE_ARRIVAL_LOOKBACK_DAYS = 3
+DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
@@ -193,6 +195,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/publication-search":
                 self.handle_publication_search(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/google-scholar-profiles":
+                self.handle_google_scholar_profile_search(parse_qs(parsed.query))
+                return
             if parsed.path == "/files":
                 self.handle_file(parse_qs(parsed.query))
                 return
@@ -291,11 +296,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/import-scholar":
                 self.handle_import_google_scholar_publications(payload)
                 return
+            if parsed.path == "/api/my-publications/resolve-scholar":
+                self.handle_resolve_google_scholar_publication(payload)
+                return
+            if parsed.path == "/api/my-publications/refresh-metrics":
+                self.handle_refresh_my_publication_metrics(payload)
+                return
             if parsed.path == "/api/my-publications/reimport":
                 self.handle_reimport_my_publication(payload)
                 return
             if parsed.path == "/api/my-publications/star":
                 self.handle_star_my_publication(payload)
+                return
+            if parsed.path == "/api/my-publications/roles":
+                self.handle_my_publication_roles(payload)
+                return
+            if parsed.path == "/api/my-publications/comments":
+                self.handle_my_publication_comments(payload)
                 return
             if parsed.path == "/api/my-publications/delete":
                 self.handle_delete_my_publication(payload)
@@ -590,6 +607,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"results": [publication_candidate_to_api(paper) for paper in results]})
 
+    def handle_google_scholar_profile_search(self, query: dict[str, list[str]]) -> None:
+        search_text = (first(query, "q") or "").strip()
+        if not search_text:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "q is required")
+            return
+        try:
+            profiles = search_google_scholar_profiles(search_text, limit=20)
+        except GoogleScholarBlockedError as exc:
+            self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+            return
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar profile lookup failed: {exc}")
+            return
+        self.send_json({"profiles": profiles})
+
     def handle_add_my_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("paper")
         paper_id = str(payload.get("paper_id") or "")
@@ -617,7 +649,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not profile_url:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Google Scholar profile URL is required")
             return
-        limit = max(1, min(1000, int(payload.get("limit") or 250)))
+        limit = max(1, min(300, int(payload.get("limit") or 200)))
         try:
             candidates = fetch_google_scholar_profile_publications(profile_url, limit=limit)
         except GoogleScholarBlockedError as exc:
@@ -626,34 +658,76 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar import failed: {exc}")
             return
+        results: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for candidate in candidates:
+            title = ((candidate.get("paper") or {}).get("title") or candidate.get("title") or "")
+            try:
+                result = publication_candidate_to_api(paper_from_publication_candidate(candidate))
+                result["match_status"] = "scholar"
+                result["scholar_title"] = title
+                results.append(result)
+            except Exception as exc:
+                if len(errors) < 5:
+                    errors.append(f"{title or 'Untitled'}: {exc}")
+        self.send_json(
+            {
+                "seen": len(candidates),
+                "doi_matches": 0,
+                "scholar_only": len(results),
+                "errors": errors,
+                "results": results,
+            }
+        )
+
+    def handle_resolve_google_scholar_publication(self, payload: dict[str, Any]) -> None:
+        candidate = payload.get("candidate")
+        if not isinstance(candidate, dict):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "candidate is required")
+            return
+        try:
+            doi_candidate = resolve_google_scholar_candidate_to_doi(candidate)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar DOI lookup failed: {exc}")
+            return
+        if not doi_candidate:
+            self.send_json({"candidate": None})
+            return
+        result = publication_candidate_to_api(doi_candidate)
+        result["match_status"] = "doi"
+        result["scholar_title"] = ((candidate.get("paper") or {}).get("title") or candidate.get("scholar_title") or "")
+        self.send_json({"candidate": result})
+
+    def handle_refresh_my_publication_metrics(self, payload: dict[str, Any]) -> None:
         storage = Storage(self.configured_db_path)
-        imported = 0
+        refreshed = 0
         skipped = 0
         errors: list[str] = []
         try:
-            for candidate in candidates:
-                title = ((candidate.get("paper") or {}).get("title") or candidate.get("title") or "")
+            publications = storage.list_my_publications()
+            for publication in publications:
+                doi = normalize_publication_doi(str(publication.get("doi") or ""))
+                paper_id = clean_text(publication.get("paper_id") or "")
+                if not paper_id or not doi or not looks_like_doi(doi):
+                    skipped += 1
+                    continue
                 try:
-                    normalized = paper_from_publication_candidate(candidate)
-                    storage.upsert_paper(normalized)
-                    storage.add_my_publication(paper_id=normalized["paper_id"])
-                    imported += 1
+                    normalized = publication_metrics_metadata_from_doi(doi, timeout=16, max_retries=2)
+                    if not normalized:
+                        skipped += 1
+                        continue
+                    if storage.refresh_paper_metadata(paper_id, normalized):
+                        refreshed += 1
+                    else:
+                        skipped += 1
                 except Exception as exc:
                     skipped += 1
                     if len(errors) < 5:
-                        errors.append(f"{title or 'Untitled'}: {exc}")
+                        errors.append(f"{publication.get('title') or doi}: {exc}")
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json(
-            {
-                "imported": imported,
-                "seen": len(candidates),
-                "skipped": skipped,
-                "errors": errors,
-                "publications": publications,
-            }
-        )
+        self.send_json({"publications": publications, "refreshed": refreshed, "skipped": skipped, "errors": errors})
 
     def handle_reimport_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -691,6 +765,50 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_my_publication_roles(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.set_my_publication_roles(
+                publication_id=publication_id,
+                first_author=bool(payload.get("first_author")),
+                corresponding_author=bool(payload.get("corresponding_author")),
+            )
+            if not publication:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+                return
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_my_publication_comments(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        if not publication_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "publication_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.get_my_publication(publication_id=publication_id)
+        finally:
+            storage.close()
+        if not publication:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+            return
+        try:
+            content, report_path, citing_count = build_my_publication_comments_report(publication)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Comments report failed: {exc}")
+            return
+        self.send_json(
+            {
+                "paper": paper_to_api(publication),
+                "content": content,
+                "path": str(report_path),
+                "citing_count": citing_count,
+            }
+        )
 
     def handle_delete_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1392,7 +1510,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid http(s) URL is required")
             return
-        webbrowser.open(url)
+        if str(payload.get("app") or "").lower() == "safari":
+            subprocess.run(["open", "-a", "Safari", url], check=True)
+        else:
+            webbrowser.open(url)
         self.send_json({"status": "opened", "url": url})
 
     def handle_reveal_path(self, payload: dict[str, Any]) -> None:
@@ -1915,6 +2036,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "late_arrival_unread": bool(late_arrival_unread),
         "bibtex": bibtex_entry(paper),
         "nature_reference": nature_reference(paper),
+        "full_detail": True,
     }
 
 
@@ -1978,6 +2100,27 @@ def publication_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: i
         return None
     normalized = paper_from_publication_candidate(candidates[0])
     return enrich_from_landing_page(dict(normalized), {}, True)
+
+
+def publication_metrics_metadata_from_doi(doi: str, *, timeout: int = 20, max_retries: int = 3) -> dict[str, Any] | None:
+    doi = normalize_publication_doi(doi)
+    if not doi or not looks_like_doi(doi):
+        return None
+    try:
+        response = request_with_retries(
+            "GET",
+            f"https://api.openalex.org/works/https://doi.org/{doi}",
+            params={"mailto": "your_email@example.com"},
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        item = response.json()
+        if isinstance(item, dict) and item.get("id"):
+            journal = clean_text(((item.get("primary_location") or {}).get("source") or {}).get("display_name")) or "Unknown Journal"
+            return normalize_openalex_item(item, journal)
+    except Exception:
+        pass
+    return publication_metadata_from_doi(doi, timeout=timeout, max_retries=max_retries)
 
 
 def refresh_paper_metadata_from_doi_if_possible(
@@ -2156,7 +2299,30 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "sort_order": int(item.get("sort_order") or 0),
         "original_folder_id": int(item["original_folder_id"]) if item.get("original_folder_id") is not None else None,
         "trashed_at": item.get("trashed_at") or "",
-        "paper": paper_to_api(paper),
+        "paper": paper_to_library_summary_api(paper),
+    }
+
+
+def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
+    merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
+    main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
+    source_path = existing_path_or_empty(paper.get("source_path") or "")
+    return {
+        "paper_id": paper.get("paper_id") or "",
+        "title": paper.get("title") or "",
+        "journal": paper.get("journal") or "",
+        "publication_date": paper.get("publication_date") or "",
+        "doi": paper.get("doi") or "",
+        "download_status": paper.get("download_status") or "not_attempted",
+        "analysis_status": paper.get("analysis_status") or "not_started",
+        "merged_pdf_path": merged_pdf,
+        "main_pdf_path": main_pdf,
+        "source_path": source_path,
+        "original_relative_path": paper.get("original_relative_path") or "",
+        "original_filename": paper.get("original_filename") or "",
+        "preprint_id": preprint_identifier(paper),
+        "preprint_category": preprint_primary_category(paper),
+        "full_detail": False,
     }
 
 
@@ -2179,6 +2345,8 @@ def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "id": int(row.get("id") or 0),
         "paper_id": row.get("paper_id") or "",
         "starred": bool(row.get("starred")),
+        "first_author": bool(row.get("first_author")),
+        "corresponding_author": bool(row.get("corresponding_author")),
         "sort_order": int(row.get("sort_order") or 0),
         "created_at": row.get("created_at") or "",
         "updated_at": row.get("updated_at") or "",
@@ -2299,6 +2467,72 @@ def search_crossref_publications(
     return results
 
 
+def parse_author_search_query(search_text: str) -> tuple[str, list[str]]:
+    parts = [clean_text(part) for part in re.split(r"[;；]+", search_text) if clean_text(part)]
+    if not parts:
+        return "", []
+    return parts[0], parts[1:]
+
+
+def search_crossref_author_publications(
+    author_name: str,
+    affiliations: list[str],
+    *,
+    rows: int = 50,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    if not affiliations:
+        return search_crossref_publications(author_name, kind="author", rows=rows, timeout=timeout, max_retries=max_retries)
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for affiliation in affiliations:
+        params = {
+            "rows": max(1, min(50, int(rows or 50))),
+            "query.author": author_name,
+            "query.affiliation": affiliation,
+            "sort": "published",
+            "order": "desc",
+        }
+        response = request_with_retries(
+            "GET",
+            "https://api.crossref.org/works",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        for item in response.json().get("message", {}).get("items", []):
+            if not isinstance(item, dict) or not crossref_item_affiliation_matches(item, affiliations):
+                continue
+            journal = clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal"
+            paper = normalize_crossref_item(item, journal)
+            key = paper.get("doi") or paper.get("paper_id")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            results.append(paper)
+    return results
+
+
+def crossref_item_affiliation_matches(item: dict[str, Any], affiliations: list[str]) -> bool:
+    texts: list[str] = []
+    for author in item.get("author") or []:
+        if not isinstance(author, dict):
+            continue
+        for affiliation in author.get("affiliation") or []:
+            if isinstance(affiliation, dict):
+                texts.append(clean_text(affiliation.get("name") or ""))
+            else:
+                texts.append(clean_text(affiliation))
+    haystack = " ".join(texts).lower()
+    return bool(haystack) and any(affiliation_text_matches(haystack, affiliation) for affiliation in affiliations)
+
+
+def affiliation_text_matches(haystack: str, affiliation: str) -> bool:
+    tokens = [token for token in re.findall(r"[a-z0-9]+", clean_text(affiliation).lower()) if len(token) > 1]
+    return bool(tokens) and all(token in haystack for token in tokens)
+
+
 def search_publications(search_text: str, *, kind: str = "auto") -> list[dict[str, Any]]:
     query = clean_text(search_text)
     if not query:
@@ -2307,12 +2541,29 @@ def search_publications(search_text: str, *, kind: str = "auto") -> list[dict[st
     if search_kind != "author":
         return search_crossref_publications(query, kind=search_kind)
 
+    author_name, affiliations = parse_author_search_query(query)
+    if not author_name:
+        return []
     results: list[dict[str, Any]] = []
     first_error: Exception | None = None
-    for lookup in [
-        lambda: search_crossref_publications(query, kind="author", rows=50),
-        lambda: search_openalex_author_publications(query, max_authors=6, per_author=20),
-    ]:
+    lookups = [
+        lambda: search_openalex_author_publications(
+            author_name,
+            affiliations=affiliations,
+            max_authors=16,
+            per_author=30,
+        ),
+        lambda: search_crossref_author_publications(author_name, affiliations, rows=50),
+    ] if affiliations else [
+        lambda: search_crossref_author_publications(author_name, affiliations, rows=50),
+        lambda: search_openalex_author_publications(
+            author_name,
+            affiliations=affiliations,
+            max_authors=6,
+            per_author=20,
+        ),
+    ]
+    for lookup in lookups:
         try:
             results.extend(lookup())
         except Exception as exc:
@@ -2346,6 +2597,186 @@ def publication_search_dedupe_key(paper: dict[str, Any]) -> str:
     journal = clean_text(paper.get("journal") or "").lower()
     year = clean_text(paper.get("publication_date") or "")[:4]
     return f"title:{title}|journal:{journal}|year:{year}"
+
+
+def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    author_name, affiliations = parse_author_search_query(search_text)
+    queries = [
+        f"{author_name} {' '.join(affiliations)} Google Scholar profile".strip(),
+        f'"{author_name}" Google Scholar profile',
+        f"{author_name} {' '.join(affiliations)}".strip(),
+    ]
+    if affiliations:
+        queries.extend(f"{author_name} {affiliation} Google Scholar" for affiliation in affiliations if affiliation)
+    queries.append(author_name)
+    profiles: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query in queries:
+        clean_query = clean_text(query)
+        if not clean_query:
+            continue
+        for profile in fetch_google_scholar_profiles_from_search(clean_query, limit=limit):
+            user_id = clean_text(profile.get("user_id") or "")
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            profiles.append(profile)
+            if len(profiles) >= limit:
+                return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    if profiles:
+        return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    for query in queries:
+        clean_query = clean_text(query)
+        if not clean_query:
+            continue
+        try:
+            response = request_with_retries(
+                "GET",
+                "https://scholar.google.com/citations",
+                params={"view_op": "search_authors", "mauthors": clean_query, "hl": "en"},
+                headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://scholar.google.com/",
+                },
+                timeout=20,
+                max_retries=1,
+            )
+        except RuntimeError as exc:
+            if is_google_scholar_block_error(exc):
+                raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
+            raise
+        if "accounts.google." in urlparse(response.url).netloc.lower():
+            continue
+        if is_google_scholar_block_page(response.text, response.url):
+            raise GoogleScholarBlockedError(google_scholar_block_message())
+        soup = BeautifulSoup(response.text, "html.parser")
+        for row in soup.select(".gsc_1usr"):
+            profile = google_scholar_author_row_to_profile(row)
+            user_id = clean_text(profile.get("user_id") or "")
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            profiles.append(profile)
+            if len(profiles) >= limit:
+                return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+
+
+def sorted_google_scholar_profiles(profiles: list[dict[str, Any]], author_name: str, affiliations: list[str]) -> list[dict[str, Any]]:
+    return sorted(
+        profiles,
+        key=lambda profile: google_scholar_profile_match_score(profile, author_name, affiliations),
+        reverse=True,
+    )
+
+
+def google_scholar_profile_match_score(profile: dict[str, Any], author_name: str, affiliations: list[str]) -> float:
+    profile_name = clean_text(profile.get("name") or "").lower()
+    author_tokens = [token for token in re.findall(r"[a-z0-9]+", clean_text(author_name).lower()) if token]
+    score = 0.0
+    if profile_name == clean_text(author_name).lower():
+        score += 10.0
+    if author_tokens:
+        name_tokens = set(re.findall(r"[a-z0-9]+", profile_name))
+        score += len(name_tokens & set(author_tokens))
+        if author_tokens[-1] in name_tokens:
+            score += 3.0
+        if profile_name and author_tokens[0][:1] and re.search(rf"\b{re.escape(author_tokens[0][:1])}\b", profile_name):
+            score += 1.5
+    haystack = " ".join(
+        [
+            clean_text(profile.get("affiliation") or ""),
+            clean_text(profile.get("email") or ""),
+            " ".join(clean_text(item) for item in profile.get("interests") or []),
+        ]
+    ).lower()
+    for affiliation in affiliations:
+        if affiliation_text_matches(haystack, affiliation):
+            score += 2.0
+    return score
+
+
+def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://scholar.google.com/scholar",
+            params={"hl": "en", "q": search_text},
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://scholar.google.com/",
+            },
+            timeout=20,
+            max_retries=1,
+        )
+    except RuntimeError as exc:
+        if is_google_scholar_block_error(exc):
+            raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
+        raise
+    if is_google_scholar_block_page(response.text, response.url):
+        raise GoogleScholarBlockedError(google_scholar_block_message())
+    soup = BeautifulSoup(response.text, "html.parser")
+    profiles: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for link in soup.select('a[href*="/citations?user="]'):
+        profile = google_scholar_search_link_to_profile(link)
+        user_id = clean_text(profile.get("user_id") or "")
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        profiles.append(profile)
+        if len(profiles) >= limit:
+            break
+    return profiles
+
+
+def google_scholar_search_link_to_profile(link: Any) -> dict[str, Any]:
+    name = clean_text(link.get_text(" "))
+    href = clean_text(link.get("href") or "")
+    profile_url = urljoin("https://scholar.google.com", href)
+    user_id = google_scholar_user_id(profile_url)
+    result = link.find_parent(class_="gs_r")
+    context = ""
+    if result:
+        context = clean_text(
+            (result.select_one(".gs_a").get_text(" ") if result.select_one(".gs_a") else "")
+            or (result.select_one(".gs_rs").get_text(" ") if result.select_one(".gs_rs") else "")
+            or result.get_text(" ")
+        )
+    return {
+        "candidate_type": "scholar-profile",
+        "name": name,
+        "affiliation": context,
+        "email": "",
+        "cited_by": "",
+        "interests": [],
+        "url": profile_url,
+        "user_id": user_id,
+    }
+
+
+def google_scholar_author_row_to_profile(row: Any) -> dict[str, Any]:
+    link = row.select_one(".gs_ai_name a")
+    name = clean_text(link.get_text(" ") if link else row.select_one(".gs_ai_name").get_text(" ") if row.select_one(".gs_ai_name") else "")
+    href = clean_text(link.get("href") if link else "")
+    profile_url = urljoin("https://scholar.google.com", href) if href else ""
+    user_id = google_scholar_user_id(profile_url)
+    affiliation = clean_text(row.select_one(".gs_ai_aff").get_text(" ") if row.select_one(".gs_ai_aff") else "")
+    email = clean_text(row.select_one(".gs_ai_eml").get_text(" ") if row.select_one(".gs_ai_eml") else "")
+    cited_by = clean_text(row.select_one(".gs_ai_cby").get_text(" ") if row.select_one(".gs_ai_cby") else "")
+    interests = [clean_text(item.get_text(" ")) for item in row.select(".gs_ai_one_int")]
+    return {
+        "candidate_type": "scholar-profile",
+        "name": name,
+        "affiliation": affiliation,
+        "email": email,
+        "cited_by": cited_by,
+        "interests": [item for item in interests if item],
+        "url": profile_url,
+        "user_id": user_id,
+    }
 
 
 def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 500) -> list[dict[str, Any]]:
@@ -2443,7 +2874,7 @@ def resolve_google_scholar_candidate_to_doi(candidate: dict[str, Any]) -> dict[s
     for index, query in enumerate(query for query in queries if query):
         kind = "bibliographic" if index == 0 and query != title else "title"
         try:
-            candidates = search_crossref_publications(query, kind=kind, rows=20, timeout=10, max_retries=1)
+            candidates = search_crossref_publications(query, kind=kind, rows=30, timeout=14, max_retries=2)
         except Exception:
             continue
         for result in candidates:
@@ -2653,6 +3084,366 @@ def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
+def build_my_publication_comments_report(publication: dict[str, Any]) -> tuple[str, Path, int]:
+    citing_papers = fetch_openalex_citing_papers(publication, max_pages=10, per_page=100)
+    try:
+        context_snippets = fetch_semantic_scholar_citation_contexts(publication, limit=30)
+    except Exception:
+        context_snippets = []
+    content = my_publication_comments_markdown(publication, citing_papers, context_snippets)
+    DEFAULT_COMMENT_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    slug = safe_slug(citation_label(publication) or publication.get("title") or publication.get("paper_id") or "publication")
+    report_path = DEFAULT_COMMENT_REPORT_DIR / f"{slug}_comments.md"
+    report_path.write_text(content, encoding="utf-8")
+    return content, report_path, len(citing_papers)
+
+
+def fetch_openalex_citing_papers(
+    paper: dict[str, Any],
+    *,
+    max_pages: int = 10,
+    per_page: int = 100,
+) -> list[dict[str, Any]]:
+    work_id = openalex_work_id_for_paper(paper)
+    if not work_id:
+        raise RuntimeError("No OpenAlex work id found for this paper. DOI metadata may need to be refreshed first.")
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    cursor = "*"
+    for _ in range(max(1, int(max_pages))):
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params={
+                "filter": f"cites:{work_id}",
+                "per-page": max(1, min(200, int(per_page))),
+                "cursor": cursor,
+                "sort": "publication_date:desc",
+                "mailto": "your_email@example.com",
+            },
+            timeout=30,
+            max_retries=3,
+        )
+        data = response.json()
+        results = data.get("results") or []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            normalized = normalize_openalex_item(item, clean_text(((item.get("primary_location") or {}).get("source") or {}).get("display_name")) or "Unknown Journal")
+            normalized["raw_json"] = json.dumps(item, ensure_ascii=False)
+            key = normalized.get("doi") or normalized.get("paper_id") or clean_text(item.get("id"))
+            if key and key not in seen:
+                seen.add(key)
+                papers.append(normalized)
+        next_cursor = data.get("meta", {}).get("next_cursor")
+        if not next_cursor or next_cursor == cursor or len(results) < per_page:
+            break
+        cursor = next_cursor
+    return papers
+
+
+def openalex_work_id_for_paper(paper: dict[str, Any]) -> str:
+    raw = parse_raw_json(paper)
+    raw_id = clean_text(raw.get("id") if isinstance(raw, dict) else "")
+    if raw_id and "openalex.org/" in raw_id:
+        return raw_id.rstrip("/").rsplit("/", 1)[-1]
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if doi:
+        try:
+            response = request_with_retries(
+                "GET",
+                f"https://api.openalex.org/works/https://doi.org/{doi}",
+                params={"mailto": "your_email@example.com"},
+                timeout=20,
+                max_retries=3,
+            )
+            data = response.json()
+            work_id = clean_text(data.get("id"))
+            if work_id:
+                return work_id.rstrip("/").rsplit("/", 1)[-1]
+        except Exception:
+            pass
+    title = clean_text(paper.get("title") or "")
+    if title:
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params={"search": title, "per-page": 1, "mailto": "your_email@example.com"},
+            timeout=20,
+            max_retries=3,
+        )
+        for item in response.json().get("results") or []:
+            if isinstance(item, dict) and clean_text(item.get("id")):
+                return clean_text(item.get("id")).rstrip("/").rsplit("/", 1)[-1]
+    return ""
+
+
+def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if not doi:
+        return []
+    paper_ref = quote(f"DOI:{doi}", safe="")
+    response = request_with_retries(
+        "GET",
+        f"https://api.semanticscholar.org/graph/v1/paper/{paper_ref}/citations",
+        params={
+            "fields": "contexts,intents,isInfluential,citingPaper.title,citingPaper.year,citingPaper.venue,citingPaper.url,citingPaper.externalIds,citingPaper.authors,citingPaper.citationCount",
+            "limit": 100,
+        },
+        timeout=30,
+        max_retries=2,
+    )
+    snippets: list[dict[str, Any]] = []
+    for item in response.json().get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        citing = item.get("citingPaper") or {}
+        contexts = item.get("contexts") or []
+        if not isinstance(contexts, list):
+            continue
+        title = clean_text(citing.get("title") or "")
+        venue = clean_text(citing.get("venue") or "")
+        year = clean_text(str(citing.get("year") or ""))
+        url = clean_text(citing.get("url") or "")
+        citing_authors = citing.get("authors") if isinstance(citing.get("authors"), list) else []
+        citing_last_author = semantic_scholar_last_author(citing_authors)
+        intents = item.get("intents") if isinstance(item.get("intents"), list) else []
+        for context in contexts:
+            text = trim_citation_context(clean_text(str(context or "")))
+            if not text:
+                continue
+            snippets.append(
+                {
+                    "target_title": clean_text(paper.get("title") or ""),
+                    "target_doi": doi,
+                    "context": text,
+                    "citing_title": title or "Untitled citing paper",
+                    "citing_venue": venue,
+                    "citing_year": year,
+                    "citing_url": url,
+                    "citing_last_author": citing_last_author,
+                    "intents": [clean_text(str(value)) for value in intents if clean_text(str(value))],
+                    "is_influential": bool(item.get("isInfluential")),
+                    "source": "Semantic Scholar citation contexts",
+                }
+            )
+            if len(snippets) >= limit:
+                return snippets
+    return snippets
+
+
+def semantic_scholar_last_author(authors: list[Any]) -> str:
+    if not authors:
+        return ""
+    last = authors[-1]
+    if isinstance(last, dict):
+        return clean_text(last.get("name") or "")
+    return clean_text(str(last))
+
+
+def trim_citation_context(text: str, *, max_chars: int = 260) -> str:
+    text = clean_text(text)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
+
+
+def my_publication_comments_markdown(
+    publication: dict[str, Any],
+    citing_papers: list[dict[str, Any]],
+    context_snippets: list[dict[str, Any]],
+) -> str:
+    metrics = citation_metrics(publication)
+    source_count = metrics.get("count")
+    role = my_publication_role_text(publication)
+    contexts_by_title = citation_contexts_by_title(context_snippets)
+    top_examples = sorted(
+        citing_papers,
+        key=lambda row: int_or_none(parse_raw_json(row).get("cited_by_count")) or 0,
+        reverse=True,
+    )[:60]
+    lines = [
+        f"# Citation Comments Report",
+        "",
+        f"## Target Paper",
+        "",
+        f"- Title: {clean_text(publication.get('title') or 'Untitled')}",
+        f"- Journal: {clean_text(publication.get('journal') or 'Unknown Journal')}",
+        f"- Date: {clean_text(publication.get('publication_date') or '')}",
+        f"- DOI: {clean_text(publication.get('doi') or '') or 'Unavailable'}",
+        f"- My role: {role}",
+        "",
+        "## Scope",
+        "",
+        (
+            "This report lists papers that cite the target paper. When available, colored boxes show citation-context "
+            "sentences returned by Semantic Scholar."
+        ),
+        "",
+        "## Summary",
+        "",
+        f"- Citing papers fetched: {len(citing_papers)}",
+        f"- Citation-context excerpts fetched: {len(context_snippets)}",
+        f"- OpenAlex/Crossref citation count in stored metadata: {source_count if source_count is not None else 'Unavailable'}",
+        "",
+        "## Citing Papers",
+        "",
+    ]
+    if not top_examples:
+        lines.append("No citing papers were returned by OpenAlex.")
+    for index, paper in enumerate(top_examples, start=1):
+        title = clean_text(paper.get("title") or "Untitled")
+        url = clean_text(paper.get("url") or paper.get("landing_url") or "")
+        title_text = f"[{title}]({url})" if url else title
+        contexts = contexts_by_title.get(normalized_title_key(title), [])
+        lines.extend(
+            [
+                f"### {index}. {title_text}",
+                "",
+                f"- Last author: {last_author_name(paper)}",
+                f"- Source: {clean_text(paper.get('journal') or 'Unknown Journal')} {clean_text(paper.get('publication_date') or '')}",
+                "",
+            ]
+        )
+        if contexts:
+            for snippet in contexts[:3]:
+                intent = primary_citation_intent(snippet)
+                lines.append(f"> [{intent}] {clean_text(snippet.get('context') or '')}")
+                lines.append("")
+        else:
+            lines.append("> [metadata] Semantic Scholar did not return a direct citation-context sentence for this citing paper.")
+            lines.append("")
+    remaining_contexts = [
+        snippet for snippet in context_snippets
+        if normalized_title_key(snippet.get("citing_title") or "") not in {normalized_title_key(paper.get("title") or "") for paper in top_examples}
+    ]
+    if remaining_contexts:
+        lines.extend(["## Citation Contexts Without OpenAlex Match", ""])
+        for index, snippet in enumerate(remaining_contexts[:20], start=1):
+            title = clean_text(snippet.get("citing_title") or "Untitled citing paper")
+            url = clean_text(snippet.get("citing_url") or "")
+            title_text = f"[{title}]({url})" if url else title
+            lines.extend([
+                f"### {index}. {title_text}",
+                "",
+                f"- Last author: {clean_text(snippet.get('citing_last_author') or '') or 'Unavailable'}",
+                f"- Source: {clean_text(snippet.get('citing_venue') or '')} {clean_text(snippet.get('citing_year') or '')}",
+                "",
+                f"> [{primary_citation_intent(snippet)}] {clean_text(snippet.get('context') or '')}",
+                "",
+            ])
+    return "\n".join(lines).strip() + "\n"
+
+
+def citation_contexts_by_title(snippets: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for snippet in snippets:
+        key = normalized_title_key(snippet.get("citing_title") or "")
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(snippet)
+    return grouped
+
+
+def normalized_title_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", clean_text(value).lower()).strip()
+
+
+def primary_citation_intent(snippet: dict[str, Any]) -> str:
+    intents = [clean_text(str(value)).lower() for value in snippet.get("intents") or [] if clean_text(str(value))]
+    if not intents:
+        return "context"
+    if "methodology" in intents:
+        return "methodology"
+    if "background" in intents:
+        return "background"
+    if "result" in intents:
+        return "result"
+    return intents[0]
+
+
+def last_author_name(paper: dict[str, Any]) -> str:
+    authors = full_author_names(paper)
+    return authors[-1] if authors else "Unavailable"
+
+
+def my_publication_role_text(publication: dict[str, Any]) -> str:
+    roles = []
+    if publication.get("first_author"):
+        roles.append("first / co-first marked")
+    if publication.get("corresponding_author"):
+        roles.append("corresponding / co-corresponding marked")
+    return ", ".join(roles) if roles else "not manually marked"
+
+
+def count_by_value(key: Any, rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = key(row) if callable(key) else key
+        label = clean_text(str(value or "Unknown"))
+        counts[label] = counts.get(label, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def count_lines(items: list[tuple[str, int]], *, limit: int | None = None) -> list[str]:
+    if not items:
+        return ["- None"]
+    visible = items[:limit] if limit else items
+    lines = [f"- {label}: {count}" for label, count in visible]
+    if limit and len(items) > limit:
+        lines.append(f"- ... {len(items) - limit} more")
+    return lines
+
+
+def year_range(rows: list[dict[str, Any]]) -> str:
+    years = sorted({publication_year(row) for row in rows if publication_year(row)})
+    if not years:
+        return "Unavailable"
+    return years[0] if len(years) == 1 else f"{years[0]}-{years[-1]}"
+
+
+def classify_citing_themes(rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    labels = {
+        "Background / motivation": ["background", "review", "overview", "introduction", "recent", "progress"],
+        "Experimental follow-up": ["experiment", "measurement", "observed", "spectroscopy", "transport", "device"],
+        "Theory / modeling": ["theory", "model", "simulation", "calculation", "mechanism", "prediction"],
+        "Materials / platform": ["material", "crystal", "film", "heterostructure", "superconductor", "semiconductor"],
+        "Method / technique": ["method", "technique", "fabrication", "growth", "microscopy", "probe"],
+    }
+    counts = {label: 0 for label in labels}
+    counts["General citation"] = 0
+    for row in rows:
+        text = f"{row.get('title') or ''} {row.get('abstract') or ''}".lower()
+        matched = False
+        for label, terms in labels.items():
+            if any(term in text for term in terms):
+                counts[label] += 1
+                matched = True
+        if not matched:
+            counts["General citation"] += 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def citation_comment_sentence(target: dict[str, Any], citing: dict[str, Any]) -> str:
+    target_terms = important_title_terms(target.get("title") or "")
+    text = f"{citing.get('title') or ''} {citing.get('abstract') or ''}".lower()
+    matched = [term for term in target_terms if term in text][:5]
+    if matched:
+        return "This citing paper appears related through: " + ", ".join(matched) + "."
+    if citing.get("abstract"):
+        return "This citing paper likely uses the target as background or related literature based on available metadata."
+    return "Only limited metadata is available, so the citation intent cannot be inferred reliably."
+
+
+def important_title_terms(title: str) -> list[str]:
+    stop = {"the", "and", "for", "with", "from", "into", "onto", "that", "this", "these", "those", "using", "based"}
+    return [
+        token
+        for token in re.findall(r"[a-zA-Z][a-zA-Z0-9+-]{3,}", clean_text(title).lower())
+        if token not in stop
+    ][:12]
+
+
 def google_scholar_url(paper: dict[str, Any]) -> str:
     query = paper.get("doi") or paper.get("title") or ""
     return f"https://scholar.google.com/scholar?q={quote(query)}" if query else ""
@@ -2814,7 +3605,13 @@ def paper_first_seen_date(paper: dict[str, Any]) -> str:
 def paper_is_late_arrival(paper: dict[str, Any]) -> bool:
     publication_date = str(paper.get("publication_date") or "")[:10]
     first_seen = paper_first_seen_date(paper)
-    return bool(publication_date and first_seen and first_seen > publication_date)
+    if not publication_date or not first_seen or first_seen <= publication_date:
+        return False
+    try:
+        delta = date.fromisoformat(first_seen) - date.fromisoformat(publication_date)
+    except ValueError:
+        return False
+    return timedelta(days=1) <= delta <= timedelta(days=LATE_ARRIVAL_LOOKBACK_DAYS)
 
 
 def unread_late_arrival_paper_ids(storage: Storage, selected: str, journals: list[str]) -> set[str]:
@@ -2829,18 +3626,23 @@ def unread_late_arrival_paper_ids(storage: Storage, selected: str, journals: lis
         WHERE papers.publication_date = ?
           AND length(papers.publication_date) = 10
           AND substr(papers.first_seen_at, 1, 10) > papers.publication_date
+          AND julianday(substr(papers.first_seen_at, 1, 10)) - julianday(papers.publication_date) <= ?
           AND papers.source IN ('crossref', 'openalex', 'arxiv')
           AND papers.journal IN ({placeholders})
           AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
           AND paper_reads.late_arrival_seen_at IS NULL
         """,
-        (selected, *journals),
+        (selected, LATE_ARRIVAL_LOOKBACK_DAYS, *journals),
     ).fetchall()
     return {str(row["paper_id"]) for row in rows}
 
 
 def late_arrivals_for_seen_date(storage: Storage, selected: str, journals: list[str]) -> list[dict[str, Any]]:
     if not journals:
+        return []
+    try:
+        window_start = (date.fromisoformat(selected) - timedelta(days=LATE_ARRIVAL_LOOKBACK_DAYS)).isoformat()
+    except ValueError:
         return []
     placeholders = ", ".join(["?"] * len(journals))
     rows = storage.conn.execute(
@@ -2850,6 +3652,7 @@ def late_arrivals_for_seen_date(storage: Storage, selected: str, journals: list[
         LEFT JOIN paper_reads ON paper_reads.paper_id = papers.paper_id
         WHERE substr(papers.first_seen_at, 1, 10) = ?
           AND length(papers.publication_date) = 10
+          AND papers.publication_date >= ?
           AND papers.publication_date < ?
           AND papers.source IN ('crossref', 'openalex', 'arxiv')
           AND papers.journal IN ({placeholders})
@@ -2857,7 +3660,7 @@ def late_arrivals_for_seen_date(storage: Storage, selected: str, journals: list[
           AND paper_reads.late_arrival_seen_at IS NULL
         ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
         """,
-        (selected, selected, *journals),
+        (selected, window_start, selected, *journals),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -4344,7 +5147,7 @@ INDEX_HTML = """<!doctype html>
       inset: 0;
       z-index: 80;
       display: none;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
       background: #fff;
     }
     .internal-browser.open { display: grid; }
@@ -4639,6 +5442,16 @@ INDEX_HTML = """<!doctype html>
     }
     .workspace.note-open.report-collapsed .workspace-resizer { display: none; }
     body.resizing { cursor: col-resize; user-select: none; }
+    .window-drag-region {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 40px;
+      z-index: 60;
+      -webkit-user-select: none;
+      user-select: none;
+    }
     .toolbar {
       display: flex;
       align-items: center;
@@ -4721,7 +5534,14 @@ INDEX_HTML = """<!doctype html>
       right: -14px;
       background: radial-gradient(circle at 100% 0, transparent 14px, var(--paper) 15px);
     }
-    .toolbar-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      position: relative;
+      z-index: 70;
+    }
     .toolbar-actions.hidden { display: none; }
     .app.library-mode #reportToolbarActions { display: none; }
     .toolbar-import {
@@ -4865,6 +5685,8 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       flex-wrap: nowrap;
       margin: -8px 0 10px;
+      position: relative;
+      z-index: 70;
     }
     .library-controls.open { display: flex; }
     .library-controls input, .library-controls select {
@@ -5160,7 +5982,7 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       overflow: hidden;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
     }
     .my-publications-search {
       border-bottom: 1px solid var(--line);
@@ -5185,16 +6007,39 @@ INDEX_HTML = """<!doctype html>
       border-radius: 7px;
       background: #fff;
     }
+    .publication-search-result.placeholder {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .publication-search-result.added {
+      background: #f7faf8;
+      border-color: #c6e2d0;
+    }
+    .publication-search-result.resolving {
+      border-color: #d6e4ff;
+      background: #f8fbff;
+    }
     .publication-search-result strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
     .publication-search-result span { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .publication-search-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
     .my-publications-table-wrap {
       min-height: 0;
-      overflow: auto;
+      overflow: scroll;
+      scrollbar-gutter: stable both-edges;
     }
     .my-publications-table {
       width: var(--my-publications-table-width, 100%);
       min-width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0 4px;
       table-layout: fixed;
       font-size: 13px;
     }
@@ -5212,7 +6057,28 @@ INDEX_HTML = """<!doctype html>
       padding: 9px 8px;
       border-right: 1px solid #edf0f5;
     }
+    .my-publications-table th.sortable { color: #475467; }
+    .my-publications-sort-button {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+    .my-publications-sort-button:hover { color: var(--accent); }
+    .my-publications-sort-indicator {
+      color: var(--accent);
+      font-size: 10px;
+      min-width: 8px;
+    }
     .my-publications-table td {
+      border-top: 1px solid #edf0f5;
       border-bottom: 1px solid #edf0f5;
       border-right: 1px solid #edf0f5;
       padding: 9px 8px;
@@ -5220,7 +6086,14 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      background: #fff;
+      transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
     }
+    .my-publications-table td:first-child {
+      border-left: 1px solid #edf0f5;
+      border-radius: 7px 0 0 7px;
+    }
+    .my-publications-table td:last-child { border-radius: 0 7px 7px 0; }
     .my-publications-table th:last-child,
     .my-publications-table td:last-child { border-right: 0; }
     .my-publications-head-cell {
@@ -5249,11 +6122,120 @@ INDEX_HTML = """<!doctype html>
     .my-publications-row {
       cursor: default;
     }
-    .my-publications-row:hover { background: #f8fafc; }
-    .my-publications-row.active { background: #e8f3f4; }
-    .my-publications-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
-    .my-publications-id em { font-style: italic; }
+    .my-publications-row:hover td { background: #f8fafc; }
+    .my-publications-row.active td { background: #e8f3f4; }
+    .my-publications-row.dragging td {
+      opacity: 0.68;
+      background: #ffffff;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+    }
+    .my-publications-row.drag-over-before td {
+      transform: translateY(24px);
+      box-shadow: 0 -20px 0 rgba(15, 107, 110, 0.14), inset 0 3px 0 var(--accent);
+    }
+    .my-publications-row.drag-over-after td {
+      transform: translateY(-24px);
+      box-shadow: 0 20px 0 rgba(15, 107, 110, 0.14), inset 0 -3px 0 var(--accent);
+    }
+    .my-publications-title-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .my-publications-title-cell .star-button { flex: 0 0 auto; }
+    .my-publications-title-text {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .my-publications-id .journal-name { color: #0f6b6e; font-style: italic; font-weight: 700; }
     .my-publications-id strong { font-weight: 750; color: var(--ink); }
+    .my-publications-stats {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.8fr) minmax(190px, 1.4fr) minmax(150px, 1fr) minmax(190px, 1.3fr);
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 8px 10px;
+      min-height: 118px;
+    }
+    .my-publications-stat {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid #e5e7eb;
+      border-radius: 7px;
+      background: #fff;
+      padding: 7px 9px;
+      display: flex;
+      flex-direction: column;
+    }
+    .my-publications-stat strong {
+      display: block;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .my-publications-stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .my-publications-stat-list {
+      display: grid;
+      gap: 3px;
+      margin-top: 6px;
+      max-height: 132px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .my-publications-stat-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: baseline;
+      color: #344054;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+    .my-publications-stat-row b {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+      color: var(--ink);
+    }
+    .my-publications-stat-row em {
+      font-style: normal;
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .publication-role-flags {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 8px 0 10px;
+    }
+    .publication-role-flag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfe;
+      padding: 7px 9px;
+      color: #344054;
+      font-size: 12px;
+    }
+    .publication-role-flag input { margin: 0; }
     .star-button {
       width: 28px;
       height: 28px;
@@ -6183,6 +7165,27 @@ INDEX_HTML = """<!doctype html>
     .analysis-body p { margin: 8px 0; }
     .analysis-body ul { margin: 8px 0 8px 20px; padding: 0; }
     .analysis-body li { margin: 4px 0; }
+    .analysis-body a { color: var(--accent); font-weight: 650; text-decoration: none; }
+    .analysis-body a:hover { text-decoration: underline; }
+    .analysis-body blockquote.citation-context {
+      margin: 8px 0 14px;
+      padding: 10px 12px;
+      border-left: 4px solid var(--accent);
+      border-radius: 7px;
+      background: #eef6ff;
+      color: #1f3b57;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .analysis-body blockquote.citation-context strong {
+      display: inline-block;
+      margin-right: 6px;
+      color: #0f3d6e;
+    }
+    .analysis-body blockquote.context-background { border-left-color: #3866ff; background: #eef3ff; }
+    .analysis-body blockquote.context-methodology { border-left-color: #0f6b6e; background: #eaf7f5; }
+    .analysis-body blockquote.context-result { border-left-color: #9b5de5; background: #f4edff; }
+    .analysis-body blockquote.context-metadata { border-left-color: #d97706; background: #fff6e6; }
     .analysis-body code {
       background: #eef2f7;
       border-radius: 4px;
@@ -6219,6 +7222,7 @@ INDEX_HTML = """<!doctype html>
   </style>
 </head>
 <body>
+  <div class="window-drag-region" id="windowDragRegion" aria-hidden="true"></div>
   <div class="app library-mode sidebar-collapsed">
     <aside class="sidebar">
       <div class="brand">
@@ -6285,17 +7289,11 @@ INDEX_HTML = """<!doctype html>
           <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="library-controls" id="libraryControls">
             <div class="my-publications-tools" id="myPublicationsTools">
-              <input class="search" id="myPublicationName" placeholder="My name">
+              <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
               <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
+              <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Crossref">Refresh Metrics</button>
               <input class="search" id="publicationSearchBox" placeholder="DOI or title">
               <button class="smallbtn" id="addMyPublication" type="button">Add</button>
-              <input class="search scholar-profile-input" id="scholarProfileUrl" placeholder="Google Scholar profile URL" type="url">
-              <button class="smallbtn" id="importScholarProfile" type="button">Import Scholar</button>
-              <select class="search" id="myPublicationSort" title="Sort publications">
-                <option value="manual">Manual</option>
-                <option value="time">Time</option>
-                <option value="highlight">Highlight</option>
-              </select>
             </div>
           </div>
           <div class="papers" id="papers"></div>
@@ -6359,12 +7357,12 @@ INDEX_HTML = """<!doctype html>
       "other": "Other Fields"
     };
     const MY_PUBLICATION_COLUMNS = [
-      {key: "star", label: "", defaultWidth: 42, minWidth: 38, maxWidth: 90},
-      {key: "number", label: "No", defaultWidth: 56, minWidth: 46, maxWidth: 120},
-      {key: "date", label: "Date", defaultWidth: 120, minWidth: 92, maxWidth: 180},
-      {key: "id", label: "ID", defaultWidth: 230, minWidth: 140, maxWidth: 520},
-      {key: "title", label: "Title", defaultWidth: 560, minWidth: 260, maxWidth: 1200},
-      {key: "reimport", label: "", defaultWidth: 96, minWidth: 82, maxWidth: 150},
+      {key: "number", label: "No", defaultWidth: 48, minWidth: 40, maxWidth: 90, sortable: false},
+      {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
+      {key: "citation", label: "Citation", defaultWidth: 270, minWidth: 185, maxWidth: 560, sortable: true},
+      {key: "date", label: "Date", defaultWidth: 92, minWidth: 74, maxWidth: 130, sortable: true},
+      {key: "citations", label: "Cites", defaultWidth: 132, minWidth: 116, maxWidth: 190, sortable: true},
+      {key: "comments", label: "", defaultWidth: 96, minWidth: 84, maxWidth: 140},
       {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140}
     ];
     const LIBRARY_SHORTCUT_TAB_COUNT = 5;
@@ -6385,6 +7383,13 @@ INDEX_HTML = """<!doctype html>
       papers: [],
       libraryFolders: [],
       libraryItems: [],
+      libraryFoldersById: new Map(),
+      libraryItemsById: new Map(),
+      libraryChildFoldersByParent: new Map(),
+      libraryItemsByFolder: new Map(),
+      libraryLoaded: false,
+      libraryLoadingPromise: null,
+      libraryPaperDetailRequests: {},
       libraryTab: "library",
       libraryShortcutTabs: [],
       libraryWorkspaceTabs: [],
@@ -6431,8 +7436,12 @@ INDEX_HTML = """<!doctype html>
       myPublications: [],
       myPublicationSelectionId: 0,
       myPublicationSort: "manual",
+      myPublicationSortDir: "asc",
       myPublicationSearchResults: [],
       myPublicationSearchStatus: "",
+      myPublicationSearchScrollTop: 0,
+      myPublicationSearchToken: 0,
+      myPublicationAuthorCache: {},
       myPublicationName: "",
       myPublicationColumnWidths: {},
       mode: "library",
@@ -6441,6 +7450,8 @@ INDEX_HTML = """<!doctype html>
       query: "",
       reportSequence: 0,
       reportCache: {},
+      monthCacheKey: "",
+      monthLoaded: false,
       lateArrivals: [],
       markingLateArrivalIds: new Set(),
       fetchingDates: new Set(),
@@ -6587,11 +7598,24 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function loadMonth() {
+    function currentMonthCacheKey() {
+      return `${state.viewYear}-${String(state.viewMonth).padStart(2, "0")}`;
+    }
+
+    async function loadMonth(options = {}) {
+      const cacheKey = currentMonthCacheKey();
+      if (!options.force && state.monthLoaded && state.monthCacheKey === cacheKey) {
+        renderCalendar();
+        renderFilters();
+        renderSubjectFilters();
+        return;
+      }
       const data = await fetchJson(`/api/month?year=${state.viewYear}&month=${state.viewMonth}`);
       state.journals = data.journals;
       syncSelectedJournals();
       state.counts = data.counts;
+      state.monthCacheKey = cacheKey;
+      state.monthLoaded = true;
       renderCalendar();
       renderFilters();
       renderSubjectFilters();
@@ -6649,7 +7673,6 @@ INDEX_HTML = """<!doctype html>
       renderSubjectFilters();
       renderFilters();
       if (state.mode === "library") {
-        loadLibrary();
         return;
       }
       renderReport();
@@ -6703,7 +7726,7 @@ INDEX_HTML = """<!doctype html>
           return;
         }
         setPendingFetchDate(selectedDate, false);
-        if (data.fetched) await loadMonth();
+        if (data.fetched) await loadMonth({force: true});
         if (selectedDate === state.selectedDate) {
           const sequence = ++state.reportSequence;
           applyReportData(selectedDate, data, sequence);
@@ -6910,18 +7933,36 @@ INDEX_HTML = """<!doctype html>
         .join("|");
     }
 
-    async function loadLibrary() {
-      state.mode = "library";
-      state.libraryTab = "library";
-      const res = await fetch("/api/library");
-      const data = await res.json();
-      applyLibrarySnapshot(data);
+    function resetLibraryRootSelection() {
       state.libraryActiveFolderId = Number(state.libraryRootId || 1);
       state.libraryCurrentFolderId = Number(state.libraryRootId || 1);
       state.librarySelection = {type: "folder", id: Number(state.libraryRootId || 1)};
       clearLibraryRangeSelection();
       ensureLibraryColumnSelection(state.libraryRootId);
+    }
+
+    async function loadLibrary(options = {}) {
+      state.mode = "library";
+      state.libraryTab = "library";
       setSidebarCollapsed(true);
+      if (!options.force && state.libraryLoaded) {
+        resetLibraryRootSelection();
+        renderLibrary();
+        return;
+      }
+      if (!state.libraryLoadingPromise) {
+        state.libraryLoadingPromise = fetch("/api/library")
+          .then(async (res) => {
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Could not load Library");
+            applyLibrarySnapshot(data);
+          })
+          .finally(() => {
+            state.libraryLoadingPromise = null;
+          });
+      }
+      await state.libraryLoadingPromise;
+      resetLibraryRootSelection();
       renderLibrary();
     }
 
@@ -6973,20 +8014,42 @@ INDEX_HTML = """<!doctype html>
     function sortedMyPublications() {
       const rows = [...state.myPublications];
       rows.sort((a, b) => {
-        if (state.myPublicationSort === "highlight") {
-          const starDelta = Number(Boolean(b.starred)) - Number(Boolean(a.starred));
-          if (starDelta) return starDelta;
-        }
         if (state.myPublicationSort === "manual") {
           const sortDelta = Number(a.sort_order || 0) - Number(b.sort_order || 0);
           if (sortDelta) return sortDelta;
           return Number(a.id || 0) - Number(b.id || 0);
         }
-        const dateDelta = String(b.paper?.publication_date || "").localeCompare(String(a.paper?.publication_date || ""));
-        if (dateDelta) return dateDelta;
+        const direction = state.myPublicationSortDir === "desc" ? -1 : 1;
+        const value = (entry) => {
+          const paper = entry.paper || {};
+          if (state.myPublicationSort === "title") return String(paper.title || "").toLowerCase();
+          if (state.myPublicationSort === "citation") return myPublicationCitationSortText(paper).toLowerCase();
+          if (state.myPublicationSort === "date") return String(paper.publication_date || "");
+          if (state.myPublicationSort === "citations") return Number(paper.citation_metrics?.count || 0);
+          return Number(entry.sort_order || 0);
+        };
+        const left = value(a);
+        const right = value(b);
+        let delta = 0;
+        if (typeof left === "number" || typeof right === "number") delta = Number(left || 0) - Number(right || 0);
+        else delta = String(left || "").localeCompare(String(right || ""));
+        if (delta) return delta * direction;
+        const dateDelta = String(a.paper?.publication_date || "").localeCompare(String(b.paper?.publication_date || ""));
+        if (dateDelta) return dateDelta * direction;
         return String(a.paper?.title || "").localeCompare(String(b.paper?.title || ""));
       });
       return rows;
+    }
+
+    function myPublicationCitationSortText(paper) {
+      const ref = paper?.nature_reference || {};
+      return [
+        ref.journal || paper?.journal || "",
+        ref.volume || "",
+        ref.pages || "",
+        ref.year || paper?.publication_date || "",
+        paper?.doi || "",
+      ].join(" ");
     }
 
     function selectedMyPublicationPaper() {
@@ -6997,6 +8060,23 @@ INDEX_HTML = """<!doctype html>
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
+      state.libraryFoldersById = new Map(state.libraryFolders.map((folder) => [Number(folder.id), folder]));
+      state.libraryItemsById = new Map(state.libraryItems.map((item) => [Number(item.id), item]));
+      state.libraryChildFoldersByParent = new Map();
+      state.libraryFolders.forEach((folder) => {
+        const parentId = Number(folder.parent_id || 0);
+        if (!state.libraryChildFoldersByParent.has(parentId)) state.libraryChildFoldersByParent.set(parentId, []);
+        state.libraryChildFoldersByParent.get(parentId).push(folder);
+      });
+      state.libraryChildFoldersByParent.forEach((folders) => folders.sort((a, b) => compareLibraryOrder(a, b, "name")));
+      state.libraryItemsByFolder = new Map();
+      state.libraryItems.forEach((item) => {
+        const folderId = Number(item.folder_id || 0);
+        if (!state.libraryItemsByFolder.has(folderId)) state.libraryItemsByFolder.set(folderId, []);
+        state.libraryItemsByFolder.get(folderId).push(item);
+      });
+      state.libraryItemsByFolder.forEach((items) => items.sort((a, b) => compareLibraryOrder(a, b, "display_name")));
+      state.libraryLoaded = true;
       clearLibrarySearchCache();
       state.librarySearchVersion += 1;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
@@ -7018,7 +8098,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryFolderById(id) {
-      return state.libraryFolders.find((folder) => Number(folder.id) === Number(id));
+      return state.libraryFoldersById.get(Number(id));
     }
 
     function libraryDisplayRootId() {
@@ -7057,7 +8137,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryItemById(id) {
-      return state.libraryItems.find((item) => Number(item.id) === Number(id));
+      return state.libraryItemsById.get(Number(id));
     }
 
     function librarySelectionExists(selection) {
@@ -7068,15 +8148,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryChildFolders(parentId) {
-      return state.libraryFolders
-        .filter((folder) => Number(folder.parent_id || 0) === Number(parentId))
-        .sort((a, b) => compareLibraryOrder(a, b, "name"));
+      return state.libraryChildFoldersByParent.get(Number(parentId)) || [];
     }
 
     function libraryFolderItemsRaw(folderId) {
-      return state.libraryItems
-        .filter((item) => Number(item.folder_id) === Number(folderId))
-        .sort((a, b) => compareLibraryOrder(a, b, "display_name"));
+      return state.libraryItemsByFolder.get(Number(folderId)) || [];
     }
 
     function libraryFolderItems(folderId) {
@@ -8034,7 +9110,7 @@ INDEX_HTML = """<!doctype html>
       syncSelectedJournals();
       renderJournalSettings();
       renderJournalHistory();
-      await loadMonth();
+      await loadMonth({force: true});
       await loadReport();
     }
 
@@ -8056,7 +9132,7 @@ INDEX_HTML = """<!doctype html>
       syncSelectedJournals();
       renderJournalSettings();
       renderJournalHistory();
-      await loadMonth();
+      await loadMonth({force: true});
       await loadReport();
     }
 
@@ -8971,8 +10047,6 @@ INDEX_HTML = """<!doctype html>
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
-      const sortSelect = $("myPublicationSort");
-      if (sortSelect) sortSelect.value = state.myPublicationSort || "manual";
       updateToolbarLibraryImport();
       updateLibrarySearchTools();
     }
@@ -9215,7 +10289,11 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function renderMyPublications() {
+    function renderMyPublications(options = {}) {
+      const existingResults = $("publicationSearchResults");
+      const previousSearchScrollTop = existingResults ? existingResults.scrollTop : Number(state.myPublicationSearchScrollTop || 0);
+      const existingTableWrap = document.querySelector(".my-publications-table-wrap");
+      const previousTableScrollTop = existingTableWrap ? existingTableWrap.scrollTop : 0;
       state.mode = "library";
       state.libraryTab = "my-publications";
       stopArxivUpdateCountdown();
@@ -9227,7 +10305,9 @@ INDEX_HTML = """<!doctype html>
       const rows = sortedMyPublications();
       const selected = myPublicationById(state.myPublicationSelectionId) || rows[0] || null;
       if (selected) state.myPublicationSelectionId = Number(selected.id);
-      const sortLabel = state.myPublicationSort === "highlight" ? "Highlight" : (state.myPublicationSort === "time" ? "Time" : "Manual");
+      const sortLabel = state.myPublicationSort === "manual"
+        ? "Manual"
+        : `${myPublicationSortLabel(state.myPublicationSort)} ${state.myPublicationSortDir === "desc" ? "desc" : "asc"}`;
       $("summary").textContent = `${state.myPublications.length} publications · Sort: ${sortLabel}`;
       const root = $("papers");
       root.classList.add("library-view");
@@ -9235,7 +10315,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-shell my-publications-shell" id="libraryShell" tabindex="0">
           <section class="my-publications-panel">
             <div class="my-publications-search">
-              <div class="publication-search-status">${escapeHtml(state.myPublicationSearchStatus || "Use DOI, title, or your saved name to add publications.")}</div>
+              <div class="publication-search-status">${escapeHtml(state.myPublicationSearchStatus || "Use DOI/title, or search by name with optional units: Name; Unit A; Unit B.")}</div>
               <div class="publication-search-results" id="publicationSearchResults">${myPublicationSearchResultsMarkup()}</div>
             </div>
             <div class="my-publications-table-wrap">
@@ -9249,6 +10329,7 @@ INDEX_HTML = """<!doctype html>
                 </tbody>
               </table>
             </div>
+            ${myPublicationStatsMarkup(rows)}
           </section>
           <aside class="library-pane">
             ${libraryPaneHeaderMarkup()}
@@ -9260,7 +10341,20 @@ INDEX_HTML = """<!doctype html>
       wireLibraryPaneTools();
       renderPublicationDetail();
       wireMyPublicationInteractions();
-      window.requestAnimationFrame(() => revealMyPublicationSelection());
+      const restoredResults = $("publicationSearchResults");
+      if (restoredResults) restoredResults.scrollTop = previousSearchScrollTop;
+      const restoredTableWrap = document.querySelector(".my-publications-table-wrap");
+      if (restoredTableWrap) {
+        restoredTableWrap.scrollTop = Number.isFinite(Number(options.tableScrollTop))
+          ? Number(options.tableScrollTop)
+          : previousTableScrollTop;
+      }
+      if (options.revealSelection) window.requestAnimationFrame(() => revealMyPublicationSelection());
+    }
+
+    function myPublicationSortLabel(key) {
+      const column = MY_PUBLICATION_COLUMNS.find((item) => item.key === key);
+      return column?.label || "Manual";
     }
 
     function myPublicationColumnWidth(key) {
@@ -9282,9 +10376,14 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationHeaderMarkup() {
       return MY_PUBLICATION_COLUMNS.map((column) => `
-        <th>
+        <th class="${column.sortable ? "sortable" : ""}" ${column.sortable ? `data-publication-sort="${escapeAttr(column.key)}"` : ""}>
           <div class="my-publications-head-cell">
-            ${escapeHtml(column.label)}
+            ${column.sortable ? `
+              <button class="my-publications-sort-button" type="button" data-publication-sort="${escapeAttr(column.key)}">
+                <span>${escapeHtml(column.label)}</span>
+                <span class="my-publications-sort-indicator">${state.myPublicationSort === column.key ? (state.myPublicationSortDir === "desc" ? "↓" : "↑") : ""}</span>
+              </button>
+            ` : escapeHtml(column.label)}
             <span class="my-publications-col-resizer" data-publication-col="${escapeAttr(column.key)}"></span>
           </div>
         </th>
@@ -9296,15 +10395,128 @@ INDEX_HTML = """<!doctype html>
       const active = Number(entry.id) === Number(state.myPublicationSelectionId);
       return `
         <tr class="my-publications-row${active ? " active" : ""}" data-publication-id="${Number(entry.id)}" draggable="true">
-          <td><button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button></td>
           <td>${index + 1}</td>
-          <td>${escapeHtml(paper.publication_date || "")}</td>
+          <td>
+            <div class="my-publications-title-cell">
+              <button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button>
+              <span class="my-publications-title-text">${escapeHtml(paper.title || "Untitled paper")}</span>
+            </div>
+          </td>
           <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
-          <td>${escapeHtml(paper.title || "Untitled paper")}</td>
-          <td><button class="action" type="button" data-action="reimport-publication">Reimport</button></td>
+          <td>${escapeHtml(paper.publication_date || "")}</td>
+          <td>${myPublicationCitationCountMarkup(paper)}</td>
+          <td><button class="action" type="button" data-action="publication-comments">Comments</button></td>
           <td><button class="action danger" type="button" data-action="delete-publication">Delete</button></td>
         </tr>
       `;
+    }
+
+    function myPublicationStatsMarkup(rows) {
+      const total = rows.length;
+      const withDoi = rows.filter((entry) => entry.paper?.doi).length;
+      const citationCounts = rows
+        .map((entry) => Number(entry.paper?.citation_metrics?.count))
+        .filter((value) => Number.isFinite(value));
+      const totalCites = citationCounts.reduce((sum, value) => sum + value, 0);
+      const hIndex = myPublicationHIndex(citationCounts);
+      const i10Index = citationCounts.filter((value) => value >= 10).length;
+      const citationSources = [...new Set(rows.map((entry) => entry.paper?.citation_metrics?.source || "").filter(Boolean))].join(", ");
+      const journalCounts = countMyPublicationJournals(rows);
+      const journals = new Set(journalCounts.map((entry) => entry.name));
+      const listedFirstRows = rows.filter((entry) => myPublicationIsListedFirstAuthor(entry));
+      const firstAuthorRows = rows.filter((entry) => entry.first_author);
+      const correspondingAuthorRows = rows.filter((entry) => entry.corresponding_author);
+      return `
+        <div class="my-publications-stats">
+          <div class="my-publications-stat">
+            <strong>${total}</strong>
+            <span>Publications · ${withDoi} with DOI</span>
+            <div class="my-publications-stat-list">
+              <div class="my-publications-stat-row"><b>H-index</b><em>${hIndex}</em></div>
+              <div class="my-publications-stat-row"><b>i10-index</b><em>${i10Index}</em></div>
+            </div>
+          </div>
+          <div class="my-publications-stat">
+            <strong>${journals.size || 0} journals</strong>
+            <span>Journal counts</span>
+            <div class="my-publications-stat-list">${myPublicationStatsRows(journalCounts)}</div>
+          </div>
+          <div class="my-publications-stat">
+            <strong>${totalCites || "--"}</strong>
+            <span>${citationCounts.length} papers with cites</span>
+            <div class="my-publications-stat-list">
+              <div class="my-publications-stat-row"><b>Source</b><em>${escapeHtml(citationSources || "unavailable")}</em></div>
+              <div class="my-publications-stat-row"><b>Average</b><em>${citationCounts.length ? Math.round(totalCites / citationCounts.length) : "--"}</em></div>
+            </div>
+          </div>
+          <div class="my-publications-stat">
+            <strong>${listedFirstRows.length} / ${firstAuthorRows.length} / ${correspondingAuthorRows.length}</strong>
+            <span>Author-list first / co-first / corresponding</span>
+            <div class="my-publications-stat-list">
+              ${myPublicationRoleStatsRows("Author-list first", listedFirstRows)}
+              ${myPublicationRoleStatsRows("Co-first marked", firstAuthorRows)}
+              ${myPublicationRoleStatsRows("Corresponding marked", correspondingAuthorRows)}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function myPublicationStatsRows(items) {
+      if (!items.length) return `<div class="my-publications-stat-row"><b>None</b><em>0</em></div>`;
+      return items
+        .map((entry) => `<div class="my-publications-stat-row"><b>${escapeHtml(entry.name)}</b><em>${escapeHtml(entry.count)}</em></div>`)
+        .join("");
+    }
+
+    function myPublicationRoleStatsRows(label, rows) {
+      const items = countMyPublicationJournals(rows);
+      if (!items.length) return `<div class="my-publications-stat-row"><b>${escapeHtml(label)}</b><em>--</em></div>`;
+      return items
+        .map((entry) => `<div class="my-publications-stat-row"><b>${escapeHtml(label)} · ${escapeHtml(entry.name)}</b><em>${escapeHtml(entry.count)}</em></div>`)
+        .join("");
+    }
+
+    function myPublicationHIndex(counts) {
+      const sorted = counts
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => b - a);
+      let index = 0;
+      while (index < sorted.length && sorted[index] >= index + 1) index += 1;
+      return index;
+    }
+
+    function countMyPublicationJournals(rows) {
+      const counts = new Map();
+      rows.forEach((entry) => {
+        const journal = entry.paper?.journal || "";
+        if (!journal) return;
+        counts.set(journal, (counts.get(journal) || 0) + 1);
+      });
+      return [...counts.entries()]
+        .map(([name, count]) => ({name, count}))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    }
+
+    function myPublicationAuthorList(entry) {
+      const paper = entry?.paper || {};
+      if (Array.isArray(paper.full_authors) && paper.full_authors.length) return paper.full_authors;
+      if (Array.isArray(paper.authors) && paper.authors.length) return paper.authors;
+      return [];
+    }
+
+    function myPublicationIsListedFirstAuthor(entry) {
+      const name = currentMyPublicationName();
+      if (!name) return false;
+      const authors = myPublicationAuthorList(entry);
+      return Boolean(authors.length && authorMatchesMyName(authors[0]));
+    }
+
+    function myPublicationCitationCountMarkup(paper) {
+      const value = paper?.citation_metrics?.count;
+      if (value === null || value === undefined || value === "") return "";
+      return escapeHtml(value);
     }
 
     function myPublicationIdMarkup(paper) {
@@ -9316,7 +10528,7 @@ INDEX_HTML = """<!doctype html>
       const volume = ref.volume || "";
       const pages = ref.pages || "";
       const parts = [];
-      if (journal) parts.push(`<em>${escapeHtml(journal)}</em>`);
+      if (journal) parts.push(`<em class="journal-name">${escapeHtml(journal)}</em>`);
       if (volume) parts.push(`<strong>${escapeHtml(volume)}</strong>${pages ? `, ${escapeHtml(pages)}` : ""}`);
       else if (pages) parts.push(escapeHtml(pages));
       if (!parts.length && paper?.doi) parts.push(`doi:${escapeHtml(paper.doi)}`);
@@ -9325,19 +10537,73 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationSearchResultsMarkup() {
       const results = state.myPublicationSearchResults || [];
-      if (!results.length) return "";
+      if (!results.length) {
+        const status = state.myPublicationSearchStatus || "";
+        if (/searching|resolving|loading/i.test(status)) {
+          return `<div class="publication-search-result placeholder">Working on the lookup. Results will appear here when the profile or title matches come back.</div>`;
+        }
+        if (/no |0 |failed|blocked|error/i.test(status)) {
+          return `<div class="publication-search-result placeholder">${escapeHtml(status)}</div>`;
+        }
+        return "";
+      }
       return results.map((candidate, index) => {
+        if (candidate.candidate_type === "scholar-profile") {
+          const meta = [
+            candidate.affiliation || "",
+            candidate.email || "",
+            candidate.cited_by || "",
+            Array.isArray(candidate.interests) ? candidate.interests.slice(0, 3).join(", ") : "",
+          ].filter(Boolean).join(" · ");
+          return `
+            <div class="publication-search-result" data-search-index="${index}">
+              <div>
+                <strong>${escapeHtml(candidate.name || "Unnamed Scholar profile")}</strong>
+                <span>${escapeHtml(meta || candidate.url || "")}</span>
+              </div>
+              <div class="publication-search-actions">
+                <button class="smallbtn" type="button" data-action="use-scholar-profile">Use Profile</button>
+              </div>
+            </div>
+          `;
+        }
         const paper = candidate.paper || {};
+        const added = myPublicationCandidateAlreadyAdded(candidate);
+        const matchLabel = candidate.match_status === "doi"
+          ? "DOI match"
+          : (candidate.match_status === "resolving" ? "Resolving DOI" : (candidate.match_status === "scholar" ? "Scholar-only" : ""));
+        const meta = [matchLabel, paper.journal, paper.publication_date, paper.doi].filter(Boolean).join(" · ");
+        const resolving = candidate.match_status === "resolving";
+        const canRetry = candidate.match_status === "scholar";
         return `
-          <div class="publication-search-result" data-search-index="${index}">
+          <div class="publication-search-result${added ? " added" : ""}${candidate.match_status === "resolving" ? " resolving" : ""}" data-search-index="${index}">
             <div>
               <strong>${escapeHtml(paper.title || "Untitled paper")}</strong>
-              <span>${escapeHtml([paper.journal, paper.publication_date, paper.doi].filter(Boolean).join(" · "))}</span>
+              <span>${escapeHtml(meta)}</span>
             </div>
-            <button class="smallbtn" type="button" data-action="add-publication-result">Add</button>
+            <div class="publication-search-actions">
+              ${canRetry ? `<button class="smallbtn" type="button" data-action="retry-scholar-doi">Retry DOI</button>` : ""}
+              <button class="smallbtn" type="button" data-action="add-publication-result" ${added || resolving ? "disabled" : ""}>${added ? "Added" : "Add"}</button>
+            </div>
           </div>
         `;
       }).join("");
+    }
+
+    function myPublicationCandidateAlreadyAdded(candidate) {
+      const paper = candidate?.paper || candidate || {};
+      const candidateDoi = String(paper.doi || "").trim().toLowerCase();
+      const candidatePaperId = String(paper.paper_id || "").trim();
+      const candidateTitle = String(paper.title || "").trim().toLowerCase();
+      const candidateYear = String(paper.publication_date || "").slice(0, 4);
+      return state.myPublications.some((entry) => {
+        const existing = entry.paper || {};
+        if (candidatePaperId && String(existing.paper_id || "") === candidatePaperId) return true;
+        if (candidateDoi && String(existing.doi || "").trim().toLowerCase() === candidateDoi) return true;
+        return Boolean(candidateTitle)
+          && String(existing.title || "").trim().toLowerCase() === candidateTitle
+          && String(existing.publication_date || "").slice(0, 4) === candidateYear;
+      });
     }
 
     function resizeLibraryViewport() {
@@ -9698,7 +10964,7 @@ INDEX_HTML = """<!doctype html>
 
     function currentMyPublicationName() {
       const input = $("myPublicationName");
-      return (input?.value || state.myPublicationName || "").trim();
+      return (input?.value || state.myPublicationName || "").split(/[;；]/)[0].trim();
     }
 
     function authorSignaturesMatch(target, candidate) {
@@ -9762,6 +11028,15 @@ INDEX_HTML = """<!doctype html>
       }
       const item = libraryItemById(selection.id);
       const paper = item?.paper || {};
+      if (paper.paper_id && !paper.full_detail) {
+        root.innerHTML = `
+          <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+          <div class="library-detail-status">Loading details...</div>
+          ${libraryDetailMetadataMarkup(paper, [])}
+        `;
+        loadLibraryItemPaperDetail(item);
+        return;
+      }
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
         ? paper.full_authors
         : (Array.isArray(paper.authors) ? paper.authors : []);
@@ -9816,10 +11091,50 @@ INDEX_HTML = """<!doctype html>
       hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
+    async function loadLibraryItemPaperDetail(item) {
+      if (!item?.paper_id || item.paper?.full_detail) return;
+      if (state.libraryPaperDetailRequests[item.paper_id]) return state.libraryPaperDetailRequests[item.paper_id];
+      state.libraryPaperDetailRequests[item.paper_id] = fetch(`/api/paper?paper_id=${encodeURIComponent(item.paper_id)}`)
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not load paper details");
+          if (data.paper) {
+            updatePaperState(item.paper_id, data.paper);
+            if (
+              state.mode === "library"
+              && state.libraryTab !== "my-publications"
+              && state.librarySelection?.type === "item"
+              && Number(state.librarySelection.id) === Number(item.id)
+            ) {
+              renderLibraryDetail();
+            }
+          }
+        })
+        .catch((error) => {
+          if (
+            state.mode === "library"
+            && state.libraryTab !== "my-publications"
+            && state.librarySelection?.type === "item"
+            && Number(state.librarySelection.id) === Number(item.id)
+          ) {
+            const status = $("libraryDetailStatus");
+            if (status) {
+              status.textContent = error.message || "Could not load paper details";
+              status.className = "library-detail-status err";
+            }
+          }
+        })
+        .finally(() => {
+          delete state.libraryPaperDetailRequests[item.paper_id];
+        });
+      return state.libraryPaperDetailRequests[item.paper_id];
+    }
+
     function renderPublicationDetail() {
       const root = $("libraryDetail");
       if (!root) return;
-      const paper = selectedMyPublicationPaper();
+      const publication = myPublicationById(state.myPublicationSelectionId);
+      const paper = publication?.paper || null;
       if (!paper) {
         root.innerHTML = `<div class="empty">Select a publication.</div>`;
         return;
@@ -9836,6 +11151,10 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
+        </div>
+        <div class="publication-role-flags">
+          <label class="publication-role-flag"><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> First / co-first author</label>
+          <label class="publication-role-flag"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Corresponding / co-corresponding</label>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
@@ -9863,6 +11182,8 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
+      root.querySelector('[data-action="toggle-first-author"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
+      root.querySelector('[data-action="toggle-corresponding-author"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
       hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
@@ -9962,24 +11283,31 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="reimport-publication"]')) return;
+          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="publication-comments"]')) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
         });
         row.addEventListener("dragstart", (event) => {
           event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
           event.dataTransfer?.setData("application/x-my-publication-id", row.dataset.publicationId || "");
+          row.classList.add("dragging");
         });
         row.addEventListener("dragover", (event) => {
           event.preventDefault();
-          row.classList.add("drag-over");
+          clearMyPublicationDragMarkers();
+          row.classList.add(myPublicationDropPosition(row, event) === "after" ? "drag-over-after" : "drag-over-before");
         });
-        row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+        row.addEventListener("dragleave", () => row.classList.remove("drag-over-before", "drag-over-after"));
+        row.addEventListener("dragend", () => {
+          row.classList.remove("dragging");
+          clearMyPublicationDragMarkers();
+        });
         row.addEventListener("drop", async (event) => {
           event.preventDefault();
-          row.classList.remove("drag-over");
+          const position = myPublicationDropPosition(row, event);
+          row.classList.remove("drag-over-before", "drag-over-after");
           const draggedId = Number(event.dataTransfer?.getData("application/x-my-publication-id") || event.dataTransfer?.getData("text/plain") || 0);
           const targetId = Number(row.dataset.publicationId || 0);
-          if (draggedId && targetId && draggedId !== targetId) await reorderMyPublications(draggedId, targetId);
+          if (draggedId && targetId && draggedId !== targetId) await reorderMyPublications(draggedId, targetId, position);
         });
       });
       shell.querySelectorAll('[data-action="toggle-publication-star"]').forEach((button) => {
@@ -9999,25 +11327,85 @@ INDEX_HTML = """<!doctype html>
           if (publicationId) await deleteMyPublication(publicationId);
         });
       });
-      shell.querySelectorAll('[data-action="reimport-publication"]').forEach((button) => {
+      shell.querySelectorAll('[data-action="publication-comments"]').forEach((button) => {
         button.addEventListener("click", async (event) => {
           event.stopPropagation();
           const row = button.closest(".my-publications-row");
           const publicationId = Number(row?.dataset.publicationId || 0);
-          if (publicationId) await reimportMyPublication(publicationId);
+          if (publicationId) await openMyPublicationComments(publicationId);
         });
       });
       shell.querySelectorAll('[data-action="add-publication-result"]').forEach((button) => {
-        button.addEventListener("click", async () => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
           const index = Number(button.closest("[data-search-index]")?.dataset.searchIndex || -1);
           const candidate = state.myPublicationSearchResults[index];
           if (candidate) await addMyPublicationCandidate(candidate);
         });
       });
+      shell.querySelectorAll('[data-action="use-scholar-profile"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const index = Number(button.closest("[data-search-index]")?.dataset.searchIndex || -1);
+          const profile = state.myPublicationSearchResults[index];
+          const authorCacheKey = myPublicationAuthorCacheKey($("myPublicationName")?.value || state.myPublicationName || "");
+          if (profile?.url) await importGoogleScholarProfile(profile.url, profile.name || "", authorCacheKey);
+        });
+      });
+      shell.querySelectorAll('[data-action="retry-scholar-doi"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const index = Number(button.closest("[data-search-index]")?.dataset.searchIndex || -1);
+          if (index >= 0) await retryScholarDoiAtIndex(index);
+        });
+      });
       shell.querySelectorAll("[data-publication-col]").forEach((handle) => {
         handle.addEventListener("pointerdown", (event) => startMyPublicationColumnResize(event, handle.dataset.publicationCol));
       });
+      shell.querySelectorAll('.my-publications-sort-button[data-publication-sort]').forEach((button) => {
+        button.addEventListener("click", (event) => {
+          if (event.target.closest(".my-publications-col-resizer")) return;
+          const key = button.dataset.publicationSort;
+          if (key) sortMyPublicationsByColumn(key);
+        });
+      });
+      const results = $("publicationSearchResults");
+      results?.addEventListener("scroll", () => {
+        state.myPublicationSearchScrollTop = results.scrollTop;
+      });
       shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+    }
+
+    function myPublicationDropPosition(row, event) {
+      const rect = row.getBoundingClientRect();
+      return event.clientY >= rect.top + rect.height / 2 ? "after" : "before";
+    }
+
+    function clearMyPublicationDragMarkers() {
+      document.querySelectorAll(".my-publications-row.drag-over-before, .my-publications-row.drag-over-after").forEach((row) => {
+        row.classList.remove("drag-over-before", "drag-over-after");
+      });
+    }
+
+    function closeMyPublicationSearchResults() {
+      if (!state.myPublicationSearchResults.length) return;
+      state.myPublicationSearchResults = [];
+      state.myPublicationSearchStatus = "";
+      state.myPublicationSearchScrollTop = 0;
+      state.myPublicationSearchToken += 1;
+      renderMyPublications({tableScrollTop: 0});
+    }
+
+    function sortMyPublicationsByColumn(key) {
+      const column = MY_PUBLICATION_COLUMNS.find((item) => item.key === key);
+      if (!column?.sortable) return;
+      if (state.myPublicationSort === key) {
+        state.myPublicationSortDir = state.myPublicationSortDir === "desc" ? "asc" : "desc";
+      } else {
+        state.myPublicationSort = key;
+        state.myPublicationSortDir = "asc";
+      }
+      renderMyPublications();
     }
 
     function startMyPublicationColumnResize(event, key) {
@@ -10072,6 +11460,41 @@ INDEX_HTML = """<!doctype html>
       renderMyPublications();
     }
 
+    async function updateSelectedMyPublicationRoles() {
+      const publication = myPublicationById(state.myPublicationSelectionId);
+      const root = $("libraryDetail");
+      if (!publication || !root) return;
+      const status = $("libraryDetailStatus");
+      const firstAuthor = Boolean(root.querySelector('[data-action="toggle-first-author"]')?.checked);
+      const correspondingAuthor = Boolean(root.querySelector('[data-action="toggle-corresponding-author"]')?.checked);
+      if (status) {
+        status.textContent = "Saving author role...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/my-publications/roles", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            publication_id: publication.id,
+            first_author: firstAuthor,
+            corresponding_author: correspondingAuthor
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not update author role");
+        applyMyPublications(data);
+        state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
+        renderMyPublications();
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Could not update author role";
+          status.className = "library-detail-status err";
+        }
+        renderPublicationDetail();
+      }
+    }
+
     async function deleteMyPublication(publicationId) {
       const res = await fetch("/api/my-publications/delete", {
         method: "POST",
@@ -10111,14 +11534,64 @@ INDEX_HTML = """<!doctype html>
       refreshLibraryQuickLookForSelection();
     }
 
-    async function reorderMyPublications(draggedId, targetId) {
+    async function openMyPublicationComments(publicationId) {
+      const publication = myPublicationById(publicationId);
+      if (!publication) return;
+      state.myPublicationSelectionId = Number(publicationId);
+      state.myPublicationSearchStatus = "Building citation comments report from citing-paper metadata...";
+      renderMyPublications();
+      try {
+        const res = await fetch("/api/my-publications/comments", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({publication_id: publicationId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not build comments report");
+        state.myPublicationSearchStatus = `Comments report opened · ${Number(data.citing_count || 0)} citing papers fetched.`;
+        renderMyPublications();
+        showAnalysis(data.paper || publication.paper, data.content || "");
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Could not build comments report";
+        renderMyPublications();
+      }
+    }
+
+    async function refreshMyPublicationMetrics() {
+      const button = $("refreshMyPublicationMetrics");
+      state.myPublicationSearchStatus = "Refreshing citation metrics from OpenAlex/Crossref...";
+      if (button) button.disabled = true;
+      renderMyPublications();
+      try {
+        const res = await fetch("/api/my-publications/refresh-metrics", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not refresh metrics");
+        applyMyPublications(data);
+        const refreshed = Number(data.refreshed || 0);
+        const skipped = Number(data.skipped || 0);
+        state.myPublicationSearchStatus = `Metrics refreshed for ${refreshed} publication${refreshed === 1 ? "" : "s"}${skipped ? ` · ${skipped} skipped` : ""}.`;
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Could not refresh metrics";
+      } finally {
+        if (button) button.disabled = false;
+        renderMyPublications();
+      }
+    }
+
+    async function reorderMyPublications(draggedId, targetId, position = "before") {
       const rows = sortedMyPublications();
       const ids = rows.map((entry) => Number(entry.id));
       const from = ids.indexOf(Number(draggedId));
       const to = ids.indexOf(Number(targetId));
       if (from < 0 || to < 0 || from === to) return;
       const [movedId] = ids.splice(from, 1);
-      ids.splice(from < to ? to - 1 : to, 0, movedId);
+      let insertIndex = ids.indexOf(Number(targetId));
+      if (position === "after") insertIndex += 1;
+      ids.splice(Math.max(0, Math.min(ids.length, insertIndex)), 0, movedId);
       state.myPublicationSort = "manual";
       state.myPublications = ids
         .map((id, index) => {
@@ -10163,22 +11636,55 @@ INDEX_HTML = """<!doctype html>
       else if (state.mode === "library") renderLibraryDetail();
     }
 
+    function myPublicationAuthorCacheKey(value) {
+      return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+    }
+
+    function cacheMyPublicationAuthorResults(key) {
+      if (!key) return;
+      state.myPublicationAuthorCache[key] = {
+        results: JSON.parse(JSON.stringify(state.myPublicationSearchResults || [])),
+        status: state.myPublicationSearchStatus || "",
+      };
+    }
+
+    function restoreMyPublicationAuthorResults(key) {
+      const cached = key ? state.myPublicationAuthorCache[key] : null;
+      if (!cached) return false;
+      state.myPublicationSearchToken += 1;
+      state.myPublicationSearchResults = JSON.parse(JSON.stringify(cached.results || []));
+      state.myPublicationSearchStatus = cached.status || `${state.myPublicationSearchResults.length} cached Scholar results.`;
+      state.myPublicationSearchScrollTop = 0;
+      renderMyPublications();
+      return true;
+    }
+
     async function searchMyPublications(kind = "auto") {
       const query = kind === "author" ? ($("myPublicationName")?.value || state.myPublicationName || "") : ($("publicationSearchBox")?.value || "");
       const cleanQuery = query.trim();
       if (!cleanQuery) return;
       if (kind === "author") await saveMyPublicationName();
-      state.myPublicationSearchStatus = "Searching publications...";
+      const authorCacheKey = kind === "author" ? myPublicationAuthorCacheKey(cleanQuery) : "";
+      if (authorCacheKey && restoreMyPublicationAuthorResults(authorCacheKey)) return;
+      state.myPublicationSearchToken += 1;
+      state.myPublicationSearchStatus = kind === "author" ? "Searching Google Scholar profiles..." : "Searching publications...";
       state.myPublicationSearchResults = [];
+      state.myPublicationSearchScrollTop = 0;
       renderMyPublications();
       try {
-        const res = await fetch(`/api/publication-search?q=${encodeURIComponent(cleanQuery)}&kind=${encodeURIComponent(kind)}`);
+        const url = kind === "author"
+          ? `/api/google-scholar-profiles?q=${encodeURIComponent(cleanQuery)}`
+          : `/api/publication-search?q=${encodeURIComponent(cleanQuery)}&kind=${encodeURIComponent(kind)}`;
+        const res = await fetch(url);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Search failed");
-        state.myPublicationSearchResults = data.results || [];
+        state.myPublicationSearchResults = kind === "author" ? (data.profiles || []) : (data.results || []);
         state.myPublicationSearchStatus = state.myPublicationSearchResults.length
-          ? `${state.myPublicationSearchResults.length} candidates found.`
-          : "No publication candidates found.";
+          ? (kind === "author"
+            ? `${state.myPublicationSearchResults.length} Google Scholar profiles found. Choose the right profile.`
+            : `${state.myPublicationSearchResults.length} candidates found.`)
+          : (kind === "author" ? "No Google Scholar profiles found." : "No publication candidates found.");
+        if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Search failed";
       }
@@ -10186,6 +11692,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function addMyPublicationCandidate(candidate) {
+      const results = $("publicationSearchResults");
+      if (results) state.myPublicationSearchScrollTop = results.scrollTop;
       state.myPublicationSearchStatus = "Adding publication...";
       renderMyPublications();
       const res = await fetch("/api/my-publications/add", {
@@ -10201,17 +11709,22 @@ INDEX_HTML = """<!doctype html>
       }
       applyMyPublications(data);
       state.myPublicationSelectionId = Number(data.publication?.id || state.myPublicationSelectionId || 0);
-      state.myPublicationSearchResults = [];
       state.myPublicationSearchStatus = "Publication added.";
       renderMyPublications();
     }
 
-    async function importGoogleScholarProfile() {
-      const input = $("scholarProfileUrl");
-      const url = (input?.value || "").trim();
+    async function importGoogleScholarProfile(profileUrl = "", profileName = "", authorCacheKey = "") {
+      const button = $("findMyPublications");
+      const url = String(profileUrl || "").trim();
       if (!url) return;
-      state.myPublicationSearchStatus = "Importing Google Scholar profile...";
+      const searchToken = ++state.myPublicationSearchToken;
+      state.myPublicationSearchStatus = `Searching Google Scholar profile${profileName ? ` for ${profileName}` : ""}...`;
       state.myPublicationSearchResults = [];
+      state.myPublicationSearchScrollTop = 0;
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Searching...";
+      }
       renderMyPublications();
       try {
         const res = await fetch("/api/my-publications/import-scholar", {
@@ -10221,14 +11734,108 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
-        applyMyPublications(data);
-        const skipped = Number(data.skipped || 0);
-        const imported = Number(data.imported || 0);
-        state.myPublicationSearchStatus = `${imported} publication${imported === 1 ? "" : "s"} imported from Google Scholar${skipped ? ` · ${skipped} skipped` : ""}. Use Reimport to refresh a row by DOI.`;
-        if (input) input.value = "";
+        if (searchToken !== state.myPublicationSearchToken) return;
+        state.myPublicationSearchResults = data.results || [];
+        const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
+        state.myPublicationSearchStatus = state.myPublicationSearchResults.length
+          ? `${state.myPublicationSearchResults.length} Scholar titles found. Resolving DOI matches...`
+          : `No Scholar titles found${errorCount ? ` · ${errorCount} errors` : ""}.`;
+        if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
+        renderMyPublications();
+        if (state.myPublicationSearchResults.length) {
+          resolveScholarSearchResults(searchToken, authorCacheKey);
+        }
       } catch (error) {
+        if (searchToken !== state.myPublicationSearchToken) return;
         state.myPublicationSearchStatus = error.message || "Google Scholar import failed";
+      } finally {
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Find by Name";
+        }
       }
+      renderMyPublications();
+    }
+
+    async function resolveScholarSearchResults(searchToken, authorCacheKey = "") {
+      const total = state.myPublicationSearchResults.length;
+      for (let pass = 1; pass <= 3; pass += 1) {
+        if (searchToken !== state.myPublicationSearchToken) return;
+        const unresolved = scholarOnlyIndexes();
+        if (!unresolved.length) break;
+        if (pass > 1) {
+          state.myPublicationSearchStatus = `${total} Scholar titles found · retrying ${unresolved.length} unresolved DOI lookup${unresolved.length === 1 ? "" : "s"}...`;
+          renderMyPublications();
+          await sleep(pass === 2 ? 1200 : 2200);
+        }
+        for (let attemptIndex = 0; attemptIndex < unresolved.length; attemptIndex += 1) {
+          if (searchToken !== state.myPublicationSearchToken) return;
+          const index = unresolved[attemptIndex];
+          state.myPublicationSearchStatus = `${total} Scholar titles found. ${pass > 1 ? "Retrying" : "Resolving"} DOI ${attemptIndex + 1} / ${unresolved.length}...`;
+          await resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey);
+        }
+      }
+      updateScholarResolutionStatus("done");
+      if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
+      renderMyPublications();
+    }
+
+    function scholarOnlyIndexes() {
+      return state.myPublicationSearchResults
+        .map((candidate, index) => candidate?.match_status === "scholar" ? index : -1)
+        .filter((index) => index >= 0);
+    }
+
+    function scholarDoiMatchCount() {
+      return state.myPublicationSearchResults.filter((candidate) => candidate?.match_status === "doi").length;
+    }
+
+    function updateScholarResolutionStatus(stage = "") {
+      const total = state.myPublicationSearchResults.length;
+      const matched = scholarDoiMatchCount();
+      const unresolved = scholarOnlyIndexes().length;
+      const prefix = `${total} Scholar titles found · ${matched} DOI matches · ${unresolved} Scholar-only`;
+      state.myPublicationSearchStatus = stage === "done" ? `${prefix}.` : prefix;
+    }
+
+    async function resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey = "") {
+      const candidate = state.myPublicationSearchResults[index];
+      if (!candidate || candidate.match_status !== "scholar") return false;
+      state.myPublicationSearchResults[index] = {...candidate, match_status: "resolving"};
+      renderMyPublications();
+      try {
+        const res = await fetch("/api/my-publications/resolve-scholar", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({candidate})
+        });
+        const data = await res.json();
+        if (searchToken !== state.myPublicationSearchToken) return false;
+        if (res.ok && data.candidate) {
+          state.myPublicationSearchResults[index] = data.candidate;
+          updateScholarResolutionStatus();
+          if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
+          renderMyPublications();
+          return true;
+        }
+      } catch (error) {
+        if (searchToken !== state.myPublicationSearchToken) return false;
+      }
+      state.myPublicationSearchResults[index] = {...candidate, match_status: "scholar"};
+      updateScholarResolutionStatus();
+      if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
+      renderMyPublications();
+      return false;
+    }
+
+    async function retryScholarDoiAtIndex(index) {
+      if (!state.myPublicationSearchResults[index]) return;
+      const searchToken = ++state.myPublicationSearchToken;
+      const authorCacheKey = myPublicationAuthorCacheKey($("myPublicationName")?.value || state.myPublicationName || "");
+      state.myPublicationSearchStatus = "Retrying DOI lookup for this Scholar title...";
+      await resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey);
+      updateScholarResolutionStatus("done");
+      if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
       renderMyPublications();
     }
 
@@ -11778,12 +13385,28 @@ INDEX_HTML = """<!doctype html>
         ${escapeHtml(paper?.journal || "")} ${escapeHtml(paper?.publication_date || "")}
       `;
       $("analysisBody").innerHTML = markdownToHtml(content || "The analysis file is empty.");
+      wireAnalysisLinks();
       $("analysisBackdrop").classList.add("open");
       $("workspace").classList.add("note-open");
       $("workspace").style.setProperty("--note-width", `${state.noteWidth}px`);
       $("analysisPanel").classList.add("open");
       $("analysisPanel").setAttribute("aria-hidden", "false");
       updateReportPanelToggle();
+    }
+
+    function wireAnalysisLinks() {
+      $("analysisBody")?.querySelectorAll('a[data-open-external="safari"]').forEach((link) => {
+        link.addEventListener("click", async (event) => {
+          event.preventDefault();
+          const url = link.getAttribute("href") || "";
+          if (!url) return;
+          await fetch("/api/open-url", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({url, app: "Safari"})
+          });
+        });
+      });
     }
 
     function closeAnalysis() {
@@ -11873,6 +13496,9 @@ INDEX_HTML = """<!doctype html>
             inList = true;
           }
           output.push(`<li>${inlineMarkdown(line.slice(2))}</li>`);
+        } else if (line.startsWith("> ")) {
+          closeList();
+          output.push(citationContextHtml(line.slice(2)));
         } else {
           closeList();
           output.push(`<p>${inlineMarkdown(line)}</p>`);
@@ -11884,8 +13510,17 @@ INDEX_HTML = """<!doctype html>
 
     function inlineMarkdown(value) {
       return escapeHtml(value)
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, `<a href="$2" data-open-external="safari">$1</a>`)
         .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
         .replace(/`([^`]+)`/g, "<code>$1</code>");
+    }
+
+    function citationContextHtml(value) {
+      const match = String(value || "").match(/^\[([^\]]+)\]\s*(.*)$/);
+      const label = match ? match[1].trim() : "context";
+      const text = match ? match[2].trim() : String(value || "");
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "context";
+      return `<blockquote class="citation-context context-${escapeAttr(slug)}"><strong>${escapeHtml(label)}</strong>${inlineMarkdown(text)}</blockquote>`;
     }
 
     function escapeHtml(value) {
@@ -11919,8 +13554,8 @@ INDEX_HTML = """<!doctype html>
     });
     async function openJournalMonitor() {
       state.mode = "report";
-      await loadMonth();
       setSidebarCollapsed(false);
+      await loadMonth();
       await loadReport({showLoading: false});
     }
 
@@ -11939,6 +13574,36 @@ INDEX_HTML = """<!doctype html>
       updateReportRefreshButton();
     }
 
+    function wireWindowDragRegion() {
+      const region = $("windowDragRegion");
+      const handler = window.webkit?.messageHandlers?.windowDrag;
+      if (!region || !handler) return;
+      let dragging = false;
+      const post = (type, event) => {
+        handler.postMessage({type, screenX: event.screenX, screenY: event.screenY});
+      };
+      region.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        dragging = true;
+        region.setPointerCapture?.(event.pointerId);
+        post("begin", event);
+        event.preventDefault();
+      });
+      region.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        post("move", event);
+        event.preventDefault();
+      });
+      const stop = (event) => {
+        if (!dragging) return;
+        dragging = false;
+        post("end", event);
+        region.releasePointerCapture?.(event.pointerId);
+      };
+      region.addEventListener("pointerup", stop);
+      region.addEventListener("pointercancel", stop);
+    }
+
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
@@ -11955,17 +13620,11 @@ INDEX_HTML = """<!doctype html>
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
-    $("importScholarProfile").addEventListener("click", importGoogleScholarProfile);
+    $("refreshMyPublicationMetrics").addEventListener("click", () => refreshMyPublicationMetrics());
     $("publicationSearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         searchMyPublications("auto");
-      }
-    });
-    $("scholarProfileUrl").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        importGoogleScholarProfile();
       }
     });
     $("myPublicationName").addEventListener("change", () => saveMyPublicationName().catch(() => {}));
@@ -11978,10 +13637,6 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         saveMyPublicationName().catch(() => {});
       }
-    });
-    $("myPublicationSort").addEventListener("change", (event) => {
-      state.myPublicationSort = ["manual", "time", "highlight"].includes(event.target.value) ? event.target.value : "manual";
-      renderMyPublications();
     });
     $("toggleSidebar").addEventListener("click", () => {
       const collapsed = document.querySelector(".app").classList.contains("sidebar-collapsed");
@@ -12057,9 +13712,17 @@ INDEX_HTML = """<!doctype html>
       hideLibraryTabContextMenu();
       closeAnalysis();
     }, true);
-    window.addEventListener("click", () => {
+    window.addEventListener("click", (event) => {
       hideLibraryContextMenu();
       hideLibraryTabContextMenu();
+      if (
+        state.libraryTab === "my-publications"
+        && state.myPublicationSearchResults.length
+        && !event.target.closest(".my-publications-search")
+        && !event.target.closest(".my-publications-tools")
+      ) {
+        closeMyPublicationSearchResults();
+      }
     });
     window.addEventListener("resize", () => {
       if (state.mode === "library") resizeLibraryViewport();
@@ -12070,6 +13733,7 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("drop", (event) => {
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     });
+    wireWindowDragRegion();
 
     Promise.resolve().then(loadLibrary).catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;

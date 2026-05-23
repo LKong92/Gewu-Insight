@@ -118,7 +118,14 @@ def clean_abstract(value: str | None) -> str:
 def _crossref_date(value: dict[str, Any] | None) -> str:
     if not value:
         return ""
-    parts = (value.get("date-parts") or [[]])[0]
+    raw_parts = value.get("date-parts") or [[]]
+    parts = raw_parts[0] if raw_parts and isinstance(raw_parts[0], list) else []
+    if not parts:
+        return ""
+    try:
+        parts = [int(part) for part in parts if part is not None]
+    except (TypeError, ValueError):
+        return ""
     if not parts:
         return ""
     if len(parts) == 1:
