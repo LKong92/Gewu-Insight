@@ -3,7 +3,7 @@
 ## Current handoff
 
 - Repo: `/Users/lingyuan/PaperMonitor-20260516`
-- App launcher: `Daico.app`
+- App launcher: `Daiqo.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
 - Current `main` includes the loader-based folder import workflow and the macOS app local-networking launcher fix.

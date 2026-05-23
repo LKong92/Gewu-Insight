@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .config import DEFAULT_DB_PATH
+from .text import normalize_publication_title
 from .time_utils import now_iso
 
 
@@ -124,6 +125,9 @@ CREATE TABLE IF NOT EXISTS my_publications (
   starred INTEGER NOT NULL DEFAULT 0,
   first_author INTEGER NOT NULL DEFAULT 0,
   corresponding_author INTEGER NOT NULL DEFAULT 0,
+  review_article INTEGER NOT NULL DEFAULT 0,
+  export_excluded INTEGER NOT NULL DEFAULT 0,
+  author_marks TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -259,6 +263,15 @@ class Storage:
         if "corresponding_author" not in my_publication_columns:
             self.conn.execute("ALTER TABLE my_publications ADD COLUMN corresponding_author INTEGER NOT NULL DEFAULT 0")
             self.conn.commit()
+        if "review_article" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN review_article INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
+        if "export_excluded" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN export_excluded INTEGER NOT NULL DEFAULT 0")
+            self.conn.commit()
+        if "author_marks" not in my_publication_columns:
+            self.conn.execute("ALTER TABLE my_publications ADD COLUMN author_marks TEXT")
+            self.conn.commit()
 
     def _ensure_library_root(self) -> None:
         timestamp = now_iso()
@@ -302,6 +315,8 @@ class Storage:
         existing = self.get_paper(paper["paper_id"])
         timestamp = now_iso()
         payload = dict(paper)
+        if payload.get("title"):
+            payload["title"] = normalize_publication_title(payload.get("title"))
         payload.setdefault("first_seen_at", timestamp)
         payload["last_seen_at"] = timestamp
         payload["raw_json"] = json.dumps(payload.get("raw") or {}, ensure_ascii=False)
@@ -403,9 +418,10 @@ class Storage:
             return None
         timestamp = now_iso()
         raw_json = json.dumps(paper.get("raw") or {}, ensure_ascii=False)
+        normalized_title = normalize_publication_title(paper.get("title")) if paper.get("title") else ""
         updates = {
             "doi": paper.get("doi") or existing.get("doi"),
-            "title": paper.get("title") or existing.get("title"),
+            "title": normalized_title or existing.get("title"),
             "journal": paper.get("journal") or existing.get("journal"),
             "publication_date": paper.get("publication_date") or existing.get("publication_date"),
             "abstract": paper.get("abstract") or existing.get("abstract"),
@@ -901,6 +917,14 @@ class Storage:
             (1 if starred else 0, now_iso(), int(publication_id)),
         )
         self.conn.commit()
+        return self.get_my_publication(publication_id=int(publication_id)) or {}
+
+    def set_my_publication_export_excluded(self, *, publication_id: int, export_excluded: bool) -> dict[str, Any]:
+        self.conn.execute(
+            "UPDATE my_publications SET export_excluded = ?, updated_at = ? WHERE id = ?",
+            (1 if export_excluded else 0, now_iso(), int(publication_id)),
+        )
+        self.conn.commit()
         row = self.conn.execute(
             """
             SELECT my_publications.*, papers.*
@@ -918,12 +942,14 @@ class Storage:
         publication_id: int,
         first_author: bool,
         corresponding_author: bool,
+        review_article: bool = False,
     ) -> dict[str, Any]:
         self.conn.execute(
             """
             UPDATE my_publications
             SET first_author = ?,
                 corresponding_author = ?,
+                review_article = ?,
                 starred = CASE WHEN ? OR ? THEN 1 ELSE starred END,
                 updated_at = ?
             WHERE id = ?
@@ -931,6 +957,7 @@ class Storage:
             (
                 1 if first_author else 0,
                 1 if corresponding_author else 0,
+                1 if review_article else 0,
                 1 if first_author else 0,
                 1 if corresponding_author else 0,
                 now_iso(),
@@ -967,14 +994,16 @@ class Storage:
             starred = max(int(current["starred"] or 0), int(existing["starred"] or 0))
             first_author = max(int(current["first_author"] or 0), int(existing["first_author"] or 0))
             corresponding_author = max(int(current["corresponding_author"] or 0), int(existing["corresponding_author"] or 0))
+            review_article = max(int(current["review_article"] or 0), int(existing["review_article"] or 0))
+            export_excluded = max(int(current["export_excluded"] or 0), int(existing["export_excluded"] or 0))
             sort_order = min(int(current["sort_order"] or 0), int(existing["sort_order"] or 0))
             self.conn.execute(
                 """
                 UPDATE my_publications
-                SET starred = ?, first_author = ?, corresponding_author = ?, sort_order = ?, updated_at = ?
+                SET starred = ?, first_author = ?, corresponding_author = ?, review_article = ?, export_excluded = ?, sort_order = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (starred, first_author, corresponding_author, sort_order, timestamp, int(existing["id"])),
+                (starred, first_author, corresponding_author, review_article, export_excluded, sort_order, timestamp, int(existing["id"])),
             )
             self.conn.execute("DELETE FROM my_publications WHERE id = ?", (publication_id,))
             self.conn.commit()
@@ -1188,6 +1217,70 @@ class Storage:
             WHERE folder_id = ? AND paper_id = ?
             """,
             (folder_id, source["paper_id"]),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def set_my_publication_author_mark(
+        self,
+        *,
+        publication_id: int,
+        author_index: int,
+        author_name: str,
+        first_author: bool,
+        co_first_author: bool,
+        corresponding_author: bool,
+    ) -> dict[str, Any]:
+        current = self.conn.execute("SELECT author_marks FROM my_publications WHERE id = ?", (int(publication_id),)).fetchone()
+        if not current:
+            return {}
+        try:
+            marks = json.loads(current["author_marks"] or "{}")
+        except json.JSONDecodeError:
+            marks = {}
+        if not isinstance(marks, dict):
+            marks = {}
+        key = str(max(0, int(author_index)))
+        mark = {
+            "name": str(author_name or ""),
+            "first_author": bool(first_author),
+            "co_first_author": bool(co_first_author),
+            "corresponding_author": bool(corresponding_author),
+        }
+        if mark["first_author"] or mark["co_first_author"] or mark["corresponding_author"]:
+            marks[key] = mark
+        else:
+            marks.pop(key, None)
+        aggregate_co_first = any(bool(item.get("co_first_author")) for item in marks.values() if isinstance(item, dict))
+        aggregate_corresponding = any(bool(item.get("corresponding_author")) for item in marks.values() if isinstance(item, dict))
+        self.conn.execute(
+            """
+            UPDATE my_publications
+            SET author_marks = ?,
+                first_author = ?,
+                corresponding_author = ?,
+                starred = CASE WHEN ? OR ? THEN 1 ELSE starred END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(marks, ensure_ascii=False),
+                1 if aggregate_co_first else 0,
+                1 if aggregate_corresponding else 0,
+                1 if aggregate_co_first else 0,
+                1 if aggregate_corresponding else 0,
+                now_iso(),
+                int(publication_id),
+            ),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            """
+            SELECT my_publications.*, papers.*
+            FROM my_publications
+            JOIN papers ON papers.paper_id = my_publications.paper_id
+            WHERE my_publications.id = ?
+            """,
+            (int(publication_id),),
         ).fetchone()
         return dict(row) if row else {}
 

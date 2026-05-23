@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
 
 from ..http import request_with_retries
-from ..text import clean_text, normalize_doi, safe_slug
+from ..text import clean_text, normalize_doi, normalize_publication_title, safe_slug
 
 
 ARXIV_JOURNAL_NAME = "arXiv"
@@ -175,7 +175,7 @@ def local_timezone() -> tzinfo:
 def normalize_arxiv_entry(entry: ET.Element) -> dict[str, Any]:
     versioned_arxiv_id = arxiv_id_from_url(atom_text(entry, "id"))
     arxiv_id = strip_arxiv_version(versioned_arxiv_id)
-    title = atom_text(entry, "title") or "(Untitled)"
+    title = normalize_publication_title(atom_text(entry, "title")) or "(Untitled)"
     published = atom_text(entry, "published")
     updated = atom_text(entry, "updated")
     authors = [clean_text(author.findtext("atom:name", default="", namespaces=ATOM_NS)) for author in entry.findall("atom:author", ATOM_NS)]

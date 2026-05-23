@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from email.parser import BytesParser
 from email.policy import default as email_policy
+import html
 import hashlib
 from io import BytesIO
 import json
 import mimetypes
+import os
 import re
 import shutil
 import socketserver
@@ -14,6 +16,7 @@ import threading
 import time
 import uuid
 import webbrowser
+import zipfile
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,13 +44,14 @@ from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
+from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, strip_arxiv_version
 from .sources.crossref import normalize_crossref_item
 from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
-from .text import clean_text, safe_slug
-from .time_utils import today_jst
+from .text import clean_text, journal_name_for_doi, normalize_publication_title, safe_slug
+from .time_utils import now_iso, today_jst
 
 
 class GoogleScholarBlockedError(RuntimeError):
@@ -70,6 +74,8 @@ LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
+ADS_API_TOKEN_SETTING = "ads_api_token"
+MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
 QUICK_LOOK_LOCK = threading.Lock()
 QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -77,6 +83,7 @@ ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
 DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
+PUBLICATION_EXPORT_DIR = ROOT / "reports" / "publication_exports"
 COMMENT_REPORT_MAX_OPENALEX_PAGES = 10
 COMMENT_REPORT_OPENALEX_PER_PAGE = 100
 COMMENT_REPORT_LIST_LIMIT = 200
@@ -176,6 +183,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/paper":
                 self.handle_paper(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/paper/semantic-influential":
+                self.handle_paper_semantic_influential(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/pdf-info":
                 self.handle_pdf_info(parse_qs(parsed.query))
                 return
@@ -206,8 +216,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/library-naming":
                 self.handle_get_library_naming_rule()
                 return
+            if parsed.path == "/api/settings/citation":
+                self.handle_get_citation_settings()
+                return
             if parsed.path == "/api/my-publications":
                 self.handle_my_publications(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/my-publications/export":
+                self.handle_export_my_publications(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/my-publications/refresh-metrics/progress":
                 self.handle_my_publication_metrics_progress(parse_qs(parsed.query))
@@ -283,6 +299,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/library-naming":
                 self.handle_set_library_naming_rule(payload)
                 return
+            if parsed.path == "/api/settings/citation":
+                self.handle_set_citation_settings(payload)
+                return
             if parsed.path == "/api/cache/clear-web":
                 self.handle_clear_web_cache(payload)
                 return
@@ -316,6 +335,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/import-scholar":
                 self.handle_import_google_scholar_publications(payload)
                 return
+            if parsed.path == "/api/my-publications/scholar-profile":
+                self.handle_my_publication_scholar_profile(payload)
+                return
             if parsed.path == "/api/my-publications/resolve-scholar":
                 self.handle_resolve_google_scholar_publication(payload)
                 return
@@ -328,8 +350,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/my-publications/star":
                 self.handle_star_my_publication(payload)
                 return
+            if parsed.path == "/api/my-publications/head":
+                self.handle_my_publication_head(payload)
+                return
             if parsed.path == "/api/my-publications/roles":
                 self.handle_my_publication_roles(payload)
+                return
+            if parsed.path == "/api/my-publications/author-marks":
+                self.handle_my_publication_author_marks(payload)
+                return
+            if parsed.path == "/api/my-publications/manual-metadata":
+                self.handle_my_publication_manual_metadata(payload)
                 return
             if parsed.path == "/api/my-publications/comments":
                 self.handle_my_publication_comments(payload)
@@ -526,6 +557,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"paper": paper_to_api(paper)})
 
+    def handle_paper_semantic_influential(self, query: dict[str, list[str]]) -> None:
+        paper_id = first(query, "paper_id")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+        finally:
+            storage.close()
+        if not paper:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        try:
+            citations = fetch_semantic_scholar_influential_citations(paper, limit=20)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Semantic Scholar influential citations failed: {exc}")
+            return
+        self.send_json({"paper_id": paper_id, "citations": citations})
+
     def handle_download(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
         if not paper_id:
@@ -610,9 +661,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
             my_name = storage.get_setting("my_publications_name", "")
+            scholar_profile = load_my_publications_scholar_profile(storage)
         finally:
             storage.close()
-        self.send_json({"publications": publications, "myName": my_name})
+        self.send_json({"publications": publications, "myName": my_name, "scholarProfile": scholar_profile})
 
     def handle_publication_search(self, query: dict[str, list[str]]) -> None:
         search_text = (first(query, "q") or "").strip()
@@ -632,6 +684,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not search_text:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "q is required")
             return
+        storage = Storage(self.configured_db_path)
+        try:
+            local_profiles = local_google_scholar_profiles(storage, search_text, limit=20)
+        finally:
+            storage.close()
+        if local_profiles:
+            self.send_json({"profiles": local_profiles})
+            return
         try:
             profiles = search_google_scholar_profiles(search_text, limit=20)
         except GoogleScholarBlockedError as exc:
@@ -640,7 +700,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar profile lookup failed: {exc}")
             return
-        self.send_json({"profiles": profiles})
+        self.send_json({"profiles": merge_google_scholar_profiles(local_profiles, profiles, search_text, limit=20)})
 
     def handle_add_my_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("paper")
@@ -671,7 +731,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         limit = max(1, min(300, int(payload.get("limit") or 200)))
         try:
-            candidates = fetch_google_scholar_profile_publications(profile_url, limit=limit)
+            scholar_payload = fetch_google_scholar_profile_payload(profile_url, limit=limit)
+            candidates = scholar_payload["candidates"]
         except GoogleScholarBlockedError as exc:
             self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
             return
@@ -690,6 +751,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 if len(errors) < 5:
                     errors.append(f"{title or 'Untitled'}: {exc}")
+        profile = save_my_publications_scholar_profile_for_db(
+            self.configured_db_path,
+            scholar_payload.get("profile") or {},
+        )
         self.send_json(
             {
                 "seen": len(candidates),
@@ -697,8 +762,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "scholar_only": len(results),
                 "errors": errors,
                 "results": results,
+                "profile": profile,
             }
         )
+
+    def handle_my_publication_scholar_profile(self, payload: dict[str, Any]) -> None:
+        profile = payload.get("profile")
+        storage = Storage(self.configured_db_path)
+        try:
+            if not profile:
+                storage.set_setting(MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING, "")
+                saved_profile: dict[str, Any] = {}
+            else:
+                saved_profile = save_my_publications_scholar_profile(storage, profile)
+        finally:
+            storage.close()
+        self.send_json({"profile": saved_profile})
 
     def handle_resolve_google_scholar_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("candidate")
@@ -777,6 +856,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
 
+    def handle_my_publication_head(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.set_my_publication_export_excluded(
+                publication_id=publication_id,
+                export_excluded=bool(payload.get("head")),
+            )
+            if not publication:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+                return
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
     def handle_my_publication_roles(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
         storage = Storage(self.configured_db_path)
@@ -784,6 +879,28 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             publication = storage.set_my_publication_roles(
                 publication_id=publication_id,
                 first_author=bool(payload.get("first_author")),
+                corresponding_author=bool(payload.get("corresponding_author")),
+                review_article=bool(payload.get("review_article")),
+            )
+            if not publication:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+                return
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_my_publication_author_marks(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        author_index = int(payload.get("author_index") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.set_my_publication_author_mark(
+                publication_id=publication_id,
+                author_index=author_index,
+                author_name=clean_text(payload.get("author_name") or ""),
+                first_author=bool(payload.get("first_author")),
+                co_first_author=bool(payload.get("co_first_author")),
                 corresponding_author=bool(payload.get("corresponding_author")),
             )
             if not publication:
@@ -793,6 +910,83 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_my_publication_manual_metadata(self, payload: dict[str, Any]) -> None:
+        publication_id = int(payload.get("publication_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            publication = storage.get_my_publication(publication_id=publication_id)
+            if not publication:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
+                return
+            if not my_publication_allows_manual_metadata(publication):
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Manual metadata is only available for publications without DOI or arXiv ID")
+                return
+            raw = parse_raw_json(publication)
+            authors = parse_manual_author_list(payload.get("authors") or "")
+            raw["authors"] = authors
+            raw["manual_metadata"] = True
+            raw["source"] = raw.get("source") or publication.get("source") or "manual"
+            for raw_key, payload_key in [
+                ("volume", "volume"),
+                ("issue", "issue"),
+                ("page", "pages"),
+                ("year", "publication_date"),
+            ]:
+                value = clean_text(payload.get(payload_key) or "")
+                if value:
+                    raw[raw_key] = value
+                else:
+                    raw.pop(raw_key, None)
+            paper = dict(publication)
+            paper.update({
+                "title": clean_text(payload.get("title") or publication.get("title") or ""),
+                "journal": clean_text(payload.get("journal") or publication.get("journal") or ""),
+                "publication_date": clean_text(payload.get("publication_date") or publication.get("publication_date") or ""),
+                "raw": raw,
+            })
+            updated = storage.refresh_paper_metadata(publication["paper_id"], merge_refreshed_metadata(publication, paper))
+            publication = storage.get_my_publication(publication_id=publication_id) if updated else publication
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+
+    def handle_export_my_publications(self, query: dict[str, list[str]]) -> None:
+        export_format = clean_text(first(query, "format") or "docx").lower()
+        response_format = clean_text(first(query, "response") or "").lower()
+        if export_format not in {"docx", "pdf", "tex", "overleaf"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "format must be docx, pdf, tex, or overleaf")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            rows = [row for row in storage.list_my_publications() if not row.get("export_excluded")]
+            my_name = storage.get_setting("my_publications_name", "")
+        finally:
+            storage.close()
+        try:
+            result_path = export_my_publication_list(rows, my_name=my_name, export_format=export_format)
+        except Exception as exc:
+            if response_format != "json":
+                self.send_export_error_page(str(exc))
+                return
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            return
+        if response_format == "json":
+            try:
+                open_result = open_publication_export_result(result_path, export_format)
+            except Exception as exc:
+                open_result = {"status": "failed", "error": str(exc)}
+            self.send_json({
+                "status": "exported",
+                "format": export_format,
+                "filename": result_path.name,
+                "path": str(result_path),
+                "folder": str(result_path.parent),
+                "open": open_result,
+            })
+            return
+        self.send_path_download(result_path)
 
     def handle_my_publication_comments(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -964,7 +1158,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             storage.upsert_paper(paper)
             paper_id = str(paper.get("paper_id") or "")
-            refresh_semantic_scholar_if_possible(storage, storage.get_paper(paper_id), timeout=8, max_retries=1)
+            refreshed = refresh_semantic_scholar_if_possible(storage, storage.get_paper(paper_id), timeout=8, max_retries=1)
+            refresh_ads_if_possible(storage, refreshed or storage.get_paper(paper_id), timeout=8, max_retries=1)
             tabs = library_workspace_tabs(storage)
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
@@ -1195,6 +1390,54 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"rule": rule})
 
+    def handle_get_citation_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            token = ads_api_token(storage)
+        finally:
+            storage.close()
+        self.send_json({"ads": {"configured": bool(token), "status": "configured" if token else "not_configured"}})
+
+    def handle_set_citation_settings(self, payload: dict[str, Any]) -> None:
+        action = clean_text(str(payload.get("action") or "save")).lower()
+        requested_token = clean_text(str(payload.get("ads_token") or ""))
+        storage = Storage(self.configured_db_path)
+        try:
+            if action == "clear":
+                storage.set_setting(ADS_API_TOKEN_SETTING, "")
+                self.send_json({"ads": {"configured": False, "status": "cleared"}})
+                return
+            token = requested_token or ads_api_token(storage)
+            if action == "test":
+                if not token:
+                    self.send_json({"ads": {"configured": False, "status": "not_configured", "ok": False}})
+                    return
+                try:
+                    ok = test_ads_token(token)
+                except Exception:
+                    ok = False
+                self.send_json({"ads": {"configured": bool(ads_api_token(storage)), "status": "connected" if ok else "invalid", "ok": ok}})
+                return
+            if requested_token:
+                storage.set_setting(ADS_API_TOKEN_SETTING, requested_token)
+                token = requested_token
+            test_requested = bool(payload.get("test"))
+            ok: bool | None = None
+            if test_requested and token:
+                try:
+                    ok = test_ads_token(token)
+                except Exception:
+                    ok = False
+            self.send_json({
+                "ads": {
+                    "configured": bool(token),
+                    "status": "connected" if ok else ("invalid" if ok is False else ("configured" if token else "not_configured")),
+                    "ok": ok,
+                }
+            })
+        finally:
+            storage.close()
+
     def handle_clear_web_cache(self, payload: dict[str, Any]) -> None:
         result = clear_webkit_network_cache()
         self.send_json(result)
@@ -1387,7 +1630,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             paper = None
             if normalized:
-                paper = storage.refresh_paper_metadata(paper_id, normalized)
+                paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(storage.get_paper(paper_id), normalized))
             if not paper:
                 paper = storage.get_paper(paper_id)
             if not paper:
@@ -1401,13 +1644,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 raw["arxiv_id"] = arxiv_id
                 semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
             paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=12, max_retries=1) or paper
+            paper = refresh_ads_if_possible(storage, paper, timeout=12, max_retries=1) or paper
             if not normalized and not parse_semantic_scholar_json(paper):
                 self.send_error_json(HTTPStatus.NOT_FOUND, f"No publication found for this {lookup_kind}: {lookup_label}")
                 return
             snapshot = library_snapshot(storage)
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"paper": paper_to_api(paper), **snapshot})
+        self.send_json({"paper": paper_to_api(paper), "publications": publications, **snapshot})
 
     def handle_paste_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -1564,21 +1809,33 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not raw_path:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
-        requested = Path(raw_path).expanduser().resolve()
-        target = requested
-        revealed = "file"
-        if requested.exists():
-            subprocess.run(["open", "-R", str(requested)], check=True)
-        else:
-            revealed = "nearest_parent"
-            target = requested.parent
-            while target != target.parent and not target.exists():
-                target = target.parent
-            if not target.exists():
-                self.send_error_json(HTTPStatus.NOT_FOUND, "No existing parent folder found")
-                return
-            subprocess.run(["open", str(target)], check=True)
-        self.send_json({"status": "opened", "path": str(requested), "opened_path": str(target), "revealed": revealed})
+        try:
+            self.send_json(reveal_path_in_finder(Path(raw_path)))
+        except FileNotFoundError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "No existing parent folder found")
+
+    def send_export_error_page(self, message: str) -> None:
+        html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Export failed</title>
+<style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fb;color:#172033;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}}
+.card{{max-width:680px;margin:24px;padding:28px;border:1px solid #d8dee8;border-radius:12px;background:#fff;box-shadow:0 18px 50px rgba(15,23,42,.12);}}
+h1{{margin:0 0 10px;font-size:22px;letter-spacing:0;}}
+p{{color:#5f6b80;line-height:1.5;}}
+pre{{white-space:pre-wrap;background:#f2f4f7;border-radius:8px;padding:12px;color:#344054;}}
+button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 13px;font-weight:700;cursor:pointer;}}
+</style></head><body><div class="card">
+<h1>Publication List Export Failed</h1>
+<p>The export did not finish. You can go back to Daiqo and try another format.</p>
+<pre>{xml_escape(message)}</pre>
+<button type="button" onclick="history.back()">Back</button>
+</div></body></html>"""
+        data = html.encode("utf-8")
+        self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_journals(self) -> None:
         raw = read_config_json()
@@ -1837,6 +2094,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def send_path_download(self, path: Path) -> None:
+        data = path.read_bytes()
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def send_error_json(self, status: HTTPStatus, message: str) -> None:
         self.send_json({"error": message}, status=status)
 
@@ -2036,6 +2303,7 @@ def prepare_internal_page_html(html: str, base_url: str) -> str:
 
 def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) -> dict[str, Any]:
     section = paper.get("publisher_section") or "unknown"
+    raw = parse_raw_json(paper)
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
@@ -2075,11 +2343,17 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "citation_label": citation_label(paper),
         "citation_metrics": citation_metrics(paper),
         "semantic_scholar": semantic_scholar_summary(paper),
+        "ads": ads_summary(paper),
         "google_scholar_url": google_scholar_url(paper),
         "late_arrival": paper_is_late_arrival(paper),
         "late_arrival_unread": bool(late_arrival_unread),
         "bibtex": bibtex_entry(paper),
         "nature_reference": nature_reference(paper),
+        "manual_metadata": {
+            "volume": _paper_volume_from_raw(raw),
+            "issue": clean_text(str(raw.get("issue") or (raw.get("biblio") or {}).get("issue") or "")),
+            "pages": _paper_page_from_raw(raw),
+        },
         "full_detail": True,
     }
 
@@ -2173,7 +2447,7 @@ def publication_metadata_from_datacite_doi(
     if not attrs:
         return None
     titles = attrs.get("titles") if isinstance(attrs.get("titles"), list) else []
-    title = clean_text(next((item.get("title") for item in titles if isinstance(item, dict) and item.get("title")), ""))
+    title = normalize_publication_title(next((item.get("title") for item in titles if isinstance(item, dict) and item.get("title")), ""))
     descriptions = attrs.get("descriptions") if isinstance(attrs.get("descriptions"), list) else []
     abstract = clean_text(next((item.get("description") for item in descriptions if isinstance(item, dict) and item.get("description")), ""))
     year = clean_text(str(attrs.get("publicationYear") or ""))
@@ -2213,6 +2487,7 @@ def publication_metrics_metadata_from_doi(
         return None
     crossref_count: int | None = None
     crossref_journal = ""
+    crossref_raw: dict[str, Any] = {}
     try:
         crossref = publication_metadata_from_doi(
             doi,
@@ -2225,8 +2500,11 @@ def publication_metrics_metadata_from_doi(
         crossref_raw = crossref.get("raw") if isinstance(crossref, dict) else {}
         if isinstance(crossref_raw, dict):
             crossref_count = int_or_none(crossref_raw.get("is-referenced-by-count"))
+        else:
+            crossref_raw = {}
     except Exception:
         crossref_count = None
+        crossref_raw = {}
     try:
         response = request_with_retries(
             "GET",
@@ -2241,8 +2519,10 @@ def publication_metrics_metadata_from_doi(
             journal = crossref_journal or source_journal or "Unknown Journal"
             normalized = normalize_openalex_item(item, journal)
             raw = normalized.setdefault("raw", {})
-            if isinstance(raw, dict) and crossref_count is not None:
-                raw["is-referenced-by-count"] = crossref_count
+            if isinstance(raw, dict):
+                merge_crossref_bibliographic_raw(raw, crossref_raw)
+                if crossref_count is not None:
+                    raw["is-referenced-by-count"] = crossref_count
             return normalized
     except Exception:
         pass
@@ -2324,7 +2604,7 @@ def attach_arxiv_preprint_metadata(published: dict[str, Any], arxiv_paper: dict[
         "source": "arxiv",
         "arxiv_id": arxiv_id,
         "versioned_arxiv_id": clean_text(arxiv_raw.get("versioned_arxiv_id") or ""),
-        "title": clean_text(arxiv_paper.get("title") or ""),
+        "title": normalize_publication_title(arxiv_paper.get("title") or ""),
         "publication_date": clean_text(arxiv_paper.get("publication_date") or ""),
         "url": clean_text(arxiv_paper.get("url") or arxiv_paper.get("landing_url") or ""),
         "pdf_url": clean_text(arxiv_paper.get("pdf_url") or ""),
@@ -2423,6 +2703,22 @@ def refresh_semantic_scholar_if_possible(
     if not enrichment:
         return paper
     updated = storage.update_semantic_scholar_enrichment(paper_id, enrichment) or paper
+    if not clean_text(updated.get("abstract") or "") and clean_text(enrichment.get("abstract") or ""):
+        updated = storage.refresh_paper_metadata(
+            paper_id,
+            merge_refreshed_metadata(
+                updated,
+                {
+                    "paper_id": paper_id,
+                    "title": updated.get("title") or enrichment.get("title") or "",
+                    "journal": updated.get("journal") or enrichment.get("venue") or "",
+                    "publication_date": updated.get("publication_date") or clean_text(str(enrichment.get("year") or "")),
+                    "abstract": clean_text(enrichment.get("abstract") or ""),
+                    "abstract_source": "semantic_scholar",
+                    "raw": parse_raw_json(updated),
+                },
+            ),
+        ) or updated
     return refresh_preprint_citation_version_if_possible(storage, updated, timeout=timeout, max_retries=max_retries) or updated
 
 
@@ -2505,7 +2801,7 @@ def refresh_paper_metadata_from_doi_if_possible(
         return paper
     if not normalized:
         return paper
-    refreshed = storage.refresh_paper_metadata(paper_id, normalized)
+    refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(paper, normalized))
     return refreshed or paper
 
 
@@ -2529,7 +2825,7 @@ def refresh_paper_metadata_from_arxiv_if_possible(
         return paper
     if not normalized:
         return paper
-    refreshed = storage.refresh_paper_metadata(paper_id, normalized)
+    refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(paper, normalized))
     return refreshed or paper
 
 
@@ -2592,6 +2888,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         else:
             refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, stored_paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
         refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
+        refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
         if refreshed and refreshed != before:
             refreshed_count += 1
             if job_id:
@@ -2725,6 +3022,58 @@ def library_naming_rule(storage: Storage) -> str:
     return rule if rule in LIBRARY_NAMING_RULES else DEFAULT_LIBRARY_NAMING_RULE
 
 
+def ads_api_token(storage: Storage) -> str:
+    return clean_text(storage.get_setting(ADS_API_TOKEN_SETTING, ""))
+
+
+def sanitize_google_scholar_profile(profile: Any) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        return {}
+    interests = profile.get("interests")
+    if not isinstance(interests, list):
+        interests = []
+    clean_interests = [clean_text(str(item)) for item in interests if clean_text(str(item))]
+    sanitized = {
+        "candidate_type": "scholar-profile",
+        "name": clean_text(str(profile.get("name") or "")),
+        "affiliation": clean_text(str(profile.get("affiliation") or "")),
+        "email": clean_text(str(profile.get("email") or "")),
+        "cited_by": clean_text(str(profile.get("cited_by") or "")),
+        "interests": clean_interests[:20],
+        "url": clean_text(str(profile.get("url") or "")),
+        "user_id": clean_text(str(profile.get("user_id") or "")),
+        "avatar_url": clean_text(str(profile.get("avatar_url") or "")),
+    }
+    return sanitized if sanitized["name"] or sanitized["url"] or sanitized["user_id"] or sanitized["avatar_url"] else {}
+
+
+def load_my_publications_scholar_profile(storage: Storage) -> dict[str, Any]:
+    raw = storage.get_setting(MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING, "")
+    if not raw:
+        return {}
+    try:
+        return sanitize_google_scholar_profile(json.loads(raw))
+    except Exception:
+        return {}
+
+
+def save_my_publications_scholar_profile(storage: Storage, profile: Any) -> dict[str, Any]:
+    sanitized = sanitize_google_scholar_profile(profile)
+    storage.set_setting(
+        MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING,
+        json.dumps(sanitized, ensure_ascii=False) if sanitized else "",
+    )
+    return sanitized
+
+
+def save_my_publications_scholar_profile_for_db(db_path: Path, profile: Any) -> dict[str, Any]:
+    storage = Storage(db_path)
+    try:
+        return save_my_publications_scholar_profile(storage, profile)
+    finally:
+        storage.close()
+
+
 def default_library_item_display_name(paper: dict[str, Any], *, rule: str = DEFAULT_LIBRARY_NAMING_RULE) -> str:
     if rule == "title":
         label = paper.get("title") or citation_label(paper) or "Untitled paper"
@@ -2741,11 +3090,52 @@ def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "starred": bool(row.get("starred")),
         "first_author": bool(row.get("first_author")),
         "corresponding_author": bool(row.get("corresponding_author")),
+        "review_article": bool(row.get("review_article")),
+        "head": bool(row.get("export_excluded")),
+        "author_marks": parse_my_publication_author_marks(row),
+        "manual_metadata_editable": my_publication_allows_manual_metadata(row),
         "sort_order": int(row.get("sort_order") or 0),
         "created_at": row.get("created_at") or "",
         "updated_at": row.get("updated_at") or "",
         "paper": paper_to_api(row),
     }
+
+
+def parse_my_publication_author_marks(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = row.get("author_marks") or "{}"
+    try:
+        marks = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        marks = {}
+    if not isinstance(marks, dict):
+        return {}
+    clean_marks: dict[str, dict[str, Any]] = {}
+    for key, value in marks.items():
+        if not isinstance(value, dict):
+            continue
+        clean_marks[str(key)] = {
+            "name": clean_text(value.get("name") or ""),
+            "first_author": bool(value.get("first_author")),
+            "co_first_author": bool(value.get("co_first_author")),
+            "corresponding_author": bool(value.get("corresponding_author")),
+        }
+    return clean_marks
+
+
+def my_publication_allows_manual_metadata(row: dict[str, Any]) -> bool:
+    doi = normalize_publication_doi(str(row.get("doi") or ""))
+    return not doi and not preprint_identifier(row)
+
+
+def parse_manual_author_list(value: Any) -> list[str]:
+    text = clean_text(value)
+    if not text:
+        return []
+    if re.search(r"[;\n；、，]", text):
+        parts = re.split(r"\s*(?:[;\n；、，]+)\s*", text)
+    else:
+        parts = re.split(r"\s*,\s*", text)
+    return dedup_names([clean_author_name(part) for part in parts if clean_author_name(part)])
 
 
 def publication_candidate_to_api(paper: dict[str, Any]) -> dict[str, Any]:
@@ -2781,12 +3171,14 @@ def paper_from_publication_candidate(candidate: dict[str, Any]) -> dict[str, Any
     paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
     raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else paper.get("raw")
     if isinstance(raw, dict) and ("DOI" in raw or "container-title" in raw):
+        raw_doi = normalize_publication_doi(str(raw.get("DOI") or paper.get("doi") or ""))
         journal = clean_text(first_crossref_text(raw.get("container-title"))) or clean_text(paper.get("journal") or "Unknown Journal")
+        journal = journal_name_for_doi(journal, raw_doi) or "Unknown Journal"
         return normalize_crossref_item(raw, journal)
     publication_date = clean_text(paper.get("publication_date") or "")
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    title = clean_text(paper.get("title") or "(Untitled)")
-    journal = clean_text(paper.get("journal") or "Unknown Journal")
+    title = normalize_publication_title(paper.get("title") or "(Untitled)")
+    journal = journal_name_for_doi(paper.get("journal") or "Unknown Journal", doi) or "Unknown Journal"
     arxiv_id = normalize_arxiv_identifier(str(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")) if isinstance(raw, dict) else ""
     return {
         "paper_id": paper.get("paper_id") or (f"arxiv_{safe_slug(arxiv_id, 90)}" if arxiv_id else paper_id_from_publication(doi, title, journal, publication_date)),
@@ -2830,7 +3222,8 @@ def search_crossref_publications(
         item = response.json().get("message", {})
         if not item:
             return []
-        return [normalize_crossref_item(item, clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal")]
+        journal = journal_name_for_doi(clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal", doi) or "Unknown Journal"
+        return [normalize_crossref_item(item, journal)]
 
     params: dict[str, Any] = {"rows": max(1, min(50, int(rows or 12)))}
     if search_kind == "author":
@@ -2854,7 +3247,8 @@ def search_crossref_publications(
     for item in items:
         if not isinstance(item, dict):
             continue
-        journal = clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal"
+        item_doi = normalize_publication_doi(str(item.get("DOI") or ""))
+        journal = journal_name_for_doi(clean_text(first_crossref_text(item.get("container-title"))) or "Unknown Journal", item_doi) or "Unknown Journal"
         paper = normalize_crossref_item(item, journal)
         key = paper.get("doi") or paper.get("paper_id")
         if key in seen:
@@ -2869,6 +3263,131 @@ def parse_author_search_query(search_text: str) -> tuple[str, list[str]]:
     if not parts:
         return "", []
     return parts[0], parts[1:]
+
+
+def local_google_scholar_profiles(storage: Storage, search_text: str, *, limit: int = 20) -> list[dict[str, Any]]:
+    author_name, affiliations = parse_author_search_query(search_text)
+    if not author_name:
+        return []
+    profiles_by_user: dict[str, dict[str, Any]] = {}
+    for paper in local_google_scholar_candidate_papers(storage):
+        authors = full_author_names(paper) or author_summary(paper)
+        matching_author = next((author for author in authors if author_matches_name(author, author_name)), "")
+        if not matching_author:
+            continue
+        user_ids = google_scholar_user_ids_from_paper(paper)
+        if not user_ids:
+            continue
+        for user_id in user_ids:
+            profile = profiles_by_user.setdefault(
+                user_id,
+                {
+                    "candidate_type": "scholar-profile",
+                    "name": author_name or matching_author,
+                    "affiliation": "",
+                    "email": "",
+                    "cited_by": "",
+                    "interests": [],
+                    "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
+                    "user_id": user_id,
+                    "source": "local",
+                    "_papers": [],
+                },
+            )
+            if matching_author and matching_author != author_name:
+                profile.setdefault("_aliases", set()).add(matching_author)
+            profile["_papers"].append(paper)
+    profiles: list[dict[str, Any]] = []
+    for profile in profiles_by_user.values():
+        papers = profile.pop("_papers", [])
+        aliases = profile.pop("_aliases", set())
+        journals = dedup_names([clean_text(paper.get("journal") or "") for paper in papers if paper.get("journal")])[:2]
+        context_parts = [f"Local Google Scholar imports · {len(papers)} publication{'s' if len(papers) != 1 else ''}"]
+        if journals:
+            context_parts.append(", ".join(journals))
+        if affiliations:
+            context_parts.append("; ".join(affiliations))
+        if aliases:
+            context_parts.append("aliases: " + ", ".join(sorted(aliases)[:3]))
+        profile["affiliation"] = " · ".join(context_parts)
+        profiles.append(profile)
+    return sorted_google_scholar_profiles(profiles, author_name, affiliations)[:limit]
+
+
+def local_google_scholar_candidate_papers(storage: Storage) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        SELECT * FROM papers
+        WHERE source = 'google-scholar'
+           OR url LIKE '%scholar.google.%'
+           OR landing_url LIKE '%scholar.google.%'
+           OR raw_json LIKE '%scholar.google.%'
+           OR raw_json LIKE '%google-scholar%'
+        ORDER BY publication_date DESC, journal ASC, title ASC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def google_scholar_user_ids_from_paper(paper: dict[str, Any]) -> list[str]:
+    raw = parse_raw_json(paper)
+    values: list[Any] = [
+        paper.get("url"),
+        paper.get("landing_url"),
+        paper.get("pdf_url"),
+        raw,
+    ]
+    seen: set[str] = set()
+    user_ids: list[str] = []
+    for value in values:
+        for user_id in google_scholar_user_ids_from_value(value):
+            if user_id and user_id not in seen:
+                seen.add(user_id)
+                user_ids.append(user_id)
+    return user_ids
+
+
+def google_scholar_user_ids_from_value(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        ids: list[str] = []
+        for item in value.values():
+            ids.extend(google_scholar_user_ids_from_value(item))
+        return ids
+    if isinstance(value, (list, tuple)):
+        ids = []
+        for item in value:
+            ids.extend(google_scholar_user_ids_from_value(item))
+        return ids
+    if not isinstance(value, str):
+        return []
+    text = html.unescape(value)
+    candidates = [text]
+    candidates.extend(match.group(0) for match in re.finditer(r"https?://[^\s\"'<>]+", text))
+    ids: list[str] = []
+    for candidate in candidates:
+        user_id = google_scholar_user_id(candidate)
+        if user_id:
+            ids.append(user_id)
+    return dedup_names(ids)
+
+
+def merge_google_scholar_profiles(
+    local_profiles: list[dict[str, Any]],
+    remote_profiles: list[dict[str, Any]],
+    search_text: str,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    author_name, affiliations = parse_author_search_query(search_text)
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for profile in [*local_profiles, *remote_profiles]:
+        user_id = clean_text(profile.get("user_id") or "")
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        merged.append(profile)
+    return sorted_google_scholar_profiles(merged, author_name, affiliations)[:limit]
 
 
 def search_crossref_author_publications(
@@ -3021,6 +3540,8 @@ def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list
         if not clean_query:
             continue
         for profile in fetch_google_scholar_profiles_from_search(clean_query, limit=limit):
+            if not google_scholar_profile_matches_author(profile, author_name):
+                continue
             user_id = clean_text(profile.get("user_id") or "")
             if not user_id or user_id in seen:
                 continue
@@ -3030,6 +3551,7 @@ def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list
                 return sorted_google_scholar_profiles(profiles, author_name, affiliations)
     if profiles:
         return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    saw_login_redirect = False
     for query in queries:
         clean_query = clean_text(query)
         if not clean_query:
@@ -3052,12 +3574,15 @@ def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list
                 raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
             raise
         if "accounts.google." in urlparse(response.url).netloc.lower():
+            saw_login_redirect = True
             continue
         if is_google_scholar_block_page(response.text, response.url):
             raise GoogleScholarBlockedError(google_scholar_block_message())
         soup = BeautifulSoup(response.text, "html.parser")
         for row in soup.select(".gsc_1usr"):
             profile = google_scholar_author_row_to_profile(row)
+            if not google_scholar_profile_matches_author(profile, author_name):
+                continue
             user_id = clean_text(profile.get("user_id") or "")
             if not user_id or user_id in seen:
                 continue
@@ -3065,7 +3590,14 @@ def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list
             profiles.append(profile)
             if len(profiles) >= limit:
                 return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    if saw_login_redirect and not profiles:
+        raise GoogleScholarBlockedError(google_scholar_block_message())
     return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+
+
+def google_scholar_profile_matches_author(profile: dict[str, Any], author_name: str) -> bool:
+    profile_name = clean_text(profile.get("name") or "")
+    return not author_name or not profile_name or author_matches_name(profile_name, author_name)
 
 
 def sorted_google_scholar_profiles(profiles: list[dict[str, Any]], author_name: str, affiliations: list[str]) -> list[dict[str, Any]]:
@@ -3185,11 +3717,26 @@ def google_scholar_author_row_to_profile(row: Any) -> dict[str, Any]:
 
 
 def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    return fetch_google_scholar_profile_payload(profile_url, limit=limit)["candidates"]
+
+
+def fetch_google_scholar_profile_payload(profile_url: str, *, limit: int = 500) -> dict[str, Any]:
     user_id = google_scholar_user_id(profile_url)
     if not user_id:
         raise ValueError("Paste a Google Scholar profile URL that contains a user id")
     page_size = 50
     candidates: list[dict[str, Any]] = []
+    profile: dict[str, Any] = {
+        "candidate_type": "scholar-profile",
+        "name": "",
+        "affiliation": "",
+        "email": "",
+        "cited_by": "",
+        "interests": [],
+        "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
+        "user_id": user_id,
+        "avatar_url": "",
+    }
     seen: set[str] = set()
     for start in range(0, limit, page_size):
         if start:
@@ -3215,6 +3762,8 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
         if is_google_scholar_block_page(html, response.url):
             raise GoogleScholarBlockedError(google_scholar_block_message())
         soup = BeautifulSoup(html, "html.parser")
+        if start == 0:
+            profile.update(google_scholar_profile_page_metadata(soup, response.url, user_id))
         rows = soup.select("tr.gsc_a_tr")
         if not rows:
             if start == 0:
@@ -3241,7 +3790,47 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
                 break
         if len(candidates) >= limit or len(rows) < page_size or len(candidates) == before:
             break
-    return candidates
+    return {"profile": profile, "candidates": candidates}
+
+
+def google_scholar_profile_page_metadata(soup: BeautifulSoup, page_url: str, user_id: str) -> dict[str, Any]:
+    name = clean_text(soup.select_one("#gsc_prf_in").get_text(" ") if soup.select_one("#gsc_prf_in") else "")
+    affiliation = clean_text(soup.select_one(".gsc_prf_il").get_text(" ") if soup.select_one(".gsc_prf_il") else "")
+    email = ""
+    cited_by = ""
+    interests = [clean_text(item.get_text(" ")) for item in soup.select("#gsc_prf_int a, .gsc_prf_ila")]
+    for line in [clean_text(item.get_text(" ")) for item in soup.select(".gsc_prf_il")]:
+        if "@" in line or "verified email" in line.lower():
+            email = line
+        if "cited by" in line.lower():
+            cited_by = line
+    avatar_url = google_scholar_profile_avatar_url(soup, page_url)
+    return {
+        "candidate_type": "scholar-profile",
+        "name": name,
+        "affiliation": affiliation,
+        "email": email,
+        "cited_by": cited_by,
+        "interests": [item for item in interests if item],
+        "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
+        "user_id": user_id,
+        "avatar_url": avatar_url,
+    }
+
+
+def google_scholar_profile_avatar_url(soup: BeautifulSoup, page_url: str) -> str:
+    for selector in ["#gsc_prf_pup-img", "#gsc_prf_pu img", ".gsc_prf_pu img", "img[src*='citations?view_op']"]:
+        node = soup.select_one(selector)
+        if not node:
+            continue
+        src = clean_text(node.get("src") or "")
+        if src:
+            return urljoin(page_url or "https://scholar.google.com", src)
+        style = clean_text(node.get("style") or "")
+        match = re.search(r"url\((['\"]?)(.*?)\1\)", style)
+        if match:
+            return urljoin(page_url or "https://scholar.google.com", clean_text(match.group(2)))
+    return ""
 
 
 def is_google_scholar_block_error(error: Exception) -> bool:
@@ -3480,7 +4069,7 @@ def google_scholar_venue_parts(venue: str) -> dict[str, str]:
 
 
 def google_scholar_author_names(value: str) -> list[str]:
-    return [name for name in [clean_author_name(part) for part in re.split(r"\s*,\s*", value)] if name]
+    return [name for name in [clean_author_name(part) for part in re.split(r"\s*(?:,|，|、|;|；)\s*", value)] if name]
 
 
 def first_crossref_text(value: Any) -> str:
@@ -3686,6 +4275,16 @@ def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
     if crossref_count is not None:
         sources["crossref"] = {"count": crossref_count}
         published_sources["crossref"] = sources["crossref"]
+    ads_raw = raw.get("ads") if isinstance(raw.get("ads"), dict) else {}
+    ads_count = int_or_none(ads_raw.get("citation_count"))
+    if ads_raw:
+        sources["ads"] = {
+            "count": ads_count,
+            "bibcode": ads_raw.get("bibcode") or "",
+            "url": f"https://ui.adsabs.harvard.edu/abs/{quote(clean_text(ads_raw.get('bibcode') or ''), safe='')}/abstract" if clean_text(ads_raw.get("bibcode") or "") else "",
+        }
+        if ads_count is not None:
+            published_sources["ads"] = sources["ads"]
     versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
     preprint = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
     preprint_source_raw = preprint.get("sources") if isinstance(preprint.get("sources"), dict) else {}
@@ -3712,6 +4311,7 @@ def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
             for value in [
                 int_or_none(published_sources.get("openalex", {}).get("count")),
                 int_or_none(published_sources.get("crossref", {}).get("count")),
+                int_or_none(published_sources.get("ads", {}).get("count")),
             ]
             if value is not None
         ],
@@ -3735,7 +4335,7 @@ def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
         primary_count = max(split_total, semantic_cluster_count or 0)
     primary_source = "Merged" if preprint_count is not None or semantic_cluster_count is not None else ""
     if not primary_source:
-        for source_key, label in [("openalex", "OpenAlex"), ("semantic_scholar", "Semantic Scholar"), ("crossref", "Crossref")]:
+        for source_key, label in [("openalex", "OpenAlex"), ("semantic_scholar", "Semantic Scholar"), ("crossref", "Crossref"), ("ads", "ADS")]:
             value = sources.get(source_key, {}).get("count")
             if value is not None:
                 primary_source = label
@@ -3810,6 +4410,144 @@ def semantic_scholar_summary(paper: dict[str, Any]) -> dict[str, Any]:
         "journal_name": clean_text(journal.get("name") or ""),
         "enriched_at": paper.get("semantic_scholar_enriched_at") or "",
     }
+
+
+def ads_summary(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    ads = raw.get("ads") if isinstance(raw.get("ads"), dict) else {}
+    if not ads:
+        return {}
+    identifiers = [clean_text(str(value)) for value in ads.get("identifier") or [] if clean_text(str(value))]
+    doi_values = [normalize_publication_doi(str(value)) for value in ads.get("doi") or [] if normalize_publication_doi(str(value))]
+    titles = [clean_text(str(value)) for value in ads.get("title") or [] if clean_text(str(value))]
+    authors = [clean_text(str(value)) for value in ads.get("author") or [] if clean_text(str(value))]
+    properties = [clean_text(str(value)) for value in ads.get("property") or [] if clean_text(str(value))]
+    links = ads.get("links_data") if isinstance(ads.get("links_data"), list) else []
+    return {
+        "bibcode": clean_text(ads.get("bibcode") or ""),
+        "alternate_bibcode": [clean_text(str(value)) for value in ads.get("alternate_bibcode") or [] if clean_text(str(value))],
+        "title": titles[0] if titles else "",
+        "publication": clean_text(ads.get("pub") or ""),
+        "year": clean_text(str(ads.get("year") or "")),
+        "publication_date": clean_text(ads.get("pubdate") or ""),
+        "doctype": clean_text(ads.get("doctype") or ""),
+        "volume": clean_text(ads.get("volume") or ""),
+        "page": clean_text((ads.get("page") or [""])[0] if isinstance(ads.get("page"), list) else ads.get("page") or ""),
+        "citation_count": int_or_none(ads.get("citation_count")),
+        "read_count": int_or_none(ads.get("read_count")),
+        "reference_count": int_or_none(ads.get("reference_count")),
+        "doi": doi_values[0] if doi_values else "",
+        "identifiers": identifiers,
+        "authors": authors,
+        "properties": properties,
+        "url": f"https://ui.adsabs.harvard.edu/abs/{quote(clean_text(ads.get('bibcode') or ''), safe='')}/abstract" if clean_text(ads.get("bibcode") or "") else "",
+        "links": links,
+    }
+
+
+def ads_identifiers_for_paper(paper: dict[str, Any]) -> list[str]:
+    identifiers: list[str] = []
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if doi and looks_like_doi(doi):
+        identifiers.append(doi)
+    arxiv_id = arxiv_identifier_for_paper(paper)
+    if arxiv_id:
+        identifiers.extend([arxiv_id, f"arXiv:{arxiv_id}"])
+    return list(dict.fromkeys(identifier for identifier in identifiers if identifier))
+
+
+def refresh_ads_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    token = ads_api_token(storage)
+    if not paper_id or not token:
+        return paper
+    record: dict[str, Any] | None = None
+    for identifier in ads_identifiers_for_paper(paper):
+        try:
+            record = fetch_ads_record_by_identifier(identifier, token, timeout=timeout, max_retries=max_retries)
+        except Exception:
+            record = None
+        if record:
+            break
+    if not record:
+        return paper
+    raw = parse_raw_json(paper)
+    raw["ads"] = record
+    ads_dois = [normalize_publication_doi(str(value)) for value in record.get("doi") or [] if normalize_publication_doi(str(value))]
+    paper_doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if ads_dois and not paper_doi:
+        raw["published_doi"] = ads_dois[0]
+    updated = storage.update_paper_raw_json(paper_id, raw) or paper
+    if ads_dois and not paper_doi and not doi_is_likely_data_repository(ads_dois[0]):
+        try:
+            published = publication_metrics_metadata_from_doi(ads_dois[0], timeout=timeout, max_retries=1)
+            if published:
+                merged = attach_arxiv_preprint_metadata(published, updated)
+                refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(updated, merged))
+                if refreshed:
+                    refreshed_raw = parse_raw_json(refreshed)
+                    refreshed_raw["ads"] = record
+                    updated = storage.update_paper_raw_json(paper_id, refreshed_raw) or refreshed
+        except Exception:
+            return updated
+    return updated
+
+
+def merge_refreshed_metadata(existing: dict[str, Any] | None, refreshed: dict[str, Any] | None) -> dict[str, Any]:
+    existing = existing or {}
+    merged = dict(refreshed or {})
+    if clean_text(merged.get("title") or "") and merged.get("source") != "arxiv" and clean_text(merged.get("doi") or ""):
+        merged["title"] = normalize_publication_title(merged.get("title") or "")
+    if not clean_text(merged.get("abstract") or "") and clean_text(existing.get("abstract") or ""):
+        merged["abstract"] = existing.get("abstract") or ""
+        merged["abstract_source"] = existing.get("abstract_source") or "existing"
+    elif (merged.get("abstract_source") in ("", None, "missing", "unavailable")) and clean_text(existing.get("abstract_source") or ""):
+        merged["abstract_source"] = existing.get("abstract_source") or ""
+    if not clean_text(merged.get("image_url") or "") and clean_text(existing.get("image_url") or ""):
+        merged["image_url"] = existing.get("image_url") or ""
+    existing_raw = parse_raw_json(existing)
+    refreshed_raw = merged.get("raw") if isinstance(merged.get("raw"), dict) else {}
+    for key in ["ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi", "citation_versions", "google_scholar", "crossref"]:
+        if key not in refreshed_raw and key in existing_raw:
+            refreshed_raw[key] = existing_raw[key]
+    for key in ["volume", "issue", "page", "article-number", "biblio", "journal-issue"]:
+        if _empty_bibliographic_value(refreshed_raw.get(key)) and not _empty_bibliographic_value(existing_raw.get(key)):
+            refreshed_raw[key] = existing_raw[key]
+    merged["raw"] = refreshed_raw
+    return merged
+
+
+def merge_crossref_bibliographic_raw(raw: dict[str, Any], crossref_raw: dict[str, Any]) -> None:
+    if not isinstance(raw, dict) or not isinstance(crossref_raw, dict) or not crossref_raw:
+        return
+    raw["crossref"] = crossref_raw
+    for key in [
+        "volume",
+        "issue",
+        "page",
+        "article-number",
+        "biblio",
+        "journal-issue",
+        "published-print",
+        "published-online",
+        "published",
+        "issued",
+        "container-title",
+    ]:
+        if _empty_bibliographic_value(raw.get(key)) and not _empty_bibliographic_value(crossref_raw.get(key)):
+            raw[key] = crossref_raw[key]
+
+
+def _empty_bibliographic_value(value: Any) -> bool:
+    return value in (None, "", [], {})
 
 
 def build_my_publication_comments_report(publication: dict[str, Any]) -> tuple[str, Path, int]:
@@ -3910,18 +4648,28 @@ def openalex_work_id_for_paper(paper: dict[str, Any]) -> str:
     return ""
 
 
-def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+def semantic_scholar_citation_ref(paper: dict[str, Any]) -> str:
+    semantic = parse_semantic_scholar_json(paper)
+    semantic_id = clean_text(semantic.get("paperId") or "")
+    if semantic_id:
+        return semantic_id
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
     arxiv_id = arxiv_identifier_for_paper(paper)
     if doi:
-        paper_ref = quote(f"DOI:{doi}", safe="")
-    elif arxiv_id:
-        paper_ref = quote(f"ARXIV:{arxiv_id}", safe="")
-    else:
+        return f"DOI:{doi}"
+    if arxiv_id:
+        return f"ARXIV:{arxiv_id}"
+    return ""
+
+
+def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    paper_ref = semantic_scholar_citation_ref(paper)
+    if not paper_ref:
         return []
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
     response = request_with_retries(
         "GET",
-        f"https://api.semanticscholar.org/graph/v1/paper/{paper_ref}/citations",
+        f"https://api.semanticscholar.org/graph/v1/paper/{quote(paper_ref, safe='')}/citations",
         params={
             "fields": "contexts,intents,isInfluential,citingPaper.title,citingPaper.year,citingPaper.venue,citingPaper.url,citingPaper.externalIds,citingPaper.authors,citingPaper.citationCount",
             "limit": 100,
@@ -3967,6 +4715,74 @@ def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: in
             if len(snippets) >= limit:
                 return snippets
     return snippets
+
+
+def fetch_semantic_scholar_influential_citations(paper: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+    paper_ref = semantic_scholar_citation_ref(paper)
+    if not paper_ref:
+        return []
+    citations: list[dict[str, Any]] = []
+    offset = 0
+    fields = (
+        "contexts,intents,isInfluential,"
+        "citingPaper.paperId,citingPaper.title,citingPaper.year,citingPaper.venue,citingPaper.url,"
+        "citingPaper.externalIds,citingPaper.authors,citingPaper.citationCount,citingPaper.influentialCitationCount"
+    )
+    while len(citations) < limit and offset < 1000:
+        response = request_with_retries(
+            "GET",
+            f"https://api.semanticscholar.org/graph/v1/paper/{quote(paper_ref, safe='')}/citations",
+            params={"fields": fields, "limit": 100, "offset": offset},
+            timeout=30,
+            max_retries=2,
+        )
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else []
+        if not isinstance(data, list) or not data:
+            break
+        for item in data:
+            if not isinstance(item, dict) or not item.get("isInfluential"):
+                continue
+            citing = item.get("citingPaper") if isinstance(item.get("citingPaper"), dict) else {}
+            contexts = [
+                trim_citation_context(clean_text(str(context or "")))
+                for context in (item.get("contexts") or [])
+                if clean_text(str(context or ""))
+            ]
+            authors = citing.get("authors") if isinstance(citing.get("authors"), list) else []
+            citations.append(
+                {
+                    "paper_id": clean_text(citing.get("paperId") or ""),
+                    "title": clean_text(citing.get("title") or "Untitled citing paper"),
+                    "venue": clean_text(citing.get("venue") or ""),
+                    "year": clean_text(str(citing.get("year") or "")),
+                    "url": clean_text(citing.get("url") or ""),
+                    "authors": [
+                        clean_text(author.get("name") or "")
+                        for author in authors
+                        if isinstance(author, dict) and clean_text(author.get("name") or "")
+                    ],
+                    "citation_count": int_or_none(citing.get("citationCount")) or 0,
+                    "influential_citation_count": int_or_none(citing.get("influentialCitationCount")) or 0,
+                    "intents": [
+                        clean_text(str(value))
+                        for value in (item.get("intents") or [])
+                        if clean_text(str(value))
+                    ],
+                    "contexts": contexts[:5],
+                }
+            )
+            if len(citations) >= limit:
+                break
+        next_offset = payload.get("next") if isinstance(payload, dict) else None
+        if isinstance(next_offset, int) and next_offset > offset:
+            offset = next_offset
+        else:
+            offset += len(data)
+            if len(data) < 100:
+                break
+    citations.sort(key=lambda item: (int(item.get("citation_count") or 0), int(item.get("influential_citation_count") or 0)), reverse=True)
+    return citations[:limit]
 
 
 def semantic_scholar_last_author(authors: list[Any]) -> str:
@@ -4068,8 +4884,11 @@ def ranked_citation_contexts(
             continue
         seen.add(key)
         intents = [clean_text(str(value)).lower() for value in snippet.get("intents") or [] if clean_text(str(value))]
+        critical_score = citation_context_score(context, CRITICAL_COMMENT_TERMS)
+        if kind in {"positive", "strongest"} and critical_score >= 3:
+            continue
         if kind == "critical":
-            score = citation_context_score(context, CRITICAL_COMMENT_TERMS)
+            score = critical_score
             min_score = 3
         elif kind == "strongest":
             score = citation_context_score(context, STRONGEST_COMMENT_TERMS) + citation_context_score(context, POSITIVE_COMMENT_TERMS)
@@ -4092,24 +4911,28 @@ def ranked_citation_contexts(
     return [snippet for *_prefix, snippet in ranked[:limit]]
 
 
+def citation_context_identity(snippet: dict[str, Any]) -> str:
+    return normalized_title_key(f"{snippet.get('citing_title') or ''} {snippet.get('context') or ''}")
+
+
 def citation_context_highlight_markdown(snippets: list[dict[str, Any]]) -> list[str]:
-    sections = [
+    section_specs = [
         (
             "Most Positive Citation Comments",
             "positive",
-            ranked_citation_contexts(snippets, kind="positive"),
+            "positive",
             "No clearly positive citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
         ),
         (
             "Strongest Praise / Impact Comments",
             "strongest",
-            ranked_citation_contexts(snippets, kind="strongest"),
+            "strongest",
             "No clearly high-praise citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
         ),
         (
             "Critical / Cautionary Comments",
             "critical",
-            ranked_citation_contexts(snippets, kind="critical"),
+            "critical",
             "No clearly critical citation-context sentences were found in the Semantic Scholar contexts fetched for this paper.",
         ),
     ]
@@ -4120,8 +4943,21 @@ def citation_context_highlight_markdown(snippets: list[dict[str, Any]]) -> list[
             "",
         ])
         return lines
-    for heading, label, ranked, empty_text in sections:
+    assigned: dict[str, list[dict[str, Any]]] = {}
+    used: set[str] = set()
+    for label in ["strongest", "positive", "critical"]:
+        assigned[label] = []
+        for snippet in ranked_citation_contexts(snippets, kind=label):
+            key = citation_context_identity(snippet)
+            if not key or key in used:
+                continue
+            assigned[label].append(snippet)
+            used.add(key)
+            if len(assigned[label]) >= COMMENT_REPORT_HIGHLIGHT_LIMIT:
+                break
+    for heading, label, kind, empty_text in section_specs:
         lines.extend([f"### {heading}", ""])
+        ranked = assigned.get(kind, [])
         if not ranked:
             lines.extend([empty_text, ""])
             continue
@@ -4466,6 +5302,37 @@ def publication_year(paper: dict[str, Any]) -> str:
 
 def paper_volume(paper: dict[str, Any]) -> str:
     raw = parse_raw_json(paper)
+    value = _paper_volume_from_raw(raw)
+    if not value and isinstance(raw.get("crossref"), dict):
+        value = _paper_volume_from_raw(raw.get("crossref") or {})
+    if not value:
+        semantic_journal = parse_semantic_scholar_json(paper).get("journal") or {}
+        if isinstance(semantic_journal, dict):
+            value = clean_text(str(semantic_journal.get("volume") or ""))
+    if not value:
+        value, _page = aps_volume_page_from_doi(clean_text(str(paper.get("doi") or raw.get("doi") or raw.get("DOI") or "")))
+    return clean_text(str(value or ""))
+
+
+def paper_page(paper: dict[str, Any]) -> str:
+    raw = parse_raw_json(paper)
+    raw_page = _paper_page_from_raw(raw)
+    crossref_raw = raw.get("crossref") if isinstance(raw.get("crossref"), dict) else {}
+    crossref_page = _paper_page_from_raw(crossref_raw)
+    if crossref_page and (not raw_page or raw_page == clean_text(str(raw.get("issue") or ""))):
+        return crossref_page
+    if raw_page:
+        return raw_page
+    semantic_journal = parse_semantic_scholar_json(paper).get("journal") or {}
+    if isinstance(semantic_journal, dict):
+        semantic_page = clean_text(str(semantic_journal.get("pages") or ""))
+        if semantic_page:
+            return semantic_page
+    _volume, doi_page = aps_volume_page_from_doi(clean_text(str(paper.get("doi") or raw.get("doi") or raw.get("DOI") or "")))
+    return doi_page
+
+
+def _paper_volume_from_raw(raw: dict[str, Any]) -> str:
     journal_issue = raw.get("journal-issue") or {}
     journal_volume = journal_issue.get("journal-volume") if isinstance(journal_issue, dict) else {}
     value = (
@@ -4476,14 +5343,788 @@ def paper_volume(paper: dict[str, Any]) -> str:
     return clean_text(str(value or ""))
 
 
-def paper_page(paper: dict[str, Any]) -> str:
-    raw = parse_raw_json(paper)
+def _paper_page_from_raw(raw: dict[str, Any]) -> str:
     biblio = raw.get("biblio") or {}
     first_page = clean_text(str(biblio.get("first_page") or biblio.get("first-page") or ""))
     last_page = clean_text(str(biblio.get("last_page") or biblio.get("last-page") or ""))
     biblio_pages = f"{first_page}-{last_page}" if first_page and last_page and first_page != last_page else first_page
     value = raw.get("page") or raw.get("article-number") or biblio_pages
     return clean_text(str(value or ""))
+
+
+def aps_volume_page_from_doi(doi: str) -> tuple[str, str]:
+    normalized = normalize_publication_doi(doi)
+    match = re.search(
+        r"^10\.1103/(?:physrev(?:[a-z]+)?|physrevlett|physrevx|physrevmaterials|revmodphys)\.(?P<volume>\d+)\.(?P<page>[A-Za-z]?\d[\w.-]*)$",
+        normalized,
+        flags=re.I,
+    )
+    if not match:
+        return "", ""
+    return clean_text(match.group("volume")), clean_text(match.group("page"))
+
+
+def clear_publication_export_format(export_format: str) -> None:
+    PUBLICATION_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    patterns = {
+        "docx": ["publication_list_*.docx"],
+        "tex": ["publication_list_*.tex"],
+        "overleaf": ["publication_list_*_overleaf.zip"],
+        "pdf": ["publication_list_*.pdf", "publication_list_*_pdf.tex", "publication_list_*_pdf.aux", "publication_list_*_pdf.log", "publication_list_*_pdf.out"],
+    }.get(export_format, [])
+    for pattern in patterns:
+        for path in PUBLICATION_EXPORT_DIR.glob(pattern):
+            if export_format == "tex" and path.name.endswith("_pdf.tex"):
+                continue
+            if path.is_file() or path.is_symlink():
+                path.unlink(missing_ok=True)
+
+
+def clear_publication_export_dir() -> None:
+    PUBLICATION_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    for path in PUBLICATION_EXPORT_DIR.glob("publication_list_*"):
+        if path.is_file() or path.is_symlink():
+            path.unlink(missing_ok=True)
+
+
+def open_publication_export_result(path: Path, export_format: str) -> dict[str, str]:
+    requested = path.expanduser().resolve()
+    if not requested.exists():
+        raise FileNotFoundError(str(requested))
+    result: dict[str, str] = {"status": "opened", "path": str(requested), "mode": "open"}
+    if export_format == "overleaf":
+        desktop_copy = copy_publication_export_to_desktop(requested)
+        result.update({"status": "copied", "mode": "desktop-copy", "desktop_path": str(desktop_copy)})
+        return result
+    if requested.suffix.lower() == ".pdf":
+        subprocess.run(["open", "-a", "Preview", str(requested)], check=True, capture_output=True, text=True)
+    elif requested.suffix.lower() == ".tex":
+        try:
+            subprocess.run(["open", "-a", "TextEdit", str(requested)], check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError:
+            subprocess.run(["open", str(requested)], check=True, capture_output=True, text=True)
+    else:
+        subprocess.run(["open", str(requested)], check=True, capture_output=True, text=True)
+    return result
+
+
+def copy_publication_export_to_desktop(path: Path) -> Path:
+    desktop = Path.home() / "Desktop"
+    desktop.mkdir(parents=True, exist_ok=True)
+    for old_path in desktop.glob("publication_list_*_overleaf.zip"):
+        if old_path.is_file() or old_path.is_symlink():
+            old_path.unlink(missing_ok=True)
+    target = desktop / path.name
+    shutil.copy2(path, target)
+    return target
+
+
+def reveal_path_in_finder(path: Path) -> dict[str, str]:
+    requested = path.expanduser().resolve()
+    target = requested
+    revealed = "file"
+    if requested.exists():
+        if requested.is_dir():
+            revealed = "folder"
+            open_finder_location(requested)
+        else:
+            try:
+                reveal_finder_posix_file(requested)
+            except subprocess.CalledProcessError:
+                open_finder_absolute_path(requested.parent)
+                revealed = "parent_folder"
+                target = requested.parent
+    else:
+        revealed = "nearest_parent"
+        target = requested.parent
+        while target != target.parent and not target.exists():
+            target = target.parent
+        if not target.exists():
+            raise FileNotFoundError(str(requested))
+        open_finder_location(target)
+    return {"status": "opened", "path": str(requested), "opened_path": str(target), "revealed": revealed}
+
+
+def reveal_finder_posix_file(path: Path) -> None:
+    run_finder_script(
+        f"""
+tell application "Finder"
+    activate
+    reveal POSIX file {applescript_string(str(path))}
+end tell
+"""
+    )
+
+
+def open_finder_posix_path(path: Path) -> None:
+    run_finder_script(
+        f"""
+tell application "Finder"
+    activate
+    open POSIX file {applescript_string(str(path))}
+end tell
+"""
+    )
+
+
+def open_finder_location(path: Path) -> None:
+    try:
+        open_finder_posix_path(path)
+    except subprocess.CalledProcessError:
+        open_finder_absolute_path(path)
+
+
+def open_finder_absolute_path(path: Path) -> None:
+    try:
+        subprocess.run(["open", str(path)], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        subprocess.run(["open", "-R", str(path)], check=True, capture_output=True, text=True)
+
+
+def run_finder_script(script: str) -> None:
+    args = ["osascript"]
+    for line in script.splitlines():
+        line = line.strip()
+        if line:
+            args.extend(["-e", line])
+    subprocess.run(args, check=True, capture_output=True, text=True)
+
+
+def applescript_string(value: str) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def export_my_publication_list(rows: list[dict[str, Any]], *, my_name: str, export_format: str) -> Path:
+    clear_publication_export_format(export_format)
+    stamp = re.sub(r"[^0-9]", "", now_iso())[:14]
+    entries = [publication_export_entry(row, my_name=my_name) for row in rows]
+    if export_format == "docx":
+        path = PUBLICATION_EXPORT_DIR / f"publication_list_{stamp}.docx"
+        write_publication_docx(path, entries)
+        return path
+    if export_format == "tex":
+        path = PUBLICATION_EXPORT_DIR / f"publication_list_{stamp}.tex"
+        write_publication_tex(path, entries, engine="xelatex")
+        return path
+    if export_format == "overleaf":
+        path = PUBLICATION_EXPORT_DIR / f"publication_list_{stamp}_overleaf.zip"
+        write_publication_overleaf_zip(path, entries)
+        return path
+    tex_path = PUBLICATION_EXPORT_DIR / f"publication_list_{stamp}_pdf.tex"
+    engine = find_latex_engine()
+    write_publication_tex(tex_path, entries, engine=Path(engine).name if engine else "xelatex")
+    if not engine:
+        raise RuntimeError(f"LaTeX is not installed. The source file was written to {tex_path}")
+    latex_env = os.environ.copy()
+    engine_dir = str(Path(engine).parent)
+    latex_env["PATH"] = f"{engine_dir}:{latex_env.get('PATH', '')}" if engine_dir else latex_env.get("PATH", "")
+    for _ in range(2):
+        result = subprocess.run(
+            [engine, "-interaction=nonstopmode", tex_path.name],
+            cwd=tex_path.parent,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=latex_env,
+        )
+        if result.returncode != 0:
+            log_path = tex_path.with_suffix(".log")
+            message = result.stderr.strip() or result.stdout[-800:].strip() or "LaTeX export failed"
+            raise RuntimeError(f"{message}. Source file: {tex_path}. Log: {log_path}")
+    pdf_path = tex_path.with_suffix(".pdf")
+    if not pdf_path.exists():
+        raise RuntimeError(f"LaTeX did not create a PDF. Source file: {tex_path}")
+    cleanup_latex_export_auxiliary_files(tex_path)
+    return pdf_path
+
+
+def cleanup_latex_export_auxiliary_files(tex_path: Path) -> None:
+    for suffix in (".aux", ".log", ".out", ".toc", ".tex"):
+        tex_path.with_suffix(suffix).unlink(missing_ok=True)
+
+
+def find_latex_engine() -> str:
+    extra_dirs = [
+        "/Library/TeX/texbin",
+        "/usr/texbin",
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ]
+    for name in ("xelatex", "pdflatex"):
+        found = shutil.which(name)
+        if found:
+            return found
+        for folder in extra_dirs:
+            candidate = Path(folder) / name
+            if candidate.exists() and candidate.is_file():
+                return str(candidate)
+    return ""
+
+
+def publication_export_entry(row: dict[str, Any], *, my_name: str) -> dict[str, Any]:
+    authors = full_author_names(row) or author_summary(row)
+    marks = parse_my_publication_author_marks(row)
+    own_indexes = [index for index, name in enumerate(authors) if author_matches_name(name, my_name)]
+    if not any(mark.get("co_first_author") for mark in marks.values()) and row.get("first_author"):
+        for index in own_indexes:
+            marks.setdefault(str(index), {"name": authors[index]})["co_first_author"] = True
+    if not any(mark.get("corresponding_author") for mark in marks.values()) and row.get("corresponding_author"):
+        for index in own_indexes:
+            marks.setdefault(str(index), {"name": authors[index]})["corresponding_author"] = True
+    return {
+        "authors": authors,
+        "marks": marks,
+        "my_name": my_name,
+        "title": clean_text(row.get("title") or ""),
+        "journal": clean_text(row.get("journal") or ""),
+        "volume": paper_volume(row),
+        "pages": paper_page(row),
+        "year": publication_year(row),
+        "doi": clean_text(row.get("doi") or ""),
+    }
+
+
+def author_matches_name(author: str, target_name: str) -> bool:
+    targets = author_name_signatures(target_name.split(";")[0] if target_name else "")
+    candidates = author_name_signatures(author)
+    return any(author_signatures_match(target, candidate) for target in targets for candidate in candidates)
+
+
+CHINESE_PINYIN = {
+    "丁": "ding", "中": "zhong", "二": "er", "井": "jing", "亮": "liang", "仁": "ren",
+    "令": "ling", "作": "zuo", "侯": "hou", "儀": "yi", "元": "yuan", "光": "guang",
+    "关": "guan", "军": "jun", "凡": "fan", "刘": "liu", "刚": "gang", "剑": "jian",
+    "卉": "hui", "单": "shan", "吴": "wu", "哲": "zhe", "善": "shan", "嘉": "jia",
+    "婧": "jing", "嫄": "yuan", "子": "zi", "孔": "kong", "孙": "sun", "宁": "ning",
+    "宇": "yu", "尚": "shang", "崔": "cui", "平": "ping", "年": "nian", "广": "guang",
+    "広": "guang", "建": "jian", "张": "zhang", "彭": "peng", "微": "wei", "户": "hu",
+    "承": "cheng", "明": "ming", "朱": "zhu", "权": "quan", "李": "li", "村": "cun",
+    "杨": "yang", "桂": "gui", "森": "sen", "正": "zheng", "治": "zhi", "洪": "hong",
+    "海": "hai", "涛": "tao", "温": "wen", "焘": "tao", "猛": "meng", "王": "wang",
+    "用": "yong", "益": "yi", "程": "cheng", "罡": "gang", "者": "zhe", "胡": "hu",
+    "良": "liang", "芃": "peng", "苏": "su", "著": "zhu", "软": "ruan", "邴": "bing",
+    "郭": "guo", "野": "ye", "金": "jin", "钟": "zhong", "钧": "jun", "铂": "bo",
+    "铭": "ming", "锡": "xi", "飞": "fei", "马": "ma", "鹏": "peng", "黄": "huang",
+    "洁": "jie", "鑫": "xin", "殷": "yin", "沈": "shen", "约": "yue", "拉": "la",
+    "娜": "na",
+}
+CHINESE_COMPOUND_SURNAMES = {"欧阳": "ouyang", "司马": "sima", "诸葛": "zhuge", "上官": "shangguan"}
+CHINESE_NAME_STOPWORDS = {"作者", "著者", "用户", "微软用户"}
+
+
+def author_name_signatures(value: str) -> list[dict[str, str]]:
+    clean = re.sub(r"[\u0300-\u036f]", "", clean_text(value))
+    clean = re.sub(r"[.,-]", " ", clean)
+    clean = re.sub(r"[^A-Za-z\s]", "", clean)
+    parts = [part.lower() for part in clean.split() if part]
+    variants: list[dict[str, str]] = []
+
+    def add_variant(family: str, given: list[str]) -> None:
+        family = clean_text(family).lower()
+        given = [clean_text(part).lower() for part in given if clean_text(part)]
+        if not family:
+            return
+        signature = {
+            "family": family,
+            "given_full": "".join(given),
+            "initials": "".join(part[:1] for part in given),
+        }
+        if signature not in variants:
+            variants.append(signature)
+
+    if parts:
+        add_variant(parts[-1], parts[:-1])
+        if len(parts) > 1:
+            add_variant(parts[0], parts[1:])
+    add_chinese_author_signatures(value, add_variant)
+    return variants
+
+
+def add_chinese_author_signatures(value: str, add_variant: Any) -> None:
+    for raw_name in re.findall(r"[\u4e00-\u9fff]{2,5}", value or ""):
+        if raw_name in CHINESE_NAME_STOPWORDS:
+            continue
+        name = raw_name.removesuffix("著")
+        if len(name) < 2 or name in CHINESE_NAME_STOPWORDS:
+            continue
+        surname = ""
+        given_chars = ""
+        for compound, pinyin in CHINESE_COMPOUND_SURNAMES.items():
+            if name.startswith(compound) and len(name) > len(compound):
+                surname = pinyin
+                given_chars = name[len(compound):]
+                break
+        if not surname:
+            surname = CHINESE_PINYIN.get(name[0], "")
+            given_chars = name[1:]
+        given = [CHINESE_PINYIN.get(char, "") for char in given_chars]
+        if surname and given and all(given):
+            add_variant(surname, given)
+
+
+def author_signatures_match(target: dict[str, str], candidate: dict[str, str]) -> bool:
+    if not target.get("family") or not candidate.get("family") or target["family"] != candidate["family"]:
+        return False
+    if target.get("given_full") and candidate.get("given_full") and target["given_full"] == candidate["given_full"]:
+        return True
+    if target.get("initials") and candidate.get("initials") and target["initials"] == candidate["initials"]:
+        return True
+    if target.get("initials") and candidate.get("initials") and (
+        target["initials"].startswith(candidate["initials"]) or candidate["initials"].startswith(target["initials"])
+    ):
+        return True
+    return not target.get("given_full") and not candidate.get("given_full")
+
+
+def write_publication_docx(path: Path, entries: list[dict[str, Any]]) -> None:
+    hyperlink_relationships: dict[str, str] = {}
+    paragraphs: list[str] = [docx_paragraph([{"text": "Publication List", "bold": True}], style="Title", hyperlink_relationships=hyperlink_relationships)]
+    legend_runs = publication_docx_legend_runs(entries)
+    if legend_runs:
+        paragraphs.append(docx_paragraph(legend_runs, style="Legend", align="right", hyperlink_relationships=hyperlink_relationships))
+    for entry in entries:
+        paragraphs.append(docx_paragraph(
+            publication_docx_runs(entry),
+            style="PublicationItem",
+            num_id=1,
+            justify=True,
+            hyperlink_relationships=hyperlink_relationships,
+        ))
+    document_xml = DOCX_DOCUMENT_TEMPLATE.format(body="\n".join(paragraphs))
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", DOCX_CONTENT_TYPES)
+        archive.writestr("_rels/.rels", DOCX_RELS)
+        archive.writestr("word/_rels/document.xml.rels", docx_document_rels(hyperlink_relationships))
+        archive.writestr("word/numbering.xml", DOCX_NUMBERING)
+        archive.writestr("word/styles.xml", DOCX_STYLES)
+        archive.writestr("word/document.xml", document_xml)
+
+
+def publication_docx_runs(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    runs.extend(publication_author_runs(entry, target="docx"))
+    runs.extend([
+        {"text": ". "},
+        {"text": entry["title"]},
+        {"text": ". "},
+        {"text": entry["journal"], "italic": True},
+    ])
+    if entry["volume"]:
+        runs.extend([{"text": " "}, {"text": entry["volume"], "bold": True}])
+    if entry["pages"]:
+        runs.append({"text": f", {entry['pages']}"})
+    if entry["year"]:
+        runs.append({"text": f" ({entry['year']})."})
+    else:
+        runs.append({"text": "."})
+    if entry["doi"]:
+        doi_url = f"https://doi.org/{entry['doi']}"
+        runs.append({"text": f" {doi_url}", "hyperlink": doi_url})
+    return runs
+
+
+def publication_docx_legend_runs(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    parts = publication_symbol_legend_parts(entries, target="docx")
+    runs: list[dict[str, Any]] = []
+    for index, (symbol, label) in enumerate(parts):
+        if index:
+            runs.append({"text": "    "})
+        runs.append({"text": symbol, "superscript": True})
+        runs.append({"text": f" {label}"})
+    return runs
+
+
+def publication_author_runs(entry: dict[str, Any], *, target: str) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    authors = entry["authors"]
+    for index, author in enumerate(authors):
+        if index:
+            runs.append({"text": ", "})
+        mark = entry["marks"].get(str(index), {})
+        runs.append({
+            "text": nature_author_name(author),
+            "bold": author_matches_name(author, entry["my_name"]),
+        })
+        symbols = publication_author_symbols(mark)
+        if symbols:
+            runs.append({"text": symbols, "superscript": True})
+    return runs or [{"text": "Authors unavailable"}]
+
+
+def publication_author_symbols(mark: dict[str, Any]) -> str:
+    symbols = ""
+    if mark.get("co_first_author"):
+        symbols += "*"
+    if mark.get("corresponding_author"):
+        symbols += "†"
+    return symbols
+
+
+def publication_symbol_legend_parts(entries: list[dict[str, Any]], *, target: str) -> list[tuple[str, str]]:
+    has_co_first = any(mark.get("co_first_author") for entry in entries for mark in entry["marks"].values())
+    has_corresponding = any(mark.get("corresponding_author") for entry in entries for mark in entry["marks"].values())
+    if target == "latex":
+        parts = []
+        if has_co_first:
+            parts.append((r"\ensuremath{\ast}", "Equal contribution"))
+        if has_corresponding:
+            parts.append((r"\ensuremath{\dagger}", "Corresponding author"))
+        return parts
+    parts = []
+    if has_co_first:
+        parts.append(("*", "Equal contribution"))
+    if has_corresponding:
+        parts.append(("†", "Corresponding author"))
+    return parts
+
+
+def docx_paragraph(
+    runs: list[dict[str, Any]],
+    *,
+    style: str = "",
+    align: str = "",
+    justify: bool = False,
+    num_id: int | None = None,
+    hyperlink_relationships: dict[str, str] | None = None,
+) -> str:
+    props = []
+    if style:
+        props.append(f'<w:pStyle w:val="{style}"/>')
+    if num_id is not None:
+        props.append(f'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="{num_id}"/></w:numPr>')
+    if justify:
+        props.append('<w:jc w:val="both"/>')
+    elif align:
+        props.append(f'<w:jc w:val="{align}"/>')
+    prop_xml = f"<w:pPr>{''.join(props)}</w:pPr>" if props else ""
+    return f"<w:p>{prop_xml}{''.join(docx_run(run, hyperlink_relationships=hyperlink_relationships) for run in runs)}</w:p>"
+
+
+def docx_run(run: dict[str, Any], *, hyperlink_relationships: dict[str, str] | None = None) -> str:
+    run_xml = "".join(docx_run_segment(segment) for segment in docx_run_segments(run))
+    url = clean_text(run.get("hyperlink") or "")
+    if not url or hyperlink_relationships is None:
+        return run_xml
+    rel_id = docx_hyperlink_relationship_id(url, hyperlink_relationships)
+    return f'<w:hyperlink r:id="{rel_id}" w:history="1">{run_xml}</w:hyperlink>'
+
+
+DOCX_SUBSCRIPT_CHARS = {
+    "₀": "0",
+    "₁": "1",
+    "₂": "2",
+    "₃": "3",
+    "₄": "4",
+    "₅": "5",
+    "₆": "6",
+    "₇": "7",
+    "₈": "8",
+    "₉": "9",
+    "₊": "+",
+    "₋": "-",
+    "₍": "(",
+    "₎": ")",
+    "ₓ": "x",
+    "ᵧ": "y",
+}
+
+
+def docx_run_segments(run: dict[str, Any]) -> list[dict[str, Any]]:
+    text = str(run.get("text") or "")
+    if not text:
+        return [run]
+    segments: list[dict[str, Any]] = []
+    current_text: list[str] = []
+    current_subscript: bool | None = None
+
+    def flush() -> None:
+        nonlocal current_text, current_subscript
+        if not current_text:
+            return
+        segment = dict(run)
+        segment["text"] = "".join(current_text)
+        if current_subscript:
+            segment["subscript"] = True
+            segment.setdefault("size", "24")
+        segments.append(segment)
+        current_text = []
+        current_subscript = None
+
+    for index, char in enumerate(text):
+        subscript_char = DOCX_SUBSCRIPT_CHARS.get(char)
+        is_subscript = subscript_char is not None
+        if char in {"δ", "Δ"} and docx_delta_is_formula_subscript(text, index):
+            subscript_char = "δ"
+            is_subscript = True
+        output_char = subscript_char if subscript_char is not None else char
+        if current_subscript is not None and current_subscript != is_subscript:
+            flush()
+        current_subscript = is_subscript
+        current_text.append(output_char)
+    flush()
+    return segments or [run]
+
+
+def docx_delta_is_formula_subscript(text: str, index: int) -> bool:
+    prev_char = text[index - 1] if index > 0 else ""
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return prev_char in DOCX_SUBSCRIPT_CHARS or next_char in DOCX_SUBSCRIPT_CHARS
+
+
+def docx_run_segment(run: dict[str, Any]) -> str:
+    props = []
+    text = str(run.get("text") or "")
+    if docx_text_has_cjk(text):
+        props.append('<w:rFonts w:eastAsia="KaiTi"/>')
+    if run.get("bold"):
+        props.append("<w:b/>")
+    if run.get("italic"):
+        props.append("<w:i/>")
+    if run.get("superscript"):
+        props.append('<w:vertAlign w:val="superscript"/>')
+    if run.get("subscript"):
+        props.append('<w:vertAlign w:val="subscript"/>')
+    if run.get("size"):
+        size = clean_text(str(run.get("size") or ""))
+        if size.isdigit():
+            props.append(f'<w:sz w:val="{size}"/><w:szCs w:val="{size}"/>')
+    if run.get("hyperlink"):
+        props.append('<w:color w:val="0563C1"/><w:u w:val="single"/>')
+    prop_xml = f"<w:rPr>{''.join(props)}</w:rPr>" if props else ""
+    return f"<w:r>{prop_xml}<w:t xml:space=\"preserve\">{xml_escape(text)}</w:t></w:r>"
+
+
+def docx_text_has_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff\uf900-\ufaff]", text or ""))
+
+
+def docx_hyperlink_relationship_id(url: str, hyperlink_relationships: dict[str, str]) -> str:
+    existing = hyperlink_relationships.get(url)
+    if existing:
+        return existing
+    rel_id = f"rId{len(hyperlink_relationships) + 3}"
+    hyperlink_relationships[url] = rel_id
+    return rel_id
+
+
+def write_publication_tex(path: Path, entries: list[dict[str, Any]], *, engine: str = "xelatex") -> None:
+    path.write_text(publication_tex_content(entries, engine=engine), encoding="utf-8")
+
+
+def write_publication_overleaf_zip(path: Path, entries: list[dict[str, Any]]) -> None:
+    readme = (
+        "Paper Monitor publication list export\n\n"
+        "Upload this zip to Overleaf as a new project. The main file is main.tex.\n"
+        "The project includes latexmkrc to select XeLaTeX automatically.\n"
+    )
+    latexmkrc = "\n".join([
+        "$pdf_mode = 5;",
+        "$xelatex = 'xelatex -interaction=nonstopmode %O %S';",
+        "",
+    ])
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("main.tex", publication_tex_content(entries, engine="xelatex"))
+        archive.writestr("latexmkrc", latexmkrc)
+        archive.writestr("README.txt", readme)
+
+
+def publication_tex_content(entries: list[dict[str, Any]], *, engine: str = "xelatex") -> str:
+    lines = [
+        r"% !TeX program = xelatex",
+        r"% !TEX TS-program = xelatex",
+        r"\documentclass[11pt]{article}",
+        r"\usepackage[margin=1in]{geometry}",
+        r"\usepackage{iftex}",
+        r"\ifPDFTeX",
+        r"  \usepackage[utf8]{inputenc}",
+        r"  \usepackage[T1]{fontenc}",
+        r"  \usepackage{mathptmx}",
+        r"  \usepackage{CJKutf8}",
+        r"\else",
+        r"  \usepackage{fontspec}",
+        r"  \setmainfont{Times New Roman}",
+        r"  \usepackage{xeCJK}",
+        r"  \setCJKmainfont{FandolKai-Regular.otf}",
+        r"  \setCJKmonofont{FandolKai-Regular.otf}",
+        r"\fi",
+        r"\usepackage{enumitem}",
+        r"\usepackage{xurl}",
+        r"\usepackage[hidelinks]{hyperref}",
+        r"\Urlmuskip=0mu plus 1mu",
+        r"\setlist[enumerate]{leftmargin=*,label=\arabic*.,itemsep=0.45em}",
+        r"\begin{document}",
+        r"\ifPDFTeX\begin{CJK}{UTF8}{gkai}\fi",
+        r"\section*{Publication List}",
+        publication_tex_legend(entries),
+        r"\begin{enumerate}",
+    ]
+    for entry in entries:
+        lines.append(r"\item " + publication_tex_entry(entry))
+    lines.extend([r"\end{enumerate}", r"\ifPDFTeX\end{CJK}\fi", r"\end{document}", ""])
+    return "\n".join(lines)
+
+
+def publication_tex_legend(entries: list[dict[str, Any]]) -> str:
+    parts = publication_symbol_legend_parts(entries, target="latex")
+    if not parts:
+        return ""
+    text = r"\quad ".join(symbol + r" " + latex_escape(label) for symbol, label in parts)
+    return r"{\raggedleft\small " + text + r"\par}"
+
+
+def publication_tex_entry(entry: dict[str, Any]) -> str:
+    author_text = publication_tex_authors(entry)
+    parts = [
+        f"{author_text}.",
+        f"{latex_escape(entry['title'])}.",
+        r"\emph{" + latex_escape(entry["journal"]) + r"}",
+    ]
+    if entry["volume"]:
+        parts.append(r"\textbf{" + latex_escape(entry["volume"]) + r"}" + (f", {latex_escape(entry['pages'])}" if entry["pages"] else ""))
+    elif entry["pages"]:
+        parts.append(latex_escape(entry["pages"]))
+    if entry["year"]:
+        parts.append(f"({latex_escape(entry['year'])}).")
+    if entry["doi"]:
+        parts.append(publication_tex_url(f"https://doi.org/{entry['doi']}"))
+    return " ".join(part for part in parts if part)
+
+
+def publication_tex_authors(entry: dict[str, Any]) -> str:
+    authors = []
+    for index, author in enumerate(entry["authors"]):
+        mark = entry["marks"].get(str(index), {})
+        text = latex_escape(nature_author_name(author))
+        if author_matches_name(author, entry["my_name"]):
+            text = r"\textbf{" + text + r"}"
+        symbols = publication_author_latex_symbols(mark)
+        if symbols:
+            text += r"\textsuperscript{" + symbols + r"}"
+        authors.append(text)
+    return ", ".join(authors) or "Authors unavailable"
+
+
+def publication_author_latex_symbols(mark: dict[str, Any]) -> str:
+    symbols = []
+    if mark.get("co_first_author"):
+        symbols.append(r"\ast")
+    if mark.get("corresponding_author"):
+        symbols.append(r"\dagger")
+    return r"\ensuremath{" + "".join(symbols) + r"}" if symbols else ""
+
+
+def latex_escape(value: str) -> str:
+    subscript_replacements = {
+        "₀": r"$_0$",
+        "₁": r"$_1$",
+        "₂": r"$_2$",
+        "₃": r"$_3$",
+        "₄": r"$_4$",
+        "₅": r"$_5$",
+        "₆": r"$_6$",
+        "₇": r"$_7$",
+        "₈": r"$_8$",
+        "₉": r"$_9$",
+        "₊": r"$_+$",
+        "₋": r"$_-$",
+        "₍": r"$_($",
+        "₎": r"$_)$",
+        "ₓ": r"$_x$",
+        "ᵧ": r"$_y$",
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "--",
+        "—": "---",
+        "−": r"$-$",
+    }
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(subscript_replacements.get(char) or replacements.get(char, char) for char in str(value))
+
+
+def publication_tex_url(url: str) -> str:
+    return r"\url{" + latex_url_escape(url) + r"}"
+
+
+def latex_url_escape(value: str) -> str:
+    return str(value).replace("\\", "/").replace("%", r"\%").replace("{", r"\{").replace("}", r"\}")
+
+
+def xml_escape(value: Any) -> str:
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+DOCX_CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>"""
+DOCX_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+DOCX_DOCUMENT_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>"""
+
+
+def docx_document_rels(hyperlink_relationships: dict[str, str]) -> str:
+    links = [
+        f'<Relationship Id="{xml_escape(rel_id)}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{xml_escape(url)}" TargetMode="External"/>'
+        for url, rel_id in hyperlink_relationships.items()
+    ]
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+  {links}
+</Relationships>""".format(links="\n  ".join(links))
+
+
+DOCX_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Legend"><w:name w:val="Legend"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="160"/></w:pPr><w:rPr><w:sz w:val="20"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="PublicationItem"><w:name w:val="Publication Item"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="120"/><w:jc w:val="both"/></w:pPr></w:style>
+</w:styles>"""
+DOCX_NUMBERING = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="1">
+    <w:multiLevelType w:val="singleLevel"/>
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+</w:numbering>"""
+DOCX_DOCUMENT_TEMPLATE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    {body}
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>"""
 
 
 def bibtex_key(paper: dict[str, Any]) -> str:
@@ -4633,6 +6274,8 @@ def authors_from_crossref(raw: dict[str, Any]) -> list[str]:
 
 
 def authors_from_arxiv(raw: dict[str, Any]) -> list[str]:
+    if clean_text(raw.get("source") or "").lower() != "arxiv" and not (raw.get("arxiv_id") or raw.get("versioned_arxiv_id")):
+        return []
     return dedup_names([clean_author_name(str(name)) for name in raw.get("authors") or [] if name])
 
 
@@ -4656,7 +6299,12 @@ def authors_from_datacite(raw: dict[str, Any]) -> list[str]:
 def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
     authors = raw.get("authors") or []
     if isinstance(authors, str):
-        authors = re.split(r"\s*,\s*", authors)
+        authors = re.split(r"\s*(?:,|，|、|;|；)\s*", authors)
+    elif isinstance(authors, list):
+        split_authors: list[str] = []
+        for author in authors:
+            split_authors.extend(re.split(r"\s*(?:，|、|;|；)\s*", str(author)))
+        authors = split_authors
     return dedup_names([clean_author_name(str(name)) for name in authors if name])
 
 
@@ -4869,9 +6517,10 @@ def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
                     normalized = publication_metrics_metadata_from_doi(doi, timeout=10, max_retries=1)
                 else:
                     normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=10, max_retries=1)
-                updated = storage.refresh_paper_metadata(paper_id, normalized) if normalized else publication
+                updated = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(publication, normalized)) if normalized else publication
                 enriched = refresh_semantic_scholar_if_possible(storage, updated, timeout=6, max_retries=1)
-                if normalized or (enriched and enriched.get("semantic_scholar_json")):
+                ads_enriched = refresh_ads_if_possible(storage, enriched or updated, timeout=6, max_retries=1)
+                if normalized or (enriched and enriched.get("semantic_scholar_json")) or (ads_enriched and ads_summary(ads_enriched)):
                     refreshed += 1
                 else:
                     skipped += 1
@@ -6478,6 +8127,9 @@ INDEX_HTML = """<!doctype html>
       padding-right: 0;
       overflow: visible;
     }
+    .app.library-mode .workspace.note-open .report-column {
+      overflow: hidden;
+    }
     .workspace.report-collapsed .report-column { display: none; }
     .workspace-toggle, .workspace-resizer { display: none; }
     .workspace.note-open .workspace-toggle {
@@ -6762,6 +8414,11 @@ INDEX_HTML = """<!doctype html>
       margin: -8px 0 10px;
       position: relative;
       z-index: 70;
+      max-width: 100%;
+    }
+    .workspace.note-open .library-controls {
+      overflow: hidden;
+      z-index: 1;
     }
     .library-controls.open { display: flex; }
     .library-controls input, .library-controls select {
@@ -7042,11 +8699,165 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-tools {
       display: none;
-      align-items: center;
+      align-items: flex-start;
       gap: 8px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
+      width: 100%;
+      min-width: 0;
+      justify-content: space-between;
     }
     .my-publications-tools.open { display: flex; }
+    .my-publications-tool-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+    }
+    #myPublicationName { flex: 0 1 470px; min-width: 220px; }
+    #publicationSearchBox { flex: 0 1 190px; width: 190px; min-width: 150px; }
+    .publication-export-menu {
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .publication-export-options {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      min-width: 210px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 14px 34px rgba(15, 23, 42, 0.15);
+      z-index: 120;
+    }
+    .publication-export-options.open { display: grid; gap: 3px; }
+    .publication-export-options button {
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      padding: 8px 10px;
+      text-align: left;
+      cursor: pointer;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .publication-export-options button:hover { background: #eef5f4; color: var(--accent-strong); }
+    .my-publications-profile-strip {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex: 0 0 clamp(360px, 31vw, 560px);
+      min-width: 0;
+      margin-left: auto;
+    }
+    .my-publications-profile-statuses {
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      gap: 6px;
+      flex-wrap: wrap;
+      min-width: 0;
+      max-height: 48px;
+      overflow: hidden;
+    }
+    .my-publications-profile-status {
+      position: relative;
+      overflow: hidden;
+      min-width: 120px;
+      max-width: 230px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      padding: 5px 8px;
+      font-size: 12px;
+      line-height: 1.25;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .my-publications-profile-status.live {
+      color: #3e6470;
+      background: rgba(14, 116, 144, 0.035);
+    }
+    .my-publications-profile-status.live::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(90deg, transparent 0%, rgba(14, 116, 144, 0.04) 28%, rgba(14, 116, 144, 0.16) 50%, rgba(14, 116, 144, 0.04) 72%, transparent 100%);
+      background-size: 260% 100%;
+      animation: statusFlow 2.8s ease-in-out infinite;
+    }
+    .my-publications-profile-avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: #eef5f4;
+      color: var(--accent-strong);
+      font-weight: 800;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      overflow: hidden;
+      padding: 0;
+    }
+    button.my-publications-profile-avatar {
+      cursor: pointer;
+    }
+    button.my-publications-profile-avatar:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+    .my-publications-profile-avatar img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+    .my-publications-profile-clear {
+      width: 22px;
+      min-height: 22px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      color: var(--muted);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      font-size: 15px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .my-publications-profile-clear:hover {
+      border-color: #c9d4e5;
+      color: var(--ink);
+      background: #f8fafc;
+    }
+    .workspace.note-open .my-publications-profile-strip {
+      flex: 1 1 180px;
+      max-width: 220px;
+    }
+    .workspace.note-open .my-publications-profile-status {
+      min-width: 90px;
+      max-width: 160px;
+    }
+    .workspace.note-open .my-publications-profile-avatar {
+      width: 34px;
+      height: 34px;
+    }
+    .workspace.note-open .my-publications-profile-clear { display: none; }
     .scholar-profile-input { width: min(320px, 45vw); }
     .my-publications-panel {
       min-width: 0;
@@ -7196,6 +9007,10 @@ INDEX_HTML = """<!doctype html>
       border-left: 1px solid #edf0f5;
       border-radius: 7px 0 0 7px;
     }
+    .my-publications-table td.my-publications-id {
+      padding-left: 14px;
+      padding-right: 10px;
+    }
     .my-publications-table td:last-child { border-radius: 0 7px 7px 0; }
     .my-publications-table th:last-child,
     .my-publications-table td:last-child { border-right: 0; }
@@ -7225,6 +9040,28 @@ INDEX_HTML = """<!doctype html>
     .my-publications-row {
       cursor: default;
     }
+    .my-publications-row.review-article td { color: #7b8796; background: #fcfcfd; }
+    .my-publications-row.review-article .my-publications-title-text { color: #8b95a5; font-weight: 500; }
+    .my-publications-row.review-article .my-publications-id .journal-name { color: #6f9698; font-weight: 650; }
+    .my-publications-row.review-article .my-publications-id strong { color: #687484; font-weight: 650; }
+    .my-publications-row.head-excluded td:not(:last-child) {
+      color: rgba(102, 112, 133, 0.36);
+      background: #fbfcfd;
+    }
+    .my-publications-row.head-excluded .my-publications-title-text,
+    .my-publications-row.head-excluded .my-publications-id .journal-name,
+    .my-publications-row.head-excluded .my-publications-id strong {
+      color: rgba(102, 112, 133, 0.42);
+      font-weight: 500;
+    }
+    .my-publications-row.head-excluded .star-button { opacity: 0.38; }
+    .my-publications-row:not(.review-article) .my-publications-title-text { font-weight: 760; color: var(--ink); }
+    .my-publications-row.head-excluded .my-publications-title-text,
+    .my-publications-row.head-excluded .my-publications-id .journal-name,
+    .my-publications-row.head-excluded .my-publications-id strong {
+      color: rgba(102, 112, 133, 0.42);
+      font-weight: 500;
+    }
     .my-publications-row:hover td { background: #f8fafc; }
     .my-publications-row.active td { background: #e8f3f4; }
     .my-publications-row.dragging td {
@@ -7253,12 +9090,31 @@ INDEX_HTML = """<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .my-publications-head-toggle {
+      width: 100%;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--muted);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .my-publications-head-toggle:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .my-publications-head-toggle.active {
+      border-color: var(--accent);
+      background: #0f6b6e;
+      color: #fff;
+    }
     .my-publications-id .journal-name { color: #0f6b6e; font-style: italic; font-weight: 700; }
     .my-publications-id strong { font-weight: 750; color: var(--ink); }
     .my-publications-stats {
       position: relative;
       display: grid;
-      grid-template-columns: minmax(120px, 0.8fr) minmax(190px, 1.4fr) minmax(150px, 1fr) minmax(190px, 1.3fr);
+      grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) minmax(190px, 1.3fr) minmax(210px, 1.45fr);
       gap: 8px;
       border-top: 1px solid var(--line);
       background: #fbfcfe;
@@ -7331,7 +9187,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-stat-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(66px, auto) minmax(0, 1fr);
       gap: 8px;
       align-items: baseline;
       color: #344054;
@@ -7349,11 +9205,68 @@ INDEX_HTML = """<!doctype html>
       font-style: normal;
       color: var(--accent);
       font-weight: 700;
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+    .my-publications-stat-filter {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-weight: inherit;
+      padding: 0;
+      text-align: left;
+      cursor: pointer;
+    }
+    .my-publications-stat-filter:hover { color: var(--accent); text-decoration: underline; }
+    .my-publications-stat-filter.active { color: var(--accent); }
+    .my-publications-stat-total {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-weight: inherit;
+      padding: 0;
+      text-align: left;
+      cursor: pointer;
+    }
+    .my-publications-stat-total:hover { color: var(--accent); text-decoration: underline; }
+    .my-publications-stat-row.sources-row {
+      grid-template-columns: minmax(66px, auto) minmax(0, 1fr);
+      align-items: start;
+    }
+    .my-publications-stat-row.sources-row em {
+      text-align: right;
+      overflow: visible;
+    }
+    .my-publications-stat-row.first-solo-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .my-publications-stat-row.first-solo-row b {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 3px;
+      white-space: nowrap;
+      min-width: 0;
+      font-size: 10px;
+    }
+    .my-publications-stat-row.first-solo-row .solo-inline {
+      white-space: nowrap;
+    }
+    .my-publications-source-list {
+      display: inline-block;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+    .my-publications-source-list-line {
+      display: block;
+      white-space: nowrap;
     }
     .publication-role-flags {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 3px;
       flex-wrap: nowrap;
       overflow-x: auto;
       margin: 0;
@@ -7366,13 +9279,62 @@ INDEX_HTML = """<!doctype html>
       border: 1px solid var(--line);
       border-radius: 6px;
       background: #fbfcfe;
-      padding: 3px 5px;
+      padding: 3px 4px;
       color: #344054;
-      font-size: 11px;
+      font-size: 10px;
       line-height: 1.2;
       white-space: nowrap;
     }
     .publication-role-flag input { margin: 0; }
+    .publication-author-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      align-items: center;
+    }
+    .publication-author-pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: #344054;
+      padding: 3px 8px;
+      font: inherit;
+      cursor: pointer;
+      max-width: 100%;
+    }
+    .publication-author-pill.mine { font-weight: 750; color: var(--ink); }
+    .publication-author-pill.marked { border-color: rgba(13, 116, 116, 0.35); background: #eef8f7; }
+    .publication-author-badge {
+      margin-left: 4px;
+      color: var(--accent-strong);
+      font-size: 9px;
+      font-weight: 800;
+    }
+    .publication-author-menu {
+      position: fixed;
+      z-index: 200;
+      width: 230px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 16px 42px rgba(15, 23, 42, 0.18);
+      padding: 10px;
+      color: var(--ink);
+    }
+    .publication-author-menu strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 12px;
+    }
+    .publication-author-menu label {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      padding: 5px 0;
+      font-size: 12px;
+      color: #344054;
+    }
+    .publication-author-menu input { margin: 0; }
     .star-button {
       width: 28px;
       height: 28px;
@@ -7965,14 +9927,16 @@ INDEX_HTML = """<!doctype html>
       object-fit: contain;
       background: #fff;
     }
-    .library-detail-abstract {
+    .library-detail-abstract,
+    .library-detail-authors {
       margin: 12px 0;
       padding: 10px;
       border: 1px solid var(--line);
       border-radius: 7px;
       background: #fbfcfe;
     }
-    .library-detail-abstract strong {
+    .library-detail-abstract strong,
+    .library-detail-authors strong {
       display: block;
       margin-bottom: 6px;
       color: var(--ink);
@@ -7980,6 +9944,49 @@ INDEX_HTML = """<!doctype html>
     .library-detail-abstract p {
       margin: 0;
       color: #344054;
+    }
+    .publication-manual-metadata {
+      margin: 12px 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfe;
+    }
+    .publication-manual-metadata strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+    }
+    .publication-manual-metadata label {
+      display: block;
+      margin-bottom: 7px;
+      color: #526071;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .publication-manual-metadata input,
+    .publication-manual-metadata textarea {
+      display: block;
+      width: 100%;
+      margin-top: 3px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: var(--ink);
+      background: #fff;
+      font: inherit;
+      font-size: 12px;
+      resize: vertical;
+    }
+    .publication-manual-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 7px;
+    }
+    .publication-manual-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 4px;
     }
     .bibtex-box {
       margin-top: 12px;
@@ -8050,46 +10057,14 @@ INDEX_HTML = """<!doctype html>
     .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
     .citation-source-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 6px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 5px;
       margin-top: 10px;
-    }
-    .citation-version-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 10px;
-    }
-    .citation-version-grid div {
-      border: 1px solid #e5e7eb;
-      border-radius: 7px;
-      padding: 8px 10px;
-      background: #fbfcfe;
-      min-width: 0;
-    }
-    .citation-version-grid b,
-    .citation-version-grid span {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .citation-version-grid b { color: var(--muted); font-size: 11px; }
-    .citation-version-grid span { color: var(--ink); font-size: 20px; font-weight: 760; margin-top: 3px; }
-    .citation-preprint-sources {
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid #eef2f7;
-    }
-    .citation-preprint-sources > strong {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
     }
     .citation-source-cell {
       border: 1px solid #edf0f5;
       border-radius: 6px;
-      padding: 6px 7px;
+      padding: 5px 5px;
       background: #fbfcfe;
       min-width: 0;
       text-align: left;
@@ -8097,9 +10072,19 @@ INDEX_HTML = """<!doctype html>
     }
     .citation-source-cell:hover { border-color: #b9c7dd; background: #f6f9fe; }
     .citation-source-cell.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-    .citation-source-cell b { display: block; color: var(--ink); font-size: 11px; }
-    .citation-source-cell span { color: var(--accent-strong); font-weight: 750; }
-    .semantic-panel {
+    .citation-source-cell b {
+      display: block;
+      color: var(--ink);
+      font-size: 10px;
+      line-height: 1.12;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .citation-source-cell span { color: var(--accent-strong); font-weight: 750; font-size: 12px; }
+    .citation-source-cell small { display: block; font-size: 9px; line-height: 1.15; color: var(--muted); }
+    .semantic-panel,
+    .ads-panel {
       display: none;
       margin-top: 10px;
       border-top: 1px solid #edf0f5;
@@ -8109,8 +10094,11 @@ INDEX_HTML = """<!doctype html>
       line-height: 1.45;
     }
     .citation-panel[data-active-citation-source="semantic_scholar"] .semantic-panel { display: block; }
-    .semantic-panel strong { color: var(--ink); }
-    .semantic-panel p { margin: 5px 0 0; }
+    .citation-panel[data-active-citation-source="ads"] .ads-panel { display: block; }
+    .semantic-panel strong,
+    .ads-panel strong { color: var(--ink); }
+    .semantic-panel p,
+    .ads-panel p { margin: 5px 0 0; }
     .semantic-detail-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8137,6 +10125,46 @@ INDEX_HTML = """<!doctype html>
       color: var(--ink);
       overflow-wrap: anywhere;
     }
+    .semantic-influential-button {
+      border: 0;
+      background: transparent;
+      color: var(--accent-strong);
+      font: inherit;
+      font-weight: 750;
+      padding: 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .semantic-influential-button:hover { text-decoration: underline; }
+    .semantic-influential-results {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .semantic-influential-card {
+      border: 1px solid #edf0f5;
+      border-radius: 7px;
+      background: #fbfcfe;
+      padding: 8px;
+    }
+    .semantic-influential-card > strong {
+      display: block;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+    .semantic-influential-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .semantic-influential-context {
+      margin: 7px 0 0;
+      padding-left: 9px;
+      border-left: 3px solid #d6e4ff;
+      color: #344054;
+    }
+    .semantic-influential-context + .semantic-influential-context { margin-top: 5px; }
     .semantic-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
     .semantic-tag {
       border: 1px solid #d6e4ff;
@@ -8147,6 +10175,11 @@ INDEX_HTML = """<!doctype html>
       font-size: 11px;
     }
     a.semantic-tag:hover { text-decoration: none; border-color: #9bbcff; }
+    .ads-panel .semantic-tag {
+      border-color: #d8c6ff;
+      background: #f7f3ff;
+      color: #4c2d86;
+    }
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
@@ -8365,7 +10398,7 @@ INDEX_HTML = """<!doctype html>
     .analysis-panel {
       grid-area: note;
       position: relative;
-      z-index: 1;
+      z-index: 90;
       min-width: 0;
       height: 100%;
       min-height: 0;
@@ -8398,6 +10431,7 @@ INDEX_HTML = """<!doctype html>
     .analysis-body h1 { font-size: 20px; margin: 12px 0 8px; letter-spacing: 0; }
     .analysis-body h2 { font-size: 17px; margin: 16px 0 8px; letter-spacing: 0; }
     .analysis-body h3 { font-size: 15px; margin: 14px 0 6px; letter-spacing: 0; }
+    .analysis-body h4 { font-size: 13px; margin: 12px 0 4px; letter-spacing: 0; }
     .analysis-body p { margin: 8px 0; }
     .analysis-body ul { margin: 8px 0 8px 20px; padding: 0; }
     .analysis-body li { margin: 4px 0; }
@@ -8426,12 +10460,125 @@ INDEX_HTML = """<!doctype html>
     .analysis-body blockquote.context-strongest { border-left-color: #7c3aed; background: #f5f0ff; color: #3f2a6f; }
     .analysis-body blockquote.context-critical,
     .analysis-body blockquote.context-cautionary { border-left-color: #b45309; background: #fff7ed; color: #6f3a12; }
+    .analysis-body.comments-report {
+      padding: 0 18px 18px;
+      background: linear-gradient(#ffffff, #fbfcfe);
+    }
+    .analysis-body.comments-report h1 {
+      margin-top: 4px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .analysis-body.comments-report h2 {
+      margin: 20px 0 10px;
+      padding: 8px 10px;
+      border-radius: 7px;
+      background: #f1f5f9;
+      color: #1f2937;
+    }
+    .analysis-body.comments-report h3 {
+      margin: 14px 0 8px;
+      color: #0f6b6e;
+      font-size: 14px;
+    }
+    .analysis-body.comments-report h4 {
+      margin: 12px 0 0;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      border-bottom: 0;
+      border-radius: 7px 7px 0 0;
+      background: #fff;
+      color: var(--ink);
+      line-height: 1.4;
+    }
+    .analysis-body.comments-report h4 + ul {
+      margin: 0 0 0;
+      padding: 8px 10px 8px 28px;
+      border: 1px solid #e5e7eb;
+      border-top: 0;
+      background: #fff;
+    }
+    .analysis-body.comments-report h4 + ul + blockquote.citation-context {
+      margin-top: 0;
+      border-radius: 0 0 7px 7px;
+    }
     .analysis-body code {
       background: #eef2f7;
       border-radius: 4px;
       padding: 1px 4px;
       font-size: 0.92em;
     }
+    .settings-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(15, 23, 42, 0.28);
+    }
+    .settings-backdrop.open { display: flex; }
+    .settings-modal {
+      width: min(560px, calc(100vw - 40px));
+      max-height: calc(100vh - 60px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+    }
+    .settings-modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings-modal-head h2 { margin: 0; font-size: 18px; letter-spacing: 0; }
+    .settings-modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .settings-modal-close { min-width: 30px; min-height: 30px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
+    .settings-modal-body { padding: 16px 18px 18px; }
+    .citation-source-setting {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+    }
+    .citation-source-setting + .citation-source-setting { margin-top: 10px; }
+    .citation-source-setting-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .citation-source-setting-head strong { color: var(--ink); }
+    .citation-source-setting-head span { color: var(--muted); font-size: 12px; }
+    .citation-source-setting p { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .citation-token-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: center;
+    }
+    .citation-token-row input {
+      flex: 1 1 300px;
+      min-width: 220px;
+      max-width: 100%;
+    }
+    .citation-token-row button {
+      flex: 0 0 auto;
+    }
+    .citation-settings-status {
+      margin-top: 8px;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .citation-settings-status.ok { color: #137333; }
+    .citation-settings-status.err { color: #b42318; }
     @media (max-width: 480px) {
       .app { grid-template-columns: 1fr; }
       .app.sidebar-collapsed { grid-template-columns: 1fr; }
@@ -8529,11 +10676,23 @@ INDEX_HTML = """<!doctype html>
           <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="library-controls" id="libraryControls">
             <div class="my-publications-tools" id="myPublicationsTools">
-              <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
-              <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
-              <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Semantic Scholar/Crossref" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
-              <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
-              <button class="smallbtn" id="addMyPublication" type="button">Add</button>
+              <div class="my-publications-tool-left">
+                <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
+                <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
+                <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Semantic Scholar/Crossref" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
+                <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
+                <button class="smallbtn" id="addMyPublication" type="button">Add</button>
+                <div class="publication-export-menu">
+                  <button class="smallbtn" id="exportPublicationList" type="button">Export List</button>
+                  <div class="publication-export-options" id="publicationExportOptions" aria-hidden="true">
+                    <button type="button" data-action="export-publications" data-export-format="pdf">LaTeX PDF</button>
+                    <button type="button" data-action="export-publications" data-export-format="tex">LaTeX .tex</button>
+                    <button type="button" data-action="export-publications" data-export-format="overleaf">Overleaf Project .zip</button>
+                    <button type="button" data-action="export-publications" data-export-format="docx">Word .docx</button>
+                  </div>
+                </div>
+              </div>
+              <div id="myPublicationProfileStripHost"></div>
             </div>
           </div>
           <div class="papers" id="papers"></div>
@@ -8571,6 +10730,34 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-quicklook-resize" id="libraryQuickLookResize" title="Resize preview"></div>
       </div>
+      <div class="settings-backdrop" id="citationSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="citationSettingsTitle">Citation Settings</h2>
+              <p>Manage optional citation and version-matching sources for paper details.</p>
+            </div>
+            <button class="settings-modal-close" id="closeCitationSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Built-in Sources</strong><span>Always available</span></div>
+              <p>OpenAlex, Semantic Scholar, Crossref, arXiv, and DataCite continue to work without extra setup.</p>
+            </div>
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>NASA ADS</strong><span id="adsConfiguredLabel">Not configured</span></div>
+              <p>Optional. Add an ADS API token to improve arXiv-published version matching and physics citation cross-checks.</p>
+              <div class="citation-token-row">
+                <input class="search" id="adsTokenInput" type="password" autocomplete="off" placeholder="ADS API token">
+                <button class="smallbtn" id="saveAdsToken" type="button">Save</button>
+                <button class="smallbtn" id="testAdsToken" type="button">Test</button>
+                <button class="smallbtn" id="clearAdsToken" type="button">Clear</button>
+              </div>
+              <div class="citation-settings-status" id="citationSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
   <script>
@@ -8599,11 +10786,12 @@ INDEX_HTML = """<!doctype html>
     const MY_PUBLICATION_COLUMNS = [
       {key: "number", label: "No", defaultWidth: 48, minWidth: 40, maxWidth: 90, sortable: false},
       {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
-      {key: "citation", label: "Citation", defaultWidth: 270, minWidth: 185, maxWidth: 560, sortable: true},
-      {key: "date", label: "Date", defaultWidth: 92, minWidth: 74, maxWidth: 130, sortable: true, defaultSortDir: "desc"},
-      {key: "citations", label: "Cites", defaultWidth: 132, minWidth: 116, maxWidth: 190, sortable: true, defaultSortDir: "desc"},
+      {key: "citation", label: "Citation", defaultWidth: 238, minWidth: 180, maxWidth: 520, sortable: true},
+      {key: "date", label: "Date", defaultWidth: 116, minWidth: 92, maxWidth: 150, sortable: true, defaultSortDir: "desc"},
+      {key: "citations", label: "Cites", defaultWidth: 66, minWidth: 56, maxWidth: 110, sortable: true, defaultSortDir: "desc"},
       {key: "comments", label: "", defaultWidth: 96, minWidth: 84, maxWidth: 140},
-      {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140}
+      {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140},
+      {key: "head", label: "Hide", defaultWidth: 76, minWidth: 68, maxWidth: 110}
     ];
     const LIBRARY_SHORTCUT_TAB_COUNT = 5;
     const LIBRARY_WORKSPACE_TAB_COUNT = 3;
@@ -8685,9 +10873,14 @@ INDEX_HTML = """<!doctype html>
       myPublicationMetricsRefreshing: false,
       myPublicationMetricsJobId: "",
       myPublicationAuthorCache: {},
+      myPublicationScholarProfile: null,
+      myPublicationActivities: [],
       myPublicationStatsHeight: 136,
       myPublicationName: "",
       myPublicationColumnWidths: {},
+      myPublicationRoleFilter: "",
+      myPublicationJournalFilter: "",
+      myPublicationKeyboardDetailToken: 0,
       mode: "library",
       activeReportJournal: "",
       noteWidth: 460,
@@ -9214,6 +11407,7 @@ INDEX_HTML = """<!doctype html>
       state.mode = "library";
       state.libraryTab = "my-publications";
       setSidebarCollapsed(true);
+      renderMyPublications();
       const res = await fetch("/api/my-publications");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load My Publications");
@@ -9243,6 +11437,9 @@ INDEX_HTML = """<!doctype html>
     function applyMyPublications(data) {
       state.myPublications = Array.isArray(data.publications) ? data.publications : [];
       state.myPublicationName = data.myName || state.myPublicationName || "";
+      if (Object.prototype.hasOwnProperty.call(data || {}, "scholarProfile")) {
+        state.myPublicationScholarProfile = data.scholarProfile && Object.keys(data.scholarProfile).length ? data.scholarProfile : null;
+      }
       if (!state.myPublicationSelectionId && state.myPublications.length) {
         state.myPublicationSelectionId = Number(sortedMyPublications()[0]?.id || 0);
       }
@@ -10078,6 +12275,7 @@ INDEX_HTML = """<!doctype html>
       const identifier = String(input?.value || "").trim();
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      const activityId = `metadata:${paper.paper_id}`;
       if (!identifier) {
         if (status) {
           status.textContent = "Enter a DOI or arXiv ID first.";
@@ -10091,6 +12289,9 @@ INDEX_HTML = """<!doctype html>
         status.textContent = "Refreshing metadata and metrics from identifier...";
         status.className = "library-detail-status";
       }
+      if (state.libraryTab === "my-publications") {
+        setMyPublicationActivity(activityId, "Refreshing metadata...");
+      }
       try {
         const res = await fetch("/api/library/refresh-metadata", {
           method: "POST",
@@ -10100,6 +12301,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
         applyLibrarySnapshot(data);
+        if (Array.isArray(data.publications)) applyMyPublications(data);
         updatePaperState(paper.paper_id, data.paper);
         state.figureFailures.delete(paper.paper_id);
         if (state.libraryTab === "my-publications") renderMyPublications();
@@ -10110,6 +12312,8 @@ INDEX_HTML = """<!doctype html>
           status.className = "library-detail-status err";
         }
         buttons.forEach((button) => button.disabled = false);
+      } finally {
+        clearMyPublicationActivity(activityId);
       }
     }
 
@@ -11014,12 +13218,15 @@ INDEX_HTML = """<!doctype html>
       return "Library";
     }
 
-    function libraryPaneHeaderMarkup() {
+    function libraryPaneHeaderMarkup(options = {}) {
       const active = state.libraryTab === "loader" ? " active" : "";
+      const loaderButton = options.hideLoader
+        ? ""
+        : `<button class="library-pane-loader${active}" id="libraryPaneLoader" type="button">Loader</button>`;
       return `
         <div class="library-pane-header">
           <span class="library-pane-header-title">Details</span>
-          <button class="library-pane-loader${active}" id="libraryPaneLoader" type="button">Loader</button>
+          ${loaderButton}
         </div>
       `;
     }
@@ -11291,6 +13498,7 @@ INDEX_HTML = """<!doctype html>
       $("myPublicationsTools")?.classList.toggle("open", state.libraryTab === "my-publications");
       const nameInput = $("myPublicationName");
       if (nameInput && document.activeElement !== nameInput) nameInput.value = state.myPublicationName || "";
+      updateMyPublicationScholarProfileStrip();
       updateToolbarLibraryImport();
       updateLibrarySearchTools();
     }
@@ -11540,6 +13748,8 @@ INDEX_HTML = """<!doctype html>
       const previousTableScrollTop = existingTableWrap ? existingTableWrap.scrollTop : 0;
       const existingDetail = $("libraryDetail");
       const previousDetailScrollTop = existingDetail ? existingDetail.scrollTop : 0;
+      const previousStatsScrollTops = Array.from(document.querySelectorAll(".my-publications-stat-list"))
+        .map((element) => element.scrollTop || 0);
       state.mode = "library";
       state.libraryTab = "my-publications";
       stopArxivUpdateCountdown();
@@ -11548,13 +13758,18 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
       $("reportTitle").textContent = "Library";
-      const rows = sortedMyPublications();
+      const allRows = sortedMyPublications();
+      const rows = myPublicationFilteredRows(allRows);
       const selected = myPublicationById(state.myPublicationSelectionId) || rows[0] || null;
-      if (selected) state.myPublicationSelectionId = Number(selected.id);
+      const visibleSelected = selected && rows.some((entry) => Number(entry.id) === Number(selected.id));
+      if (visibleSelected) state.myPublicationSelectionId = Number(selected.id);
+      else if (rows[0]) state.myPublicationSelectionId = Number(rows[0].id);
+      else state.myPublicationSelectionId = 0;
       const sortLabel = state.myPublicationSort === "manual"
         ? "Manual"
         : `${myPublicationSortLabel(state.myPublicationSort)} ${state.myPublicationSortDir === "desc" ? "desc" : "asc"}`;
-      $("summary").textContent = `${state.myPublications.length} publications · Sort: ${sortLabel}`;
+      const filterLabel = myPublicationFilterLabel();
+      $("summary").textContent = `${state.myPublications.length} publications${filterLabel ? ` · Filter: ${filterLabel} (${rows.length})` : ""} · Sort: ${sortLabel}`;
       const root = $("papers");
       root.classList.add("library-view");
       root.innerHTML = `
@@ -11571,14 +13786,14 @@ INDEX_HTML = """<!doctype html>
                   <tr>${myPublicationHeaderMarkup()}</tr>
                 </thead>
                 <tbody>
-                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="${MY_PUBLICATION_COLUMNS.length}"><div class="empty">No publications yet.</div></td></tr>`}
+                  ${rows.length ? rows.map((entry, index) => myPublicationRowMarkup(entry, index)).join("") : `<tr><td colspan="${MY_PUBLICATION_COLUMNS.length}"><div class="empty">${allRows.length ? "No matching publications." : "No publications yet."}</div></td></tr>`}
                 </tbody>
               </table>
             </div>
-            ${myPublicationStatsMarkup(rows)}
+            ${myPublicationStatsMarkup(allRows)}
           </section>
           <aside class="library-pane">
-            ${libraryPaneHeaderMarkup()}
+            ${libraryPaneHeaderMarkup({hideLoader: true})}
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
         </div>
@@ -11601,6 +13816,9 @@ INDEX_HTML = """<!doctype html>
           ? Number(options.detailScrollTop)
           : previousDetailScrollTop;
       }
+      document.querySelectorAll(".my-publications-stat-list").forEach((element, index) => {
+        element.scrollTop = Number(previousStatsScrollTops[index] || 0);
+      });
       if (options.revealSelection) window.requestAnimationFrame(() => revealMyPublicationSelection());
     }
 
@@ -11610,6 +13828,7 @@ INDEX_HTML = """<!doctype html>
         status.textContent = myPublicationSearchStatusText();
         status.className = myPublicationSearchStatusClass();
       }
+      updateMyPublicationScholarProfileStrip();
     }
 
     function myPublicationSearchStatusText() {
@@ -11622,7 +13841,112 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationSearchStatusIsLive(text = state.myPublicationSearchStatus) {
       if (state.myPublicationMetricsRefreshing) return true;
-      return /\b(adding|building|deleting|refreshing|reimporting|resolving|retrying|searching|starting|stopping|updating)\b/i.test(String(text || ""));
+      return /(adding|building|checking|deleting|fetching|importing|matching|refreshing|reimporting|resolving|retrying|searching|starting|stopping|updating)/i.test(String(text || ""));
+    }
+
+    function myPublicationScholarProfileMarkup() {
+      const profile = state.myPublicationScholarProfile || {};
+      const chips = myPublicationProfileStatusChips(profile);
+      if (!profile.name && !profile.avatar_url && !chips.length) return "";
+      const avatarUrl = profile.avatar_url || "";
+      const initials = scholarProfileInitials(profile.name || "");
+      const profileUrl = scholarProfileExternalUrl(profile);
+      const hasSavedProfile = Boolean(profile.name || profile.avatar_url || profileUrl || profile.user_id);
+      const avatarMarkup = avatarUrl
+        ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}">`
+        : `${escapeHtml(initials)}`;
+      return `
+        <div class="my-publications-profile-strip" id="myPublicationProfileStrip">
+          <div class="my-publications-profile-statuses">
+            ${chips.map((chip) => `<div class="my-publications-profile-status${chip.live ? " live" : ""}" title="${escapeHtml(chip.text)}">${escapeHtml(chip.text)}</div>`).join("")}
+          </div>
+          ${profileUrl
+            ? `<button class="my-publications-profile-avatar" type="button" data-action="open-scholar-profile" title="Open Google Scholar profile" aria-label="Open Google Scholar profile">${avatarMarkup}</button>`
+            : `<div class="my-publications-profile-avatar" aria-label="${escapeHtml(profile.name || "Google Scholar profile")}">${avatarMarkup}</div>`}
+          ${hasSavedProfile ? `<button class="my-publications-profile-clear" type="button" data-action="clear-scholar-profile" title="Forget saved Google Scholar profile">×</button>` : ""}
+        </div>
+      `;
+    }
+
+    function myPublicationProfileStatusChips(profile = {}) {
+      const chips = [];
+      const statusText = state.myPublicationSearchStatus || "";
+      if (myPublicationSearchStatusIsLive(statusText)) chips.push({id: "search", text: statusText, live: true});
+      (state.myPublicationActivities || []).forEach((activity) => {
+        if (activity?.text) chips.push({id: activity.id || "", text: activity.text, live: activity.live !== false});
+      });
+      if (!chips.length && (profile.name || profile.avatar_url)) {
+        chips.push({id: "profile", text: `Using ${profile.name || "Google Scholar profile"}`, live: false});
+      }
+      return chips.slice(0, 4);
+    }
+
+    function setMyPublicationActivity(id, text, options = {}) {
+      if (!id || !text) return;
+      const next = (state.myPublicationActivities || []).filter((activity) => activity.id !== id);
+      next.push({id, text, live: options.live !== false});
+      state.myPublicationActivities = next.slice(-4);
+      updateMyPublicationScholarProfileStrip();
+    }
+
+    function clearMyPublicationActivity(id) {
+      state.myPublicationActivities = (state.myPublicationActivities || []).filter((activity) => activity.id !== id);
+      updateMyPublicationScholarProfileStrip();
+    }
+
+    function updateMyPublicationScholarProfileStrip() {
+      const host = $("myPublicationProfileStripHost");
+      if (!host) return;
+      host.innerHTML = myPublicationScholarProfileMarkup();
+    }
+
+    async function clearMyPublicationScholarProfile() {
+      const previous = state.myPublicationScholarProfile;
+      state.myPublicationScholarProfile = null;
+      state.myPublicationSearchStatus = "Google Scholar profile forgotten.";
+      updateMyPublicationScholarProfileStrip();
+      try {
+        const res = await fetch("/api/my-publications/scholar-profile", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({profile: null})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not forget Google Scholar profile");
+      } catch (error) {
+        state.myPublicationScholarProfile = previous;
+        state.myPublicationSearchStatus = error.message || "Could not forget Google Scholar profile";
+      }
+      updateMyPublicationSearchStatusText();
+    }
+
+    function scholarProfileExternalUrl(profile = {}) {
+      const url = String(profile?.url || "").trim();
+      if (/^https?:\/\//i.test(url)) return url;
+      const userId = String(profile?.user_id || "").trim();
+      return userId ? `https://scholar.google.com/citations?user=${encodeURIComponent(userId)}&hl=en` : "";
+    }
+
+    async function openMyPublicationScholarProfile() {
+      const url = scholarProfileExternalUrl(state.myPublicationScholarProfile || {});
+      if (!url) return;
+      try {
+        await fetch("/api/open-url", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url})
+        });
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Could not open Google Scholar profile";
+        updateMyPublicationSearchStatusText();
+      }
+    }
+
+    function scholarProfileInitials(name) {
+      const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return "GS";
+      if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+      return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
     }
 
     function myPublicationSortLabel(key) {
@@ -11667,7 +13991,7 @@ INDEX_HTML = """<!doctype html>
       const paper = entry.paper || {};
       const active = Number(entry.id) === Number(state.myPublicationSelectionId);
       return `
-        <tr class="my-publications-row${active ? " active" : ""}" data-publication-id="${Number(entry.id)}" draggable="true">
+        <tr class="my-publications-row${active ? " active" : ""}${entry.review_article ? " review-article" : ""}${entry.head ? " head-excluded" : ""}" data-publication-id="${Number(entry.id)}" draggable="true">
           <td>${index + 1}</td>
           <td>
             <div class="my-publications-title-cell">
@@ -11680,17 +14004,70 @@ INDEX_HTML = """<!doctype html>
           <td>${myPublicationCitationCountMarkup(paper)}</td>
           <td><button class="action" type="button" data-action="publication-comments">Comments</button></td>
           <td><button class="action danger" type="button" data-action="delete-publication">Delete</button></td>
+          <td><button class="my-publications-head-toggle${entry.head ? " active" : ""}" type="button" data-action="toggle-publication-head" title="Hide excludes this paper from Export Publication List. Turn it on for items you do not want in exported publication lists.">Hide</button></td>
         </tr>
       `;
     }
 
+    function myPublicationFilteredRows(rows) {
+      return myPublicationJournalFilteredRows(myPublicationRoleFilteredRows(rows));
+    }
+
+    function myPublicationRoleFilteredRows(rows) {
+      const key = state.myPublicationRoleFilter || "";
+      if (!key) return rows;
+      return rows.filter((entry) => myPublicationMatchesRoleFilter(entry, key));
+    }
+
+    function myPublicationJournalFilteredRows(rows) {
+      const journal = state.myPublicationJournalFilter || "";
+      if (!journal) return rows;
+      return rows.filter((entry) => String(entry.paper?.journal || "") === journal);
+    }
+
+    function visibleMyPublicationRows() {
+      return myPublicationFilteredRows(sortedMyPublications());
+    }
+
+    function myPublicationMatchesRoleFilter(entry, key) {
+      if (key === "listed-first") return myPublicationIsListedFirstAuthor(entry);
+      if (key === "solo-first") return myPublicationIsListedFirstAuthor(entry) && !entry.first_author;
+      if (key === "co-first") return Boolean(entry.first_author);
+      if (key === "solo-and-co-first") return (myPublicationIsListedFirstAuthor(entry) && !entry.first_author) || Boolean(entry.first_author);
+      if (key === "corresponding") return Boolean(entry.corresponding_author);
+      return true;
+    }
+
+    function myPublicationRoleFilterLabel(key) {
+      return {
+        "listed-first": "First as listed",
+        "solo-first": "Solo first",
+        "co-first": "Co-first",
+        "solo-and-co-first": "Solo first or Co-first",
+        "corresponding": "Corresponding"
+      }[key] || "";
+    }
+
+    function myPublicationFilterLabel() {
+      const labels = [];
+      const roleLabel = myPublicationRoleFilterLabel(state.myPublicationRoleFilter);
+      if (roleLabel) labels.push(roleLabel);
+      if (state.myPublicationJournalFilter) labels.push(`Journal: ${state.myPublicationJournalFilter}`);
+      return labels.join(" · ");
+    }
+
     function myPublicationStatsMarkup(rows) {
       const total = rows.length;
-      const withDoi = rows.filter((entry) => entry.paper?.doi).length;
+      const doiRows = rows.filter((entry) => String(entry.paper?.doi || "").trim());
+      const withDoi = doiRows.length;
       const citationCounts = rows
         .map((entry) => myPublicationMaxCitationCount(entry.paper))
         .filter((value) => Number.isFinite(value));
       const totalCites = citationCounts.reduce((sum, value) => sum + value, 0);
+      const doiCitationTotal = doiRows.reduce((sum, entry) => {
+        const value = myPublicationMaxCitationCount(entry.paper);
+        return sum + (Number.isFinite(value) ? Number(value) : 0);
+      }, 0);
       const hIndex = myPublicationHIndex(citationCounts);
       const i10Index = citationCounts.filter((value) => value >= 10).length;
       const journalCounts = countMyPublicationJournals(rows);
@@ -11698,12 +14075,13 @@ INDEX_HTML = """<!doctype html>
       const listedFirstRows = rows.filter((entry) => myPublicationIsListedFirstAuthor(entry));
       const soleFirstRows = listedFirstRows.filter((entry) => !entry.first_author);
       const firstAuthorRows = rows.filter((entry) => entry.first_author);
+      const soloAndCoFirstRows = rows.filter((entry) => (myPublicationIsListedFirstAuthor(entry) && !entry.first_author) || entry.first_author);
       const correspondingAuthorRows = rows.filter((entry) => entry.corresponding_author);
       return `
         <div class="my-publications-stats" style="--my-publications-stats-height:${Number(state.myPublicationStatsHeight || 136)}px">
           <button class="my-publications-stats-resizer" type="button" data-action="resize-publication-stats" title="Resize statistics panel"></button>
           <div class="my-publications-stat">
-            <strong>${total} Publications</strong>
+            <strong><button class="my-publications-stat-total" type="button" data-action="publication-clear-filters">${total} Publications</button></strong>
             <span>${withDoi} with DOI</span>
             <div class="my-publications-stat-list">
               <div class="my-publications-stat-row"><b>H-index</b><em>${hIndex}</em></div>
@@ -11713,25 +14091,25 @@ INDEX_HTML = """<!doctype html>
           <div class="my-publications-stat">
             <strong>${journals.size || 0} Journals</strong>
             <span>Journal counts</span>
-            <div class="my-publications-stat-list">${myPublicationStatsRows(journalCounts)}</div>
+            <div class="my-publications-stat-list">${myPublicationJournalStatsRows(journalCounts)}</div>
           </div>
           <div class="my-publications-stat">
             <strong>${totalCites || "--"} Cites</strong>
             <span>${citationCounts.length} papers with cites</span>
             <div class="my-publications-stat-list">
               <div class="my-publications-stat-row"><b>Rule</b><em>Max per paper</em></div>
-              <div class="my-publications-stat-row"><b>Sources</b><em>OpenAlex / Semantic / Crossref</em></div>
-              <div class="my-publications-stat-row"><b>Average</b><em>${citationCounts.length ? Math.round(totalCites / citationCounts.length) : "--"}</em></div>
+              <div class="my-publications-stat-row sources-row"><b>Sources</b><em><span class="my-publications-source-list"><span class="my-publications-source-list-line">OpenAlex / Semantic</span><span class="my-publications-source-list-line">Crossref / ADS</span></span></em></div>
+              <div class="my-publications-stat-row"><b>Average</b><em>${withDoi ? Math.round(doiCitationTotal / withDoi) : "--"}</em></div>
             </div>
           </div>
           <div class="my-publications-stat">
-            <strong>${listedFirstRows.length} / ${soleFirstRows.length} / ${firstAuthorRows.length} / ${correspondingAuthorRows.length} Major Papers</strong>
-            <span>First / solo 1st / co-1st / corr.</span>
+            <strong>${listedFirstRows.length} (${soleFirstRows.length}) / ${firstAuthorRows.length} / ${soloAndCoFirstRows.length} / ${correspondingAuthorRows.length} Major Papers</strong>
+            <span>First listed (solo) / co-1st / union / corr.</span>
             <div class="my-publications-stat-list">
-              ${myPublicationRoleStatsRows("Author-list first", listedFirstRows)}
-              ${myPublicationRoleStatsRows("Solo first", soleFirstRows)}
-              ${myPublicationRoleStatsRows("Co-first marked", firstAuthorRows)}
-              ${myPublicationRoleStatsRows("Corresponding marked", correspondingAuthorRows)}
+              ${myPublicationFirstSoloRoleFilterRow(listedFirstRows.length, soleFirstRows.length)}
+              ${myPublicationRoleFilterRow("Co-first", "co-first", firstAuthorRows.length)}
+              ${myPublicationRoleFilterRow("Solo first and Co-first", "solo-and-co-first", soloAndCoFirstRows.length)}
+              ${myPublicationRoleFilterRow("Corresponding", "corresponding", correspondingAuthorRows.length)}
             </div>
           </div>
         </div>
@@ -11745,12 +14123,41 @@ INDEX_HTML = """<!doctype html>
         .join("");
     }
 
+    function myPublicationJournalStatsRows(items) {
+      if (!items.length) return `<div class="my-publications-stat-row"><b>None</b><em>0</em></div>`;
+      return items
+        .map((entry) => {
+          const active = state.myPublicationJournalFilter === entry.name;
+          return `<div class="my-publications-stat-row"><b><button class="my-publications-stat-filter${active ? " active" : ""}" type="button" data-action="publication-journal-filter" data-journal-filter="${escapeAttr(entry.name)}" title="${escapeAttr(entry.name)}">${escapeHtml(entry.name)}</button></b><em>${escapeHtml(entry.count)}</em></div>`;
+        })
+        .join("");
+    }
+
     function myPublicationRoleStatsRows(label, rows) {
       const items = countMyPublicationJournals(rows);
       if (!items.length) return `<div class="my-publications-stat-row"><b>${escapeHtml(label)}</b><em>--</em></div>`;
       return items
         .map((entry) => `<div class="my-publications-stat-row"><b>${escapeHtml(label)} · ${escapeHtml(entry.name)}</b><em>${escapeHtml(entry.count)}</em></div>`)
         .join("");
+    }
+
+    function myPublicationRoleFilterRow(label, key, count) {
+      const active = state.myPublicationRoleFilter === key;
+      return `<div class="my-publications-stat-row"><b><button class="my-publications-stat-filter${active ? " active" : ""}" type="button" data-action="publication-role-filter" data-role-filter="${escapeAttr(key)}">${escapeHtml(label)}</button></b><em>${escapeHtml(count)}</em></div>`;
+    }
+
+    function myPublicationFirstSoloRoleFilterRow(firstCount, soloCount) {
+      const firstActive = state.myPublicationRoleFilter === "listed-first";
+      const soloActive = state.myPublicationRoleFilter === "solo-first";
+      return `
+        <div class="my-publications-stat-row first-solo-row">
+          <b>
+            <button class="my-publications-stat-filter${firstActive ? " active" : ""}" type="button" data-action="publication-role-filter" data-role-filter="listed-first">First as listed</button>
+            <span class="solo-inline">(<button class="my-publications-stat-filter${soloActive ? " active" : ""}" type="button" data-action="publication-role-filter" data-role-filter="solo-first">Solo first</button>)</span>
+          </b>
+          <em>${escapeHtml(firstCount)} (${escapeHtml(soloCount)})</em>
+        </div>
+      `;
     }
 
     function myPublicationHIndex(counts) {
@@ -11829,7 +14236,7 @@ INDEX_HTML = """<!doctype html>
       const results = state.myPublicationSearchResults || [];
       if (!results.length) {
         const status = state.myPublicationSearchStatus || "";
-        if (/searching|resolving|loading/i.test(status)) {
+        if (/importing|matching|searching|resolving|loading/i.test(status)) {
           return `<div class="publication-search-result placeholder">Working on the lookup. Results will appear here when the profile or title matches come back.</div>`;
         }
         if (/no |0 |failed|blocked|error/i.test(status)) {
@@ -11837,7 +14244,7 @@ INDEX_HTML = """<!doctype html>
         }
         return "";
       }
-      return results.map((candidate, index) => {
+      return myPublicationSearchResultViewItems(results).map(({candidate, index}) => {
         if (candidate.candidate_type === "scholar-profile") {
           const meta = [
             candidate.affiliation || "",
@@ -11880,6 +14287,17 @@ INDEX_HTML = """<!doctype html>
       }).join("");
     }
 
+    function myPublicationSearchResultViewItems(results) {
+      return (results || [])
+        .map((candidate, index) => ({candidate, index, added: myPublicationCandidateAlreadyAdded(candidate)}))
+        .sort((a, b) => {
+          const aProfile = a.candidate?.candidate_type === "scholar-profile";
+          const bProfile = b.candidate?.candidate_type === "scholar-profile";
+          if (aProfile !== bProfile) return aProfile ? -1 : 1;
+          return Number(a.added) - Number(b.added) || a.index - b.index;
+        });
+    }
+
     function myPublicationCandidateAlreadyAdded(candidate) {
       const paper = candidate?.paper || candidate || {};
       const candidateDoi = String(paper.doi || "").trim().toLowerCase();
@@ -11894,6 +14312,13 @@ INDEX_HTML = """<!doctype html>
           && String(existing.title || "").trim().toLowerCase() === candidateTitle
           && String(existing.publication_date || "").slice(0, 4) === candidateYear;
       });
+    }
+
+    function sortMyPublicationSearchResultsByAdded() {
+      state.myPublicationSearchResults = (state.myPublicationSearchResults || [])
+        .map((candidate, index) => ({candidate, index, added: myPublicationCandidateAlreadyAdded(candidate)}))
+        .sort((a, b) => Number(a.added) - Number(b.added) || a.index - b.index)
+        .map((item) => item.candidate);
     }
 
     function resizeLibraryViewport() {
@@ -12200,6 +14625,15 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function publicationAuthorsSectionMarkup(publication, authors) {
+      return `
+        <section class="library-detail-authors">
+          <strong>Authors</strong>
+          <div>${publicationAuthorsMarkup(publication, authors)}</div>
+        </section>
+      `;
+    }
+
     function libraryDetailDoiMarkup(paper) {
       const value = paper?.doi || paper?.preprint_id || "";
       return `
@@ -12218,21 +14652,49 @@ INDEX_HTML = """<!doctype html>
       return lines.join("");
     }
 
-    function libraryDetailMetadataMarkup(paper, authors) {
+    function libraryDetailMetadataMarkup(paper, authors, publication = null, options = {}) {
       const preprintId = paper.preprint_id || "";
       const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
+      const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors) : authorsMarkup(authors);
       return `
         <dl>
           <dt>Title</dt><dd class="library-detail-title">${escapeHtml(paper.title || "Untitled paper")}</dd>
-          <dt>Authors</dt><dd>${authorsMarkup(authors)}</dd>
+          ${options.hideAuthors ? "" : `<dt>Authors</dt><dd>${authorMarkup}</dd>`}
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>Identifier</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
           ${preprintId && paper.doi ? `<dt>Preprint</dt><dd><span>arXiv:${escapeHtml(preprintId)}</span> <button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button></dd>` : ""}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
-          <dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>
+          ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>`}
         </dl>
+      `;
+    }
+
+    function manualPublicationMetadataMarkup(publication, paper, authors) {
+      if (!publication?.manual_metadata_editable) return "";
+      const ref = paper?.nature_reference || {};
+      const manual = paper?.manual_metadata || {};
+      const volume = manual.volume || ref.volume || "";
+      const issue = manual.issue || "";
+      const pages = manual.pages || ref.pages || "";
+      const authorText = Array.isArray(authors) ? authors.join("; ") : "";
+      return `
+        <section class="publication-manual-metadata">
+          <strong>Manual Metadata</strong>
+          <label>Title<input type="text" data-manual-metadata-field="title" value="${escapeAttr(paper.title || "")}"></label>
+          <label>Authors<textarea data-manual-metadata-field="authors" rows="2">${escapeHtml(authorText)}</textarea></label>
+          <div class="publication-manual-grid">
+            <label>Journal<input type="text" data-manual-metadata-field="journal" value="${escapeAttr(paper.journal || "")}"></label>
+            <label>Date<input type="text" data-manual-metadata-field="publication_date" value="${escapeAttr(paper.publication_date || "")}"></label>
+            <label>Volume<input type="text" data-manual-metadata-field="volume" value="${escapeAttr(volume)}"></label>
+            <label>Issue<input type="text" data-manual-metadata-field="issue" value="${escapeAttr(issue)}"></label>
+            <label>Pages<input type="text" data-manual-metadata-field="pages" value="${escapeAttr(pages)}"></label>
+          </div>
+          <div class="publication-manual-actions">
+            <button class="action" type="button" data-action="save-manual-publication-metadata">Save Metadata</button>
+          </div>
+        </section>
       `;
     }
 
@@ -12247,6 +14709,21 @@ INDEX_HTML = """<!doctype html>
         const escaped = escapeHtml(author);
         return authorMatchesMyName(author) ? `<strong>${escaped}</strong>` : escaped;
       }).join(", ");
+    }
+
+    function publicationAuthorsMarkup(publication, authors) {
+      if (!Array.isArray(authors) || !authors.length) return "Authors unavailable";
+      const marks = publication.author_marks || {};
+      return `<span class="publication-author-list">${authors.map((author, index) => {
+        const mark = marks[String(index)] || {};
+        const badges = [
+          mark.first_author ? "1st" : "",
+          mark.co_first_author ? "co-1st" : "",
+          mark.corresponding_author ? "corr." : ""
+        ].filter(Boolean);
+        const mine = authorMatchesMyName(author);
+        return `<button class="publication-author-pill${mine ? " mine" : ""}${badges.length ? " marked" : ""}" type="button" data-action="edit-publication-author" data-author-index="${index}" data-author-name="${escapeAttr(author)}">${escapeHtml(author)}${badges.map((badge) => `<span class="publication-author-badge">${escapeHtml(badge)}</span>`).join("")}</button>`;
+      }).join("")}</span>`;
     }
 
     function authorMatchesMyName(author) {
@@ -12292,9 +14769,57 @@ INDEX_HTML = """<!doctype html>
           variants.push(signature);
         }
       };
-      addVariant(parts[parts.length - 1], parts.slice(0, -1));
-      if (parts.length > 1) addVariant(parts[0], parts.slice(1));
+      if (parts.length) {
+        addVariant(parts[parts.length - 1], parts.slice(0, -1));
+        if (parts.length > 1) addVariant(parts[0], parts.slice(1));
+      }
+      addChineseAuthorSignatures(value, addVariant);
       return variants;
+    }
+
+    const CHINESE_PINYIN = {
+      "丁": "ding", "中": "zhong", "二": "er", "井": "jing", "亮": "liang", "仁": "ren",
+      "令": "ling", "作": "zuo", "侯": "hou", "儀": "yi", "元": "yuan", "光": "guang",
+      "关": "guan", "军": "jun", "凡": "fan", "刘": "liu", "刚": "gang", "剑": "jian",
+      "卉": "hui", "单": "shan", "吴": "wu", "哲": "zhe", "善": "shan", "嘉": "jia",
+      "婧": "jing", "嫄": "yuan", "子": "zi", "孔": "kong", "孙": "sun", "宁": "ning",
+      "宇": "yu", "尚": "shang", "崔": "cui", "平": "ping", "年": "nian", "广": "guang",
+      "広": "guang", "建": "jian", "张": "zhang", "彭": "peng", "微": "wei", "户": "hu",
+      "承": "cheng", "明": "ming", "朱": "zhu", "权": "quan", "李": "li", "村": "cun",
+      "杨": "yang", "桂": "gui", "森": "sen", "正": "zheng", "治": "zhi", "洪": "hong",
+      "海": "hai", "涛": "tao", "温": "wen", "焘": "tao", "猛": "meng", "王": "wang",
+      "用": "yong", "益": "yi", "程": "cheng", "罡": "gang", "者": "zhe", "胡": "hu",
+      "良": "liang", "芃": "peng", "苏": "su", "著": "zhu", "软": "ruan", "邴": "bing",
+      "郭": "guo", "野": "ye", "金": "jin", "钟": "zhong", "钧": "jun", "铂": "bo",
+      "铭": "ming", "锡": "xi", "飞": "fei", "马": "ma", "鹏": "peng", "黄": "huang",
+      "洁": "jie", "鑫": "xin", "殷": "yin", "沈": "shen", "约": "yue", "拉": "la",
+      "娜": "na"
+    };
+    const CHINESE_COMPOUND_SURNAMES = {"欧阳": "ouyang", "司马": "sima", "诸葛": "zhuge", "上官": "shangguan"};
+    const CHINESE_NAME_STOPWORDS = new Set(["作者", "著者", "用户", "微软用户"]);
+
+    function addChineseAuthorSignatures(value, addVariant) {
+      const matches = String(value || "").match(/[\u4e00-\u9fff]{2,5}/g) || [];
+      matches.forEach((rawName) => {
+        if (CHINESE_NAME_STOPWORDS.has(rawName)) return;
+        const name = rawName.replace(/著$/u, "");
+        if (name.length < 2 || CHINESE_NAME_STOPWORDS.has(name)) return;
+        let family = "";
+        let givenChars = "";
+        for (const [compound, pinyin] of Object.entries(CHINESE_COMPOUND_SURNAMES)) {
+          if (name.startsWith(compound) && name.length > compound.length) {
+            family = pinyin;
+            givenChars = name.slice(compound.length);
+            break;
+          }
+        }
+        if (!family) {
+          family = CHINESE_PINYIN[name[0]] || "";
+          givenChars = name.slice(1);
+        }
+        const given = Array.from(givenChars).map((char) => CHINESE_PINYIN[char] || "");
+        if (family && given.length && given.every(Boolean)) addVariant(family, given);
+      });
     }
 
     function renderLibraryDetail() {
@@ -12384,6 +14909,7 @@ INDEX_HTML = """<!doctype html>
         }
       });
       wireCitationSourceSelector(root);
+      wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       hydrateLibraryDetailFigureIfNeeded(paper);
@@ -12450,13 +14976,16 @@ INDEX_HTML = """<!doctype html>
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           <span class="publication-role-flags">
-            <label class="publication-role-flag" title="First or co-first author"><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
+            <label class="publication-role-flag" title="Only check for co-first authors. Leave unchecked for solo first author."><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
             <label class="publication-role-flag" title="Corresponding or co-corresponding author"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Co-corr.</label>
+            <label class="publication-role-flag" title="Review or perspective article"><input type="checkbox" data-action="toggle-review-article" ${publication.review_article ? "checked" : ""}> Rev.</label>
           </span>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
-        ${libraryDetailMetadataMarkup(paper, authors)}
+        ${manualPublicationMetadataMarkup(publication, paper, authors)}
+        ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true})}
         ${citationMetricsMarkup(paper)}
+        ${publicationAuthorsSectionMarkup(publication, authors)}
         ${libraryDetailAbstractMarkup(paper)}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
@@ -12483,10 +15012,19 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       wireCitationSourceSelector(root);
+      wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="toggle-first-author"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
       root.querySelector('[data-action="toggle-corresponding-author"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
+      root.querySelector('[data-action="toggle-review-article"]')?.addEventListener("change", () => updateSelectedMyPublicationRoles());
+      root.querySelector('[data-action="save-manual-publication-metadata"]')?.addEventListener("click", () => saveSelectedManualPublicationMetadata());
+      root.querySelectorAll('[data-action="edit-publication-author"]').forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openPublicationAuthorMenu(button, publication);
+        });
+      });
       hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
@@ -12498,12 +15036,6 @@ INDEX_HTML = """<!doctype html>
         ? null
         : (Number.isFinite(Number(rawCount)) ? Number(rawCount) : null);
       const sources = metrics.sources || {};
-      const versions = metrics.versions || {};
-      const publishedCount = versions.published?.count;
-      const preprintCount = versions.preprint?.count;
-      const semanticClusterCount = versions.semantic_cluster?.count;
-      const semanticMerged = Boolean(versions.semantic_cluster?.merged_preprint || versions.preprint?.semantic_merged);
-      const preprintId = versions.preprint?.arxiv_id || paper.preprint_id || "";
       const years = Array.isArray(metrics.by_year) ? metrics.by_year.filter((entry) => Number.isFinite(Number(entry.year)) && Number.isFinite(Number(entry.count))) : [];
       const max = Math.max(1, ...years.map((entry) => Number(entry.count)));
       const bars = years.length
@@ -12522,36 +15054,19 @@ INDEX_HTML = """<!doctype html>
       return `
         <section class="citation-panel" data-active-citation-source="${escapeAttr(citationSourceKeyFromLabel(source))}">
           <div class="citation-summary">
-            <strong data-citation-title>${escapeHtml(source)} Citations</strong>
+            <strong data-citation-title>Merged Citations</strong>
             <span class="citation-count" data-citation-count>${count === null ? "--" : escapeHtml(count)}</span>
           </div>
-          ${publishedCount !== undefined || preprintCount !== undefined ? `
-            <div class="citation-version-grid">
-              <div><b>Published version</b><span>${publishedCount === null || publishedCount === undefined ? "--" : escapeHtml(publishedCount)}</span></div>
-              <div><b>${semanticMerged ? "Semantic Scholar cluster" : "Preprint version"}${preprintId ? ` · arXiv:${escapeHtml(preprintId)}` : ""}</b><span>${semanticMerged ? escapeHtml(semanticClusterCount ?? "--") : (preprintCount === null || preprintCount === undefined ? "--" : escapeHtml(preprintCount))}</span></div>
-            </div>
-          ` : ""}
           <div class="citation-source-grid">
             ${citationSourceCell("openalex", "OpenAlex", sources.openalex?.count, citationSourceKeyFromLabel(source))}
-            ${citationSourceCell("semantic_scholar", "Semantic Scholar", sources.semantic_scholar?.count, citationSourceKeyFromLabel(source), sources.semantic_scholar?.influential_count)}
+            ${citationSourceCell("semantic_scholar", "Semantic", sources.semantic_scholar?.count, citationSourceKeyFromLabel(source), sources.semantic_scholar?.influential_count)}
             ${citationSourceCell("crossref", "Crossref", sources.crossref?.count, citationSourceKeyFromLabel(source))}
+            ${paper.ads && Object.keys(paper.ads).length ? citationSourceCell("ads", "ADS", sources.ads?.count, citationSourceKeyFromLabel(source)) : ""}
           </div>
-          ${preprintCount !== null && preprintCount !== undefined ? citationPreprintSourceGrid(versions.preprint?.sources || {}) : ""}
           ${bars}
-          ${semanticScholarMarkup(paper.semantic_scholar || {})}
+          ${semanticScholarMarkup(paper.semantic_scholar || {}, paper)}
+          ${adsMarkup(paper.ads || {})}
         </section>
-      `;
-    }
-
-    function citationPreprintSourceGrid(sources) {
-      return `
-        <div class="citation-preprint-sources">
-          <strong>Preprint sources</strong>
-          <div class="citation-source-grid">
-            ${citationSourceCell("preprint_semantic", "Semantic Scholar arXiv", sources.semantic_scholar?.count, "", sources.semantic_scholar?.influential_count)}
-            ${citationSourceCell("preprint_openalex", "OpenAlex arXiv", sources.openalex?.count, "")}
-          </div>
-        </div>
       `;
     }
 
@@ -12565,6 +15080,7 @@ INDEX_HTML = """<!doctype html>
       const normalized = String(label || "").toLowerCase();
       if (normalized.includes("semantic")) return "semantic_scholar";
       if (normalized.includes("crossref")) return "crossref";
+      if (normalized.includes("ads")) return "ads";
       return "openalex";
     }
 
@@ -12585,8 +15101,70 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function semanticScholarMarkup(semantic) {
+    function wireSemanticInfluentialCitations(root) {
+      root.querySelectorAll('[data-action="load-semantic-influential"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const paperId = button.dataset.paperId || "";
+          const panel = button.closest(".semantic-panel");
+          const target = panel?.querySelector("[data-semantic-influential-results]");
+          if (!paperId || !target) return;
+          if (target.dataset.loaded === "1") {
+            target.classList.toggle("collapsed");
+            target.style.display = target.classList.contains("collapsed") ? "none" : "";
+            return;
+          }
+          button.disabled = true;
+          target.innerHTML = `<div class="citation-empty">Loading influential citing papers...</div>`;
+          try {
+            const res = await fetch(`/api/paper/semantic-influential?paper_id=${encodeURIComponent(paperId)}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Could not load influential citations");
+            target.dataset.loaded = "1";
+            target.innerHTML = semanticInfluentialListMarkup(data.citations || []);
+          } catch (error) {
+            target.innerHTML = `<div class="citation-empty">${escapeHtml(error.message || "Could not load influential citations")}</div>`;
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    }
+
+    function semanticInfluentialListMarkup(citations) {
+      if (!Array.isArray(citations) || !citations.length) {
+        return `<div class="citation-empty">Semantic Scholar did not return influential citing papers for this item.</div>`;
+      }
+      return citations.map((item, index) => {
+        const authors = Array.isArray(item.authors) ? compactList(item.authors, 4) : "";
+        const meta = [
+          item.venue || "",
+          item.year || "",
+          authors ? `Authors: ${authors}` : "",
+          Number.isFinite(Number(item.citation_count)) ? `${item.citation_count} cites` : "",
+          Number.isFinite(Number(item.influential_citation_count)) ? `${item.influential_citation_count} influential` : "",
+          Array.isArray(item.intents) && item.intents.length ? `Intent: ${item.intents.join(", ")}` : ""
+        ].filter(Boolean).join(" · ");
+        const contexts = Array.isArray(item.contexts) ? item.contexts : [];
+        const title = item.url
+          ? `<a href="${escapeAttr(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || "Untitled citing paper")}</a>`
+          : escapeHtml(item.title || "Untitled citing paper");
+        return `
+          <article class="semantic-influential-card">
+            <strong>${index + 1}. ${title}</strong>
+            ${meta ? `<div class="semantic-influential-meta">${escapeHtml(meta)}</div>` : ""}
+            ${contexts.length
+              ? contexts.map((context) => `<blockquote class="semantic-influential-context">${escapeHtml(context)}</blockquote>`).join("")
+              : `<div class="semantic-influential-meta">No citation-context sentence returned for this influential citation.</div>`}
+          </article>
+        `;
+      }).join("");
+    }
+
+    function semanticScholarMarkup(semantic, paper) {
       if (!semantic || !Object.keys(semantic).length) return "";
+      const paperId = paper?.paper_id || "";
+      const influentialCount = semantic.influential_citation_count ?? null;
       const fields = [
         ...(Array.isArray(semantic.fields_of_study) ? semantic.fields_of_study : []),
         ...(Array.isArray(semantic.s2_fields) ? semantic.s2_fields : [])
@@ -12600,7 +15178,9 @@ INDEX_HTML = """<!doctype html>
         .join(" · ");
       const semanticRows = [
         ["Citations", semantic.citation_count ?? "--"],
-        ["Influential", semantic.influential_citation_count ?? "--"],
+        ["Influential", influentialCount !== null && influentialCount !== undefined && Number(influentialCount) > 0 && paperId
+          ? `<button class="semantic-influential-button" type="button" data-action="load-semantic-influential" data-paper-id="${escapeAttr(paperId)}">${escapeHtml(influentialCount)} influential</button>`
+          : escapeHtml(influentialCount ?? "--")],
         ["References", semantic.reference_count ?? "--"],
         ["Venue / Year", [semantic.venue || semantic.journal_name || "", semantic.year || ""].filter(Boolean).join(" · ") || "--"],
         ["Paper ID", semantic.paper_id || "--"],
@@ -12617,15 +15197,55 @@ INDEX_HTML = """<!doctype html>
             ${semanticRows.map(([label, value]) => `
               <div class="semantic-detail-row">
                 <b>${escapeHtml(label)}</b>
-                <span>${escapeHtml(value)}</span>
+                <span>${String(value).includes("<button") ? value : escapeHtml(value)}</span>
               </div>
             `).join("")}
           </div>
+          <div class="semantic-influential-results" data-semantic-influential-results></div>
           <div class="semantic-tags">
             ${fields.map((field) => `<span class="semantic-tag">${escapeHtml(field)}</span>`).join("")}
             ${types.map((type) => `<span class="semantic-tag">${escapeHtml(type)}</span>`).join("")}
             ${semantic.url ? `<a class="semantic-tag" href="${escapeAttr(semantic.url)}" target="_blank" rel="noreferrer">Semantic Scholar</a>` : ""}
             ${semantic.open_access_pdf_url ? `<a class="semantic-tag" href="${escapeAttr(semantic.open_access_pdf_url)}" target="_blank" rel="noreferrer">Open PDF</a>` : ""}
+          </div>
+        </div>
+      `;
+    }
+
+    function adsMarkup(ads) {
+      if (!ads || !Object.keys(ads).length) return "";
+      const identifiers = Array.isArray(ads.identifiers) ? ads.identifiers : [];
+      const authors = Array.isArray(ads.authors) ? ads.authors : [];
+      const properties = Array.isArray(ads.properties) ? ads.properties : [];
+      const alternateBibcodes = Array.isArray(ads.alternate_bibcode) ? ads.alternate_bibcode : [];
+      const adsRows = [
+        ["Citations", ads.citation_count ?? "--"],
+        ["Reads", ads.read_count ?? "--"],
+        ["References", ads.reference_count ?? "--"],
+        ["Publication / Year", [ads.publication || "", ads.year || ""].filter(Boolean).join(" · ") || "--"],
+        ["Bibcode", ads.bibcode || "--"],
+        ["Document Type", ads.doctype || "--"],
+        ["Volume / Page", [ads.volume || "", ads.page || ""].filter(Boolean).join(" · ") || "--"],
+        ["DOI", ads.doi || "--"],
+        ["Identifiers", identifiers.length ? compactList(identifiers, 5) : "--"],
+        ["Alt. Bibcodes", alternateBibcodes.length ? compactList(alternateBibcodes, 3) : "--"],
+        ["Authors", authors.length ? compactList(authors, 6) : "--"],
+      ];
+      return `
+        <div class="ads-panel">
+          <strong>ADS Details</strong>
+          ${ads.title ? `<p><b>Title</b> ${escapeHtml(ads.title)}</p>` : ""}
+          <div class="semantic-detail-grid">
+            ${adsRows.map(([label, value]) => `
+              <div class="semantic-detail-row">
+                <b>${escapeHtml(label)}</b>
+                <span>${escapeHtml(value)}</span>
+              </div>
+            `).join("")}
+          </div>
+          <div class="semantic-tags">
+            ${properties.map((property) => `<span class="semantic-tag">${escapeHtml(property)}</span>`).join("")}
+            ${ads.url ? `<a class="semantic-tag" href="${escapeAttr(ads.url)}" target="_blank" rel="noreferrer">Open ADS</a>` : ""}
           </div>
         </div>
       `;
@@ -12700,8 +15320,18 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="publication-comments"]')) return;
+          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="publication-comments"]') || event.target.closest('[data-action="toggle-publication-head"]')) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
+        });
+        row.addEventListener("dblclick", async (event) => {
+          if (event.target.closest("button, input, select, textarea, a")) return;
+          const publicationId = Number(row.dataset.publicationId || 0);
+          const publication = myPublicationById(publicationId);
+          if (!publication) return;
+          selectMyPublication(publicationId);
+          await openNativePaperFile(publication.paper, {
+            missingMessage: "No local file path is available for this publication."
+          });
         });
         row.addEventListener("dragstart", (event) => {
           event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
@@ -12744,6 +15374,15 @@ INDEX_HTML = """<!doctype html>
           if (publicationId) await deleteMyPublication(publicationId);
         });
       });
+      shell.querySelectorAll('[data-action="toggle-publication-head"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const row = button.closest(".my-publications-row");
+          const publication = myPublicationById(Number(row?.dataset.publicationId || 0));
+          if (!publication) return;
+          await toggleMyPublicationHead(publication, !publication.head);
+        });
+      });
       shell.querySelectorAll('[data-action="publication-comments"]').forEach((button) => {
         button.addEventListener("click", async (event) => {
           event.stopPropagation();
@@ -12766,7 +15405,7 @@ INDEX_HTML = """<!doctype html>
           const index = Number(button.closest("[data-search-index]")?.dataset.searchIndex || -1);
           const profile = state.myPublicationSearchResults[index];
           const authorCacheKey = myPublicationAuthorCacheKey($("myPublicationName")?.value || state.myPublicationName || "");
-          if (profile?.url) await importGoogleScholarProfile(profile.url, profile.name || "", authorCacheKey);
+          if (profile?.url) await importGoogleScholarProfile(profile.url, profile.name || "", authorCacheKey, profile);
         });
       });
       shell.querySelectorAll('[data-action="retry-scholar-doi"]').forEach((button) => {
@@ -12780,6 +15419,22 @@ INDEX_HTML = """<!doctype html>
         handle.addEventListener("pointerdown", (event) => startMyPublicationColumnResize(event, handle.dataset.publicationCol));
       });
       shell.querySelector('[data-action="resize-publication-stats"]')?.addEventListener("pointerdown", startMyPublicationStatsResize);
+      shell.querySelectorAll('[data-action="publication-role-filter"]').forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          setMyPublicationRoleFilter(button.dataset.roleFilter || "");
+        });
+      });
+      shell.querySelectorAll('[data-action="publication-journal-filter"]').forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          setMyPublicationJournalFilter(button.dataset.journalFilter || "");
+        });
+      });
+      shell.querySelector('[data-action="publication-clear-filters"]')?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        clearMyPublicationFilters();
+      });
       shell.querySelectorAll('.my-publications-sort-button[data-publication-sort]').forEach((button) => {
         button.addEventListener("click", (event) => {
           if (event.target.closest(".my-publications-col-resizer")) return;
@@ -12791,7 +15446,79 @@ INDEX_HTML = """<!doctype html>
       results?.addEventListener("scroll", () => {
         state.myPublicationSearchScrollTop = results.scrollTop;
       });
-      shell.addEventListener("click", () => shell.focus({preventScroll: true}));
+      shell.addEventListener("click", (event) => {
+        if (shouldPreserveInteractiveFocus(event.target)) return;
+        shell.focus({preventScroll: true});
+      });
+    }
+
+    function shouldPreserveInteractiveFocus(target) {
+      return Boolean(target?.closest?.("input, textarea, select, button, a, [contenteditable='true'], .library-detail, .analysis-body, .bibtex-box, .publication-search-results"));
+    }
+
+    function setMyPublicationRoleFilter(filter) {
+      state.myPublicationRoleFilter = filter || "";
+      renderMyPublications({tableScrollTop: 0});
+    }
+
+    function setMyPublicationJournalFilter(filter) {
+      state.myPublicationJournalFilter = filter || "";
+      renderMyPublications({tableScrollTop: 0});
+    }
+
+    function clearMyPublicationFilters() {
+      state.myPublicationRoleFilter = "";
+      state.myPublicationJournalFilter = "";
+      renderMyPublications({tableScrollTop: 0});
+    }
+
+    function togglePublicationExportMenu() {
+      const menu = $("publicationExportOptions");
+      if (!menu) return;
+      const open = !menu.classList.contains("open");
+      menu.classList.toggle("open", open);
+      menu.setAttribute("aria-hidden", open ? "false" : "true");
+    }
+
+    function closePublicationExportMenu() {
+      const menu = $("publicationExportOptions");
+      menu?.classList.remove("open");
+      menu?.setAttribute("aria-hidden", "true");
+    }
+
+    async function exportPublicationList(format) {
+      closePublicationExportMenu();
+      const requestedFormat = format || "docx";
+      const status = $("publicationSearchStatus");
+      if (status) {
+        status.textContent = "Exporting publication list...";
+        status.className = "publication-search-status live";
+      }
+      if (format === "overleaf") {
+        window.open("https://www.overleaf.com/project", "_blank", "noopener");
+      }
+      try {
+        const target = `/api/my-publications/export?format=${encodeURIComponent(requestedFormat)}&response=json`;
+        const res = await fetch(target);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Export failed");
+        const openStatus = data.open?.status || "";
+        const opened = openStatus === "opened" || openStatus === "copied";
+        const targetPath = data.open?.desktop_path || data.path || "";
+        state.myPublicationSearchStatus = openStatus === "copied"
+          ? `Exported ${data.filename}. Zip copied to Desktop.`
+          : (opened ? `Exported ${data.filename}. Opened.` : `Exported ${data.filename}. Could not open automatically.`);
+        if (status) {
+          status.textContent = `${state.myPublicationSearchStatus} Path: ${targetPath}`;
+          status.className = `publication-search-status ${opened ? "ok" : "err"}`;
+        }
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Export failed";
+        if (status) {
+          status.textContent = state.myPublicationSearchStatus;
+          status.className = "publication-search-status err";
+        }
+      }
     }
 
     function startMyPublicationStatsResize(event) {
@@ -12896,6 +15623,12 @@ INDEX_HTML = """<!doctype html>
       const wrap = document.querySelector(".my-publications-table-wrap");
       const row = document.querySelector(`.my-publications-row[data-publication-id="${Number(state.myPublicationSelectionId || 0)}"]`);
       if (!wrap || !row) return;
+      scrollMyPublicationRowIntoView(row, direction);
+    }
+
+    function scrollMyPublicationRowIntoView(row, direction = "nearest") {
+      const wrap = document.querySelector(".my-publications-table-wrap");
+      if (!wrap || !row) return;
       const wrapRect = wrap.getBoundingClientRect();
       const rowRect = row.getBoundingClientRect();
       const head = wrap.querySelector("thead");
@@ -12914,6 +15647,22 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function scrollMyPublicationKeyboardTarget(targetId, direction) {
+      const row = document.querySelector(`.my-publications-row[data-publication-id="${Number(targetId || 0)}"]`);
+      if (!row) return;
+      scrollMyPublicationRowIntoView(row, direction);
+    }
+
+    function scheduleMyPublicationDetailRender(selectedId) {
+      const token = ++state.myPublicationKeyboardDetailToken;
+      window.requestAnimationFrame(() => {
+        if (token !== state.myPublicationKeyboardDetailToken) return;
+        if (Number(state.myPublicationSelectionId || 0) !== Number(selectedId || 0)) return;
+        renderPublicationDetail();
+        refreshLibraryQuickLookForSelection();
+      });
+    }
+
     async function toggleMyPublicationStar(publication, starred) {
       const res = await fetch("/api/my-publications/star", {
         method: "POST",
@@ -12927,6 +15676,19 @@ INDEX_HTML = """<!doctype html>
       renderMyPublications();
     }
 
+    async function toggleMyPublicationHead(publication, head) {
+      const res = await fetch("/api/my-publications/head", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({publication_id: publication.id, head})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not update Hide");
+      applyMyPublications(data);
+      state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
+      renderMyPublications();
+    }
+
     async function updateSelectedMyPublicationRoles() {
       const publication = myPublicationById(state.myPublicationSelectionId);
       const root = $("libraryDetail");
@@ -12934,8 +15696,9 @@ INDEX_HTML = """<!doctype html>
       const status = $("libraryDetailStatus");
       const firstAuthor = Boolean(root.querySelector('[data-action="toggle-first-author"]')?.checked);
       const correspondingAuthor = Boolean(root.querySelector('[data-action="toggle-corresponding-author"]')?.checked);
+      const reviewArticle = Boolean(root.querySelector('[data-action="toggle-review-article"]')?.checked);
       if (status) {
-        status.textContent = "Saving author role...";
+        status.textContent = "Saving publication flags...";
         status.className = "library-detail-status";
       }
       try {
@@ -12945,20 +15708,127 @@ INDEX_HTML = """<!doctype html>
           body: JSON.stringify({
             publication_id: publication.id,
             first_author: firstAuthor,
-            corresponding_author: correspondingAuthor
+            corresponding_author: correspondingAuthor,
+            review_article: reviewArticle
           })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not update author role");
+        if (!res.ok) throw new Error(data.error || "Could not update publication flags");
         applyMyPublications(data);
         state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
         renderMyPublications();
       } catch (error) {
         if (status) {
-          status.textContent = error.message || "Could not update author role";
+          status.textContent = error.message || "Could not update publication flags";
           status.className = "library-detail-status err";
         }
         renderPublicationDetail();
+      }
+    }
+
+    async function saveSelectedManualPublicationMetadata() {
+      const publication = myPublicationById(state.myPublicationSelectionId);
+      const root = $("libraryDetail");
+      if (!publication || !root || !publication.manual_metadata_editable) return;
+      const status = $("libraryDetailStatus");
+      const fieldValue = (name) => root.querySelector(`[data-manual-metadata-field="${name}"]`)?.value || "";
+      if (status) {
+        status.textContent = "Saving manual metadata...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/my-publications/manual-metadata", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            publication_id: publication.id,
+            title: fieldValue("title"),
+            authors: fieldValue("authors"),
+            journal: fieldValue("journal"),
+            publication_date: fieldValue("publication_date"),
+            volume: fieldValue("volume"),
+            issue: fieldValue("issue"),
+            pages: fieldValue("pages")
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save manual metadata");
+        applyMyPublications(data);
+        state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
+        renderMyPublications();
+        const nextStatus = $("libraryDetailStatus");
+        if (nextStatus) {
+          nextStatus.textContent = "Manual metadata saved.";
+          nextStatus.className = "library-detail-status ok";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Could not save manual metadata";
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    function openPublicationAuthorMenu(button, publication) {
+      closePublicationAuthorMenu();
+      const index = Number(button.dataset.authorIndex || 0);
+      const authorName = button.dataset.authorName || "";
+      const mark = publication.author_marks?.[String(index)] || {};
+      const rect = button.getBoundingClientRect();
+      const menu = document.createElement("div");
+      menu.className = "publication-author-menu";
+      menu.id = "publicationAuthorMenu";
+      menu.innerHTML = `
+        <strong>${escapeHtml(authorName)}</strong>
+        <label><input type="checkbox" data-author-menu-field="first_author" ${mark.first_author ? "checked" : ""}> First author</label>
+        <label><input type="checkbox" data-author-menu-field="co_first_author" ${mark.co_first_author ? "checked" : ""}> Co-first author</label>
+        <label><input type="checkbox" data-author-menu-field="corresponding_author" ${mark.corresponding_author ? "checked" : ""}> Corresponding author</label>
+      `;
+      document.body.appendChild(menu);
+      const top = Math.min(window.innerHeight - menu.offsetHeight - 12, rect.bottom + 6);
+      const left = Math.min(window.innerWidth - menu.offsetWidth - 12, rect.left);
+      menu.style.top = `${Math.max(12, top)}px`;
+      menu.style.left = `${Math.max(12, left)}px`;
+      menu.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("change", () => updateSelectedMyPublicationAuthorMark(publication, index, authorName, menu));
+      });
+    }
+
+    function closePublicationAuthorMenu() {
+      $("publicationAuthorMenu")?.remove();
+    }
+
+    async function updateSelectedMyPublicationAuthorMark(publication, index, authorName, menu) {
+      const status = $("libraryDetailStatus");
+      const payload = {
+        publication_id: publication.id,
+        author_index: index,
+        author_name: authorName,
+        first_author: Boolean(menu.querySelector('[data-author-menu-field="first_author"]')?.checked),
+        co_first_author: Boolean(menu.querySelector('[data-author-menu-field="co_first_author"]')?.checked),
+        corresponding_author: Boolean(menu.querySelector('[data-author-menu-field="corresponding_author"]')?.checked)
+      };
+      if (status) {
+        status.textContent = "Saving author marker...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/my-publications/author-marks", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not update author marker");
+        closePublicationAuthorMenu();
+        applyMyPublications(data);
+        state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
+        renderMyPublications();
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Could not update author marker";
+          status.className = "library-detail-status err";
+        }
       }
     }
 
@@ -12971,7 +15841,7 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not delete publication");
       applyMyPublications(data);
-      const rows = sortedMyPublications();
+      const rows = visibleMyPublicationRows();
       if (!myPublicationById(state.myPublicationSelectionId)) {
         state.myPublicationSelectionId = Number(rows[0]?.id || 0);
       }
@@ -13154,6 +16024,7 @@ INDEX_HTML = """<!doctype html>
 
     function cacheMyPublicationAuthorResults(key) {
       if (!key) return;
+      if (!Array.isArray(state.myPublicationSearchResults) || !state.myPublicationSearchResults.length) return;
       state.myPublicationAuthorCache[key] = {
         results: JSON.parse(JSON.stringify(state.myPublicationSearchResults || [])),
         status: state.myPublicationSearchStatus || "",
@@ -13163,6 +16034,7 @@ INDEX_HTML = """<!doctype html>
     function restoreMyPublicationAuthorResults(key) {
       const cached = key ? state.myPublicationAuthorCache[key] : null;
       if (!cached) return false;
+      if (!Array.isArray(cached.results) || !cached.results.length) return false;
       state.myPublicationSearchToken += 1;
       state.myPublicationSearchResults = JSON.parse(JSON.stringify(cached.results || []));
       state.myPublicationSearchStatus = cached.status || `${state.myPublicationSearchResults.length} cached Scholar results.`;
@@ -13179,7 +16051,7 @@ INDEX_HTML = """<!doctype html>
       const authorCacheKey = kind === "author" ? myPublicationAuthorCacheKey(cleanQuery) : "";
       if (authorCacheKey && restoreMyPublicationAuthorResults(authorCacheKey)) return;
       state.myPublicationSearchToken += 1;
-      state.myPublicationSearchStatus = kind === "author" ? "Searching Google Scholar profiles..." : "Searching publications...";
+      state.myPublicationSearchStatus = kind === "author" ? "Matching Google Scholar profiles..." : "Searching publications...";
       state.myPublicationSearchResults = [];
       state.myPublicationSearchScrollTop = 0;
       renderMyPublications();
@@ -13221,16 +16093,18 @@ INDEX_HTML = """<!doctype html>
       }
       applyMyPublications(data);
       state.myPublicationSelectionId = Number(data.publication?.id || state.myPublicationSelectionId || 0);
+      sortMyPublicationSearchResultsByAdded();
       state.myPublicationSearchStatus = "Publication added.";
       renderMyPublications();
     }
 
-    async function importGoogleScholarProfile(profileUrl = "", profileName = "", authorCacheKey = "") {
+    async function importGoogleScholarProfile(profileUrl = "", profileName = "", authorCacheKey = "", profile = null) {
       const button = $("findMyPublications");
       const url = String(profileUrl || "").trim();
       if (!url) return;
       const searchToken = ++state.myPublicationSearchToken;
-      state.myPublicationSearchStatus = `Searching Google Scholar profile${profileName ? ` for ${profileName}` : ""}...`;
+      state.myPublicationScholarProfile = {...(profile || {}), name: profileName || profile?.name || ""};
+      state.myPublicationSearchStatus = `Importing Google Scholar titles${profileName ? ` for ${profileName}` : ""}...`;
       state.myPublicationSearchResults = [];
       state.myPublicationSearchScrollTop = 0;
       if (button) {
@@ -13247,7 +16121,9 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
         if (searchToken !== state.myPublicationSearchToken) return;
+        state.myPublicationScholarProfile = {...(state.myPublicationScholarProfile || {}), ...(data.profile || {})};
         state.myPublicationSearchResults = data.results || [];
+        sortMyPublicationSearchResultsByAdded();
         const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
         state.myPublicationSearchStatus = state.myPublicationSearchResults.length
           ? `${state.myPublicationSearchResults.length} Scholar titles found. Resolving DOI/arXiv matches...`
@@ -13288,6 +16164,7 @@ INDEX_HTML = """<!doctype html>
         }
       }
       updateScholarResolutionStatus("done");
+      sortMyPublicationSearchResultsByAdded();
       if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
       renderMyPublications();
     }
@@ -13352,7 +16229,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function handleMyPublicationKeydown(event, key) {
-      const rows = sortedMyPublications();
+      const rows = visibleMyPublicationRows();
       if (!rows.length) return true;
       if (key === " ") {
         const paper = selectedMyPublicationPaper();
@@ -13367,11 +16244,11 @@ INDEX_HTML = """<!doctype html>
       const nextIndex = currentIndex < 0
         ? fallback
         : Math.max(0, Math.min(rows.length - 1, currentIndex + (movingDown ? 1 : -1)));
-      state.myPublicationSelectionId = Number(rows[nextIndex].id);
+      const nextId = Number(rows[nextIndex].id);
+      state.myPublicationSelectionId = nextId;
       updateMyPublicationActiveRow();
-      renderPublicationDetail();
-      revealMyPublicationSelection(movingDown ? "down" : "up");
-      refreshLibraryQuickLookForSelection();
+      scrollMyPublicationKeyboardTarget(nextId, movingDown ? "down" : "up");
+      scheduleMyPublicationDetailRender(nextId);
       return true;
     }
 
@@ -13619,9 +16496,12 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function libraryNativeItemPath(item) {
-      const paper = item?.paper || {};
+    function paperNativePath(paper) {
       return paper.merged_pdf_path || paper.main_pdf_path || paper.source_path || "";
+    }
+
+    function libraryNativeItemPath(item) {
+      return paperNativePath(item?.paper || {});
     }
 
     function libraryNativeFolderPath(folderId) {
@@ -13646,18 +16526,34 @@ INDEX_HTML = """<!doctype html>
 
     async function openNativeLibraryEntry(entryType, entryId) {
       const target = libraryNativeTargetForEntry(entryType, entryId);
+      await openNativeTarget(target, {
+        missingMessage: entryType === "folder"
+          ? "No native file was found inside this folder."
+          : "No native file path is available for this item.",
+        openingMessage: target.mode === "folder" ? "Opening native folder in Finder..." : "Opening native file...",
+        openedMessage: target.mode === "folder" ? "Native folder opened in Finder" : "Native file opened"
+      });
+    }
+
+    async function openNativePaperFile(paper, options = {}) {
+      await openNativeTarget({path: paperNativePath(paper || {}), mode: "open"}, {
+        missingMessage: options.missingMessage || "No local file path is available for this paper.",
+        openingMessage: "Opening local file...",
+        openedMessage: "Local file opened"
+      });
+    }
+
+    async function openNativeTarget(target, messages = {}) {
       const status = $("libraryDetailStatus");
       if (!target.path) {
         if (status) {
-          status.textContent = entryType === "folder"
-            ? "No native file was found inside this folder."
-            : "No native file path is available for this item.";
+          status.textContent = messages.missingMessage || "No native file path is available.";
           status.className = "library-detail-status err";
         }
         return;
       }
       if (status) {
-        status.textContent = target.mode === "folder" ? "Opening native folder in Finder..." : "Opening native file...";
+        status.textContent = messages.openingMessage || "Opening native file...";
         status.className = "library-detail-status";
       }
       try {
@@ -13669,7 +16565,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "open failed");
         if (status) {
-          status.textContent = target.mode === "folder" ? "Native folder opened in Finder" : "Native file opened";
+          status.textContent = messages.openedMessage || "Native file opened";
           status.className = "library-detail-status ok";
         }
       } catch (error) {
@@ -13684,10 +16580,14 @@ INDEX_HTML = """<!doctype html>
       if (!paper?.paper_id) return;
       const status = $("libraryDetailStatus");
       const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      const activityId = `pdf:${paper.paper_id}`;
       buttons.forEach((button) => button.disabled = true);
       if (status) {
         status.textContent = options.force ? "Refreshing PDF..." : "Downloading PDF...";
         status.className = "library-detail-status";
+      }
+      if (state.libraryTab === "my-publications") {
+        setMyPublicationActivity(activityId, options.force ? "Refreshing PDF..." : "Downloading PDF...");
       }
       try {
         const res = await fetch("/api/download", {
@@ -13710,6 +16610,8 @@ INDEX_HTML = """<!doctype html>
           status.className = "library-detail-status err";
         }
         buttons.forEach((button) => button.disabled = false);
+      } finally {
+        clearMyPublicationActivity(activityId);
       }
     }
 
@@ -14935,11 +17837,13 @@ INDEX_HTML = """<!doctype html>
     }
 
     function showAnalysis(paper, content) {
+      const isCommentsReport = /^#\s+Citation Comments Report\b/.test(String(content || "").trim());
       $("analysisMeta").innerHTML = `
         <strong>${escapeHtml(paper?.title || "Analysis")}</strong><br>
         ${escapeHtml(paper?.journal || "")} ${escapeHtml(paper?.publication_date || "")}
       `;
       $("analysisBody").innerHTML = markdownToHtml(content || "The analysis file is empty.");
+      $("analysisBody").classList.toggle("comments-report", isCommentsReport);
       wireAnalysisLinks();
       $("analysisBackdrop").classList.add("open");
       $("workspace").classList.add("note-open");
@@ -15045,6 +17949,9 @@ INDEX_HTML = """<!doctype html>
         } else if (line.startsWith("# ")) {
           closeList();
           output.push(`<h1>${inlineMarkdown(line.slice(2))}</h1>`);
+        } else if (/^\*\*\d+\.\s+.+\*\*$/.test(line)) {
+          closeList();
+          output.push(`<h4>${inlineMarkdown(line.slice(2, -2))}</h4>`);
         } else if (line.startsWith("- ")) {
           if (!inList) {
             output.push("<ul>");
@@ -15076,6 +17983,109 @@ INDEX_HTML = """<!doctype html>
       const text = match ? match[2].trim() : String(value || "");
       const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "context";
       return `<blockquote class="citation-context context-${escapeAttr(slug)}"><strong>${escapeHtml(label)}</strong>${inlineMarkdown(text)}</blockquote>`;
+    }
+
+    async function openCitationSettings() {
+      const backdrop = $("citationSettingsBackdrop");
+      if (!backdrop) return;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      $("citationSettingsStatus").textContent = "Loading citation settings...";
+      $("citationSettingsStatus").className = "citation-settings-status";
+      $("adsTokenInput").value = "";
+      try {
+        const res = await fetch("/api/settings/citation");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load citation settings");
+        updateCitationSettingsUi(data.ads || {});
+        $("citationSettingsStatus").textContent = data.ads?.configured ? "ADS token is saved locally." : "ADS is optional and currently disabled.";
+        $("citationSettingsStatus").className = `citation-settings-status${data.ads?.configured ? " ok" : ""}`;
+      } catch (error) {
+        $("citationSettingsStatus").textContent = error.message || "Could not load citation settings";
+        $("citationSettingsStatus").className = "citation-settings-status err";
+      }
+      $("adsTokenInput")?.focus({preventScroll: true});
+    }
+
+    function closeCitationSettings() {
+      $("citationSettingsBackdrop")?.classList.remove("open");
+      $("citationSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+      $("adsTokenInput").value = "";
+    }
+
+    function updateCitationSettingsUi(ads) {
+      const configured = Boolean(ads?.configured);
+      $("adsConfiguredLabel").textContent = configured ? "Configured" : "Not configured";
+    }
+
+    async function saveCitationAdsToken({test = false} = {}) {
+      const token = $("adsTokenInput")?.value || "";
+      if (!token.trim()) {
+        $("citationSettingsStatus").textContent = "Paste an ADS token before saving.";
+        $("citationSettingsStatus").className = "citation-settings-status err";
+        return;
+      }
+      $("citationSettingsStatus").textContent = test ? "Saving and testing ADS token..." : "Saving ADS token locally...";
+      $("citationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ads_token: token, test})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save ADS token");
+        updateCitationSettingsUi(data.ads || {});
+        $("adsTokenInput").value = "";
+        const ok = data.ads?.ok;
+        $("citationSettingsStatus").textContent = ok === false ? "ADS token saved, but the connection test failed." : (ok === true ? "ADS token saved and connected." : "ADS token saved locally.");
+        $("citationSettingsStatus").className = `citation-settings-status${ok === false ? " err" : " ok"}`;
+      } catch (error) {
+        $("citationSettingsStatus").textContent = error.message || "Could not save ADS token";
+        $("citationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function testCitationAdsToken() {
+      const token = $("adsTokenInput")?.value || "";
+      $("citationSettingsStatus").textContent = "Testing ADS connection...";
+      $("citationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({action: "test", ads_token: token})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not test ADS token");
+        updateCitationSettingsUi(data.ads || {});
+        $("citationSettingsStatus").textContent = data.ads?.ok ? "ADS connection works." : "ADS token is missing or invalid.";
+        $("citationSettingsStatus").className = `citation-settings-status${data.ads?.ok ? " ok" : " err"}`;
+      } catch (error) {
+        $("citationSettingsStatus").textContent = error.message || "Could not test ADS token";
+        $("citationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function clearCitationAdsToken() {
+      $("citationSettingsStatus").textContent = "Clearing ADS token...";
+      $("citationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({action: "clear"})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not clear ADS token");
+        updateCitationSettingsUi(data.ads || {});
+        $("adsTokenInput").value = "";
+        $("citationSettingsStatus").textContent = "ADS token cleared. ADS is disabled.";
+        $("citationSettingsStatus").className = "citation-settings-status";
+      } catch (error) {
+        $("citationSettingsStatus").textContent = error.message || "Could not clear ADS token";
+        $("citationSettingsStatus").className = "citation-settings-status err";
+      }
     }
 
     function escapeHtml(value) {
@@ -15176,6 +18186,16 @@ INDEX_HTML = """<!doctype html>
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
     $("refreshMyPublicationMetrics").addEventListener("click", () => refreshMyPublicationMetrics());
+    $("exportPublicationList").addEventListener("click", (event) => {
+      event.stopPropagation();
+      togglePublicationExportMenu();
+    });
+    $("publicationExportOptions").querySelectorAll('[data-action="export-publications"]').forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        exportPublicationList(button.dataset.exportFormat || "docx");
+      });
+    });
     $("publicationSearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -15238,6 +18258,19 @@ INDEX_HTML = """<!doctype html>
     });
     $("closeAnalysis").addEventListener("click", closeAnalysis);
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
+    $("closeCitationSettings").addEventListener("click", closeCitationSettings);
+    $("citationSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("citationSettingsBackdrop")) closeCitationSettings();
+    });
+    $("saveAdsToken").addEventListener("click", () => saveCitationAdsToken());
+    $("testAdsToken").addEventListener("click", testCitationAdsToken);
+    $("clearAdsToken").addEventListener("click", clearCitationAdsToken);
+    $("adsTokenInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveCitationAdsToken({test: true});
+      }
+    });
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
     $("openExternalBrowser").addEventListener("click", openExternalBrowser);
     $("closeLibraryQuickLook").addEventListener("click", () => {
@@ -15251,6 +18284,14 @@ INDEX_HTML = """<!doctype html>
       if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (event.key !== "Escape") return;
+      closePublicationAuthorMenu();
+      closePublicationExportMenu();
+      if ($("citationSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeCitationSettings();
+        return;
+      }
       if (state.libraryQuickLookOpen) {
         event.preventDefault();
         event.stopPropagation();
@@ -15272,8 +18313,22 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
     }, true);
     window.addEventListener("click", (event) => {
+      if (event.target.closest?.('[data-action="open-scholar-profile"]')) {
+        event.preventDefault();
+        event.stopPropagation();
+        openMyPublicationScholarProfile();
+        return;
+      }
+      if (event.target.closest?.('[data-action="clear-scholar-profile"]')) {
+        event.preventDefault();
+        event.stopPropagation();
+        clearMyPublicationScholarProfile();
+        return;
+      }
       hideLibraryContextMenu();
       hideLibraryTabContextMenu();
+      if (!event.target.closest?.(".publication-author-menu, .publication-author-pill")) closePublicationAuthorMenu();
+      if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
       if (
         state.libraryTab === "my-publications"
         && state.myPublicationSearchResults.length
@@ -15293,6 +18348,7 @@ INDEX_HTML = """<!doctype html>
       if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
     });
     wireWindowDragRegion();
+    window.openCitationSettings = openCitationSettings;
 
     Promise.resolve().then(loadLibrary).catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;

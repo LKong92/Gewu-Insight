@@ -6,4 +6,6 @@ data/
 logs/
 reports/analysis_jobs/
 reports/imports/
+reports/citation_comments/
+reports/publication_exports/
 backups/

@@ -5,7 +5,7 @@ from datetime import date
 from typing import Any
 
 from ..http import request_with_retries
-from ..text import clean_markup_text, first_text, make_paper_id, normalize_doi
+from ..text import clean_markup_text, first_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
 
 
 def fetch_crossref_journal(
@@ -80,8 +80,9 @@ def fetch_crossref_journal(
 
 
 def normalize_crossref_item(item: dict[str, Any], journal_name: str) -> dict[str, Any]:
-    title = clean_markup_text(first_text(item.get("title")))
+    title = normalize_publication_title(clean_markup_text(first_text(item.get("title"))))
     doi = normalize_doi(item.get("DOI"))
+    journal_name = journal_name_for_doi(journal_name, doi) or "Unknown Journal"
     publication_date = (
         _crossref_date(item.get("published-online"))
         or _crossref_date(item.get("published-print"))

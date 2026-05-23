@@ -144,8 +144,8 @@
 
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Daico"];
-    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Daico"];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Daiqo"];
+    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Daiqo"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
 
@@ -173,6 +173,8 @@
     self.citationNamingItem.state = NSControlStateValueOn;
     namingRuleMenuItem.submenu = namingRuleMenu;
     [settingMenu addItem:namingRuleMenuItem];
+    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings..." action:@selector(openCitationSettings:) keyEquivalent:@","];
+    citationSettingsItem.target = self;
     [settingMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Web Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
     clearCacheItem.target = self;
@@ -188,7 +190,7 @@
         ".card{display:flex;align-items:center;gap:16px;padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
         ".icon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#0f6b6e,#d7b46a);color:white;font-size:22px;font-weight:800;box-shadow:0 10px 22px rgba(15,107,110,.22);}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><div class='icon'>D</div><div><strong>Starting Daico...</strong>Preparing the local reading workspace.</div></div></body></html>";
+        "</style></head><body><div class='card'><div class='icon'>D</div><div><strong>Starting Daiqo...</strong>Preparing the local reading workspace.</div></div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -277,6 +279,10 @@
 
 - (void)useCitationNamingRule:(id)sender {
     [self setLibraryNamingRule:@"citation"];
+}
+
+- (void)openCitationSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openCitationSettings && window.openCitationSettings()" completionHandler:nil];
 }
 
 - (void)updateLibraryNamingRuleMenu:(NSString *)rule {
@@ -368,7 +374,7 @@
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
     NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Daico could not start";
+    alert.messageText = @"Daiqo could not start";
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];

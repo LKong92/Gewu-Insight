@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 
 from ..http import request_with_retries
-from ..text import clean_markup_text, clean_text, make_paper_id, normalize_doi
+from ..text import clean_markup_text, clean_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
 
 
 def fetch_openalex_journal(
@@ -165,7 +165,7 @@ def affiliation_matches(haystack: str, affiliation: str) -> bool:
 def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str, Any]:
     primary_location = item.get("primary_location") or {}
     source = primary_location.get("source") or {}
-    title = clean_markup_text(item.get("title")) or "(Untitled)"
+    title = normalize_publication_title(clean_markup_text(item.get("title"))) or "(Untitled)"
     doi = normalize_doi(item.get("doi"))
     publication_date = clean_text(item.get("publication_date"))
     landing_url = clean_text(primary_location.get("landing_page_url"))
@@ -176,12 +176,13 @@ def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str
     preferred_journal = normalize_openalex_journal_name(journal_name)
     source_journal = normalize_openalex_journal_name(source.get("display_name"))
     journal = preferred_journal if preferred_journal and preferred_journal.lower() != "unknown journal" else source_journal or preferred_journal
+    journal = journal_name_for_doi(journal, doi) or "Unknown Journal"
 
     return {
         "paper_id": paper_id,
         "doi": doi,
         "title": title,
-        "journal": journal or "Unknown Journal",
+        "journal": journal,
         "publication_date": publication_date,
         "abstract": abstract,
         "abstract_source": "metadata" if abstract else "missing",

@@ -1,6 +1,6 @@
-# Daico
+# Daiqo
 
-Daico is a local macOS research-library and paper-monitoring assistant. It now
+Daiqo is a local macOS research-library and paper-monitoring assistant. It now
 opens into a Library-first workspace: you organize papers, preview PDFs, keep
 your own publication list, import folders, and use Journal Monitor as one of the
 tools attached to the library rather than as the whole app.
@@ -8,7 +8,7 @@ tools attached to the library rather than as the whole app.
 All persistent state lives in SQLite. JSON and Markdown are generated artifacts,
 not the source of truth.
 
-## What Daico Does
+## What Daiqo Does
 
 - **Library workspace**: Finder-style columns for folders and paper shortcuts,
   with drag/drop, rename, copy/paste, delete/recover, keyboard navigation,
@@ -34,7 +34,7 @@ not the source of truth.
 The current launcher in this repository is:
 
 ```text
-Daico.app
+Daiqo.app
 ```
 
 ## Quick Start
@@ -42,7 +42,7 @@ Daico.app
 Double-click:
 
 ```text
-Daico.app
+Daiqo.app
 ```
 
 On first launch the app will:
@@ -62,7 +62,7 @@ logs/paper_monitor_launcher.log
 
 The only external runtime requirement is a working `python3` command on macOS.
 For Finder double-click launch, keep the project outside protected macOS folders
-when possible; a path such as `~/Applications/Daico` or `~/Daico` is safer than
+when possible; a path such as `~/Applications/Daiqo` or `~/Daiqo` is safer than
 Desktop, Documents, or Downloads.
 
 ## Manual Setup
@@ -129,7 +129,7 @@ You can:
 - use the star button to highlight important entries
 
 Google Scholar can temporarily block automated profile fetches with a 429 or
-verification page. Daico reports that clearly and does not keep retrying, because
+verification page. Daiqo reports that clearly and does not keep retrying, because
 retries usually extend the block. In that case, wait before trying again or open
 the Scholar profile in your browser first.
 
@@ -165,7 +165,7 @@ Recommended workflow:
 3. Inspect created/updated/duplicate/missing counts.
 4. Run **Import** only after the dry run looks right.
 
-The source folder is read-only from Daico's perspective. Source files are not
+The source folder is read-only from Daiqo's perspective. Source files are not
 moved or deleted.
 
 ## CLI Commands
