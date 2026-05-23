@@ -8734,7 +8734,7 @@ INDEX_HTML = """<!doctype html>
       flex-wrap: nowrap;
       min-width: 0;
       flex: 1 1 auto;
-      overflow: hidden;
+      overflow: visible;
     }
     #myPublicationName { flex: 0 1 470px; min-width: 220px; }
     #publicationSearchBox { flex: 0 1 190px; width: 190px; min-width: 150px; }
