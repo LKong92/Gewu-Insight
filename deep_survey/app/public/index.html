@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Codex Literature Workflow</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+    <link rel="stylesheet" href="/styles.css?v=deep-survey-divider-to-top" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="topic-rail">
+        <button id="newTopicBtn" class="new-topic-btn">New Topic</button>
+        <div id="topicList" class="topic-list"></div>
+      </aside>
+
+      <aside class="sidebar">
+        <section id="newTopicPanel" class="sidebar-section compact hidden">
+          <div class="section-title tight">
+            <h3>New Topic</h3>
+          </div>
+          <label for="topicInput">Research Topic</label>
+          <textarea id="topicInput" rows="4" placeholder="e.g. thin-film lithium niobate integrated photonics"></textarea>
+          <label for="topicDirectoryInput">Directory</label>
+          <div class="directory-picker">
+            <input id="topicDirectoryInput" class="directory-input" type="text" placeholder="/Users/zhengranwu/Desktop/Deep_research" />
+            <button id="chooseDirectoryBtn" type="button">Choose</button>
+          </div>
+          <button id="startBtn" class="primary">Start</button>
+        </section>
+
+        <section class="sidebar-section compact">
+          <button id="resumeBtn">Resume Auto</button>
+          <button id="cancelBtn" class="danger" disabled>Cancel Run</button>
+        </section>
+
+        <section class="sidebar-section timeline-panel">
+          <div class="section-title compact-title">
+            <h3>Progress</h3>
+            <button id="refreshBtn" class="refresh-button" type="button" title="Refresh">↻</button>
+          </div>
+          <div id="timeline" class="timeline"></div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h2 id="topicTitle">No active topic</h2>
+            <p id="workspacePath">Loading workspace...</p>
+          </div>
+          <div class="status-pills">
+            <span id="codexPill" class="pill">Codex</span>
+            <span id="stagePill" class="pill">Stage</span>
+            <span id="manualPill" class="pill">Manual PDFs</span>
+          </div>
+        </header>
+
+        <section class="right-tabs">
+          <div class="tab-bar">
+            <button id="runTabBtn" class="tab-button active" type="button">Run</button>
+            <button id="vaultTabBtn" class="tab-button" type="button">Output files</button>
+          </div>
+
+          <div id="runTab" class="tab-panel active">
+            <div class="thread-workspace">
+              <div class="thread-toolbar">
+                <div class="thread-title-block">
+                  <div id="threadStatusText" class="thread-status">Thread: None selected</div>
+                </div>
+                <span id="appServerState" class="muted">Disconnected</span>
+              </div>
+
+              <select id="threadSelect" class="control-select-hidden" aria-label="Codex thread" tabindex="-1"></select>
+
+              <div id="approvalPanel" class="approval-panel hidden">
+                <div class="approval-head">
+                  <div>
+                    <div class="approval-title">Waiting For Approval</div>
+                    <div id="approvalMeta" class="approval-meta"></div>
+                  </div>
+                  <div class="approval-actions">
+                    <button id="approvalDenyBtn" class="approval-secondary" type="button">Deny</button>
+                    <button id="approvalCancelBtn" class="approval-secondary" type="button">Cancel</button>
+                    <button id="approvalApproveBtn" class="approval-primary" type="button">Approve</button>
+                  </div>
+                </div>
+                <pre id="approvalCommand" class="approval-command"></pre>
+              </div>
+
+              <div id="stageConfirmPanel" class="stage-confirm-panel hidden">
+                <div>
+                  <div id="stageConfirmTitle" class="stage-confirm-title">Stage 3 Waiting For Confirmation</div>
+                  <div id="stageConfirmText" class="stage-confirm-text"></div>
+                </div>
+                <button id="stageConfirmBtn" class="stage-confirm-button" type="button">Confirm Start</button>
+              </div>
+
+              <div class="codex-chat-header">
+                <span id="threadHeaderTitle">Chat: no thread bound to this topic</span>
+                <span id="threadChatState" class="muted">Idle</span>
+              </div>
+              <div id="threadChat" class="thread-chat" aria-live="polite">
+                <div class="chat-empty">Select a thread and send a message. Full replies will appear here.</div>
+              </div>
+
+              <div class="thread-composer">
+                <textarea id="threadMessage" class="thread-message" rows="1" placeholder="Message the current thread, e.g. continue Stage 5A only, then stop."></textarea>
+                <div class="composer-footer">
+                  <div class="thread-settings">
+                    <div class="model-picker">
+                      <button id="threadModelMenuBtn" class="model-menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+                        <span id="threadModelMenuLabel">GPT-5.5 Medium</span>
+                        <span class="model-menu-caret" aria-hidden="true"></span>
+                      </button>
+                      <div id="threadModelMenu" class="model-menu hidden" role="menu">
+                        <div class="model-menu-section">
+                          <div class="model-menu-title">Model</div>
+                          <button class="model-option" type="button" data-model="gpt-5.5">GPT-5.5</button>
+                          <button class="model-option" type="button" data-model="gpt-5.4">GPT-5.4</button>
+                          <button class="model-option" type="button" data-model="gpt-5.4-mini">GPT-5.4 Mini</button>
+                          <button class="model-option" type="button" data-model="gpt-5.3-codex">GPT-5.3 Codex</button>
+                        </div>
+                        <div class="model-menu-section">
+                          <div class="model-menu-title">Reasoning</div>
+                          <div class="effort-options" role="group" aria-label="Reasoning effort">
+                            <button class="effort-option" type="button" data-effort="low">Low</button>
+                            <button class="effort-option" type="button" data-effort="medium">Medium</button>
+                            <button class="effort-option" type="button" data-effort="high">High</button>
+                            <button class="effort-option" type="button" data-effort="xhigh">XHigh</button>
+                          </div>
+                        </div>
+                      </div>
+                      <select id="threadModelSelect" class="compact-select control-select-hidden" aria-hidden="true" tabindex="-1">
+                        <option value="gpt-5.5" selected>GPT-5.5</option>
+                        <option value="gpt-5.4">GPT-5.4</option>
+                        <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                        <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
+                      </select>
+                      <select id="threadEffortSelect" class="compact-select control-select-hidden" aria-label="Reasoning" tabindex="-1">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">XHigh</option>
+                      </select>
+                    </div>
+                    <div class="permission-picker">
+                      <button id="threadModeMenuBtn" class="model-menu-button permission-menu-button" type="button" aria-haspopup="true" aria-expanded="false">
+                        <span class="permission-prefix">Mode</span>
+                        <span id="threadModeMenuLabel">Read Only</span>
+                        <span class="select-caret" aria-hidden="true"></span>
+                      </button>
+                      <div id="threadModeMenu" class="permission-menu hidden" role="menu">
+                        <button class="permission-option" type="button" data-mode="read">Read Only</button>
+                        <button class="permission-option" type="button" data-mode="write">Allow Edits</button>
+                      </div>
+                      <select id="threadModeSelect" class="control-select-hidden" aria-label="Mode" tabindex="-1">
+                        <option value="read" selected>Read Only</option>
+                        <option value="write">Allow Edits</option>
+                      </select>
+                    </div>
+                    <div class="plugin-control">
+                      <button id="pluginProbeBtn" class="probe-button" type="button" aria-haspopup="dialog" aria-expanded="false">Plugin</button>
+                      <div id="pluginHint" class="plugin-hint hidden" role="dialog" aria-label="Plugin mention status">
+                        <div class="plugin-hint-title">Deep Literature Workflow</div>
+                        <div class="plugin-hint-text">DLW controls and the current chat send a structured plugin mention, not just a plain-text hint.</div>
+                        <code>plugin://deep-literature-workflow@deep-research-local</code>
+                        <button id="pluginProbeRunBtn" class="plugin-test-button" type="button">Test Connection</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="composer-actions">
+                    <button id="stopThreadBtn" class="stop-button" type="button" disabled>Stop</button>
+                    <button id="sendThreadBtn" class="send-button" type="button" aria-label="Send" title="Send">↑</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel run-panel">
+              <div class="section-title">
+                <h3>Run Log</h3>
+                <span id="runState" class="muted">Idle</span>
+              </div>
+              <div id="log" class="log"></div>
+            </div>
+          </div>
+
+          <div id="vaultTab" class="tab-panel">
+            <div class="vault-panel">
+              <div class="vault-layout">
+                <div class="vault-file-column">
+                  <input id="vaultSearch" class="vault-search" type="search" placeholder="Search Markdown files" />
+                  <div id="vaultFiles" class="vault-files"></div>
+                </div>
+                <div id="vaultPreview" class="vault-preview">Select a Markdown file</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

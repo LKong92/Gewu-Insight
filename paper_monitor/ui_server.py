@@ -4,12 +4,14 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 import html
 import hashlib
+import atexit
 from io import BytesIO
 import json
 import mimetypes
 import os
 import re
 import shutil
+import socket
 import socketserver
 import subprocess
 import threading
@@ -93,6 +95,115 @@ COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
+DEEP_SURVEY_DIR = ROOT / "deep_survey"
+DEEP_SURVEY_APP_DIR = DEEP_SURVEY_DIR / "app"
+DEEP_SURVEY_TEMPLATE_DIR = DEEP_SURVEY_DIR / "workspace-template"
+DEEP_SURVEY_WORKSPACE_DIR = ROOT / "data" / "deep_survey_workspace"
+DEEP_SURVEY_LOCK = threading.Lock()
+DEEP_SURVEY_PROCESS: subprocess.Popen | None = None
+DEEP_SURVEY_PORT: int | None = None
+
+
+def find_free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def deep_survey_node_binary() -> str | None:
+    candidates = [
+        os.environ.get("DEEP_SURVEY_NODE"),
+        "/Applications/Codex.app/Contents/Resources/node",
+        shutil.which("node"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return str(candidate)
+    return None
+
+
+def ensure_deep_survey_workspace() -> None:
+    DEEP_SURVEY_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    plugin_source = DEEP_SURVEY_TEMPLATE_DIR / "plugins" / "deep-literature-workflow"
+    plugin_target = DEEP_SURVEY_WORKSPACE_DIR / "plugins" / "deep-literature-workflow"
+    if plugin_source.exists() and not plugin_target.exists():
+        plugin_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(plugin_source, plugin_target)
+
+
+def wait_for_deep_survey_port(port: int, timeout: float = 4.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except OSError:
+            time.sleep(0.1)
+    return False
+
+
+def ensure_deep_survey_server() -> dict[str, Any]:
+    global DEEP_SURVEY_PROCESS, DEEP_SURVEY_PORT
+    with DEEP_SURVEY_LOCK:
+        if DEEP_SURVEY_PROCESS and DEEP_SURVEY_PROCESS.poll() is None and DEEP_SURVEY_PORT:
+            return {
+                "ok": True,
+                "url": f"http://127.0.0.1:{DEEP_SURVEY_PORT}/",
+                "port": DEEP_SURVEY_PORT,
+                "workspace": str(DEEP_SURVEY_WORKSPACE_DIR),
+            }
+
+        server_path = DEEP_SURVEY_APP_DIR / "server.mjs"
+        node_binary = deep_survey_node_binary()
+        if not server_path.exists():
+            return {"ok": False, "error": "Deep Survey server.mjs is missing."}
+        if not node_binary:
+            return {"ok": False, "error": "Node.js was not found. Install Codex.app or Node.js."}
+
+        ensure_deep_survey_workspace()
+        DEEP_SURVEY_PORT = find_free_local_port()
+        env = os.environ.copy()
+        env["CODEX_DLW_APP_PORT"] = str(DEEP_SURVEY_PORT)
+        env["CODEX_DLW_WORKSPACE_ROOT"] = str(DEEP_SURVEY_WORKSPACE_DIR)
+        env["PATH"] = ":".join([
+            "/Applications/Codex.app/Contents/Resources",
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            env.get("PATH", ""),
+        ])
+        log_dir = ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_dir / "deep_survey.log", "a", encoding="utf-8")
+        DEEP_SURVEY_PROCESS = subprocess.Popen(
+            [node_binary, str(server_path)],
+            cwd=str(DEEP_SURVEY_APP_DIR),
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        ready = wait_for_deep_survey_port(DEEP_SURVEY_PORT)
+        if not ready and DEEP_SURVEY_PROCESS.poll() is not None:
+            return {"ok": False, "error": "Deep Survey server exited during startup."}
+        return {
+            "ok": ready,
+            "url": f"http://127.0.0.1:{DEEP_SURVEY_PORT}/",
+            "port": DEEP_SURVEY_PORT,
+            "workspace": str(DEEP_SURVEY_WORKSPACE_DIR),
+            "error": None if ready else "Deep Survey server is still starting.",
+        }
+
+
+def stop_deep_survey_server() -> None:
+    global DEEP_SURVEY_PROCESS
+    if DEEP_SURVEY_PROCESS and DEEP_SURVEY_PROCESS.poll() is None:
+        DEEP_SURVEY_PROCESS.terminate()
+
+
+atexit.register(stop_deep_survey_server)
 
 
 class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
@@ -176,6 +287,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/arxiv-daily-refresh":
                 self.handle_arxiv_daily_refresh()
+                return
+            if parsed.path == "/api/deep-survey/status":
+                self.handle_deep_survey_status()
                 return
             if parsed.path == "/api/library/import-folder/progress":
                 self.handle_library_import_folder_progress(parse_qs(parsed.query))
@@ -407,6 +521,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    def handle_deep_survey_status(self) -> None:
+        self.send_json(ensure_deep_survey_server())
 
     def handle_month(self, query: dict[str, list[str]]) -> None:
         self.refresh_journals()
@@ -7886,6 +8003,62 @@ INDEX_HTML = """<!doctype html>
     .journal-setting-name { font-size: 14px; min-width: 0; }
     .main { padding: 50px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
     .app.library-mode .main { padding-top: 52px; }
+    .app.deep-survey-mode {
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .app.deep-survey-mode .main {
+      position: relative;
+      padding: 38px 0 0;
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .app.deep-survey-mode .main::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 220px;
+      height: 38px;
+      background: #f0f2f5;
+      pointer-events: none;
+    }
+    .app.deep-survey-mode .main::after {
+      content: "";
+      position: absolute;
+      left: 220px;
+      top: 0;
+      width: 1px;
+      height: 38px;
+      background: var(--line);
+      pointer-events: none;
+      z-index: 2;
+    }
+    .app.deep-survey-mode .workspace {
+      height: calc(100vh - 38px);
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .app.deep-survey-mode .report-column {
+      height: 100%;
+      padding-right: 0;
+      grid-template-rows: auto minmax(0, 1fr);
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .app.deep-survey-mode #summary,
+    .app.deep-survey-mode #reportTabs,
+    .app.deep-survey-mode #fetchProgressHost,
+    .app.deep-survey-mode #libraryControls {
+      display: none !important;
+    }
+    .app.deep-survey-mode .toolbar {
+      height: 0;
+      min-height: 0;
+      margin-bottom: 0;
+      padding: 0;
+    }
+    .app.deep-survey-mode #reportTitle,
+    .app.deep-survey-mode #reportToolbarActions,
+    .app.deep-survey-mode #librarySearchTools {
+      display: none !important;
+    }
     .internal-browser {
       position: fixed;
       inset: 0;
@@ -10262,6 +10435,29 @@ INDEX_HTML = """<!doctype html>
       overflow: visible;
       padding-right: 0;
     }
+    .papers.deep-survey-view {
+      display: block;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      padding-right: 0;
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .deep-survey-frame {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      border: 0;
+      display: block;
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .deep-survey-loading {
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
     .paper {
       position: relative;
       background: var(--panel);
@@ -10636,6 +10832,7 @@ INDEX_HTML = """<!doctype html>
         <div class="sidebar-view-switcher" id="sidebarViewSwitcher">
           <button class="view-switch" id="sideLibraryMode" type="button">Library</button>
           <button class="view-switch" id="sideReportMode" type="button">Journal Monitor</button>
+          <button class="view-switch" id="sideDeepSurveyMode" type="button">Deep Survey</button>
         </div>
       </div>
       <div class="monthbar">
@@ -10676,6 +10873,7 @@ INDEX_HTML = """<!doctype html>
               <button class="view-switch active" id="libraryMode" type="button">Library</button>
               <button class="view-switch" id="myPublicationsMode" type="button">My Publications</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
+              <button class="view-switch" id="deepSurveyMode" type="button">Deep Survey</button>
             </div>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
@@ -12654,7 +12852,7 @@ INDEX_HTML = """<!doctype html>
         .join(", ");
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
-      root.classList.remove("library-view");
+      root.classList.remove("library-view", "deep-survey-view");
       root.style.height = "";
       root.style.minHeight = "";
       root.innerHTML = "";
@@ -12891,6 +13089,7 @@ INDEX_HTML = """<!doctype html>
       $("reportTitle").textContent = "Library Loader";
       $("summary").textContent = "";
       const root = $("papers");
+      root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       const job = state.libraryImportJob || {};
       const result = state.libraryImportLastResult || job.result || null;
@@ -13177,6 +13376,7 @@ INDEX_HTML = """<!doctype html>
       captureLibraryColumnScrollTops();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
       $("summary").textContent = "";
+      root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0">
@@ -13794,6 +13994,7 @@ INDEX_HTML = """<!doctype html>
       const filterLabel = myPublicationFilterLabel();
       $("summary").textContent = `${state.myPublications.length} publications${filterLabel ? ` · Filter: ${filterLabel} (${rows.length})` : ""} · Sort: ${sortLabel}`;
       const root = $("papers");
+      root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell my-publications-shell" id="libraryShell" tabindex="0">
@@ -18147,14 +18348,43 @@ INDEX_HTML = """<!doctype html>
       await loadReport({showLoading: false});
     }
 
+    async function openDeepSurvey() {
+      state.mode = "deep-survey";
+      closeLibraryQuickLook();
+      closeAnalysis();
+      stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
+      setPrimaryView("deep-survey");
+      $("summary").textContent = "";
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      $("libraryControls").classList.remove("open");
+      const root = $("papers");
+      root.classList.remove("library-view");
+      root.classList.add("deep-survey-view");
+      root.style.height = "";
+      root.style.minHeight = "";
+      root.innerHTML = `<div class="deep-survey-loading">Starting Deep Survey...</div>`;
+      try {
+        const data = await fetchJson("/api/deep-survey/status");
+        if (!data.ok || !data.url) throw new Error(data.error || "Deep Survey could not start");
+        root.innerHTML = `<iframe class="deep-survey-frame" title="Deep Survey" src="${escapeAttr(data.url)}"></iframe>`;
+      } catch (error) {
+        root.innerHTML = `<div class="empty">${escapeHtml(error.message || "Deep Survey could not start")}</div>`;
+      }
+    }
+
     function setPrimaryView(view) {
-      const isLibrarySurface = view === "library" || view === "my-publications";
+      const isLibrarySurface = view === "library" || view === "my-publications" || view === "deep-survey";
       document.querySelector(".app")?.classList.toggle("library-mode", isLibrarySurface);
+      document.querySelector(".app")?.classList.toggle("deep-survey-mode", view === "deep-survey");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
-      $("sideLibraryMode")?.classList.toggle("active", isLibrarySurface);
+      $("deepSurveyMode")?.classList.toggle("active", view === "deep-survey");
+      $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
+      $("sideDeepSurveyMode")?.classList.toggle("active", view === "deep-survey");
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
@@ -18201,10 +18431,12 @@ INDEX_HTML = """<!doctype html>
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
     });
+    $("deepSurveyMode").addEventListener("click", () => openDeepSurvey());
     $("sideReportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
+    $("sideDeepSurveyMode").addEventListener("click", () => openDeepSurvey());
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
