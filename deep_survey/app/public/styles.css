@@ -234,6 +234,10 @@ button.danger {
   background: #fff8ec;
 }
 
+.pill.actionable {
+  cursor: pointer;
+}
+
 .panel {
   border: 0;
   border-radius: 0;
@@ -624,6 +628,92 @@ textarea {
 
 .thread-title-block {
   display: none;
+}
+
+.setup-panel {
+  margin: 10px 0 0;
+  padding: 10px 0 8px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.setup-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.setup-title {
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.setup-text {
+  margin-top: 3px;
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.setup-action,
+.setup-install {
+  min-height: 28px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 10px;
+  background: #f3f5f7;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.setup-install {
+  margin-top: 8px;
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.setup-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
+.setup-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.setup-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #b8c0cc;
+  flex: 0 0 auto;
+}
+
+.setup-check.ok .setup-dot {
+  background: var(--ok);
+}
+
+.setup-check.warn .setup-dot {
+  background: #d79a32;
+}
+
+.setup-check-meta {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread-select,

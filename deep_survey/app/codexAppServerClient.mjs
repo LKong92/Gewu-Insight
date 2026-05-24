@@ -61,6 +61,16 @@ export class CodexAppServerClient extends EventEmitter {
     this.initialized = true;
   }
 
+  stop() {
+    if (this.child && !this.child.killed) {
+      this.child.kill();
+    }
+    this.child = null;
+    this.initialized = false;
+    this.starting = null;
+    this.buffer = "";
+  }
+
   handleStdout(chunk) {
     this.buffer += chunk.toString("utf8");
     let index;

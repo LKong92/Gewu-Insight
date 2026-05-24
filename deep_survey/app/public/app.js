@@ -20,6 +20,7 @@ const state = {
   topicThreadBindings: {},
   activeDlwThreadId: null,
   pendingApprovals: [],
+  setupStatus: null,
   draggedTopicVault: null,
   stagePromptInFlight: false,
   pendingStageAction: null,
@@ -49,6 +50,12 @@ const els = {
   threadSelect: document.querySelector("#threadSelect"),
   threadDisplay: document.querySelector("#threadHeaderTitle"),
   threadWorkspace: document.querySelector(".thread-workspace"),
+  setupPanel: document.querySelector("#setupPanel"),
+  setupTitle: document.querySelector("#setupTitle"),
+  setupText: document.querySelector("#setupText"),
+  setupChecks: document.querySelector("#setupChecks"),
+  setupRetryBtn: document.querySelector("#setupRetryBtn"),
+  setupInstallBtn: document.querySelector("#setupInstallBtn"),
   threadModelSelect: document.querySelector("#threadModelSelect"),
   threadEffortSelect: document.querySelector("#threadEffortSelect"),
   threadModelMenuBtn: document.querySelector("#threadModelMenuBtn"),
@@ -318,7 +325,7 @@ function renderStatus(status) {
   els.workspacePath.title = workspacePath;
   els.newTopicBtn.classList.toggle("selected", state.isCreatingTopic);
 
-  setPill(els.codexPill, status.codex.ok ? "Codex ready" : "Codex missing", status.codex.ok ? "ok" : "warn");
+  renderCodexPill();
   setPill(els.stagePill, `Next: ${labelStage(displayTopic.nextStage)}`, displayTopic.nextStage === "stage_3_pdf_acquisition" ? "warn" : "ok");
   setPill(els.manualPill, `Manual PDFs: ${displayTopic.manualPdfCount ?? 0}`, (displayTopic.manualPdfCount ?? 0) > 0 ? "warn" : "ok");
 
@@ -409,6 +416,37 @@ function runningStageForTopic(topic) {
 function setPill(el, text, kind) {
   el.textContent = text;
   el.className = `pill ${kind || ""}`;
+}
+
+function setupIssueDetails(setup = state.setupStatus) {
+  if (!setup) return "";
+  const issues = [];
+  if (!setup.codex?.ok) issues.push(`Codex app: ${setup.codex?.error || "missing"}`);
+  if (!setup.workspacePlugin?.ok) issues.push("Workspace plugin missing");
+  if (!setup.codexPlugin?.ok) issues.push("Codex plugin cache missing");
+  if (!setup.skills?.deepLiterature) issues.push(`DLW skill: ${setup.skills?.error || "not visible"}`);
+  return issues.join("; ");
+}
+
+function renderCodexPill() {
+  if (!els.codexPill) return;
+  const setup = state.setupStatus;
+  const status = state.status;
+  els.codexPill.classList.remove("actionable");
+  els.codexPill.title = "";
+  if (status?.codex && !status.codex.ok) {
+    setPill(els.codexPill, "Codex missing", "warn");
+    els.codexPill.classList.add("actionable");
+    els.codexPill.title = "Click to check Codex setup.";
+    return;
+  }
+  if (setup && !setup.ok) {
+    setPill(els.codexPill, "Codex setup issue", "warn");
+    els.codexPill.classList.add("actionable");
+    els.codexPill.title = `${setupIssueDetails(setup)}. Click to repair setup.`;
+    return;
+  }
+  setPill(els.codexPill, "Codex ready", "ok");
 }
 
 function renderStageRow(stage, nextStage) {
@@ -947,6 +985,82 @@ function emptyChatNode(text) {
   node.className = "chat-empty";
   node.textContent = text;
   return node;
+}
+
+function setupStatusLabel(ok, pending = false) {
+  if (pending) return "checking";
+  return ok ? "ready" : "needs attention";
+}
+
+function setupCheckNode(label, ok, detail = "") {
+  const node = document.createElement("div");
+  node.className = `setup-check ${ok ? "ok" : "warn"}`;
+  const dot = document.createElement("span");
+  dot.className = "setup-dot";
+  const text = document.createElement("span");
+  text.textContent = label;
+  const meta = document.createElement("span");
+  meta.className = "setup-check-meta";
+  meta.textContent = detail || setupStatusLabel(ok);
+  node.append(dot, text, meta);
+  return node;
+}
+
+function renderSetupPanel(setup = state.setupStatus) {
+  if (!els.setupPanel) return;
+  els.setupPanel.classList.add("hidden");
+  renderCodexPill();
+  if (!setup) {
+    els.setupPanel.classList.remove("ready", "warn");
+    els.setupTitle.textContent = "Checking Codex Setup";
+    els.setupText.textContent = "On startup, Deep Survey connects to Codex and installs the bundled Deep Literature Workflow plugin if needed.";
+    els.setupChecks.replaceChildren(
+      setupCheckNode("Codex app", false, "checking"),
+      setupCheckNode("Workspace plugin", false, "checking"),
+      setupCheckNode("Codex plugin cache", false, "checking"),
+      setupCheckNode("DLW skill visible to Codex", false, "checking")
+    );
+    els.setupInstallBtn.classList.add("hidden");
+    return;
+  }
+  const codexOk = Boolean(setup.codex?.ok);
+  const workspaceOk = Boolean(setup.workspacePlugin?.ok);
+  const cacheOk = Boolean(setup.codexPlugin?.ok);
+  const skillOk = Boolean(setup.skills?.deepLiterature);
+  const allOk = Boolean(setup.ok);
+  els.setupPanel.classList.toggle("ready", allOk);
+  els.setupPanel.classList.toggle("warn", !allOk);
+  els.setupTitle.textContent = allOk ? "Codex Setup Ready" : "Codex Setup Needs Attention";
+  els.setupText.textContent = allOk
+    ? "Codex is connected and Deep Literature Workflow is available for structured plugin calls."
+    : "Deep Survey will keep trying to prepare Codex. If a check stays unresolved, use Repair Setup, then reopen the app.";
+  els.setupChecks.replaceChildren(
+    setupCheckNode("Codex app", codexOk, setup.codex?.version || setup.codex?.error || setup.codex?.path || ""),
+    setupCheckNode("Workspace plugin", workspaceOk, workspaceOk ? "installed" : "missing"),
+    setupCheckNode("Codex plugin cache", cacheOk, cacheOk ? "installed" : "missing"),
+    setupCheckNode("DLW skill visible to Codex", skillOk, skillOk ? "available" : setup.skills?.error || "not visible yet")
+  );
+  els.setupInstallBtn.classList.toggle("hidden", allOk);
+  renderCodexPill();
+}
+
+async function runSetupCheck({ install = false } = {}) {
+  if (!els.setupPanel) return null;
+  els.setupRetryBtn.disabled = true;
+  els.setupInstallBtn.disabled = true;
+  if (!state.setupStatus) renderSetupPanel(null);
+  try {
+    const setup = await api(`/api/setup?install=${install ? "1" : "0"}`);
+    state.setupStatus = setup;
+    renderSetupPanel(setup);
+    if (setup.installation?.workspace?.installed || setup.installation?.cache?.installed) {
+      appendLog("meta", "Deep Survey installed the bundled DLW plugin template for this local Codex setup.");
+    }
+    return setup;
+  } finally {
+    els.setupRetryBtn.disabled = false;
+    els.setupInstallBtn.disabled = false;
+  }
 }
 
 function renderChatMessage(message) {
@@ -1923,6 +2037,13 @@ els.refreshBtn.addEventListener("click", async () => {
 els.runTabBtn.addEventListener("click", () => setActiveTab("run"));
 els.vaultTabBtn.addEventListener("click", () => setActiveTab("vault"));
 els.vaultSearch.addEventListener("input", renderVaultFiles);
+els.setupRetryBtn.addEventListener("click", () => runSetupCheck({ install: false }).catch(showError));
+els.setupInstallBtn.addEventListener("click", () => runSetupCheck({ install: true }).catch(showError));
+els.codexPill.addEventListener("click", () => {
+  if (els.codexPill.classList.contains("actionable")) {
+    runSetupCheck({ install: true }).catch(showError);
+  }
+});
 els.pluginProbeBtn.addEventListener("click", () => togglePluginHint());
 if (els.pluginProbeRunBtn) {
   els.pluginProbeRunBtn.addEventListener("click", () => runPluginMentionProbe().catch(showError));
@@ -2010,7 +2131,9 @@ function showError(error) {
 
 restoreThreadPreferences();
 resizeThreadMessage();
+renderSetupPanel(null);
 
 refreshStatus()
+  .then(() => runSetupCheck({ install: true }).catch(showError))
   .then(() => listAppServerThreads().catch(showError))
   .catch(showError);

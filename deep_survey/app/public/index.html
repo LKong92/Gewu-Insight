@@ -73,6 +73,18 @@
 
               <select id="threadSelect" class="control-select-hidden" aria-label="Codex thread" tabindex="-1"></select>
 
+              <div id="setupPanel" class="setup-panel hidden">
+                <div class="setup-head">
+                  <div>
+                    <div id="setupTitle" class="setup-title">Checking Codex Setup</div>
+                    <div id="setupText" class="setup-text">On startup, Deep Survey connects to Codex and installs the bundled Deep Literature Workflow plugin if needed.</div>
+                  </div>
+                  <button id="setupRetryBtn" class="setup-action" type="button">Check</button>
+                </div>
+                <div id="setupChecks" class="setup-checks"></div>
+                <button id="setupInstallBtn" class="setup-install hidden" type="button">Repair Setup</button>
+              </div>
+
               <div id="approvalPanel" class="approval-panel hidden">
                 <div class="approval-head">
                   <div>
@@ -202,6 +214,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=setup-pill" ></script>
   </body>
 </html>

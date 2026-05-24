@@ -1,7 +1,8 @@
 import { spawn, execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CodexAppServerClient } from "./codexAppServerClient.mjs";
@@ -9,6 +10,10 @@ import { CodexAppServerClient } from "./codexAppServerClient.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const workspaceRoot = path.resolve(process.env.CODEX_DLW_WORKSPACE_ROOT || path.resolve(__dirname, ".."));
+const bundledDlwPluginDir = path.resolve(__dirname, "../workspace-template/plugins/deep-literature-workflow");
+const workspaceDlwPluginDir = path.join(workspaceRoot, "plugins/deep-literature-workflow");
+const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+const codexDlwPluginCacheDir = path.join(codexHome, "plugins/cache/deep-research-local/deep-literature-workflow/0.1.0");
 const dlwScript = path.join(workspaceRoot, "plugins/deep-literature-workflow/scripts/dlw.py");
 const statePath = path.join(workspaceRoot, ".deep-literature-workflow/state.json");
 const rootProjectStatePath = path.join(workspaceRoot, "PROJECT_STATE.md");
@@ -121,6 +126,94 @@ async function readJsonIfExists(filePath) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function pathExists(filePath) {
+  try {
+    await stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pluginDirStatus(pluginDir) {
+  const pluginJson = path.join(pluginDir, ".codex-plugin/plugin.json");
+  const skillFile = path.join(pluginDir, "skills/deep-literature-workflow/SKILL.md");
+  const scriptFile = path.join(pluginDir, "scripts/dlw.py");
+  const [root, manifest, skill, script] = await Promise.all([
+    pathExists(pluginDir),
+    pathExists(pluginJson),
+    pathExists(skillFile),
+    pathExists(scriptFile)
+  ]);
+  return {
+    path: pluginDir,
+    ok: root && manifest && skill && script,
+    root,
+    manifest,
+    skill,
+    script
+  };
+}
+
+async function copyBundledPluginIfMissing(targetDir) {
+  if (!(await pathExists(bundledDlwPluginDir))) {
+    return { ok: false, installed: false, error: "Bundled Deep Literature Workflow plugin template is missing." };
+  }
+  const before = await pluginDirStatus(targetDir);
+  if (before.ok) return { ok: true, installed: false, status: before };
+  await mkdir(path.dirname(targetDir), { recursive: true });
+  await cp(bundledDlwPluginDir, targetDir, { recursive: true, force: false, errorOnExist: false });
+  const after = await pluginDirStatus(targetDir);
+  return { ok: after.ok, installed: true, status: after, error: after.ok ? null : "Plugin copy finished, but required files are still missing." };
+}
+
+async function ensureBundledDlwPluginInstalled() {
+  const workspace = await copyBundledPluginIfMissing(workspaceDlwPluginDir);
+  const cache = await copyBundledPluginIfMissing(codexDlwPluginCacheDir);
+  if (workspace.installed || cache.installed) {
+    codexAppServer.stop();
+  }
+  return { workspace, cache };
+}
+
+async function getSetupStatus({ install = false } = {}) {
+  const installation = install ? await ensureBundledDlwPluginInstalled() : null;
+  const [codexVersion, workspacePlugin, cachePlugin] = await Promise.all([
+    execFileText(codexBinary, ["--version"], { cwd: workspaceRoot }),
+    pluginDirStatus(workspaceDlwPluginDir),
+    pluginDirStatus(codexDlwPluginCacheDir)
+  ]);
+  let skills = { ok: false, deepLiterature: null, error: null };
+  try {
+    const skillsResult = await codexAppServer.listSkills({ cwd: workspaceRoot });
+    skills = {
+      ok: true,
+      deepLiterature: findDeepLiteratureSkill(skillsResult),
+      error: null
+    };
+  } catch (error) {
+    skills = { ok: false, deepLiterature: null, error: error.message || String(error) };
+  }
+  return {
+    ok: Boolean(codexVersion.ok && workspacePlugin.ok && cachePlugin.ok && skills.deepLiterature),
+    codex: {
+      ok: codexVersion.ok,
+      path: codexBinary,
+      version: codexVersion.stdout.trim(),
+      error: codexVersion.stderr.trim() || codexVersion.error
+    },
+    workspacePlugin,
+    codexPlugin: cachePlugin,
+    skills,
+    installation,
+    notes: [
+      "The app auto-copies its bundled Deep Literature Workflow plugin into the Deep Survey workspace.",
+      "It also tries to place a local Codex plugin cache copy so structured plugin mentions can resolve.",
+      "If Codex is missing, install Codex.app first, then reopen this app."
+    ]
+  };
 }
 
 function execFileText(command, args, options = {}) {
@@ -939,6 +1032,23 @@ async function handleApi(req, res, url) {
       ...status,
       selectedTopic: selected
     });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/setup") {
+    try {
+      const install = url.searchParams.get("install") === "1";
+      return json(res, 200, await getSetupStatus({ install }));
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/setup/install") {
+    try {
+      return json(res, 200, await getSetupStatus({ install: true }));
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/directories/choose") {
