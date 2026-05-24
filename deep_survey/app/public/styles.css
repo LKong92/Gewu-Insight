@@ -1090,9 +1090,9 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
+  margin-top: 0;
+  padding-top: 10px;
+  border-top: 0;
   color: var(--ink);
   font-size: 13px;
   font-weight: 800;
@@ -1245,7 +1245,7 @@ textarea {
 
 .right-tabs {
   display: grid;
-  gap: 6px;
+  gap: 0;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -1254,22 +1254,41 @@ textarea {
 }
 
 .tab-bar {
+  position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 4px;
   border-bottom: 0;
+  height: 34px;
+  flex: 0 0 34px;
+  margin-bottom: 10px;
+}
+
+.tab-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -10px;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
 }
 
 .tab-button {
+  display: grid;
+  place-items: center;
   min-width: 78px;
-  min-height: 34px;
+  height: 30px;
+  min-height: 30px;
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: var(--bg);
   color: var(--muted);
   font-weight: 800;
-  padding: 0 16px;
+  line-height: 1;
+  padding: 0 16px 2px;
 }
 
 .tab-button.active {
@@ -1337,7 +1356,6 @@ textarea {
   align-items: stretch;
   flex: 1;
   min-height: 0;
-  border-top: 1px solid var(--line);
   padding-top: 10px;
 }
 
