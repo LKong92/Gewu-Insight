@@ -18,4 +18,5 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -o "$OUTPUT"
 
 chmod +x "$OUTPUT"
+codesign --force --deep --sign - "$PROJECT_DIR/Daiqo.app"
 file "$OUTPUT"

@@ -1140,6 +1140,7 @@ def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode:
           AND resources.kind = ?
           AND resources.stored_path IS NOT NULL
           AND resources.stored_path != ''
+          AND resources.stored_path != resources.source_path
         ORDER BY
           CASE WHEN inventory_import_batches.status = 'completed' THEN 0 ELSE 1 END,
           resources.updated_at DESC

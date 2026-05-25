@@ -556,7 +556,15 @@ class Storage:
         self.conn.commit()
 
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute("SELECT * FROM papers WHERE paper_id = ?", (paper_id,)).fetchone()
+        row = self.conn.execute(
+            """
+            SELECT papers.*, inventory_import_batches.copy_mode AS import_copy_mode
+            FROM papers
+            LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
+            WHERE papers.paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchone()
         return dict(row) if row else None
 
     def list_papers(
@@ -1448,9 +1456,10 @@ class Storage:
     def list_library_items(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
-            SELECT library_items.*, papers.*
+            SELECT library_items.*, papers.*, inventory_import_batches.copy_mode AS import_copy_mode
             FROM library_items
             JOIN papers ON papers.paper_id = library_items.paper_id
+            LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
             ORDER BY library_items.folder_id, library_items.sort_order, papers.title
             """
         ).fetchall()

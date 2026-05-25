@@ -23,6 +23,8 @@ const appServerClients = new Set();
 const appServerThreadStatus = new Map();
 const appServerApprovalRequests = new Map();
 const codexModel = process.env.CODEX_DLW_MODEL || "gpt-5.5";
+const codexSandbox = process.env.CODEX_DLW_SANDBOX || "danger-full-access";
+const codexApprovalPolicy = process.env.CODEX_DLW_APPROVAL_POLICY || "never";
 const codexBinary = "/Applications/Codex.app/Contents/Resources/codex";
 const commandPath = [
   "/Applications/Codex.app/Contents/Resources",
@@ -45,7 +47,9 @@ const codexAppServer = new CodexAppServerClient({
   codexPath: codexBinary,
   cwd: workspaceRoot,
   env: childEnv,
-  model: codexModel
+  model: codexModel,
+  sandbox: codexSandbox,
+  approvalPolicy: codexApprovalPolicy
 });
 const allowedModels = new Set(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"]);
 const allowedReasoningEfforts = new Set(["low", "medium", "high", "xhigh"]);
@@ -97,6 +101,10 @@ function normalizeModel(model) {
 
 function normalizeReasoningEffort(effort) {
   return allowedReasoningEfforts.has(effort) ? effort : "medium";
+}
+
+function sandboxForMode(mode) {
+  return mode === "read" ? "read-only" : codexSandbox;
 }
 
 function forbidden(res, message) {
@@ -1143,13 +1151,14 @@ function startCodexRun({ title, prompt, sandbox = "workspace-write" }) {
     "exec",
     "--json",
     "--model",
-    codexModel,
-    "--sandbox",
-    sandbox,
-    "--cd",
-    workspaceRoot,
-    prompt
+    codexModel
   ];
+  if (codexApprovalPolicy === "never" && sandbox === codexSandbox) {
+    args.push("--dangerously-bypass-approvals-and-sandbox");
+  } else {
+    args.push("--sandbox", sandbox);
+  }
+  args.push("--cd", workspaceRoot, prompt);
 
   const child = spawn("codex", args, {
     cwd: workspaceRoot,
@@ -1498,7 +1507,7 @@ async function handleApi(req, res, url) {
       const result = await codexAppServer.startThread({
         name,
         model: normalizeModel(body.model),
-        sandbox: body.mode === "read" ? "read-only" : "workspace-write"
+        sandbox: sandboxForMode(body.mode)
       });
       const thread = normalizeThread(result?.thread);
       if (!thread.name) thread.name = name;
@@ -1540,7 +1549,7 @@ async function handleApi(req, res, url) {
         text: body.message || "",
         model: normalizeModel(body.model),
         effort: normalizeReasoningEffort(body.effort),
-        sandbox: body.mode === "write" ? "workspace-write" : "read-only"
+        sandbox: sandboxForMode(body.mode)
       });
       const status = updateAppServerThreadStatus(threadId, {
         status: "running",
@@ -1594,7 +1603,7 @@ async function handleApi(req, res, url) {
         input,
         model: normalizeModel(body.model),
         effort: normalizeReasoningEffort(body.effort),
-        sandbox: body.mode === "read" ? "read-only" : "workspace-write"
+        sandbox: sandboxForMode(body.mode)
       });
       const status = updateAppServerThreadStatus(threadId, {
         status: "running",
@@ -1695,7 +1704,7 @@ async function handleApi(req, res, url) {
     };
     const sandbox = action === "custom" && mode === "read"
       ? "read-only"
-      : "workspace-write";
+      : codexSandbox;
     const run = startCodexRun({ title: titles[action] || action, prompt, sandbox });
     return json(res, 200, { id: run.id, status: run.status, title: run.title });
   }

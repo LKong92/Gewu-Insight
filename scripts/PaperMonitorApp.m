@@ -65,6 +65,8 @@
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) NSWindow *loaderWindow;
+@property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -151,6 +153,10 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
+        [self.loaderWindow orderOut:nil];
+        return;
+    }
     if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {
         return;
     }
@@ -221,6 +227,13 @@
     [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
     [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
     editMenuItem.submenu = editMenu;
+
+    NSMenuItem *loaderMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:loaderMenuItem];
+    NSMenu *loaderMenu = [[NSMenu alloc] initWithTitle:@"Loader"];
+    NSMenuItem *openLoaderItem = [loaderMenu addItemWithTitle:@"Open Loader" action:@selector(openLibraryLoader:) keyEquivalent:@"l"];
+    openLoaderItem.target = self;
+    loaderMenuItem.submenu = loaderMenu;
 
     NSMenuItem *settingMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:settingMenuItem];
@@ -344,6 +357,45 @@
 
 - (void)openCitationSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openCitationSettings && window.openCitationSettings()" completionHandler:nil];
+}
+
+- (void)openLibraryLoader:(id)sender {
+    [self showLibraryLoaderWindow];
+}
+
+- (NSURL *)loaderURL {
+    NSURLComponents *components = [NSURLComponents componentsWithURL:self.url resolvingAgainstBaseURL:NO];
+    components.queryItems = @[[[NSURLQueryItem alloc] initWithName:@"standalone" value:@"loader"]];
+    return components.URL ?: self.url;
+}
+
+- (void)showLibraryLoaderWindow {
+    if (!self.loaderWindow) {
+        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+        [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
+        configuration.userContentController = userContentController;
+
+        self.loaderWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+        self.loaderWebView.UIDelegate = self;
+
+        self.loaderWindow = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 1220, 780)
+                      styleMask:(NSWindowStyleMaskTitled |
+                                 NSWindowStyleMaskClosable |
+                                 NSWindowStyleMaskMiniaturizable |
+                                 NSWindowStyleMaskResizable)
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        self.loaderWindow.title = @"Folder Loader";
+        self.loaderWindow.delegate = self;
+        self.loaderWindow.minSize = NSMakeSize(940, 620);
+        self.loaderWindow.contentView = self.loaderWebView;
+        [self.loaderWindow center];
+    }
+    [self.loaderWebView loadRequest:[NSURLRequest requestWithURL:[self loaderURL]]];
+    [self.loaderWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (void)updateLibraryNamingRuleMenu:(NSString *)rule {

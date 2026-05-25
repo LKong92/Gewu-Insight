@@ -3,12 +3,14 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 
 export class CodexAppServerClient extends EventEmitter {
-  constructor({ codexPath, cwd, env, model }) {
+  constructor({ codexPath, cwd, env, model, sandbox = "danger-full-access", approvalPolicy = "never" }) {
     super();
     this.codexPath = codexPath;
     this.cwd = cwd;
     this.env = env;
     this.model = model;
+    this.sandbox = sandbox;
+    this.approvalPolicy = approvalPolicy;
     this.child = null;
     this.buffer = "";
     this.pending = new Map();
@@ -142,13 +144,13 @@ export class CodexAppServerClient extends EventEmitter {
     return this.request("skills/list", { cwd });
   }
 
-  async startThread({ name, sandbox = "workspace-write", model = this.model } = {}) {
+  async startThread({ name, sandbox = this.sandbox, model = this.model } = {}) {
     await this.ensureStarted();
     const result = await this.request("thread/start", {
       cwd: this.cwd,
       model,
       sandbox,
-      approvalPolicy: "on-request",
+      approvalPolicy: this.approvalPolicy,
       threadSource: "user",
       sessionStartSource: "startup"
     });
@@ -159,7 +161,7 @@ export class CodexAppServerClient extends EventEmitter {
     return result;
   }
 
-  async sendInputToThread({ threadId, input, sandbox = "read-only", model = this.model, effort = "medium" }) {
+  async sendInputToThread({ threadId, input, sandbox = this.sandbox, model = this.model, effort = "medium" }) {
     if (!threadId) throw new Error("threadId is required");
     if (!Array.isArray(input) || input.length === 0) throw new Error("input is required");
     await this.ensureStarted();
@@ -168,7 +170,7 @@ export class CodexAppServerClient extends EventEmitter {
       cwd: this.cwd,
       model,
       sandbox,
-      approvalPolicy: "on-request",
+      approvalPolicy: this.approvalPolicy,
       excludeTurns: true
     });
     return this.request("turn/start", {
@@ -176,13 +178,13 @@ export class CodexAppServerClient extends EventEmitter {
       cwd: this.cwd,
       model,
       sandbox,
-      approvalPolicy: "on-request",
+      approvalPolicy: this.approvalPolicy,
       effort,
       input
     });
   }
 
-  async sendToThread({ threadId, text, sandbox = "read-only", model = this.model, effort = "medium" }) {
+  async sendToThread({ threadId, text, sandbox = this.sandbox, model = this.model, effort = "medium" }) {
     if (!text?.trim()) throw new Error("message is required");
     return this.sendInputToThread({
       threadId,

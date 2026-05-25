@@ -165,6 +165,8 @@ def ensure_deep_survey_server() -> dict[str, Any]:
         env = os.environ.copy()
         env["CODEX_DLW_APP_PORT"] = str(DEEP_SURVEY_PORT)
         env["CODEX_DLW_WORKSPACE_ROOT"] = str(DEEP_SURVEY_WORKSPACE_DIR)
+        env.setdefault("CODEX_DLW_SANDBOX", "danger-full-access")
+        env.setdefault("CODEX_DLW_APPROVAL_POLICY", "never")
         env["PATH"] = ":".join([
             "/Applications/Codex.app/Contents/Resources",
             "/opt/homebrew/bin",
@@ -431,8 +433,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/delete":
                 self.handle_delete_library_entry(payload)
                 return
+            if parsed.path == "/api/library/delete-file":
+                self.handle_delete_library_item_file(payload)
+                return
             if parsed.path == "/api/library/recover":
                 self.handle_recover_library_entry(payload)
+                return
+            if parsed.path == "/api/library/remove-item":
+                self.handle_remove_library_item(payload)
                 return
             if parsed.path == "/api/library/remove-paper":
                 self.handle_remove_paper_from_library(payload)
@@ -1747,6 +1755,62 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json(snapshot)
 
+    def handle_delete_library_item_file(self, payload: dict[str, Any]) -> None:
+        entry_type = str(payload.get("type") or "")
+        entry_id = int(payload.get("id") or 0)
+        item_id = int(payload.get("item_id") or 0)
+        confirmed = bool(payload.get("confirmed"))
+        if item_id and not entry_type:
+            entry_type = "item"
+            entry_id = item_id
+        if entry_type not in {"item", "folder"} or not entry_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "type and id are required")
+            return
+        if not confirmed:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            if entry_type == "item":
+                item = storage.get_library_item(entry_id)
+                if not item:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Library item not found")
+                    return
+                paper_ids = [str(item.get("paper_id") or "")]
+            else:
+                folder = storage.get_library_folder(entry_id)
+                if not folder:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Folder not found")
+                    return
+                special = ensure_library_special_folders(storage)
+                protected_ids = {
+                    1,
+                    int(special["unsorted"].get("id") or 0),
+                    int(special["recycle"].get("id") or 0),
+                }
+                if int(folder.get("id") or 0) in protected_ids or folder.get("parent_id") is None:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "This folder cannot be deleted")
+                    return
+                paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
+            deleted = delete_library_paper_files(storage, paper_ids)
+            if not deleted and entry_type == "item":
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No local files are available for this selection")
+                return
+            if entry_type == "item":
+                storage.delete_library_item(item_id=entry_id)
+            if entry_type == "folder":
+                storage.delete_library_folder(folder_id=entry_id)
+            snapshot = library_snapshot(storage)
+        except IsADirectoryError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
+            return
+        except PermissionError as exc:
+            self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"deleted": deleted, **snapshot})
+
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
@@ -1768,6 +1832,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"recovered": dict(recovered or {}), **snapshot})
+
+    def handle_remove_library_item(self, payload: dict[str, Any]) -> None:
+        item_id = int(payload.get("item_id") or payload.get("id") or 0)
+        if not item_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "item_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            item = storage.get_library_item(item_id)
+            if not item:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Library item not found")
+                return
+            storage.delete_library_item(item_id=item_id)
+            snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
 
     def handle_remove_paper_from_library(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -2490,6 +2571,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
     analysis_path = existing_path_or_empty(paper.get("analysis_path") or "")
+    storage_mode = paper_storage_mode(paper, merged_pdf=merged_pdf, main_pdf=main_pdf, source_path=source_path)
     return {
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
@@ -2508,6 +2590,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "merged_pdf_url": file_url(merged_pdf),
         "main_pdf_path": main_pdf,
         "source_path": source_path,
+        "storage_mode": storage_mode,
         "original_relative_path": paper.get("original_relative_path") or "",
         "original_parent_relative_path": paper.get("original_parent_relative_path") or "",
         "original_filename": paper.get("original_filename") or "",
@@ -3189,10 +3272,12 @@ def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
+    storage_mode = paper_storage_mode(paper, merged_pdf=merged_pdf, main_pdf=main_pdf, source_path=source_path)
     summary = {
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
         "full_detail": False,
+        "storage_mode": storage_mode,
     }
     for key in ["journal", "publication_date", "doi"]:
         value = paper.get(key) or ""
@@ -6550,6 +6635,15 @@ def parse_raw_json(paper: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def paper_storage_mode(paper: dict[str, Any], *, merged_pdf: str = "", main_pdf: str = "", source_path: str = "") -> str:
+    copy_mode = clean_text(paper.get("import_copy_mode") or paper.get("copy_mode") or "").lower()
+    if copy_mode in {"copy", "link"}:
+        return copy_mode
+    if source_path and source_path in {merged_pdf, main_pdf}:
+        return "link"
+    return "local"
+
+
 def parse_semantic_scholar_json(paper: dict[str, Any]) -> dict[str, Any]:
     try:
         raw = json.loads(paper.get("semantic_scholar_json") or "{}")
@@ -7444,6 +7538,50 @@ def delete_pdf_files_for_paper(paper: dict[str, Any]) -> list[str]:
     return deleted
 
 
+def library_file_path_for_delete(paper: dict[str, Any]) -> Path | None:
+    for key in ("merged_pdf_path", "main_pdf_path", "source_path"):
+        raw_path = str(paper.get(key) or "")
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser().resolve()
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[str]:
+    deleted: list[str] = []
+    seen_paths: set[str] = set()
+    cleared_paper_ids: set[str] = set()
+    for paper_id in dict.fromkeys(str(paper_id or "") for paper_id in paper_ids if paper_id):
+        paper = storage.get_paper(paper_id)
+        if not paper:
+            continue
+        path = library_file_path_for_delete(paper)
+        if not path:
+            continue
+        path_key = str(path)
+        if path_key in seen_paths:
+            cleared_paper_ids.add(paper_id)
+            continue
+        seen_paths.add(path_key)
+        try:
+            path.unlink()
+            deleted.append(path_key)
+        except FileNotFoundError:
+            continue
+        cleared_paper_ids.add(paper_id)
+    for raw_path in deleted:
+        path = Path(raw_path)
+        if is_relative_to(path.parent, DEFAULT_LIBRARY_IMPORT_DIR.resolve()):
+            cleanup_empty_parents([raw_path], DEFAULT_LIBRARY_IMPORT_DIR.resolve())
+        elif is_relative_to(path.parent, DEFAULT_PDF_DIR.resolve()):
+            cleanup_empty_parents([raw_path], DEFAULT_PDF_DIR.resolve())
+    for paper_id in cleared_paper_ids:
+        storage.clear_download_status(paper_id)
+    return deleted
+
+
 def delete_analysis_file_for_paper(paper: dict[str, Any]) -> list[str]:
     return delete_allowed_files([str(paper.get("analysis_path") or "")], [DEFAULT_ANALYSIS_DIR.resolve()])
 
@@ -7845,7 +7983,11 @@ INDEX_HTML = """<!doctype html>
     }
     .app.sidebar-collapsed { --sidebar-width: 0px; grid-template-columns: 0 minmax(0, 1fr); }
     .app.sidebar-collapsed .sidebar { padding: 0; border-right: 0; overflow: hidden; }
-    .app.library-mode { --sidebar-width: 0px; grid-template-columns: minmax(0, 1fr); }
+    .app.library-mode {
+      --sidebar-width: 0px;
+      grid-template-columns: minmax(0, 1fr);
+      background: #fff;
+    }
     .app.library-mode .sidebar,
     .app.library-mode .sidebar-edge {
       display: none;
@@ -8067,7 +8209,10 @@ INDEX_HTML = """<!doctype html>
     }
     .journal-setting-name { font-size: 14px; min-width: 0; }
     .main { padding: 50px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
-    .app.library-mode .main { padding-top: 52px; }
+    .app.library-mode .main {
+      padding: 42px 12px 0 30px;
+      background: #fff;
+    }
     .app.deep-survey-mode {
       background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
     }
@@ -8384,6 +8529,12 @@ INDEX_HTML = """<!doctype html>
     .app.library-mode .report-column {
       padding-right: 0;
       overflow: visible;
+      background: #fff;
+    }
+    .app.library-mode:has(.my-publications-shell),
+    .app.library-mode .main:has(.my-publications-shell),
+    .app.library-mode .report-column:has(.my-publications-shell) {
+      background: #f2f2f2;
     }
     .app.library-mode .workspace.note-open .report-column {
       overflow: hidden;
@@ -8807,6 +8958,9 @@ INDEX_HTML = """<!doctype html>
       overflow-y: auto;
       scrollbar-width: none;
     }
+    .library-tab-rail::after {
+      display: none;
+    }
     .library-tab-rail::-webkit-scrollbar {
       width: 0;
       height: 0;
@@ -8958,24 +9112,78 @@ INDEX_HTML = """<!doctype html>
     .my-publications-tools {
       display: none;
       align-items: flex-start;
-      gap: 8px;
-      flex-wrap: nowrap;
+      gap: 4px 8px;
+      flex-wrap: wrap;
       width: 100%;
       min-width: 0;
+      margin-left: 0;
       justify-content: space-between;
     }
     .my-publications-tools.open { display: flex; }
+    .my-publications-tool-note {
+      flex: 1 0 100%;
+      max-width: 100%;
+      margin: 0 0 2px;
+    }
+    .my-publications-tools .search {
+      min-height: 28px;
+      border: 0;
+      border-radius: 7px;
+      background: #f2f2f2;
+      box-shadow: inset 0 0 0 1px rgba(216, 216, 220, 0.78);
+      color: var(--ink);
+      font-size: 12px;
+      padding: 0 8px;
+      transition: background 0.16s ease, box-shadow 0.16s ease;
+    }
+    .my-publications-tools .search:focus {
+      outline: 0;
+      background: #fff;
+      box-shadow: inset 0 0 0 1px rgba(15, 107, 110, 0.64), 0 0 0 3px rgba(15, 107, 110, 0.08);
+    }
+    .my-publications-tools .smallbtn {
+      min-height: 28px;
+      border: 0;
+      border-radius: 7px;
+      background: #d9d9d9;
+      color: #2f3948;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1;
+      white-space: nowrap;
+      box-shadow: none;
+    }
+    .my-publications-tools .smallbtn:hover {
+      background: #d9d9d9;
+      color: var(--accent);
+      box-shadow: none;
+    }
+    .my-publications-tools #addMyPublication {
+      background: #d9d9d9;
+      color: var(--accent);
+      box-shadow: none;
+    }
     .my-publications-tool-left {
       display: flex;
       align-items: center;
       gap: 8px;
       flex-wrap: nowrap;
       min-width: 0;
-      flex: 1 1 auto;
+      flex: 0 0 calc(100% - 352px);
       overflow: visible;
+      margin-left: -18px;
     }
-    #myPublicationName { flex: 0 1 470px; min-width: 220px; }
-    #publicationSearchBox { flex: 0 1 190px; width: 190px; min-width: 150px; }
+    #myPublicationName { flex: 1 1 220px; min-width: 170px; }
+    #publicationSearchBox { flex: 0 1 165px; width: 165px; min-width: 125px; }
+    #myPublicationProfileStripHost {
+      flex: 0 0 344px;
+      min-width: 0;
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+    }
     .publication-export-menu {
       position: relative;
       flex: 0 0 auto;
@@ -8987,8 +9195,8 @@ INDEX_HTML = """<!doctype html>
       top: calc(100% + 6px);
       min-width: 210px;
       padding: 5px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      border: 0;
+      border-radius: 0;
       background: #fff;
       box-shadow: 0 14px 34px rgba(15, 23, 42, 0.15);
       z-index: 120;
@@ -9011,8 +9219,10 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       justify-content: flex-end;
       gap: 8px;
-      flex: 0 0 clamp(360px, 31vw, 560px);
+      flex: 1 1 auto;
       min-width: 0;
+      max-width: 100%;
+      min-height: 28px;
       margin-left: auto;
     }
     .my-publications-profile-statuses {
@@ -9020,28 +9230,27 @@ INDEX_HTML = """<!doctype html>
       align-items: flex-start;
       justify-content: flex-end;
       gap: 6px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       min-width: 0;
-      max-height: 48px;
+      max-height: 32px;
       overflow: hidden;
     }
     .my-publications-profile-status {
       position: relative;
       overflow: hidden;
-      min-width: 120px;
-      max-width: 230px;
-      border: 1px solid var(--line);
+      min-width: 0;
+      max-width: 160px;
+      border: 0;
       border-radius: 8px;
-      background: #fff;
+      background: #f2f2f2;
       color: var(--muted);
-      padding: 5px 8px;
+      padding: 4px 8px;
       font-size: 12px;
       line-height: 1.25;
-      white-space: normal;
+      white-space: nowrap;
       overflow-wrap: anywhere;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
+      display: block;
+      text-overflow: ellipsis;
     }
     .my-publications-profile-status.live {
       color: #3e6470;
@@ -9057,10 +9266,10 @@ INDEX_HTML = """<!doctype html>
       animation: statusFlow 2.8s ease-in-out infinite;
     }
     .my-publications-profile-avatar {
-      width: 38px;
-      height: 38px;
+      width: 28px;
+      height: 28px;
       border-radius: 50%;
-      border: 1px solid var(--line);
+      border: 0;
       background: #eef5f4;
       color: var(--accent-strong);
       font-weight: 800;
@@ -9074,8 +9283,7 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     button.my-publications-profile-avatar:hover {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+      box-shadow: none;
     }
     .my-publications-profile-avatar img {
       width: 100%;
@@ -9086,9 +9294,9 @@ INDEX_HTML = """<!doctype html>
     .my-publications-profile-clear {
       width: 22px;
       min-height: 22px;
-      border: 1px solid var(--line);
+      border: 0;
       border-radius: 50%;
-      background: #fff;
+      background: #d9d9d9;
       color: var(--muted);
       cursor: pointer;
       display: grid;
@@ -9099,9 +9307,8 @@ INDEX_HTML = """<!doctype html>
       flex: 0 0 auto;
     }
     .my-publications-profile-clear:hover {
-      border-color: #c9d4e5;
       color: var(--ink);
-      background: #f8fafc;
+      background: #d9d9d9;
     }
     .workspace.note-open .my-publications-profile-strip {
       flex: 1 1 180px;
@@ -9121,26 +9328,31 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       min-height: 0;
       height: 100%;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
+      border: 0;
+      border-radius: 0;
+      background: #f2f2f2;
       overflow: hidden;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
     }
     .my-publications-search {
-      border-bottom: 1px solid var(--line);
-      padding: 10px 12px;
-      background: #fbfcfe;
+      grid-row: 1;
+      border-bottom: 1px solid #d8d8dc;
+      padding: 5px 10px 6px;
+      background: #f2f2f2;
+    }
+    .my-publications-search:has(.publication-search-results:empty) {
+      display: none;
     }
     .publication-search-status {
       position: relative;
       overflow: hidden;
       color: var(--muted);
-      font-size: 12px;
-      min-height: 22px;
+      font-size: 11px;
+      line-height: 1.25;
+      min-height: 15px;
       border-radius: 7px;
-      padding: 4px 8px;
+      padding: 1px 4px;
       transition: color 240ms ease, background-color 240ms ease;
     }
     .publication-search-status.live {
@@ -9164,8 +9376,8 @@ INDEX_HTML = """<!doctype html>
     }
     .publication-search-results {
       display: grid;
-      gap: 8px;
-      margin-top: 8px;
+      gap: 3px;
+      margin-top: 4px;
       max-height: 190px;
       overflow-y: auto;
     }
@@ -9174,11 +9386,12 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 10px;
       align-items: center;
-      padding: 8px;
-      border: 1px solid var(--line);
+      padding: 6px 8px;
+      border: 0;
       border-radius: 7px;
       background: #fff;
     }
+    .publication-search-result:hover { background: #f4f5f7; }
     .publication-search-result.placeholder {
       display: block;
       color: var(--muted);
@@ -9203,31 +9416,35 @@ INDEX_HTML = """<!doctype html>
       flex-wrap: wrap;
     }
     .my-publications-table-wrap {
+      grid-row: 2;
       min-height: 0;
-      overflow: scroll;
-      scrollbar-gutter: stable both-edges;
+      overflow: auto;
+      background: #fff;
+      padding: 0 8px;
     }
     .my-publications-table {
       width: var(--my-publications-table-width, 100%);
       min-width: 100%;
       border-collapse: separate;
-      border-spacing: 0 4px;
+      border-spacing: 0 1px;
       table-layout: fixed;
-      font-size: 13px;
+      font-size: 12.5px;
+      line-height: 1.15;
     }
     .my-publications-table th {
       position: sticky;
       top: 0;
-      z-index: 1;
+      z-index: 3;
       background: #fff;
-      border-bottom: 1px solid var(--line);
+      border-bottom: 0;
+      box-shadow: inset 0 -1px 0 #d8d8dc;
       color: var(--muted);
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       text-align: left;
-      padding: 9px 8px;
-      border-right: 1px solid #edf0f5;
+      padding: 7px 8px;
+      border-right: 0;
     }
     .my-publications-table th.sortable { color: #475467; }
     .my-publications-sort-button {
@@ -9250,10 +9467,10 @@ INDEX_HTML = """<!doctype html>
       min-width: 8px;
     }
     .my-publications-table td {
-      border-top: 1px solid #edf0f5;
-      border-bottom: 1px solid #edf0f5;
-      border-right: 1px solid #edf0f5;
-      padding: 9px 8px;
+      border-top: 0;
+      border-bottom: 0;
+      border-right: 0;
+      padding: 1px 8px;
       color: #344054;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -9262,14 +9479,17 @@ INDEX_HTML = """<!doctype html>
       transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
     }
     .my-publications-table td:first-child {
-      border-left: 1px solid #edf0f5;
-      border-radius: 7px 0 0 7px;
+      border-right: 0;
+      border-radius: 6px 0 0 6px;
+    }
+    .my-publications-table th:first-child {
+      border-right: 0;
     }
     .my-publications-table td.my-publications-id {
       padding-left: 14px;
       padding-right: 10px;
     }
-    .my-publications-table td:last-child { border-radius: 0 7px 7px 0; }
+    .my-publications-table td:last-child { border-radius: 0 6px 6px 0; }
     .my-publications-table th:last-child,
     .my-publications-table td:last-child { border-right: 0; }
     .my-publications-head-cell {
@@ -9298,30 +9518,49 @@ INDEX_HTML = """<!doctype html>
     .my-publications-row {
       cursor: default;
     }
-    .my-publications-row.review-article td { color: #7b8796; background: #fcfcfd; }
-    .my-publications-row.review-article .my-publications-title-text { color: #8b95a5; font-weight: 500; }
-    .my-publications-row.review-article .my-publications-id .journal-name { color: #6f9698; font-weight: 650; }
-    .my-publications-row.review-article .my-publications-id strong { color: #687484; font-weight: 650; }
-    .my-publications-row.head-excluded td:not(:last-child) {
+    .my-publications-row:nth-child(even):not(.active) td { background: #f3f3f3; }
+    .my-publications-row.review-article:not(.active) td { color: #7b8796; background: #fafafa; }
+    .my-publications-row.review-article .my-publications-title-text { color: #8b95a5; font-weight: 400; }
+    .my-publications-row.review-article .my-publications-id .journal-name { color: #687484; font-weight: 400; }
+    .my-publications-row.review-article .my-publications-id strong { color: #687484; font-weight: 400; }
+    .my-publications-row.head-excluded:not(.active) td:not(:last-child) {
       color: rgba(102, 112, 133, 0.36);
-      background: #fbfcfd;
+      background: #fafafa;
     }
     .my-publications-row.head-excluded .my-publications-title-text,
     .my-publications-row.head-excluded .my-publications-id .journal-name,
     .my-publications-row.head-excluded .my-publications-id strong {
       color: rgba(102, 112, 133, 0.42);
-      font-weight: 500;
+      font-weight: 400;
     }
     .my-publications-row.head-excluded .star-button { opacity: 0.38; }
-    .my-publications-row:not(.review-article) .my-publications-title-text { font-weight: 760; color: var(--ink); }
+    .my-publications-row:not(.review-article) .my-publications-title-text { font-weight: 400; color: var(--ink); }
     .my-publications-row.head-excluded .my-publications-title-text,
     .my-publications-row.head-excluded .my-publications-id .journal-name,
     .my-publications-row.head-excluded .my-publications-id strong {
       color: rgba(102, 112, 133, 0.42);
-      font-weight: 500;
+      font-weight: 400;
     }
-    .my-publications-row:hover td { background: #f8fafc; }
-    .my-publications-row.active td { background: #e8f3f4; }
+    .my-publications-row.active td {
+      background: var(--accent);
+      color: #fff;
+    }
+    .my-publications-row.active td:first-child {
+      box-shadow: none;
+    }
+    .my-publications-row.active .my-publications-title-text { font-weight: 400; }
+    .my-publications-row.active .my-publications-title-text,
+    .my-publications-row.active .my-publications-id .journal-name,
+    .my-publications-row.active .my-publications-id strong {
+      color: #fff;
+    }
+    .my-publications-row.active .star-button,
+    .my-publications-row.active .action,
+    .my-publications-row.active .my-publications-head-toggle {
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.42);
+      background: rgba(255, 255, 255, 0.12);
+    }
     .my-publications-row.dragging td {
       opacity: 0.68;
       background: #ffffff;
@@ -9338,10 +9577,14 @@ INDEX_HTML = """<!doctype html>
     .my-publications-title-cell {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       min-width: 0;
     }
     .my-publications-title-cell .star-button { flex: 0 0 auto; }
+    .my-publications-table .action {
+      min-height: 22px;
+      padding: 0 7px;
+    }
     .my-publications-title-text {
       min-width: 0;
       overflow: hidden;
@@ -9350,42 +9593,52 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-head-toggle {
       width: 100%;
-      min-height: 30px;
+      min-height: 22px;
       border: 1px solid var(--line);
       border-radius: 7px;
       background: #fff;
-      color: var(--muted);
-      font-weight: 700;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 400;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 7px;
       cursor: pointer;
     }
     .my-publications-head-toggle:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+      color: #344054;
+      background: #fff;
     }
     .my-publications-head-toggle.active {
-      border-color: var(--accent);
-      background: #0f6b6e;
-      color: #fff;
+      border-color: var(--line);
+      background: #fff;
+      color: var(--accent);
     }
-    .my-publications-id .journal-name { color: #0f6b6e; font-style: italic; font-weight: 700; }
-    .my-publications-id strong { font-weight: 750; color: var(--ink); }
+    .my-publications-id .journal-name { color: var(--ink); font-style: italic; font-weight: 400; }
+    .my-publications-id strong { font-weight: 400; color: var(--ink); }
     .my-publications-stats {
+      grid-row: 3;
       position: relative;
       display: grid;
       grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) minmax(190px, 1.3fr) minmax(210px, 1.45fr);
       gap: 8px;
-      border-top: 1px solid var(--line);
-      background: #fbfcfe;
-      padding: 8px 10px;
-      height: var(--my-publications-stats-height, 136px);
-      min-height: 86px;
+      border-top: 0;
+      background: #f2f2f2;
+      padding: 6px 0 1.5px;
+      height: var(--my-publications-stats-height, 126px);
+      min-height: 78px;
       overflow: hidden;
+      z-index: 1;
+    }
+    .my-publications-table-wrap + .my-publications-stats {
+      display: grid;
     }
     .my-publications-stats-resizer {
       position: absolute;
       top: -5px;
-      left: 0;
-      right: 0;
+      left: 42%;
+      right: 42%;
       height: 10px;
       border: 0;
       background: transparent;
@@ -9394,9 +9647,10 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-stats-resizer::before {
       content: "";
+      display: none;
       position: absolute;
-      left: 42%;
-      right: 42%;
+      left: 0;
+      right: 0;
       top: 4px;
       height: 2px;
       border-radius: 999px;
@@ -9405,10 +9659,10 @@ INDEX_HTML = """<!doctype html>
     .my-publications-stat {
       min-width: 0;
       min-height: 0;
-      border: 1px solid #e5e7eb;
-      border-radius: 7px;
+      border: 1px solid #e4e7ee;
+      border-radius: 8px;
       background: #fff;
-      padding: 7px 9px;
+      padding: 6px 10px;
       display: flex;
       flex-direction: column;
       overflow: hidden;
@@ -9416,6 +9670,7 @@ INDEX_HTML = """<!doctype html>
     .my-publications-stat strong {
       display: block;
       flex: 0 0 auto;
+      position: relative;
       color: var(--ink);
       font-size: 14px;
       line-height: 1.1;
@@ -9448,6 +9703,7 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(66px, auto) minmax(0, 1fr);
       gap: 8px;
       align-items: baseline;
+      position: relative;
       color: #344054;
       font-size: 11px;
       line-height: 1.25;
@@ -9476,6 +9732,15 @@ INDEX_HTML = """<!doctype html>
       padding: 0;
       text-align: left;
       cursor: pointer;
+    }
+    .my-publications-stat-row:has(.my-publications-stat-filter) {
+      cursor: pointer;
+    }
+    .my-publications-stat-filter::after,
+    .my-publications-stat-total::after {
+      content: "";
+      position: absolute;
+      inset: 0;
     }
     .my-publications-stat-filter:hover { color: var(--accent); text-decoration: underline; }
     .my-publications-stat-filter.active { color: var(--accent); }
@@ -9594,13 +9859,13 @@ INDEX_HTML = """<!doctype html>
     }
     .publication-author-menu input { margin: 0; }
     .star-button {
-      width: 28px;
-      height: 28px;
+      width: 22px;
+      height: 22px;
       border: 0;
       background: transparent;
       color: #a0a7b4;
       cursor: pointer;
-      font-size: 18px;
+      font-size: 15px;
       line-height: 1;
     }
     .star-button.active { color: #d97706; }
@@ -9622,6 +9887,33 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       padding: 14px;
       overflow: hidden;
+    }
+    .loader-backdrop {
+      z-index: 95;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 64px 28px 24px;
+      background: transparent;
+      pointer-events: none;
+    }
+    .loader-modal {
+      width: min(1480px, calc(100vw - 56px));
+      height: min(820px, calc(100vh - 88px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+      pointer-events: auto;
+    }
+    .loader-modal-body {
+      min-height: 0;
+      padding: 14px;
+      display: grid;
+    }
+    .loader-modal .loader-panel {
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
     }
     .loader-head {
       display: flex;
@@ -9692,7 +9984,7 @@ INDEX_HTML = """<!doctype html>
     .loader-main {
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
       gap: 12px;
     }
     .loader-console-wrap {
@@ -9840,9 +10132,10 @@ INDEX_HTML = """<!doctype html>
     }
     .library-shell {
       display: grid;
-      grid-template-columns: 30px minmax(0, 1fr) minmax(260px, 340px);
+      grid-template-columns: 30px minmax(0, 1fr) 8px minmax(280px, var(--library-detail-width, 420px));
+      grid-template-rows: minmax(0, 1fr) 26px;
       column-gap: 0;
-      row-gap: 12px;
+      row-gap: 0;
       align-items: stretch;
       height: 100%;
       max-height: 100%;
@@ -9851,8 +10144,23 @@ INDEX_HTML = """<!doctype html>
       width: calc(100% + 30px);
       overflow: visible;
       outline: none;
+      background: #fff;
+      position: relative;
+    }
+    .library-shell::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 26px;
+      left: 30px;
+      width: 1px;
+      background: #d8d8dc;
+      pointer-events: none;
+      z-index: 8;
     }
     .library-main-area {
+      grid-column: 2;
+      grid-row: 1;
       min-width: 0;
       min-height: 0;
       height: 100%;
@@ -9865,17 +10173,84 @@ INDEX_HTML = """<!doctype html>
       grid-row: 2;
     }
     .library-shell > .library-pane {
-      margin-left: 12px;
+      margin-left: 0;
     }
     .my-publications-shell {
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      column-gap: 12px;
-      margin-left: 0;
-      width: 100%;
+      column-gap: 22px;
+      margin-left: -18px;
+      width: calc(100% + 18px);
       overflow: hidden;
+      background: #f2f2f2;
+    }
+    .my-publications-shell::before {
+      display: none;
+    }
+    .my-publications-shell::after {
+      display: none;
     }
     .my-publications-shell > .library-pane {
       margin-left: 0;
+    }
+    .my-publications-shell > .library-pane {
+      grid-column: 2;
+      border-left: 0;
+      background: #f2f2f2;
+      grid-template-rows: minmax(0, 1fr);
+    }
+    .my-publications-shell .library-pane-header {
+      display: none;
+    }
+    .my-publications-shell .library-detail {
+      background: #f2f2f2;
+      padding-top: 4px;
+      padding-bottom: 1px;
+    }
+    .my-publications-shell .library-detail > :last-child {
+      margin-bottom: 0;
+    }
+    .my-publications-shell .library-detail .bibtex-box,
+    .my-publications-shell .library-detail .citation-panel,
+    .my-publications-shell .library-detail .library-detail-abstract,
+    .my-publications-shell .library-detail .library-detail-authors,
+    .my-publications-shell .library-detail .library-detail-doi input,
+    .my-publications-shell .library-detail .library-detail-figure,
+    .my-publications-shell .library-detail .library-detail-figure img,
+    .my-publications-shell .library-detail .publication-manual-metadata,
+    .my-publications-shell .library-detail .publication-manual-metadata input,
+    .my-publications-shell .library-detail .publication-manual-metadata textarea,
+    .my-publications-shell .library-detail .semantic-detail-row,
+    .my-publications-shell .library-detail .semantic-influential-card {
+      background: #f2f2f2;
+    }
+    .my-publications-shell .library-detail .action,
+    .my-publications-shell .library-detail .action.danger,
+    .my-publications-shell .library-detail .citation-source-cell,
+    .my-publications-shell .library-detail .publication-author-pill,
+    .my-publications-shell .library-detail .publication-role-flag {
+      background: #d9d9d9;
+      color: #2f3948;
+      border: 0;
+      box-shadow: none;
+    }
+    .my-publications-shell .library-detail .publication-author-pill.marked {
+      background: #d9d9d9;
+      border: 0;
+      box-shadow: none;
+    }
+    .my-publications-shell .library-detail .citation-source-cell:hover {
+      background: #d9d9d9;
+    }
+    .my-publications-shell .library-detail .action,
+    .my-publications-shell .library-detail .action.danger,
+    .my-publications-shell .library-detail .citation-source-cell,
+    .my-publications-shell .library-detail .publication-author-pill {
+      border: 0;
+      box-shadow: none;
+    }
+    .my-publications-shell .library-detail .citation-source-cell.active {
+      border: 0;
+      box-shadow: none;
     }
     .library-columns {
       min-width: 0;
@@ -9884,8 +10259,8 @@ INDEX_HTML = """<!doctype html>
       max-height: 100%;
       align-self: stretch;
       flex: 1 1 auto;
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      border: 0;
+      border-radius: 0;
       background: #fff;
       display: flex;
       align-items: stretch;
@@ -9931,12 +10306,13 @@ INDEX_HTML = """<!doctype html>
       max-height: 100%;
       min-height: 0;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      border-right: 1px solid #b9c1ce;
+      grid-template-rows: minmax(0, 1fr);
+      border-right: 0;
       overflow: hidden;
       background: #fff;
       position: relative;
     }
+    .library-column > .library-pane-header { display: none; }
     .library-column:last-child { border-right: 0; }
     .library-column-resizer {
       position: absolute;
@@ -9953,11 +10329,34 @@ INDEX_HTML = """<!doctype html>
       top: 0;
       bottom: 0;
       left: 3px;
-      width: 2px;
-      background: #b9c1ce;
+      width: 1px;
+      background: #d8d8dc;
     }
     .library-column-resizer:hover::after,
     .library-column.resizing .library-column-resizer::after {
+      background: var(--accent);
+    }
+    .library-detail-divider {
+      grid-column: 3;
+      grid-row: 1;
+      height: 100%;
+      min-height: 0;
+      position: relative;
+      cursor: col-resize;
+      background: #fff;
+      z-index: 4;
+    }
+    .library-detail-divider::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 3px;
+      width: 1px;
+      background: #d8d8dc;
+    }
+    .library-detail-divider:hover::after,
+    .library-detail-divider.resizing::after {
       background: var(--accent);
     }
     .library-pane {
@@ -9966,12 +10365,12 @@ INDEX_HTML = """<!doctype html>
       height: 100%;
       max-height: 100%;
       align-self: stretch;
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      border: 0;
+      border-radius: 0;
       background: #fff;
       overflow: hidden;
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
     }
     .library-pane-header {
       z-index: 1;
@@ -10102,29 +10501,33 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       overflow-y: auto;
       overscroll-behavior: contain;
-      padding: 8px;
+      padding: 4px 8px;
     }
     .library-row {
       width: 100%;
-      height: 44px;
+      height: 30px;
       border: 1px solid transparent;
-      border-radius: 6px;
+      border-radius: 5px;
       background: transparent;
       color: var(--ink);
       display: grid;
-      grid-template-columns: 22px minmax(0, 1fr) auto;
-      gap: 8px;
+      grid-template-columns: 22px minmax(0, 1fr) 16px;
+      gap: 6px;
       align-items: center;
-      padding: 5px 8px;
+      padding: 2px 8px;
       text-align: left;
       cursor: default;
       font-size: 13px;
+      line-height: 1.15;
     }
-    .library-row:hover { background: #f8fafc; }
-    .library-row.range-selected { background: #edf5ff; border-color: #cadcf5; }
-    .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
-    .library-row.path-parent { background: #f3f4f6; border-color: #e5e7eb; }
+    .library-row + .library-row { margin-top: 1px; }
+    .library-row:hover { background: #f2f2f3; }
+    .library-row.range-selected { background: #d9ebff; border-color: #b9d7fb; }
+    .library-row.active { background: #0b67d8; border-color: #0b67d8; color: #fff; }
+    .library-row.path-parent { background: #dedede; border-color: #dedede; color: #1f2328; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
+    .library-row.active .library-meta { color: rgba(255, 255, 255, 0.86); }
+    .library-row.path-parent .library-meta { color: #717171; }
     .library-shell.finder-drag-over .library-columns {
       border-color: var(--accent);
       box-shadow: inset 0 0 0 2px rgba(20, 184, 166, 0.18);
@@ -10132,9 +10535,11 @@ INDEX_HTML = """<!doctype html>
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-row.special-folder { color: #667085; }
+    .library-row.special-folder.active { color: #fff; }
+    .library-row.special-folder.path-parent { color: #1f2328; }
     .library-entry-icon {
-      width: 20px;
-      height: 18px;
+      width: 18px;
+      height: 16px;
       position: relative;
       display: inline-block;
       justify-self: center;
@@ -10145,8 +10550,8 @@ INDEX_HTML = """<!doctype html>
       position: absolute;
       left: 1px;
       top: 6px;
-      width: 18px;
-      height: 11px;
+      width: 17px;
+      height: 10px;
       border-radius: 3px 3px 2px 2px;
       background: linear-gradient(180deg, #62b4f9 0%, #2384dc 100%);
       box-shadow: inset 0 0 0 1px rgba(20, 89, 150, 0.24);
@@ -10156,11 +10561,24 @@ INDEX_HTML = """<!doctype html>
       position: absolute;
       left: 2px;
       top: 3px;
-      width: 9px;
+      width: 8px;
       height: 5px;
       border-radius: 3px 3px 0 0;
       background: #78c3ff;
       box-shadow: inset 0 0 0 1px rgba(20, 89, 150, 0.16);
+    }
+    .library-entry-icon.linked-document {
+      width: 18px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      line-height: 1;
+      filter: saturate(0.82);
+    }
+    .library-entry-icon.linked-document::before {
+      content: "🔗";
     }
     .library-entry-icon.document::before {
       content: "";
@@ -10187,7 +10605,53 @@ INDEX_HTML = """<!doctype html>
       clip-path: polygon(0 0, 100% 100%, 0 100%);
     }
     .library-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .library-meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .library-meta {
+      color: #8a8a8a;
+      font-size: 18px;
+      line-height: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      justify-self: end;
+    }
+    .library-path-bar {
+      grid-column: 2 / 5;
+      grid-row: 2;
+      min-width: 0;
+      height: 26px;
+      border-top: 1px solid #d8d8dc;
+      background: #fff;
+      color: #6e6e73;
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      padding: 0 10px 4px;
+      font-size: 12px;
+      line-height: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      user-select: text;
+    }
+    .library-path-item {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      line-height: 12px;
+    }
+    .library-path-icon {
+      transform: scale(0.7);
+      transform-origin: center;
+    }
+    .library-path-part {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .library-path-separator {
+      color: #a0a0a5;
+      flex: 0 0 auto;
+    }
     .library-rename-input {
       width: 100%;
       min-width: 0;
@@ -10202,13 +10666,26 @@ INDEX_HTML = """<!doctype html>
     .library-detail {
       min-height: 0;
       overflow-y: auto;
-      padding: 14px;
+      padding: 14px 12px;
       color: #344054;
       font-size: 13px;
       line-height: 1.5;
     }
-    .library-detail h3 { margin: 0 0 8px; color: var(--ink); font-size: 16px; line-height: 1.3; letter-spacing: 0; }
-    .library-detail dl { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 10px; margin: 12px 0; }
+    .library-detail h3 {
+      margin: 0 0 10px;
+      color: var(--ink);
+      font-size: 17px;
+      line-height: 1.25;
+      letter-spacing: 0;
+      max-width: 100%;
+    }
+    .library-detail dl {
+      display: grid;
+      grid-template-columns: minmax(76px, 0.22fr) minmax(0, 1fr);
+      gap: 8px 18px;
+      margin: 14px 0;
+      max-width: 100%;
+    }
     .library-detail dt { color: var(--muted); }
     .library-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
     .library-detail-title {
@@ -10217,7 +10694,8 @@ INDEX_HTML = """<!doctype html>
       line-height: 1.35;
     }
     .library-detail-doi {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
       gap: 6px;
     }
@@ -10381,6 +10859,26 @@ INDEX_HTML = """<!doctype html>
       background: var(--accent);
     }
     .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .citation-comments-row {
+      display: flex;
+      justify-content: flex-start;
+      margin-top: 8px;
+    }
+    .citation-comments-button.action,
+    .my-publications-shell .library-detail .citation-comments-button.action {
+      border: 0;
+      background: var(--accent) !important;
+      color: #fff !important;
+      box-shadow: none;
+    }
+    .citation-comments-button.action:hover,
+    .citation-comments-button.action:focus-visible,
+    .my-publications-shell .library-detail .citation-comments-button.action:hover,
+    .my-publications-shell .library-detail .citation-comments-button.action:focus-visible {
+      background: var(--accent-strong) !important;
+      color: #fff !important;
+      box-shadow: none;
+    }
     .citation-source-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -10509,32 +11007,113 @@ INDEX_HTML = """<!doctype html>
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
+    .library-confirm-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 180;
+      display: grid;
+      place-items: center;
+      background: rgba(31, 35, 40, 0.24);
+    }
+    .library-confirm-dialog {
+      width: min(620px, calc(100vw - 44px));
+      max-height: min(520px, calc(100vh - 80px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      border: 1px solid rgba(17, 24, 39, 0.16);
+      border-radius: 10px;
+      background: #f8f8f8;
+      box-shadow: 0 22px 70px rgba(15, 23, 42, 0.24);
+      overflow: hidden;
+    }
+    .library-confirm-dialog header {
+      padding: 16px 18px 10px;
+      font-size: 17px;
+      font-weight: 760;
+      color: var(--ink);
+    }
+    .library-confirm-body {
+      padding: 0 18px 14px;
+      color: #475467;
+      font-size: 13px;
+      line-height: 1.45;
+      overflow: auto;
+    }
+    .library-confirm-paths {
+      margin: 10px 0 0;
+      padding: 10px;
+      border: 1px solid rgba(15, 23, 42, 0.1);
+      border-radius: 7px;
+      background: #fff;
+      color: #344054;
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .library-confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 18px 16px;
+      border-top: 1px solid rgba(15, 23, 42, 0.09);
+      background: #f2f2f2;
+    }
+    .library-confirm-actions button {
+      min-height: 30px;
+      border: 0;
+      border-radius: 7px;
+      background: #d9d9d9;
+      color: #263241;
+      padding: 0 13px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .library-confirm-actions button.danger {
+      background: #b42318;
+      color: #fff;
+    }
     .library-context-menu {
       position: fixed;
       z-index: 50;
       display: none;
-      min-width: 160px;
-      border: 1px solid var(--line);
+      width: fit-content;
+      min-width: 0;
+      max-width: none;
+      border: 1px solid rgba(0, 0, 0, 0.16);
       border-radius: 8px;
-      background: #fff;
-      box-shadow: var(--shadow);
-      padding: 6px;
+      background: rgba(229, 229, 229, 0.96);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+      padding: 5px 6px;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
     }
-    .library-context-menu.open { display: block; }
+    .library-context-menu.open { display: inline-grid; }
     .library-context-menu button {
-      width: 100%;
-      min-height: 30px;
+      width: auto;
+      min-width: 100%;
+      min-height: 24px;
       border: 0;
-      border-radius: 6px;
+      border-radius: 5px;
       background: transparent;
-      color: var(--ink);
+      color: #1f2328;
       text-align: left;
-      padding: 6px 8px;
+      padding: 2px 12px;
+      font-size: 12.5px;
+      font-weight: 400;
+      line-height: 1.15;
+      white-space: nowrap;
       cursor: pointer;
     }
-    .library-context-menu button:hover { background: #eef2f7; }
-    .library-context-menu button[data-action="delete-entry"] { color: #b42318; }
-    .library-context-menu button[data-action="delete-entry"]:hover { background: #fff1f0; }
+    .library-context-menu button:hover { background: rgba(0, 0, 0, 0.08); }
+    .library-context-menu button[data-action="delete-entry"],
+    .library-context-menu button[data-action="delete-file-entry"],
+    .library-context-menu button[data-action="delete-my-publication"] { color: #1f2328; }
+    .library-context-menu button[data-action="delete-entry"]:hover,
+    .library-context-menu button[data-action="delete-file-entry"]:hover,
+    .library-context-menu button[data-action="delete-my-publication"]:hover { background: rgba(0, 0, 0, 0.08); }
+    .my-publication-context-menu {
+      min-width: 0;
+    }
     .library-color-input { position: fixed; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
     .action.copied {
       border-color: rgba(29, 112, 68, 0.35);
@@ -10703,6 +11282,25 @@ INDEX_HTML = """<!doctype html>
     .action.secondary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .action.danger { border-color: var(--accent-2); color: var(--accent-2); background: #fff7f6; }
     .action:disabled { opacity: 0.55; cursor: wait; }
+    button.action.citation-comments-button,
+    .my-publications-shell .library-detail button.action.citation-comments-button,
+    button.action.citation-comments-button:hover,
+    button.action.citation-comments-button:active,
+    button.action.citation-comments-button:focus,
+    button.action.citation-comments-button:focus-visible,
+    .my-publications-shell .library-detail button.action.citation-comments-button:hover,
+    .my-publications-shell .library-detail button.action.citation-comments-button:active,
+    .my-publications-shell .library-detail button.action.citation-comments-button:focus,
+    .my-publications-shell .library-detail button.action.citation-comments-button:focus-visible {
+      border: 0 !important;
+      background: #0f6b6e !important;
+      background-color: #0f6b6e !important;
+      background-image: none !important;
+      color: #fff !important;
+      -webkit-text-fill-color: #fff !important;
+      box-shadow: none !important;
+      text-shadow: none !important;
+    }
     .manual-drop {
       border: 1px dashed var(--line);
       background: #fbfcfe;
@@ -10889,6 +11487,121 @@ INDEX_HTML = """<!doctype html>
     .settings-modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .settings-modal-close { min-width: 30px; min-height: 30px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
     .settings-modal-body { padding: 16px 18px 18px; }
+    .settings-backdrop.loader-backdrop {
+      z-index: 95;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 64px 28px 18px;
+      background: transparent;
+      pointer-events: none;
+    }
+    .settings-backdrop.loader-backdrop.open {
+      display: flex;
+    }
+    .settings-modal.loader-modal {
+      width: min(1480px, calc(100vw - 56px));
+      height: min(860px, calc(100vh - 76px));
+      max-height: none;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      pointer-events: auto;
+    }
+    .settings-modal-body.loader-modal-body {
+      min-height: 0;
+      padding: 14px;
+      display: grid;
+      overflow: hidden;
+    }
+    .settings-modal.loader-modal .loader-main {
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
+    }
+    .app.loader-window-mode {
+      display: block;
+      height: 100vh;
+      background: #f2f2f2;
+      overflow: hidden;
+    }
+    .app.loader-window-mode::before {
+      display: none;
+    }
+    body.loader-window-body .window-drag-region {
+      display: none;
+    }
+    .app.loader-window-mode .sidebar,
+    .app.loader-window-mode .sidebar-edge,
+    .app.loader-window-mode .workspace,
+    .app.loader-window-mode .internal-browser,
+    .app.loader-window-mode .library-quicklook,
+    .app.loader-window-mode #citationSettingsBackdrop {
+      display: none !important;
+    }
+    .app.loader-window-mode .main {
+      height: 100vh;
+      padding: 0;
+      background: #f2f2f2;
+      overflow: hidden;
+    }
+    .app.loader-window-mode .settings-backdrop.loader-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+      padding: 0;
+      background: #f2f2f2;
+      pointer-events: auto;
+    }
+    .app.loader-window-mode .settings-modal.loader-modal {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      grid-template-rows: minmax(0, 1fr);
+    }
+    .app.loader-window-mode .settings-modal.loader-modal .settings-modal-head {
+      display: none !important;
+      height: 0 !important;
+      min-height: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      overflow: hidden !important;
+      background: transparent !important;
+    }
+    .app.loader-window-mode .settings-modal.loader-modal .settings-modal-close {
+      display: none;
+    }
+    .app.loader-window-mode .settings-modal-body.loader-modal-body {
+      height: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px 12px;
+    }
+    .app.loader-window-mode .loader-panel {
+      gap: 8px;
+      height: 100%;
+      min-height: 0;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+    }
+    .app.loader-window-mode .loader-form {
+      gap: 6px;
+    }
+    .app.loader-window-mode .loader-progress-track {
+      height: 6px;
+    }
+    .app.loader-window-mode .loader-main {
+      grid-row: 3 / -1;
+      min-height: 0;
+      height: 100%;
+    }
+    .app.loader-window-mode .loader-panel:has(.loader-result) .loader-main {
+      grid-row: 4 / -1;
+    }
+    .app.loader-window-mode .loader-console-wrap,
+    .app.loader-window-mode .loader-side {
+      height: 100%;
+    }
     .citation-source-setting {
       border: 1px solid #e5e7eb;
       border-radius: 8px;
@@ -11027,6 +11740,7 @@ INDEX_HTML = """<!doctype html>
           <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="library-controls" id="libraryControls">
             <div class="my-publications-tools" id="myPublicationsTools">
+              <div class="publication-search-status my-publications-tool-note" id="publicationSearchStatus">Use DOI/arXiv/title, or search by name with optional units: Name; Unit A; Unit B.</div>
               <div class="my-publications-tool-left">
                 <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
                 <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
@@ -11109,10 +11823,23 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop loader-backdrop" id="libraryLoaderBackdrop" aria-hidden="true">
+        <section class="settings-modal loader-modal" role="dialog" aria-modal="false" aria-labelledby="libraryLoaderTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="libraryLoaderTitle">Folder Loader</h2>
+              <p>Import a folder into Library with a live log. Source files are never moved or deleted.</p>
+            </div>
+            <button class="settings-modal-close" id="closeLibraryLoader" type="button" title="Close loader">×</button>
+          </div>
+          <div class="settings-modal-body loader-modal-body" id="libraryLoaderModalBody"></div>
+        </section>
+      </div>
     </main>
   </div>
   <script>
     const initialToday = localIsoDate(new Date());
+    const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
       ["cond-mat.dis-nn", "Disordered Systems"],
@@ -11139,10 +11866,7 @@ INDEX_HTML = """<!doctype html>
       {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
       {key: "citation", label: "Citation", defaultWidth: 238, minWidth: 180, maxWidth: 520, sortable: true},
       {key: "date", label: "Date", defaultWidth: 116, minWidth: 92, maxWidth: 150, sortable: true, defaultSortDir: "desc"},
-      {key: "citations", label: "Cites", defaultWidth: 66, minWidth: 56, maxWidth: 110, sortable: true, defaultSortDir: "desc"},
-      {key: "comments", label: "", defaultWidth: 96, minWidth: 84, maxWidth: 140},
-      {key: "delete", label: "", defaultWidth: 86, minWidth: 72, maxWidth: 140},
-      {key: "head", label: "Hide", defaultWidth: 76, minWidth: 68, maxWidth: 110}
+      {key: "citations", label: "Cites", defaultWidth: 66, minWidth: 56, maxWidth: 110, sortable: true, defaultSortDir: "desc"}
     ];
     const LIBRARY_SHORTCUT_TAB_COUNT = 5;
     const LIBRARY_WORKSPACE_TAB_COUNT = 3;
@@ -11186,6 +11910,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportMissingIndex: 0,
       libraryImportMissingDoiIndex: 0,
       libraryImportFollowLatest: true,
+      libraryLoaderOpen: false,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
       libraryActiveFolderId: 1,
@@ -11199,6 +11924,7 @@ INDEX_HTML = """<!doctype html>
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
       libraryColumnWidths: {},
+      libraryDetailWidth: 340,
       libraryClipboard: null,
       libraryDragPayload: null,
       libraryRevealColumnFolderId: 0,
@@ -11227,12 +11953,13 @@ INDEX_HTML = """<!doctype html>
       myPublicationAuthorCache: {},
       myPublicationScholarProfile: null,
       myPublicationActivities: [],
-      myPublicationStatsHeight: 136,
+      myPublicationStatsHeight: 126,
       myPublicationName: "",
       myPublicationColumnWidths: {},
       myPublicationRoleFilter: "",
       myPublicationJournalFilter: "",
       myPublicationKeyboardDetailToken: 0,
+      myPublicationKeyboardDetailTimer: 0,
       mode: "library",
       activeReportJournal: "",
       noteWidth: 460,
@@ -11769,17 +12496,21 @@ INDEX_HTML = """<!doctype html>
     }
 
     function openLibraryLoader() {
-      state.mode = "library";
-      state.libraryTab = "loader";
-      setSidebarCollapsed(true);
+      state.libraryLoaderOpen = true;
       renderLibraryLoader();
     }
 
-    function renderActiveLibraryTab() {
-      if (state.libraryTab === "loader") {
-        renderLibraryLoader();
+    function closeLibraryLoader() {
+      if (IS_STANDALONE_LOADER_WINDOW) {
+        window.webkit?.messageHandlers?.libraryLoaderWindow?.postMessage({type: "close"});
         return;
       }
+      state.libraryLoaderOpen = false;
+      $("libraryLoaderBackdrop")?.classList.remove("open");
+      $("libraryLoaderBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    function renderActiveLibraryTab() {
       if (state.libraryTab === "my-publications") {
         renderMyPublications();
         return;
@@ -12518,6 +13249,115 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
+    async function removeLibraryItemFromCurrentCollection(itemId) {
+      if (!itemId) return;
+      const item = libraryItemById(itemId);
+      if (!item) return;
+      const parentId = Number(item.folder_id || state.libraryActiveFolderId || state.libraryRootId);
+      const deletedEntry = {type: "item", id: Number(itemId)};
+      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+      const res = await fetch("/api/library/remove-item", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({item_id: itemId})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not remove paper from current collection");
+      applyLibrarySnapshot(data);
+      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+      renderLibrary();
+    }
+
+    function libraryFilePathsForDelete(type, id) {
+      if (type === "item") {
+        const path = libraryNativeItemPath(libraryItemById(id));
+        return path ? [path] : [];
+      }
+      if (type === "folder") {
+        const folderIds = libraryDescendantFolderIds(id);
+        const paths = state.libraryItems
+          .filter((item) => folderIds.has(Number(item.folder_id || 0)))
+          .map((item) => libraryNativeItemPath(item))
+          .filter(Boolean);
+        return [...new Set(paths)];
+      }
+      return [];
+    }
+
+    async function deleteLibraryEntryFiles(type, id) {
+      const paths = libraryFilePathsForDelete(type, id);
+      if (!paths.length && type !== "folder") return;
+      const parentId = type === "folder"
+        ? parentFolderId(id)
+        : Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId);
+      const deletedEntry = {type, id: Number(id)};
+      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+      const entryLabel = type === "folder"
+        ? `this Library folder${paths.length ? ` and ${paths.length} file${paths.length === 1 ? "" : "s"}` : ""}`
+        : "the original file from disk";
+      const preview = paths.length ? paths.slice(0, 8).join("\\n") : "No local files found in this folder.";
+      const overflow = paths.length > 8 ? `\\n...and ${paths.length - 8} more` : "";
+      const confirmed = await showLibraryConfirmDialog({
+        title: `Delete ${entryLabel}?`,
+        body: type === "folder"
+          ? "This cannot be undone. The Library folder and these files will be removed."
+          : "This cannot be undone. The original file will be deleted and this paper will be removed from the current collection.",
+        paths: preview + overflow,
+        confirmLabel: type === "folder" ? "Delete Folder" : "Delete File"
+      });
+      if (!confirmed) return;
+      const res = await fetch("/api/library/delete-file", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({type, id, confirmed: true})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not delete files");
+      applyLibrarySnapshot(data);
+      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+      renderLibrary();
+    }
+
+    function showLibraryConfirmDialog({title, body, paths, confirmLabel = "Delete"} = {}) {
+      return new Promise((resolve) => {
+        document.querySelector(".library-confirm-backdrop")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.className = "library-confirm-backdrop";
+        backdrop.innerHTML = `
+          <section class="library-confirm-dialog" role="dialog" aria-modal="true">
+            <header>${escapeHtml(title || "Confirm action")}</header>
+            <div class="library-confirm-body">
+              <div>${escapeHtml(body || "This action cannot be undone.")}</div>
+              ${paths ? `<pre class="library-confirm-paths">${escapeHtml(paths)}</pre>` : ""}
+            </div>
+            <div class="library-confirm-actions">
+              <button type="button" data-action="cancel">Cancel</button>
+              <button class="danger" type="button" data-action="confirm">${escapeHtml(confirmLabel)}</button>
+            </div>
+          </section>
+        `;
+        let onKeydown = null;
+        const finish = (value) => {
+          if (onKeydown) window.removeEventListener("keydown", onKeydown, true);
+          backdrop.remove();
+          resolve(value);
+        };
+        backdrop.querySelector('[data-action="cancel"]')?.addEventListener("click", () => finish(false));
+        backdrop.querySelector('[data-action="confirm"]')?.addEventListener("click", () => finish(true));
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) finish(false);
+        });
+        onKeydown = (event) => {
+          if (event.key === "Escape") {
+            finish(false);
+          }
+        };
+        window.addEventListener("keydown", onKeydown, true);
+        document.body.appendChild(backdrop);
+        backdrop.querySelector('[data-action="cancel"]')?.focus({preventScroll: true});
+      });
+    }
+
     async function deleteSelectedLibraryEntries() {
       const selectedEntries = libraryRangeSelectionEntries()
         .filter((entry) => !(entry.type === "folder" && libraryFolderById(entry.id)?.protected));
@@ -12602,24 +13442,6 @@ INDEX_HTML = """<!doctype html>
       if (pastedId) {
         setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type: clipboard.type, id: pastedId});
       }
-      renderLibrary();
-    }
-
-    async function removePaperFromLibrary(paper) {
-      const paperId = paper?.paper_id;
-      if (!paperId) return;
-      const res = await fetch("/api/library/remove-paper", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({paper_id: paperId})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not remove paper from Library");
-      const fallbackFolderId = Number(state.libraryActiveFolderId || libraryUnsortedFolderId() || state.libraryRootId);
-      applyLibrarySnapshot(data);
-      state.librarySelection = {type: "folder", id: libraryFolderById(fallbackFolderId) ? fallbackFolderId : state.libraryRootId};
-      state.libraryActiveFolderId = state.librarySelection.id;
-      state.libraryCurrentFolderId = state.librarySelection.id;
       renderLibrary();
     }
 
@@ -13212,18 +14034,16 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderLibraryLoader() {
-      state.mode = "library";
-      state.libraryTab = "loader";
-      stopArxivUpdateCountdown();
-      clearFetchProgressDisplay();
-      renderLibraryTabs();
-      $("reportTabs").classList.remove("open");
-      $("reportTabs").innerHTML = "";
-      $("reportTitle").textContent = "Library Loader";
-      $("summary").textContent = "";
-      const root = $("papers");
-      root.classList.remove("deep-survey-view");
-      root.classList.add("library-view");
+      const backdrop = $("libraryLoaderBackdrop");
+      const root = $("libraryLoaderModalBody");
+      if (!backdrop || !root) return;
+      if (!state.libraryLoaderOpen) {
+        backdrop.classList.remove("open");
+        backdrop.setAttribute("aria-hidden", "true");
+        return;
+      }
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
       const job = state.libraryImportJob || {};
       const result = state.libraryImportLastResult || job.result || null;
       const percent = Number(job.percent || 0);
@@ -13233,13 +14053,6 @@ INDEX_HTML = """<!doctype html>
       const previousConsoleScrollTop = previousConsole?.scrollTop || 0;
       root.innerHTML = `
         <div class="loader-panel">
-          <div class="loader-head">
-            <div class="loader-head-main">
-              <strong>Folder Loader</strong>
-              <span class="loader-description">Import a folder into Library with a live log. Source files are never moved or deleted.</span>
-            </div>
-            <button class="smallbtn" id="loaderBackToLibrary" type="button">Back to Library</button>
-          </div>
           <div class="loader-form">
             <input id="libraryImportPath" type="text" value="${escapeAttr(state.libraryImportPath || "")}" placeholder="/path/to/folder">
             <select id="libraryImportCopyMode" title="Import mode">
@@ -13268,10 +14081,6 @@ INDEX_HTML = """<!doctype html>
       `;
       wireLibraryImportTools();
       wireLoaderSide();
-      $("loaderBackToLibrary")?.addEventListener("click", async () => {
-        stopLibraryImportPolling();
-        await loadLibrary();
-      });
       resumeLibraryImportPollingIfNeeded();
       const consoleEl = $("libraryLoaderConsole");
       if (consoleEl) {
@@ -13512,7 +14321,7 @@ INDEX_HTML = """<!doctype html>
       root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       root.innerHTML = `
-        <div class="library-shell" id="libraryShell" tabindex="0">
+        <div class="library-shell" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
           <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
           <div class="library-main-area">
             ${workspaceToolsMarkup()}
@@ -13520,10 +14329,14 @@ INDEX_HTML = """<!doctype html>
               ? `<div class="library-search-results" id="librarySearchResults"></div>`
               : `<div class="library-columns" id="libraryColumns"></div>`}
           </div>
+          <div class="library-detail-divider" id="libraryDetailDivider" title="Resize details"></div>
           <aside class="library-pane">
             ${libraryPaneHeaderMarkup()}
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
+          <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
+            ${librarySelectionPathMarkup()}
+          </div>
         </div>
         <div class="library-tab-context-menu" id="libraryTabContextMenu">
           <button type="button" data-action="rename-tab">Rename</button>
@@ -13531,12 +14344,14 @@ INDEX_HTML = """<!doctype html>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
           <button type="button" data-action="rename-entry">Rename</button>
-          <button type="button" data-action="open-native-entry">Open Native File</button>
-          <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="copy-entry">Copy</button>
+          <button type="button" data-action="open-native-entry">Open Native File</button>
+          <button type="button" data-action="reveal-native-entry">Open in Finder</button>
+          <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="paste-entry">Paste</button>
           <button type="button" data-action="recover-entry">Recover</button>
-          <button type="button" data-action="delete-entry">Delete</button>
+          <button type="button" data-action="delete-entry">Remove from current collection</button>
+          <button type="button" data-action="delete-file-entry">Delete File...</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
       `;
@@ -13574,21 +14389,57 @@ INDEX_HTML = """<!doctype html>
       return "Library";
     }
 
+    function librarySelectionPathParts() {
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const folderParts = [];
+      const seen = new Set();
+      let folderId = displayRootId;
+      let leafName = "";
+      const selection = state.librarySelection || {};
+      if (selection.type === "item") {
+        const item = libraryItemById(selection.id);
+        folderId = Number(item?.folder_id || state.libraryActiveFolderId || displayRootId);
+        leafName = item?.display_name || libraryPaperDisplayName(item?.paper || {}) || "Untitled";
+      } else if (selection.type === "folder") {
+        folderId = Number(selection.id || displayRootId);
+      } else {
+        folderId = Number(state.libraryActiveFolderId || displayRootId);
+      }
+      let current = folderId;
+      while (current && !seen.has(current)) {
+        seen.add(current);
+        const folder = libraryFolderById(current);
+        if (!folder) break;
+        folderParts.unshift({type: "folder", name: folder.name || "Library"});
+        if (current === displayRootId) break;
+        current = Number(folder.parent_id || displayRootId);
+      }
+      if (!folderParts.length) folderParts.push({type: "folder", name: libraryFolderById(displayRootId)?.name || "Library"});
+      if (leafName) folderParts.push({type: "document", name: leafName});
+      return folderParts;
+    }
+
+    function librarySelectionPathText() {
+      return librarySelectionPathParts().map((part) => part.name).join(" > ");
+    }
+
+    function librarySelectionPathMarkup() {
+      return librarySelectionPathParts()
+        .map((part, index) => `
+          ${index ? `<span class="library-path-separator">›</span>` : ""}
+          <span class="library-path-item">
+            <span class="library-entry-icon ${part.type === "folder" ? "folder" : "document"} library-path-icon" aria-hidden="true"></span>
+            <span class="library-path-part">${escapeHtml(part.name)}</span>
+          </span>
+        `)
+        .join("");
+    }
+
     function libraryPaneHeaderMarkup(options = {}) {
-      const active = state.libraryTab === "loader" ? " active" : "";
-      const loaderButton = options.hideLoader
-        ? ""
-        : `<button class="library-pane-loader${active}" id="libraryPaneLoader" type="button">Loader</button>`;
-      return `
-        <div class="library-pane-header">
-          <span class="library-pane-header-title">Details</span>
-          ${loaderButton}
-        </div>
-      `;
+      return "";
     }
 
     function wireLibraryPaneTools() {
-      $("libraryPaneLoader")?.addEventListener("click", openLibraryLoader);
     }
 
     function activeWorkspaceIndex() {
@@ -13828,12 +14679,12 @@ INDEX_HTML = """<!doctype html>
             if (libraryRes.ok) applyLibrarySnapshot(libraryData);
           }
         }
-        if (state.mode === "library" && state.libraryTab === "loader") renderLibraryLoader();
+        if (state.libraryLoaderOpen) renderLibraryLoader();
       } catch (error) {
         state.libraryImportStatus = error.message || "Could not read loader progress";
         state.libraryImportBusy = false;
         stopLibraryImportPolling();
-        if (state.mode === "library" && state.libraryTab === "loader") renderLibraryLoader();
+        if (state.libraryLoaderOpen) renderLibraryLoader();
       }
     }
 
@@ -14202,6 +15053,7 @@ INDEX_HTML = """<!doctype html>
         .map((element) => element.scrollTop || 0);
       state.mode = "library";
       state.libraryTab = "my-publications";
+      clearScheduledMyPublicationDetailRender();
       stopArxivUpdateCountdown();
       clearFetchProgressDisplay();
       renderLibraryTabs();
@@ -14215,11 +15067,7 @@ INDEX_HTML = """<!doctype html>
       if (visibleSelected) state.myPublicationSelectionId = Number(selected.id);
       else if (rows[0]) state.myPublicationSelectionId = Number(rows[0].id);
       else state.myPublicationSelectionId = 0;
-      const sortLabel = state.myPublicationSort === "manual"
-        ? "Manual"
-        : `${myPublicationSortLabel(state.myPublicationSort)} ${state.myPublicationSortDir === "desc" ? "desc" : "asc"}`;
-      const filterLabel = myPublicationFilterLabel();
-      $("summary").textContent = `${state.myPublications.length} publications${filterLabel ? ` · Filter: ${filterLabel} (${rows.length})` : ""} · Sort: ${sortLabel}`;
+      $("summary").textContent = "";
       const root = $("papers");
       root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
@@ -14227,7 +15075,6 @@ INDEX_HTML = """<!doctype html>
         <div class="library-shell my-publications-shell" id="libraryShell" tabindex="0">
           <section class="my-publications-panel">
             <div class="my-publications-search">
-              <div class="${myPublicationSearchStatusClass()}">${escapeHtml(myPublicationSearchStatusText())}</div>
               <div class="publication-search-results" id="publicationSearchResults">${myPublicationSearchResultsMarkup()}</div>
             </div>
             <div class="my-publications-table-wrap">
@@ -14247,6 +15094,10 @@ INDEX_HTML = """<!doctype html>
             ${libraryPaneHeaderMarkup({hideLoader: true})}
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
+        </div>
+        <div class="library-context-menu my-publication-context-menu" id="myPublicationContextMenu">
+          <button type="button" data-action="toggle-my-publication-head">Hide</button>
+          <button type="button" data-action="delete-my-publication">Delete</button>
         </div>
       `;
       resizeLibraryViewport();
@@ -14270,6 +15121,8 @@ INDEX_HTML = """<!doctype html>
       document.querySelectorAll(".my-publications-stat-list").forEach((element, index) => {
         element.scrollTop = Number(previousStatsScrollTops[index] || 0);
       });
+      updateMyPublicationSearchStatusText();
+      window.requestAnimationFrame(() => resizeLibraryViewport());
       if (options.revealSelection) window.requestAnimationFrame(() => revealMyPublicationSelection());
     }
 
@@ -14277,7 +15130,7 @@ INDEX_HTML = """<!doctype html>
       const status = document.querySelector(".publication-search-status");
       if (status) {
         status.textContent = myPublicationSearchStatusText();
-        status.className = myPublicationSearchStatusClass();
+        status.className = `${myPublicationSearchStatusClass()} my-publications-tool-note`;
       }
       updateMyPublicationScholarProfileStrip();
     }
@@ -14297,14 +15150,14 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationScholarProfileMarkup() {
       const profile = state.myPublicationScholarProfile || {};
-      const chips = myPublicationProfileStatusChips(profile);
-      if (!profile.name && !profile.avatar_url && !chips.length) return "";
-      const avatarUrl = profile.avatar_url || "";
-      const initials = scholarProfileInitials(profile.name || "");
       const profileUrl = scholarProfileExternalUrl(profile);
       const hasSavedProfile = Boolean(profile.name || profile.avatar_url || profileUrl || profile.user_id);
+      const chips = myPublicationProfileStatusChips(profile);
+      if (!hasSavedProfile && !chips.length) return "";
+      const avatarUrl = profile.avatar_url || "";
+      const initials = scholarProfileInitials(profile.name || "") || "GS";
       const avatarMarkup = avatarUrl
-        ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}">`
+        ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}" onerror="this.remove(); this.parentElement.textContent='${escapeAttr(initials)}';">`
         : `${escapeHtml(initials)}`;
       return `
         <div class="my-publications-profile-strip" id="myPublicationProfileStrip">
@@ -14326,7 +15179,8 @@ INDEX_HTML = """<!doctype html>
       (state.myPublicationActivities || []).forEach((activity) => {
         if (activity?.text) chips.push({id: activity.id || "", text: activity.text, live: activity.live !== false});
       });
-      if (!chips.length && (profile.name || profile.avatar_url)) {
+      const profileUrl = scholarProfileExternalUrl(profile);
+      if (!chips.length && (profile.name || profile.avatar_url || profileUrl || profile.user_id)) {
         chips.push({id: "profile", text: `Using ${profile.name || "Google Scholar profile"}`, live: false});
       }
       return chips.slice(0, 4);
@@ -14453,9 +15307,6 @@ INDEX_HTML = """<!doctype html>
           <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
           <td>${escapeHtml(paper.publication_date || "")}</td>
           <td>${myPublicationCitationCountMarkup(paper)}</td>
-          <td><button class="action" type="button" data-action="publication-comments">Comments</button></td>
-          <td><button class="action danger" type="button" data-action="delete-publication">Delete</button></td>
-          <td><button class="my-publications-head-toggle${entry.head ? " active" : ""}" type="button" data-action="toggle-publication-head" title="Hide excludes this paper from Export Publication List. Turn it on for items you do not want in exported publication lists.">Hide</button></td>
         </tr>
       `;
     }
@@ -14529,7 +15380,7 @@ INDEX_HTML = """<!doctype html>
       const soloAndCoFirstRows = rows.filter((entry) => (myPublicationIsListedFirstAuthor(entry) && !entry.first_author) || entry.first_author);
       const correspondingAuthorRows = rows.filter((entry) => entry.corresponding_author);
       return `
-        <div class="my-publications-stats" style="--my-publications-stats-height:${Number(state.myPublicationStatsHeight || 136)}px">
+        <div class="my-publications-stats" style="--my-publications-stats-height:${Number(state.myPublicationStatsHeight || 126)}px">
           <button class="my-publications-stats-resizer" type="button" data-action="resize-publication-stats" title="Resize statistics panel"></button>
           <div class="my-publications-stat">
             <strong><button class="my-publications-stat-total" type="button" data-action="publication-clear-filters">${total} Publications</button></strong>
@@ -14779,7 +15630,8 @@ INDEX_HTML = """<!doctype html>
       if (!root || !reportColumn) return;
       const columnRect = reportColumn.getBoundingClientRect();
       const rootRect = root.getBoundingClientRect();
-      const availableHeight = Math.max(280, Math.floor(columnRect.bottom - rootRect.top));
+      const viewportBottom = window.innerHeight;
+      const availableHeight = Math.max(280, Math.floor(viewportBottom - rootRect.top));
       root.style.height = `${availableHeight}px`;
       root.style.minHeight = `${availableHeight}px`;
       const shell = $("libraryShell");
@@ -14916,6 +15768,35 @@ INDEX_HTML = """<!doctype html>
       window.addEventListener("pointerup", stop);
     }
 
+    function startLibraryDetailResize(event) {
+      const shell = $("libraryShell");
+      const pane = shell?.querySelector(".library-pane");
+      const divider = $("libraryDetailDivider");
+      if (!shell || !pane || !divider) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = pane.getBoundingClientRect().width;
+      divider.classList.add("resizing");
+      document.body.classList.add("resizing");
+      const move = (moveEvent) => {
+        const shellWidth = shell.getBoundingClientRect().width;
+        const maxWidth = Math.max(320, Math.min(720, Math.round(shellWidth * 0.56)));
+        const width = Math.max(280, Math.min(maxWidth, Math.round(startWidth - (moveEvent.clientX - startX))));
+        state.libraryDetailWidth = width;
+        shell.style.setProperty("--library-detail-width", `${width}px`);
+      };
+      const stop = () => {
+        divider.classList.remove("resizing");
+        document.body.classList.remove("resizing");
+        $("libraryShell")?.focus({preventScroll: true});
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", stop);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", stop);
+    }
+
     function renderLibraryColumns() {
       const root = $("libraryColumns");
       if (!root) return;
@@ -14984,7 +15865,7 @@ INDEX_HTML = """<!doctype html>
       const selected = libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
       const paper = entry.paper || {};
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
-      const iconClass = type === "folder" ? "folder" : "document";
+      const iconClass = libraryEntryIconClass(type, entry);
       const meta = type === "folder" ? "Folder" : (paper.journal || "Paper");
       return `
         <button class="library-row${selected ? " active" : ""}"
@@ -15012,8 +15893,8 @@ INDEX_HTML = """<!doctype html>
       const rangeSelected = libraryEntryIsRangeSelected(parentFolderId, {type, id});
       const paper = entry.paper || {};
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
-      const meta = type === "folder" ? libraryFolderItems(id).length : (paper.journal || "");
-      const iconClass = type === "folder" ? "folder" : "document";
+      const meta = type === "folder" ? "›" : "";
+      const iconClass = libraryEntryIconClass(type, entry);
       const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
       const isPathParent = type === "folder" && pathFolderIds.has(id) && !selected;
       const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
@@ -15040,6 +15921,11 @@ INDEX_HTML = """<!doctype html>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
+    }
+
+    function libraryEntryIconClass(type, entry) {
+      if (type === "folder") return "folder";
+      return entry?.paper?.storage_mode === "link" ? "linked-document" : "document";
     }
 
     function libraryFolderTextColor(folder) {
@@ -15318,7 +16204,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
-          <button class="action danger" data-action="remove-library-paper">Remove from Library</button>
+          <button class="action danger" data-action="remove-library-paper">Remove from current collection</button>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
@@ -15351,10 +16237,10 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="remove-library-paper"]')?.addEventListener("click", async () => {
         const status = $("libraryDetailStatus");
         try {
-          await removePaperFromLibrary(paper);
+          await removeLibraryItemFromCurrentCollection(item?.id);
         } catch (error) {
           if (status) {
-            status.textContent = error.message || "Could not remove paper from Library";
+            status.textContent = error.message || "Could not remove paper from current collection";
             status.className = "library-detail-status err";
           }
         }
@@ -15435,7 +16321,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${manualPublicationMetadataMarkup(publication, paper, authors)}
         ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true})}
-        ${citationMetricsMarkup(paper)}
+        ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
         ${publicationAuthorsSectionMarkup(publication, authors)}
         ${libraryDetailAbstractMarkup(paper)}
         <div class="library-reference-head">
@@ -15462,6 +16348,7 @@ INDEX_HTML = """<!doctype html>
         openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -15479,7 +16366,7 @@ INDEX_HTML = """<!doctype html>
       hydrateLibraryDetailFigureIfNeeded(paper);
     }
 
-    function citationMetricsMarkup(paper) {
+    function citationMetricsMarkup(paper, options = {}) {
       const metrics = paper.citation_metrics || {};
       const source = metrics.source || "Citation data";
       const rawCount = metrics.count;
@@ -15502,6 +16389,9 @@ INDEX_HTML = """<!doctype html>
             }).join("")}
           </div>`
         : `<div class="citation-empty">Yearly citation histogram unavailable.</div>`;
+      const commentsButton = options.commentsPublicationId
+        ? `<div class="citation-comments-row"><button class="action citation-comments-button" data-action="publication-comments" type="button">Comments</button></div>`
+        : "";
       return `
         <section class="citation-panel" data-active-citation-source="${escapeAttr(citationSourceKeyFromLabel(source))}">
           <div class="citation-summary">
@@ -15515,6 +16405,7 @@ INDEX_HTML = """<!doctype html>
             ${paper.ads && Object.keys(paper.ads).length ? citationSourceCell("ads", "ADS", sources.ads?.count, citationSourceKeyFromLabel(source)) : ""}
           </div>
           ${bars}
+          ${commentsButton}
           ${semanticScholarMarkup(paper.semantic_scholar || {}, paper)}
           ${adsMarkup(paper.ads || {})}
         </section>
@@ -15771,8 +16662,11 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
-          if (event.target.closest(".star-button") || event.target.closest('[data-action="delete-publication"]') || event.target.closest('[data-action="publication-comments"]') || event.target.closest('[data-action="toggle-publication-head"]')) return;
+          if (event.target.closest(".star-button")) return;
           selectMyPublication(Number(row.dataset.publicationId || 0));
+        });
+        row.addEventListener("contextmenu", (event) => {
+          showMyPublicationContextMenu(event, Number(row.dataset.publicationId || 0));
         });
         row.addEventListener("dblclick", async (event) => {
           if (event.target.closest("button, input, select, textarea, a")) return;
@@ -15815,31 +16709,6 @@ INDEX_HTML = """<!doctype html>
           const publication = myPublicationById(Number(row?.dataset.publicationId || 0));
           if (!publication) return;
           await toggleMyPublicationStar(publication, !publication.starred);
-        });
-      });
-      shell.querySelectorAll('[data-action="delete-publication"]').forEach((button) => {
-        button.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          const row = button.closest(".my-publications-row");
-          const publicationId = Number(row?.dataset.publicationId || 0);
-          if (publicationId) await deleteMyPublication(publicationId);
-        });
-      });
-      shell.querySelectorAll('[data-action="toggle-publication-head"]').forEach((button) => {
-        button.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          const row = button.closest(".my-publications-row");
-          const publication = myPublicationById(Number(row?.dataset.publicationId || 0));
-          if (!publication) return;
-          await toggleMyPublicationHead(publication, !publication.head);
-        });
-      });
-      shell.querySelectorAll('[data-action="publication-comments"]').forEach((button) => {
-        button.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          const row = button.closest(".my-publications-row");
-          const publicationId = Number(row?.dataset.publicationId || 0);
-          if (publicationId) await openMyPublicationComments(publicationId);
         });
       });
       shell.querySelectorAll('[data-action="add-publication-result"]').forEach((button) => {
@@ -15943,7 +16812,7 @@ INDEX_HTML = """<!doctype html>
       const status = $("publicationSearchStatus");
       if (status) {
         status.textContent = "Exporting publication list...";
-        status.className = "publication-search-status live";
+        status.className = "publication-search-status live my-publications-tool-note";
       }
       if (format === "overleaf") {
         window.open("https://www.overleaf.com/project", "_blank", "noopener");
@@ -15961,13 +16830,13 @@ INDEX_HTML = """<!doctype html>
           : (opened ? `Exported ${data.filename}. Opened.` : `Exported ${data.filename}. Could not open automatically.`);
         if (status) {
           status.textContent = `${state.myPublicationSearchStatus} Path: ${targetPath}`;
-          status.className = `publication-search-status ${opened ? "ok" : "err"}`;
+          status.className = `publication-search-status ${opened ? "ok" : "err"} my-publications-tool-note`;
         }
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Export failed";
         if (status) {
           status.textContent = state.myPublicationSearchStatus;
-          status.className = "publication-search-status err";
+          status.className = "publication-search-status err my-publications-tool-note";
         }
       }
     }
@@ -16057,6 +16926,7 @@ INDEX_HTML = """<!doctype html>
 
     function selectMyPublication(id) {
       if (!myPublicationById(id)) return;
+      clearScheduledMyPublicationDetailRender();
       state.myPublicationSelectionId = Number(id);
       updateMyPublicationActiveRow();
       renderPublicationDetail();
@@ -16106,12 +16976,22 @@ INDEX_HTML = """<!doctype html>
 
     function scheduleMyPublicationDetailRender(selectedId) {
       const token = ++state.myPublicationKeyboardDetailToken;
-      window.requestAnimationFrame(() => {
+      if (state.myPublicationKeyboardDetailTimer) window.clearTimeout(state.myPublicationKeyboardDetailTimer);
+      state.myPublicationKeyboardDetailTimer = window.setTimeout(() => {
+        state.myPublicationKeyboardDetailTimer = 0;
         if (token !== state.myPublicationKeyboardDetailToken) return;
         if (Number(state.myPublicationSelectionId || 0) !== Number(selectedId || 0)) return;
         renderPublicationDetail();
         refreshLibraryQuickLookForSelection();
-      });
+      }, 90);
+    }
+
+    function clearScheduledMyPublicationDetailRender() {
+      state.myPublicationKeyboardDetailToken += 1;
+      if (state.myPublicationKeyboardDetailTimer) {
+        window.clearTimeout(state.myPublicationKeyboardDetailTimer);
+        state.myPublicationKeyboardDetailTimer = 0;
+      }
     }
 
     async function toggleMyPublicationStar(publication, starred) {
@@ -16851,6 +17731,7 @@ INDEX_HTML = """<!doctype html>
       shell.querySelectorAll("[data-library-resize-folder]").forEach((handle) => {
         handle.addEventListener("pointerdown", (event) => startLibraryColumnResize(event, Number(handle.dataset.libraryResizeFolder || 0)));
       });
+      $("libraryDetailDivider")?.addEventListener("pointerdown", startLibraryDetailResize);
       shell.addEventListener("contextmenu", (event) => {
         const column = event.target.closest?.("[data-library-column-folder]");
         const folderId = Number(column?.dataset.libraryColumnFolder || state.libraryActiveFolderId || state.libraryRootId);
@@ -16984,6 +17865,39 @@ INDEX_HTML = """<!doctype html>
         openingMessage: target.mode === "folder" ? "Opening native folder in Finder..." : "Opening native file...",
         openedMessage: target.mode === "folder" ? "Native folder opened in Finder" : "Native file opened"
       });
+    }
+
+    async function revealNativeLibraryEntry(entryType, entryId) {
+      const target = libraryNativeTargetForEntry(entryType, entryId);
+      const status = $("libraryDetailStatus");
+      if (!target.path) {
+        if (status) {
+          status.textContent = entryType === "folder"
+            ? "No native file was found inside this folder."
+            : "No native file path is available for this item.";
+          status.className = "library-detail-status err";
+        }
+        return;
+      }
+      if (status) {
+        status.textContent = "Opening in Finder...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/reveal-path", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({path: target.path})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to open Finder");
+        if (status) status.textContent = "Opened in Finder";
+      } catch (err) {
+        if (status) {
+          status.textContent = err.message || "Failed to open Finder";
+          status.className = "library-detail-status err";
+        }
+      }
     }
 
     async function openNativePaperFile(paper, options = {}) {
@@ -17459,8 +18373,46 @@ INDEX_HTML = """<!doctype html>
       return Number(state.libraryActiveFolderId || state.libraryRootId);
     }
 
+    function showMyPublicationContextMenu(event, publicationId) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideLibraryContextMenu();
+      hideLibraryTabContextMenu();
+      const publication = myPublicationById(publicationId);
+      const menu = $("myPublicationContextMenu");
+      if (!publication || !menu) return;
+      selectMyPublication(publicationId);
+      menu.dataset.publicationId = String(publicationId);
+      menu.style.left = `${event.clientX}px`;
+      menu.style.top = `${event.clientY}px`;
+      menu.classList.add("open");
+      menu.onclick = (clickEvent) => clickEvent.stopPropagation();
+      const headButton = menu.querySelector('[data-action="toggle-my-publication-head"]');
+      const deleteButton = menu.querySelector('[data-action="delete-my-publication"]');
+      if (headButton) {
+        headButton.textContent = publication.head ? "Show" : "Hide";
+        headButton.onclick = async () => {
+          const current = myPublicationById(Number(menu.dataset.publicationId || 0));
+          hideMyPublicationContextMenu();
+          if (current) await runLibraryMenuAction(() => toggleMyPublicationHead(current, !current.head));
+        };
+      }
+      if (deleteButton) {
+        deleteButton.onclick = async () => {
+          const id = Number(menu.dataset.publicationId || 0);
+          hideMyPublicationContextMenu();
+          if (id) await runLibraryMenuAction(() => deleteMyPublication(id));
+        };
+      }
+    }
+
+    function hideMyPublicationContextMenu() {
+      $("myPublicationContextMenu")?.classList.remove("open");
+    }
+
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
+      hideMyPublicationContextMenu();
       hideLibraryTabContextMenu();
       const menu = $("libraryContextMenu");
       if (!menu) return;
@@ -17483,10 +18435,12 @@ INDEX_HTML = """<!doctype html>
       const colorButton = menu.querySelector('[data-action="color-folder"]');
       const colorPicker = menu.querySelector('[data-action="folder-color-picker"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
+      const deleteFileButton = menu.querySelector('[data-action="delete-file-entry"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
+      const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -17512,9 +18466,27 @@ INDEX_HTML = """<!doctype html>
       }
       if (deleteButton) {
         deleteButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
+        deleteButton.textContent = entryType === "item" ? "Remove from current collection" : "Remove Folder";
         deleteButton.onclick = async () => {
+          const type = menu.dataset.entryType;
+          const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
-          await runLibraryMenuAction(() => deleteLibraryEntry(menu.dataset.entryType, Number(menu.dataset.entryId || 0)));
+          await runLibraryMenuAction(() => {
+            if (type === "item") return removeLibraryItemFromCurrentCollection(id);
+            return deleteLibraryEntry(type, id);
+          });
+        };
+      }
+      if (deleteFileButton) {
+        const canDeleteFile = entryType === "item" && hasEntry && Boolean(libraryNativeItemPath(item));
+        const canDeleteFolder = entryType === "folder" && hasEntry && !isProtectedFolder;
+        deleteFileButton.textContent = entryType === "folder" ? "Delete Folder..." : "Delete File...";
+        deleteFileButton.style.display = canDeleteFile || canDeleteFolder ? "" : "none";
+        deleteFileButton.onclick = async () => {
+          const type = menu.dataset.entryType;
+          const id = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => deleteLibraryEntryFiles(type, id));
         };
       }
       if (copyButton) {
@@ -17540,6 +18512,15 @@ INDEX_HTML = """<!doctype html>
           await openNativeLibraryEntry(type, id);
         };
       }
+      if (revealNativeButton) {
+        revealNativeButton.style.display = hasEntry ? "" : "none";
+        revealNativeButton.onclick = async () => {
+          const type = menu.dataset.entryType;
+          const id = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await revealNativeLibraryEntry(type, id);
+        };
+      }
       if (pasteButton) {
         pasteButton.style.display = state.libraryClipboard ? "" : "none";
         pasteButton.onclick = async () => {
@@ -17559,6 +18540,7 @@ INDEX_HTML = """<!doctype html>
 
     function showLibraryTabContextMenu(event, tabType, index) {
       hideLibraryContextMenu();
+      hideMyPublicationContextMenu();
       const menu = $("libraryTabContextMenu");
       if (!menu) return;
       menu.dataset.tabType = tabType;
@@ -18744,6 +19726,7 @@ INDEX_HTML = """<!doctype html>
     $("citationSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("citationSettingsBackdrop")) closeCitationSettings();
     });
+    $("closeLibraryLoader").addEventListener("click", closeLibraryLoader);
     $("saveAdsToken").addEventListener("click", () => saveCitationAdsToken());
     $("testAdsToken").addEventListener("click", testCitationAdsToken);
     $("clearAdsToken").addEventListener("click", clearCitationAdsToken);
@@ -18774,6 +19757,12 @@ INDEX_HTML = """<!doctype html>
         closeCitationSettings();
         return;
       }
+      if ($("libraryLoaderBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryLoader();
+        return;
+      }
       if (state.libraryQuickLookOpen) {
         event.preventDefault();
         event.stopPropagation();
@@ -18792,6 +19781,7 @@ INDEX_HTML = """<!doctype html>
       }
       hideLibraryContextMenu();
       hideLibraryTabContextMenu();
+      hideMyPublicationContextMenu();
       closeAnalysis();
     }, true);
     window.addEventListener("click", (event) => {
@@ -18809,6 +19799,7 @@ INDEX_HTML = """<!doctype html>
       }
       hideLibraryContextMenu();
       hideLibraryTabContextMenu();
+      hideMyPublicationContextMenu();
       if (!event.target.closest?.(".publication-author-menu, .publication-author-pill")) closePublicationAuthorMenu();
       if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
       if (
@@ -18839,17 +19830,26 @@ INDEX_HTML = """<!doctype html>
       $("libraryShell")?.classList.remove("finder-drag-over");
     });
     wireWindowDragRegion();
+    document.addEventListener("daiqo-open-library-loader", openLibraryLoader);
     window.handleNativeFinderDrop = handleNativeFinderDrop;
     window.openCitationSettings = openCitationSettings;
+    window.openLibraryLoader = openLibraryLoader;
 
-    Promise.resolve().then(loadLibrary).catch((error) => {
-      $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-    });
-    window.setTimeout(() => {
-      fetch("/api/arxiv-daily-refresh").catch(() => {});
-    }, 1600);
-    updateSidebarToggle();
-    updateReportPanelToggle();
+    if (IS_STANDALONE_LOADER_WINDOW) {
+      document.body.classList.add("loader-window-body");
+      document.querySelector(".app")?.classList.add("loader-window-mode");
+      state.libraryLoaderOpen = true;
+      renderLibraryLoader();
+    } else {
+      Promise.resolve().then(loadLibrary).catch((error) => {
+        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      });
+      window.setTimeout(() => {
+        fetch("/api/arxiv-daily-refresh").catch(() => {});
+      }, 1600);
+      updateSidebarToggle();
+      updateReportPanelToggle();
+    }
   </script>
 </body>
 </html>

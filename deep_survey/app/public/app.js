@@ -104,7 +104,7 @@ let visibleVaultFiles = [];
 let selectedVaultFile = null;
 const collapsedFolders = new Set();
 const threadPreferenceKeys = {
-  mode: "dlw.thread.mode",
+  mode: "dlw.thread.mode.v2",
   model: "dlw.thread.model",
   effort: "dlw.thread.effort",
   bindings: "dlw.topic.thread.bindings",
@@ -1157,7 +1157,7 @@ function labelStage(stage) {
 }
 
 function selectedThreadMode() {
-  return els.threadModeSelect?.value || document.querySelector('input[name="threadMode"]:checked')?.value || "read";
+  return els.threadModeSelect?.value || document.querySelector('input[name="threadMode"]:checked')?.value || "write";
 }
 
 function selectedThreadModel() {
@@ -1851,10 +1851,6 @@ async function sendDlwActionToThread(action, options = {}) {
       mode = "write";
     }
   }
-  if (mode === "write" && !options.skipWriteConfirm && !confirm("Allow Edits lets this real Codex thread write workspace files. Continue?")) {
-    return;
-  }
-
   state.dlwStartupBusy = true;
   const startupStage = inferRunningStageForAction(action, actionTopic);
   state.localRunningStage = startupStage;
@@ -1911,9 +1907,6 @@ async function sendToAppServerThread() {
     return;
   }
   const mode = selectedThreadMode();
-  if (mode === "write" && !confirm("Allow Edits lets this real Codex thread write workspace files. Continue?")) {
-    return;
-  }
   saveThreadPreferences();
   els.appServerState.textContent = "Sending...";
   const previousMessage = els.threadMessage.value;

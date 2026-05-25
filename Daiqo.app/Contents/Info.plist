@@ -24,6 +24,12 @@
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
   <string>10.15</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>Daiqo uses Desktop access so Deep Survey can read and write literature-review folders stored on the Desktop.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>Daiqo uses Documents access so Deep Survey can read and write literature-review folders stored in Documents.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>Daiqo uses Downloads access so Deep Survey can import manually downloaded literature files.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>
