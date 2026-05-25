@@ -11,9 +11,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const workspaceRoot = path.resolve(process.env.CODEX_DLW_WORKSPACE_ROOT || path.resolve(__dirname, ".."));
 const bundledDlwPluginDir = path.resolve(__dirname, "../workspace-template/plugins/deep-literature-workflow");
+const bundledCodexSkillsDir = path.resolve(__dirname, "../codex-skills");
 const workspaceDlwPluginDir = path.join(workspaceRoot, "plugins/deep-literature-workflow");
 const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
 const codexDlwPluginCacheDir = path.join(codexHome, "plugins/cache/deep-research-local/deep-literature-workflow/0.1.0");
+const codexSkillsDir = path.join(codexHome, "skills");
 const dlwScript = path.join(workspaceRoot, "plugins/deep-literature-workflow/scripts/dlw.py");
 const statePath = path.join(workspaceRoot, ".deep-literature-workflow/state.json");
 const rootProjectStatePath = path.join(workspaceRoot, "PROJECT_STATE.md");
@@ -67,6 +69,11 @@ const stage3DownloadProcessMarkers = [
   "stage2_deep_reading_queue",
   "08_stage3_pdf_inventory",
   "09_manual_pdf_download_queue"
+];
+const requiredCodexSkillNames = [
+  "literature-downloader",
+  "chrome-literature-downloader",
+  "paper-broad-reading-analysis"
 ];
 
 const stages = [
@@ -165,6 +172,22 @@ async function pluginDirStatus(pluginDir) {
   };
 }
 
+async function skillDirStatus(skillName) {
+  const skillDir = path.join(codexSkillsDir, skillName);
+  const skillFile = path.join(skillDir, "SKILL.md");
+  const [root, skill] = await Promise.all([
+    pathExists(skillDir),
+    pathExists(skillFile)
+  ]);
+  return {
+    name: skillName,
+    path: skillDir,
+    ok: root && skill,
+    root,
+    skill
+  };
+}
+
 async function copyBundledPluginIfMissing(targetDir) {
   if (!(await pathExists(bundledDlwPluginDir))) {
     return { ok: false, installed: false, error: "Bundled Deep Literature Workflow plugin template is missing." };
@@ -177,21 +200,39 @@ async function copyBundledPluginIfMissing(targetDir) {
   return { ok: after.ok, installed: true, status: after, error: after.ok ? null : "Plugin copy finished, but required files are still missing." };
 }
 
+async function copyBundledSkillIfMissing(skillName) {
+  const sourceDir = path.join(bundledCodexSkillsDir, skillName);
+  if (!(await pathExists(sourceDir))) {
+    return { ok: false, installed: false, name: skillName, error: `Bundled Codex skill is missing: ${skillName}` };
+  }
+  const before = await skillDirStatus(skillName);
+  if (before.ok) return { ok: true, installed: false, status: before };
+  await mkdir(codexSkillsDir, { recursive: true });
+  await cp(sourceDir, before.path, { recursive: true, force: false, errorOnExist: false });
+  const after = await skillDirStatus(skillName);
+  return { ok: after.ok, installed: true, status: after, error: after.ok ? null : `Skill copy finished, but ${skillName}/SKILL.md is still missing.` };
+}
+
 async function ensureBundledDlwPluginInstalled() {
   const workspace = await copyBundledPluginIfMissing(workspaceDlwPluginDir);
   const cache = await copyBundledPluginIfMissing(codexDlwPluginCacheDir);
-  if (workspace.installed || cache.installed) {
+  const bundledSkills = {};
+  for (const skillName of requiredCodexSkillNames) {
+    bundledSkills[skillName] = await copyBundledSkillIfMissing(skillName);
+  }
+  if (workspace.installed || cache.installed || Object.values(bundledSkills).some((item) => item.installed)) {
     codexAppServer.stop();
   }
-  return { workspace, cache };
+  return { workspace, cache, bundledSkills };
 }
 
 async function getSetupStatus({ install = false } = {}) {
   const installation = install ? await ensureBundledDlwPluginInstalled() : null;
-  const [codexVersion, workspacePlugin, cachePlugin] = await Promise.all([
+  const [codexVersion, workspacePlugin, cachePlugin, bundledSkills] = await Promise.all([
     execFileText(codexBinary, ["--version"], { cwd: workspaceRoot }),
     pluginDirStatus(workspaceDlwPluginDir),
-    pluginDirStatus(codexDlwPluginCacheDir)
+    pluginDirStatus(codexDlwPluginCacheDir),
+    Promise.all(requiredCodexSkillNames.map((skillName) => skillDirStatus(skillName)))
   ]);
   let skills = { ok: false, deepLiterature: null, error: null };
   try {
@@ -205,7 +246,7 @@ async function getSetupStatus({ install = false } = {}) {
     skills = { ok: false, deepLiterature: null, error: error.message || String(error) };
   }
   return {
-    ok: Boolean(codexVersion.ok && workspacePlugin.ok && cachePlugin.ok && skills.deepLiterature),
+    ok: Boolean(codexVersion.ok && workspacePlugin.ok && cachePlugin.ok && bundledSkills.every((skill) => skill.ok) && skills.deepLiterature),
     codex: {
       ok: codexVersion.ok,
       path: codexBinary,
@@ -214,11 +255,13 @@ async function getSetupStatus({ install = false } = {}) {
     },
     workspacePlugin,
     codexPlugin: cachePlugin,
+    bundledSkills,
     skills,
     installation,
     notes: [
       "The app auto-copies its bundled Deep Literature Workflow plugin into the Deep Survey workspace.",
       "It also tries to place a local Codex plugin cache copy so structured plugin mentions can resolve.",
+      "It installs bundled Codex skills into ~/.codex/skills when they are missing.",
       "If Codex is missing, install Codex.app first, then reopen this app."
     ]
   };

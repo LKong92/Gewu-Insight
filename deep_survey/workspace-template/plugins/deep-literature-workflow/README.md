@@ -39,8 +39,14 @@ downloads into `~/Downloads`, tries direct/API retrieval first, and uses Google
 Chrome only as the user's authorized browser fallback:
 
 ```bash
-python3 /Users/zhengranwu/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "10.xxxx/yyyy"
+python3 ~/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "10.xxxx/yyyy"
 ```
+
+PaperMonitor Deep Survey bundles `chrome-literature-downloader`,
+`literature-downloader`, and `paper-broad-reading-analysis`, and installs them
+into `~/.codex/skills` when they are missing. If the Chrome downloader skill is
+not available, stop and install the bundled skills; do not replace Stage 3 with
+a different PDF acquisition route.
 
 Record a linked manual PDF queue item:
 

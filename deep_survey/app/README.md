@@ -14,16 +14,24 @@ This app does not modify the plugin. It wraps the existing workflow with:
 
 ## Run
 
-Double-click:
+Install bundled Codex dependencies once after cloning:
+
+```bash
+deep_survey/scripts/install_codex_deps.sh
+```
+
+The app also installs missing bundled dependencies automatically when it starts.
+
+Double-click the bundled app from this repository:
 
 ```text
-/Users/zhengranwu/Desktop/Deep_research/codex-deep-literature-app/Codex Literature Workflow.app
+deep_survey/app/Codex Literature Workflow.app
 ```
 
 Or run from Terminal:
 
 ```bash
-cd /Users/zhengranwu/Desktop/Deep_research/codex-deep-literature-app
+cd deep_survey/app
 npm start
 ```
 
@@ -38,7 +46,7 @@ http://127.0.0.1:8787
 The backend uses:
 
 ```bash
-codex exec --json --sandbox workspace-write --cd /Users/zhengranwu/Desktop/Deep_research "<prompt>"
+codex exec --json --sandbox workspace-write --cd <selected-literature-workspace> "<prompt>"
 ```
 
 The default path uses the local Codex login and usage. It does not use an OpenAI API key.
@@ -55,3 +63,5 @@ The default path uses the local Codex login and usage. It does not use an OpenAI
 - Do not package or upload `~/.codex/auth.json`.
 - Do not use unauthorized PDF sources.
 - Use Chrome only through the authorized literature downloader workflow.
+- Bundled skills are copied into `~/.codex/skills`; credentials, browser
+  cookies, and Codex auth files are never copied.

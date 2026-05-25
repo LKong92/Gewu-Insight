@@ -117,14 +117,15 @@ Outputs should include:
 
 ### Stage 3: PDF Acquisition And Import
 
-Always use the `chrome-literature-downloader` skill for article/PDF downloads when the skill is available. The user has explicitly authorized this workflow to use Chrome for literature downloads. The skill still tries direct/API retrieval first with Safari disabled, then falls back to Google Chrome as the user's authorized browser session.
+Always use the `chrome-literature-downloader` skill for article/PDF downloads. The PaperMonitor Deep Survey app bundles this skill and installs it into `~/.codex/skills` when missing. The user has explicitly authorized this workflow to use Chrome for literature downloads. The skill still tries direct/API retrieval first with Safari disabled, then falls back to Google Chrome as the user's authorized browser session.
 
 Rules:
 
 - Use only legal or user-provided access.
 - Do not use Sci-Hub or other unauthorized sources.
 - Downloads must land in `~/Downloads` first when using `chrome-literature-downloader`.
-- Use the bundled command by default: `python3 /Users/zhengranwu/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "<doi-or-url>"`.
+- Use the bundled command by default: `python3 ~/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "<doi-or-url>"`.
+- If the skill is not installed, stop and ask the user to reopen PaperMonitor Deep Survey or run `deep_survey/scripts/install_codex_deps.sh`; do not substitute a different PDF acquisition route.
 - Do not inspect, export, or reuse Chrome cookies, profile files, passwords, local storage, or session databases.
 - If Chrome shows captcha, Cloudflare, human verification, login/access problems, browser warnings, or a publisher save/download flow that cannot be completed safely, stop and mark the item as needing user action.
 - If the Chrome downloader reports `needs_user_action`, no new valid main PDF, or a non-PDF main result, write the paper to the manual download queue rather than improvising another route.
