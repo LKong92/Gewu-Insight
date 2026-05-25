@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -429,6 +429,26 @@ function inferNextStage(stageStatus = {}) {
   return "complete";
 }
 
+function stageLabel(stage) {
+  if (!stage || stage === "complete") return "complete";
+  return stage.replace(/_/g, " ");
+}
+
+function topicStatusSummary(state = {}) {
+  const stageStatus = state.stage_status || {};
+  const doneCount = stages.reduce((count, [stage]) => count + (stageStatus[stage] === "done" ? 1 : 0), 0);
+  for (const [stage] of stages) {
+    if (stageStatus[stage] === "blocked") return `${doneCount} stage(s) done; blocked at ${stageLabel(stage)}`;
+  }
+  const nextStage = inferNextStage(stageStatus);
+  if (!nextStage || nextStage === "complete") return "All stages complete";
+  return `${doneCount} stage(s) done; ${stageLabel(nextStage)} next`;
+}
+
+function tableCell(value = "") {
+  return String(value).replace(/\|/g, "\\|").replace(/\n/g, " ").trim();
+}
+
 function safeVaultRoot(vault) {
   return resolveVaultRoot(vault);
 }
@@ -551,6 +571,297 @@ function parseManualPdfCount(markdown) {
   if (match) return Number(match[1]);
   if (markdown.includes("- empty")) return 0;
   return null;
+}
+
+function cleanTopicFromFolderName(folderName = "") {
+  return folderName
+    .replace(/_Obsidian_Workflow$/i, "")
+    .replace(/_survay$/i, "")
+    .replace(/[-_]+/g, " ")
+    .trim() || "Imported Topic";
+}
+
+function parseImportedTopicName(markdown = "", vaultRoot = "") {
+  const managedMatch = markdown.match(/^- Topic:\s*(.+)$/m);
+  if (managedMatch?.[1]?.trim()) return managedMatch[1].trim().replace(/^`|`$/g, "");
+  const titleMatch = markdown.match(/^#\s+(.+?)\s*$/m);
+  const projectMatch = markdown.match(/Project:\s*(?:.*?\bon\s+)?(.+?)(?:\.|\n|$)/i);
+  const candidate = projectMatch?.[1] || titleMatch?.[1] || "";
+  const cleaned = candidate
+    .replace(/^PROJECT_STATE\.md$/i, "")
+    .replace(/^Project\s+State:?/i, "")
+    .replace(/\s+workflow$/i, "")
+    .trim();
+  if (cleaned) return cleaned;
+  return cleanTopicFromFolderName(path.basename(vaultRoot));
+}
+
+async function firstExistingFile(paths) {
+  for (const item of paths) {
+    if (item && (await pathExists(item))) return item;
+  }
+  return null;
+}
+
+function markStagesThrough(status, stageId) {
+  const next = { ...status };
+  for (const [stage] of stages) {
+    if (!next[stage] || next[stage] === "pending" || next[stage] === "unknown") next[stage] = "done";
+    if (stage === stageId) break;
+  }
+  for (const [stage] of stages) {
+    if (!next[stage]) next[stage] = "pending";
+  }
+  return next;
+}
+
+async function inferStageStatusFromVault(vaultRoot, handoffMarkdown = "") {
+  const hasExplicitStageStatus = /- `(stage_[^`]+)`:\s*([A-Za-z_ -]+)/.test(handoffMarkdown);
+  const fromHandoff = parseStageStatus(handoffMarkdown);
+  const status = {};
+  for (const [stage] of stages) status[stage] = fromHandoff[stage] || "pending";
+
+  const checks = [
+    ["stage_1_discovery", [
+      "04_Evidence_Tables/03_stage1_candidates.csv",
+      "04_Evidence_Tables/05_stage1_summary.md"
+    ]],
+    ["stage_2_screening", [
+      "04_Evidence_Tables/06_stage2_summary.md",
+      "04_Evidence_Tables/06_stage2_screening_audit.csv",
+      "04_Evidence_Tables/07_stage2_deep_reading_queue.md"
+    ]],
+    ["stage_3_pdf_acquisition", [
+      "04_Evidence_Tables/08_stage3_pdf_inventory.csv",
+      "04_Evidence_Tables/07_stage3_summary.md"
+    ]],
+    ["stage_4_paper_deep_reading", [
+      "04_Evidence_Tables/12_stage4_deep_reading_progress.md",
+      "04_Evidence_Tables/12_claim_evidence_matrix.md"
+    ]],
+    ["stage_5a_concept_notes", [
+      "03_Concepts/01_Concept_Index.md",
+      "04_Evidence_Tables/13_stage5a_concept_notes.md"
+    ]],
+    ["stage_5b_review_synthesis", [
+      "02_Review.md",
+      "02_Review_Synthesis.md",
+      "04_Evidence_Tables/14_stage5b_review.md"
+    ]]
+  ];
+
+  for (const [stage, relPaths] of checks) {
+    if (status[stage] === "done") continue;
+    const exists = await firstExistingFile(relPaths.map((relPath) => path.join(vaultRoot, relPath)));
+    if (exists) status[stage] = "done";
+  }
+
+  if (hasExplicitStageStatus) return status;
+  const text = handoffMarkdown.toLowerCase();
+  if (/stage\s*5b/.test(text) || /review synthesis/.test(text)) return markStagesThrough(status, "stage_5b_review_synthesis");
+  if (/stage\s*5a/.test(text) || /concept notes?/.test(text)) return markStagesThrough(status, "stage_5a_concept_notes");
+  if (/stage\s*4/.test(text) || /deep reading/.test(text)) return markStagesThrough(status, "stage_4_paper_deep_reading");
+  if (/stage\s*3/.test(text) || /pdf acquisition|pdf import/.test(text)) return markStagesThrough(status, "stage_3_pdf_acquisition");
+  if (/stage\s*2/.test(text) || /screening/.test(text)) return markStagesThrough(status, "stage_2_screening");
+  if (/stage\s*1/.test(text) || /discovery/.test(text)) return markStagesThrough(status, "stage_1_discovery");
+  return status;
+}
+
+async function readManualPdfQueueCount(vaultRoot, handoffMarkdown = "") {
+  const handoffCount = parseManualPdfCount(handoffMarkdown);
+  if (handoffCount !== null) return handoffCount;
+  const queuePath = path.join(vaultRoot, "04_Evidence_Tables/09_manual_pdf_download_queue.md");
+  try {
+    const queue = await readFile(queuePath, "utf8");
+    if (/- empty/i.test(queue)) return 0;
+    const listItems = queue.split("\n").filter((line) => /^-\s+/.test(line) && !/-\s*empty/i.test(line));
+    return listItems.length;
+  } catch {
+    return 0;
+  }
+}
+
+function importedVaultReference(vaultRoot) {
+  const relative = path.relative(workspaceRoot, vaultRoot);
+  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return relative;
+  return vaultRoot;
+}
+
+async function writeWorkspaceTopicIndex(activeState = {}, rowValues = []) {
+  const activeTopic = activeState.topic || "No active topic";
+  const activeVault = activeState.vault_root || "";
+  const table = rowValues
+    .map(([topic, vault, status, handoff]) =>
+      `| ${tableCell(topic)} | \`${tableCell(vault)}\` | ${tableCell(status)} | \`${tableCell(handoff)}\` |`
+    )
+    .join("\n");
+
+  await writeFile(
+    rootProjectStatePath,
+    `# PROJECT_STATE.md
+
+## Workspace Role
+
+- This file is a multi-topic index for the literature-review workspace.
+- It should not contain a full single-topic handoff.
+- Before continuing a specific topic, read the topic handoff path listed in the table below.
+- Current active topic: ${activeTopic}
+
+## Topics
+
+| Topic | Vault | Status | Topic Handoff |
+|---|---|---|---|
+${table}
+
+## Shared Rules
+
+- Do not delete or rewrite another topic vault unless explicitly asked.
+- Chrome is authorized for literature downloads only through the \`chrome-literature-downloader\` skill.
+- Use legal metadata and PDF sources only; do not use Sci-Hub or unauthorized sources.
+- Always use the \`chrome-literature-downloader\` skill for article/PDF downloads.
+- Downloads should land in \`~/Downloads\` first, then be validated before import.
+- Do not commit automatically after small edits; commit only when asked or at a meaningful milestone.
+
+## Current Plugin State
+
+- \`.deep-literature-workflow/state.json\` currently points to ${activeTopic}.
+- If switching topics, confirm which topic is active and update/read the corresponding topic handoff.
+
+## Current Next Step
+
+- Continue \`${stageLabel(inferNextStage(activeState.stage_status || {}))}\` for \`${activeVault}\`.
+`,
+    "utf8"
+  );
+}
+
+async function writeImportedWorkspaceState(state, handoffPath) {
+  await mkdir(path.dirname(statePath), { recursive: true });
+  await writeFile(statePath, JSON.stringify(state, null, 2) + "\n", "utf8");
+
+  const rows = new Map();
+  for (const topic of await readTopicIndex(state)) {
+    if (!topic.vault) continue;
+    rows.set(topic.vault, [topic.topic, topic.vault, topic.status, topic.handoff]);
+  }
+  const vaultRef = importedVaultReference(resolveVaultRoot(state.vault_root) || state.vault_root);
+  const handoffRef = path.isAbsolute(handoffPath)
+    ? importedVaultReference(handoffPath)
+    : handoffPath;
+  rows.set(vaultRef, [state.topic, vaultRef, topicStatusSummary(state), handoffRef]);
+  const orderedRows = [...rows.values()].sort((a, b) => {
+    if (a[1] === vaultRef) return -1;
+    if (b[1] === vaultRef) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+  await writeWorkspaceTopicIndex(state, orderedRows);
+}
+
+async function importExistingVault(vaultPath) {
+  const vaultRoot = path.resolve(vaultPath || "");
+  if (!vaultRoot || !(await pathExists(vaultRoot))) {
+    throw new Error("Selected vault path does not exist.");
+  }
+  const vaultStat = await stat(vaultRoot);
+  if (!vaultStat.isDirectory()) throw new Error("Selected path is not a directory.");
+  const handoffPath = await firstExistingFile([
+    path.join(vaultRoot, "08_Project_Workflow/PROJECT_STATE.md"),
+    path.join(vaultRoot, "09_Project_Workflow/PROJECT_STATE.md"),
+    path.join(vaultRoot, "PROJECT_STATE.md")
+  ]);
+  const handoffMarkdown = handoffPath ? await readFile(handoffPath, "utf8") : "";
+  const topic = parseImportedTopicName(handoffMarkdown, vaultRoot);
+  const stageStatus = await inferStageStatusFromVault(vaultRoot, handoffMarkdown);
+  const nextStage = parseCurrentStage(handoffMarkdown) || inferNextStage(stageStatus);
+  const manualCount = await readManualPdfQueueCount(vaultRoot, handoffMarkdown);
+  const vaultRef = importedVaultReference(vaultRoot);
+  const state = {
+    schema_version: 1,
+    topic,
+    slug: slugifyTopic(topic),
+    vault_root: vaultRef,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    current_stage: nextStage === "complete" ? inferNextStage(stageStatus) : nextStage,
+    stage_status: stageStatus,
+    manual_pdf_queue: Array.from({ length: manualCount }, (_, index) => ({
+      title: `Manual PDF ${index + 1}`,
+      status: "needed"
+    })),
+    notes: [
+      "Imported existing vault into Deep Survey. Vault files were not modified."
+    ]
+  };
+  const topicHandoff = handoffPath || path.join(vaultRoot, "08_Project_Workflow/PROJECT_STATE.md");
+  await writeImportedWorkspaceState(state, topicHandoff);
+  return { ok: true, topic: buildSelectedTopic(state, await readTopicIndex(state), vaultRef), state, handoff: topicHandoff };
+}
+
+async function switchStateToTopicRow(row) {
+  if (!row) {
+    await writeFile(statePath, "{}\n", "utf8");
+    return {};
+  }
+  const [, vault, , handoff] = row;
+  const vaultRoot = resolveVaultRoot(vault);
+  const handoffPath = path.isAbsolute(handoff) ? handoff : path.join(workspaceRoot, handoff);
+  const handoffMarkdown = await readFile(handoffPath, "utf8").catch(() => "");
+  const topic = row[0] || parseImportedTopicName(handoffMarkdown, vaultRoot || vault);
+  const stageStatus = await inferStageStatusFromVault(vaultRoot || path.resolve(vault), handoffMarkdown);
+  const manualCount = vaultRoot ? await readManualPdfQueueCount(vaultRoot, handoffMarkdown) : 0;
+  const nextStage = parseCurrentStage(handoffMarkdown) || inferNextStage(stageStatus);
+  const nextState = {
+    schema_version: 1,
+    topic,
+    slug: slugifyTopic(topic),
+    vault_root: vault,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    current_stage: nextStage === "complete" ? inferNextStage(stageStatus) : nextStage,
+    stage_status: stageStatus,
+    manual_pdf_queue: Array.from({ length: manualCount }, (_, index) => ({
+      title: `Manual PDF ${index + 1}`,
+      status: "needed"
+    })),
+    notes: ["Selected from Deep Survey topic index."]
+  };
+  await mkdir(path.dirname(statePath), { recursive: true });
+  await writeFile(statePath, JSON.stringify(nextState, null, 2) + "\n", "utf8");
+  return nextState;
+}
+
+async function renameTopicInIndex(vault, nextTopic) {
+  const workflowState = await readJsonIfExists(statePath);
+  const topics = await readTopicIndex(workflowState);
+  const rowValues = topics.map((topic) => [
+    topic.vault === vault ? nextTopic : topic.topic,
+    topic.vault,
+    topic.status,
+    topic.handoff
+  ]);
+  if (!rowValues.some((row) => row[1] === vault)) throw new Error("Topic vault was not found in the app index.");
+  const activeState = workflowState?.vault_root === vault
+    ? { ...workflowState, topic: nextTopic, updated_at: new Date().toISOString() }
+    : workflowState || {};
+  if (workflowState?.vault_root === vault) {
+    await writeFile(statePath, JSON.stringify(activeState, null, 2) + "\n", "utf8");
+  }
+  await writeWorkspaceTopicIndex(activeState, rowValues);
+  return { ok: true, topic: nextTopic, vault };
+}
+
+async function removeTopicFromIndex(vault) {
+  const workflowState = await readJsonIfExists(statePath);
+  const topics = await readTopicIndex(workflowState);
+  const remaining = topics
+    .filter((topic) => topic.vault !== vault)
+    .map((topic) => [topic.topic, topic.vault, topic.status, topic.handoff]);
+  if (remaining.length === topics.length) throw new Error("Topic vault was not found in the app index.");
+  const activeState = workflowState?.vault_root === vault
+    ? await switchStateToTopicRow(remaining[0] || null)
+    : workflowState || {};
+  await writeWorkspaceTopicIndex(activeState, remaining);
+  return { ok: true, vault, removed: true, nextActiveTopic: activeState.topic || null };
 }
 
 function sendSse(res, event, data) {
@@ -941,8 +1252,9 @@ function vaultArgForSelectedDirectory(topic, workspaceDirectory) {
   return vaultPath;
 }
 
-async function chooseDirectoryWithDialog() {
-  const script = 'POSIX path of (choose folder with prompt "选择新课题目录")';
+async function chooseDirectoryWithDialog(prompt = "Choose a Deep Survey folder") {
+  const safePrompt = prompt.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const script = `POSIX path of (choose folder with prompt "${safePrompt}")`;
   const result = await execFileText("osascript", ["-e", script], { cwd: workspaceRoot });
   if (!result.ok) {
     const message = result.stderr || result.error || "";
@@ -1010,20 +1322,6 @@ function findDeepLiteratureSkill(skillsResult) {
   return null;
 }
 
-function pluginMentionProbeInput(variant) {
-  const probeText =
-    "Plugin Mention Spike。不要修改文件，不要运行 workflow 命令。请只回复一行：DLW_PLUGIN_MENTION_PROBE_OK。";
-  if (variant === "markdown") {
-    return [
-      {
-        type: "text",
-        text: `[@deep-literature-workflow](plugin://deep-literature-workflow@deep-research-local)\n\n${probeText}`
-      }
-    ];
-  }
-  return dlwPluginInput(probeText);
-}
-
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/status") {
     const status = await getStatus();
@@ -1052,9 +1350,49 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/directories/choose") {
-    const result = await chooseDirectoryWithDialog();
+    const result = await chooseDirectoryWithDialog("Choose a parent folder for the new topic");
     if (result.error) return json(res, result.status || 500, { error: result.error });
     return json(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/vaults/import") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      let vaultPath = body.path?.trim();
+      if (!vaultPath) {
+        const result = await chooseDirectoryWithDialog("Choose an existing Deep Survey vault folder");
+        if (result.error) return json(res, result.status || 500, { error: result.error });
+        if (result.cancelled) return json(res, 200, { ok: false, cancelled: true });
+        vaultPath = result.path;
+      }
+      const imported = await importExistingVault(vaultPath);
+      return json(res, 200, imported);
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/topics/rename") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const vault = body.vault?.trim();
+      const topic = body.topic?.trim();
+      if (!vault || !topic) return badRequest(res, "Vault and topic name are required.");
+      return json(res, 200, await renameTopicInIndex(vault, topic));
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/topics/remove") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const vault = body.vault?.trim();
+      if (!vault) return badRequest(res, "Vault is required.");
+      return json(res, 200, await removeTopicFromIndex(vault));
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/vault/files") {
@@ -1118,74 +1456,6 @@ async function handleApi(req, res, url) {
       return json(res, 200, { ok: true, deepLiterature, raw: result });
     } catch (error) {
       return json(res, 500, { ok: false, error: error.message || String(error) });
-    }
-  }
-
-  if (
-    req.method === "POST" &&
-    (url.pathname === "/api/appserver/plugin-mention-probe" ||
-      url.pathname === "/api/appserver/skill-mention-probe")
-  ) {
-    const body = JSON.parse((await readRequestBody(req)) || "{}");
-    const variant = body.variant === "markdown" ? "markdown" : "structured";
-    const model = normalizeModel(body.model);
-    const effort = normalizeReasoningEffort(body.effort || "low");
-    try {
-      const skillsResult = await codexAppServer.listSkills({ cwd: workspaceRoot });
-      const deepLiterature = findDeepLiteratureSkill(skillsResult);
-      const name = `DLW Plugin Mention Probe: ${variant}`;
-      const threadResult = await codexAppServer.startThread({
-        name,
-        model,
-        sandbox: "read-only"
-      });
-      const thread = normalizeThread(threadResult?.thread);
-      if (!thread.name) thread.name = name;
-      addAppServerEvent("appserver", {
-        method: "thread/create/local",
-        summary: `Created skill probe thread: ${thread.name || thread.id}`,
-        thread
-      });
-      const input = pluginMentionProbeInput(variant);
-      const turnResult = await codexAppServer.sendInputToThread({
-        threadId: thread.id,
-        input,
-        model,
-        effort,
-        sandbox: "read-only"
-      });
-      const status = updateAppServerThreadStatus(thread.id, {
-        status: "running",
-        turnId: turnResult?.turn?.id || null,
-        summary: `Plugin mention probe (${variant})`
-      });
-      addAppServerEvent("appserver", {
-        method: "pluginMention/probe/start",
-        summary: `Plugin mention probe started (${variant})`,
-        variant,
-        deepLiterature,
-        threadId: thread.id,
-        turnId: turnResult?.turn?.id || null,
-        input,
-        status
-      });
-      return json(res, 200, {
-        ok: true,
-        variant,
-        deepLiterature,
-        thread,
-        turn: turnResult?.turn || null,
-        input,
-        status,
-        raw: turnResult
-      });
-    } catch (error) {
-      addAppServerEvent("appserver", {
-        method: "pluginMention/probe/error",
-        summary: error.message || String(error),
-        variant
-      });
-      return json(res, 500, { ok: false, variant, error: error.message || String(error) });
     }
   }
 
@@ -1299,7 +1569,22 @@ async function handleApi(req, res, url) {
     const topic = body.topic?.trim();
     const workspaceDirectory = body.workspaceDirectory?.trim() || "";
     if (action === "start" && !topic) return badRequest(res, "Research topic is required.");
-    const promptSet = prompts(action, topic, body.selectedTopic || null, { workspaceDirectory });
+    let selectedTopic = body.selectedTopic || null;
+    if (action === "start") {
+      try {
+        const initialized = await initTopic(topic, workspaceDirectory);
+        selectedTopic = {
+          topic: initialized.topic || topic,
+          vault: initialized.vault_root,
+          active: true,
+          nextStage: initialized.current_stage || "stage_1_discovery",
+          stages: []
+        };
+      } catch (error) {
+        return json(res, 500, { ok: false, action, error: error.message || String(error) });
+      }
+    }
+    const promptSet = prompts(action, topic, selectedTopic, { workspaceDirectory });
     const prompt = promptSet[action];
     if (!prompt) return badRequest(res, `Unknown DLW action: ${action}`);
     const input = dlwPluginInput(prompt);
@@ -1326,7 +1611,7 @@ async function handleApi(req, res, url) {
         input,
         status
       });
-      return json(res, 200, { ok: true, action, prompt, input, turn: result?.turn || null, status, raw: result });
+      return json(res, 200, { ok: true, action, prompt, input, selectedTopic, turn: result?.turn || null, status, raw: result });
     } catch (error) {
       return json(res, 500, { ok: false, action, error: error.message || String(error) });
     }

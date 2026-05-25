@@ -1,6 +1,67 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
+@interface DaiqoWebView : WKWebView <NSDraggingDestination>
+@end
+
+@implementation DaiqoWebView
+
+- (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration *)configuration {
+    self = [super initWithFrame:frame configuration:configuration];
+    if (self) {
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL, NSPasteboardTypeURL]];
+    }
+    return self;
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        return NSDragOperationCopy;
+    }
+    return [super draggingEntered:sender];
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        return NSDragOperationCopy;
+    }
+    return [super draggingUpdated:sender];
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSArray<NSString *> *paths = [self finderDropPathsFromDraggingInfo:sender];
+    if (paths.count == 0) {
+        return [super performDragOperation:sender];
+    }
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:paths options:0 error:&error];
+    if (!data || error) {
+        return NO;
+    }
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@)", json ?: @"[]"];
+    [self evaluateJavaScript:script completionHandler:nil];
+    return YES;
+}
+
+- (NSArray<NSString *> *)finderDropPathsFromDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSPasteboard *pasteboard = sender.draggingPasteboard;
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+
+    NSDictionary *options = @{NSPasteboardURLReadingFileURLsOnlyKey: @YES};
+    NSArray<NSURL *> *urls = [pasteboard readObjectsForClasses:@[[NSURL class]] options:options];
+    for (NSURL *url in urls) {
+        if (!url.isFileURL || !url.path) continue;
+        if ([seen containsObject:url.path]) continue;
+        [seen addObject:url.path];
+        [paths addObject:url.path];
+    }
+    return paths;
+}
+
+@end
+
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
@@ -57,7 +118,7 @@
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     configuration.userContentController = userContentController;
-    self.webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+    self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
 
     self.window = [[NSWindow alloc]

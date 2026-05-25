@@ -44,7 +44,7 @@ def slugify(value: str) -> str:
 
 def default_vault_name(topic: str, slug: str | None) -> str:
     base = slug or slugify(topic)
-    return f"{base}_Obsidian_Workflow"
+    return f"{base}_survay"
 
 
 def topic_project_state_path(vault_root: str) -> Path:

@@ -85,7 +85,7 @@ button.danger {
 .app-shell {
   position: relative;
   display: grid;
-  grid-template-columns: 220px 320px minmax(0, 1fr);
+  grid-template-columns: 220px 280px minmax(0, 1fr);
   min-height: 100vh;
   overflow-x: hidden;
   overflow-y: visible;
@@ -112,11 +112,37 @@ button.danger {
   overflow: visible;
 }
 
+.topic-context-menu {
+  position: fixed;
+  z-index: 100;
+  width: 180px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #f3f5f7;
+  box-shadow: 0 12px 32px rgba(20, 29, 43, 0.16);
+}
+
+.topic-context-menu button {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.topic-context-menu button:hover {
+  background: var(--sidebar-hover);
+}
+
 .topic-rail::before {
   display: none;
 }
 
-.new-topic-btn {
+.new-topic-btn,
+.import-vault-btn {
   width: 100%;
   margin-bottom: 10px;
   border: 0;
@@ -127,6 +153,14 @@ button.danger {
   padding: 8px 10px;
   position: relative;
   overflow: visible;
+}
+
+.import-vault-btn {
+  margin-top: 10px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
 }
 
 .sidebar {
@@ -354,9 +388,9 @@ textarea {
 }
 
 .refresh-button {
-  min-width: 54px;
+  min-width: 38px;
   min-height: 30px;
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 12px;
   font-weight: 700;
 }
@@ -364,12 +398,14 @@ textarea {
 .topic-list {
   display: grid;
   gap: 2px;
-  max-height: calc(100vh - 72px);
+  align-content: start;
+  grid-auto-rows: min-content;
   overflow: auto;
 }
 
 .topic-item {
   display: flex;
+  align-self: start;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -380,6 +416,13 @@ textarea {
   text-align: left;
   min-height: 36px;
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.topic-item:active {
+  cursor: grabbing;
 }
 
 .topic-item.active {
@@ -387,16 +430,28 @@ textarea {
 }
 
 .topic-item:hover,
-.new-topic-btn:hover {
+.new-topic-btn:hover,
+.import-vault-btn:hover {
   background: var(--sidebar-hover);
 }
 
 .topic-item.dragging {
-  opacity: 0.55;
+  opacity: 0.35;
 }
 
 .topic-item.drag-over {
   background: #dfe3e8;
+}
+
+.topic-drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 140;
+  pointer-events: none;
+  background: var(--sidebar-selected);
+  box-shadow: 0 12px 28px rgba(20, 29, 43, 0.16);
+  opacity: 0.96;
 }
 
 .topic-name {
@@ -446,6 +501,65 @@ textarea {
   font-size: 11px;
 }
 
+.topic-rename-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  background: rgba(23, 32, 42, 0.08);
+}
+
+.topic-rename-dialog {
+  width: min(420px, calc(100vw - 42px));
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: 0 20px 55px rgba(20, 29, 43, 0.2);
+  padding: 18px;
+}
+
+.topic-rename-title {
+  margin-bottom: 12px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.topic-rename-dialog-input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 8px 11px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.topic-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.topic-rename-actions button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 13px;
+  background: #f3f5f7;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.topic-rename-actions button[data-action="save"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+
 .timeline {
   display: grid;
   gap: 6px;
@@ -453,8 +567,8 @@ textarea {
 
 .stage-row {
   display: grid;
-  grid-template-columns: 18px 1fr auto;
-  gap: 7px;
+  grid-template-columns: 14px 1fr auto;
+  gap: 6px;
   align-items: center;
   min-height: 34px;
   border: 0;
@@ -463,8 +577,8 @@ textarea {
 }
 
 .stage-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #bac3cf;
 }
@@ -742,69 +856,6 @@ textarea {
   padding: 0;
   color: var(--muted);
   font-size: 16px;
-  font-weight: 850;
-}
-
-.probe-button {
-  min-width: 44px;
-  min-height: 28px;
-  border-radius: 9px;
-  padding: 0 6px;
-  border: 0;
-  background: #f3f5f7;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-}
-
-.plugin-control {
-  position: relative;
-  display: inline-flex;
-}
-
-.plugin-hint {
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 10px);
-  z-index: 30;
-  width: min(330px, calc(100vw - 48px));
-  padding: 12px;
-  border-radius: 14px;
-  background: #f3f5f7;
-  color: var(--ink);
-  box-shadow: 0 14px 36px rgba(20, 29, 43, 0.16);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.plugin-hint-title {
-  font-weight: 850;
-  margin-bottom: 4px;
-}
-
-.plugin-hint-text {
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-
-.plugin-hint code {
-  display: block;
-  padding: 8px;
-  border-radius: 9px;
-  background: var(--bg);
-  color: var(--ink);
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.plugin-test-button {
-  margin-top: 10px;
-  min-height: 28px;
-  border-radius: 9px;
-  padding: 0 10px;
-  background: var(--ink);
-  color: var(--bg);
-  font-size: 12px;
   font-weight: 850;
 }
 
@@ -1470,6 +1521,14 @@ textarea {
   border-radius: 0;
   background: var(--bg);
   padding: 10px 0 2px;
+}
+
+.vault-files:focus,
+.vault-files:focus-visible,
+.vault-file:focus,
+.vault-file:focus-visible {
+  outline: 0;
+  box-shadow: none;
 }
 
 .vault-folder {

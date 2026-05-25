@@ -126,6 +126,82 @@ def build_inventory_from_folder(
     return inventory
 
 
+def build_inventory_from_paths(
+    paths: Iterable[str | Path],
+    *,
+    output_path: str | Path | None = None,
+    parse_pdfs: bool = True,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    source_paths = [Path(path).expanduser().resolve() for path in paths]
+    if not source_paths:
+        raise ValueError("At least one path is required")
+    missing = [str(path) for path in source_paths if not path.exists()]
+    if missing:
+        raise ValueError(f"Path does not exist: {missing[0]}")
+
+    common_inputs = [path.parent for path in source_paths]
+    root = Path(os.path.commonpath([str(path) for path in common_inputs])).resolve()
+    directories: list[dict[str, str]] = []
+    files: list[dict[str, Any]] = []
+    scan_errors: list[dict[str, str]] = []
+    seen_dirs: set[str] = set()
+    seen_files: set[str] = set()
+    scanned = 0
+
+    def add_directory(path: Path) -> None:
+        key = str(path)
+        if key in seen_dirs:
+            return
+        seen_dirs.add(key)
+        relative_dir = "" if path == root else path.relative_to(root).as_posix()
+        directories.append({"path": str(path), "relative_path": relative_dir})
+
+    def add_file(path: Path) -> None:
+        nonlocal scanned
+        key = str(path)
+        if key in seen_files:
+            return
+        seen_files.add(key)
+        try:
+            record = scan_inventory_file(path, root, parse_pdfs=parse_pdfs)
+            files.append(record)
+        except Exception as exc:
+            files.append(scan_error_record(path, root, exc))
+            scan_errors.append({"path": str(path), "error": str(exc)})
+        scanned += 1
+        emit_progress(
+            progress_callback,
+            stage="scan",
+            message=f"Scanned {scanned} files",
+            current=scanned,
+            total=None,
+            files_scanned=scanned,
+            directories_scanned=len(directories),
+        )
+
+    emit_progress(progress_callback, stage="scan", message=f"Scanning dropped paths under: {root}", current=0, total=None)
+    for source_path in source_paths:
+        if source_path.is_file():
+            add_directory(source_path.parent)
+            add_file(source_path)
+            continue
+        for current, dirnames, filenames in os_walk_sorted(source_path, scan_errors=scan_errors):
+            current_path = Path(current)
+            add_directory(current_path)
+            for filename in filenames:
+                add_file(current_path / filename)
+
+    summary = inventory_summary(root, directories, files, scan_errors)
+    inventory = {"summary": summary, "directories": directories, "files": files}
+    if output_path:
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
+    emit_progress(progress_callback, stage="scan", message=f"Scan complete: {len(files)} files", current=len(files), total=len(files))
+    return inventory
+
+
 def import_library_inventory(
     inventory_path: str | Path,
     *,
@@ -138,6 +214,7 @@ def import_library_inventory(
     report_path: str | Path | None = None,
     target_root: str | Path = LIBRARY_IMPORT_DIR,
     library_item_name: str = "default",
+    library_root_folder_id: int = 1,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Inspect or import an external inventory into Paper Monitor storage."""
@@ -201,6 +278,7 @@ def import_library_inventory(
                 inventory_file,
                 library_target_root,
                 library_item_name,
+                library_root_folder_id=library_root_folder_id,
                 progress_callback=progress_callback,
             )
     finally:
@@ -393,6 +471,7 @@ def execute_import(
     library_target_root: Path,
     library_item_name: str,
     *,
+    library_root_folder_id: int = 1,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -405,7 +484,7 @@ def execute_import(
     seen_dois: set[str] = set()
     seen_arxiv_ids: set[str] = set()
     seen_paths: set[str] = set()
-    folder_cache: dict[str, int] = {"": 1}
+    folder_cache: dict[str, int] = {"": int(library_root_folder_id or 1)}
     total = len(files)
     emit_progress(progress_callback, stage="import", message=f"Importing {total} records", current=0, total=total)
 
@@ -1102,7 +1181,7 @@ def ensure_folder_path(storage: Storage, relative_parent_path: str, folder_cache
     clean_path = relative_parent_path.strip("/")
     if clean_path in folder_cache:
         return folder_cache[clean_path]
-    current = 1
+    current = int(folder_cache.get("", 1) or 1)
     current_path = ""
     for part in Path(clean_path).parts if clean_path else []:
         name = clean_text(part) or "Untitled Folder"

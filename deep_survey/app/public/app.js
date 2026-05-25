@@ -19,12 +19,19 @@ const state = {
   loadedThreadMessages: {},
   topicThreadBindings: {},
   activeDlwThreadId: null,
+  dlwStartupBusy: false,
+  missingThreadNotices: new Set(),
   pendingApprovals: [],
   setupStatus: null,
   draggedTopicVault: null,
   stagePromptInFlight: false,
   pendingStageAction: null,
-  dismissedStagePrompts: new Set()
+  dismissedStagePrompts: new Set(),
+  topicContextMenu: null,
+  topicRenameDialog: null,
+  topicPointerDrag: null,
+  topicDragGhost: null,
+  suppressTopicClick: false
 };
 
 const els = {
@@ -32,6 +39,7 @@ const els = {
   topicDirectoryInput: document.querySelector("#topicDirectoryInput"),
   chooseDirectoryBtn: document.querySelector("#chooseDirectoryBtn"),
   newTopicBtn: document.querySelector("#newTopicBtn"),
+  importVaultBtn: document.querySelector("#importVaultBtn"),
   newTopicPanel: document.querySelector("#newTopicPanel"),
   startBtn: document.querySelector("#startBtn"),
   resumeBtn: document.querySelector("#resumeBtn"),
@@ -65,9 +73,6 @@ const els = {
   threadModeMenuBtn: document.querySelector("#threadModeMenuBtn"),
   threadModeMenuLabel: document.querySelector("#threadModeMenuLabel"),
   threadModeMenu: document.querySelector("#threadModeMenu"),
-  pluginProbeBtn: document.querySelector("#pluginProbeBtn"),
-  pluginHint: document.querySelector("#pluginHint"),
-  pluginProbeRunBtn: document.querySelector("#pluginProbeRunBtn"),
   threadMessage: document.querySelector("#threadMessage"),
   sendThreadBtn: document.querySelector("#sendThreadBtn"),
   stopThreadBtn: document.querySelector("#stopThreadBtn"),
@@ -95,6 +100,7 @@ const els = {
   runState: document.querySelector("#runState")
 };
 let vaultFiles = [];
+let visibleVaultFiles = [];
 let selectedVaultFile = null;
 const collapsedFolders = new Set();
 const threadPreferenceKeys = {
@@ -273,8 +279,11 @@ function reconcileTopicThreadBinding(topic = state.status?.selectedTopic) {
   if (!topic?.topic || !topic?.vault) return;
   const vaultKey = topicThreadKey(topic);
   const topicKey = topicThreadKey(null, topic.topic);
-  if (vaultKey && topicKey && vaultKey !== topicKey && !state.topicThreadBindings[vaultKey] && state.topicThreadBindings[topicKey]) {
-    state.topicThreadBindings[vaultKey] = state.topicThreadBindings[topicKey];
+  if (vaultKey && topicKey && vaultKey !== topicKey && state.topicThreadBindings[topicKey]) {
+    if (state.topicThreadBindings[vaultKey] === state.topicThreadBindings[topicKey]) {
+      delete state.topicThreadBindings[vaultKey];
+    }
+    delete state.topicThreadBindings[topicKey];
     saveTopicThreadBindings();
   }
 }
@@ -315,12 +324,11 @@ function renderStatus(status) {
   reconcileTopicThreadBinding(selectedTopic);
   const displayTopic = withLocalRunningStage(selectedTopic);
   const topic = selectedTopic.topic || status.state?.topic || "No active topic";
-  els.topicTitle.innerHTML = selectedTopic.active
+  const showActiveBadge = topicHasIncompleteProgress(displayTopic);
+  els.topicTitle.innerHTML = showActiveBadge
     ? `${escapeHtml(topic)} <span class="topic-title-badge">active</span>`
     : escapeHtml(topic);
-  const workspacePath = selectedTopic.vault
-    ? `${status.workspaceRoot}/${selectedTopic.vault}`
-    : status.workspaceRoot;
+  const workspacePath = displayVaultPath(status.workspaceRoot, selectedTopic.vault);
   els.workspacePath.textContent = workspacePath;
   els.workspacePath.title = workspacePath;
   els.newTopicBtn.classList.toggle("selected", state.isCreatingTopic);
@@ -339,8 +347,9 @@ function renderStatus(status) {
     els.stage3Btn.classList.toggle("stage3-ready", stage3Ready);
   }
   if (els.manualBtn) els.manualBtn.disabled = !selectedTopic.vault || Boolean(state.currentRunId);
-  els.resumeBtn.disabled = !selectedTopic.active || hasRunningProcess();
-  els.startBtn.disabled = Boolean(state.currentRunId);
+  els.resumeBtn.disabled = !selectedTopic.vault || !topicHasIncompleteProgress(displayTopic) || hasRunningProcess();
+  els.startBtn.disabled = Boolean(state.currentRunId || state.dlwStartupBusy);
+  els.startBtn.textContent = state.dlwStartupBusy ? "Starting..." : "Start";
   els.cancelBtn.disabled = !hasRunningProcess();
   maybePromptStageAction(displayTopic);
 
@@ -351,7 +360,7 @@ function renderStatus(status) {
     forgetThreadBinding(selectedTopic);
     boundThreadId = "";
   }
-  const matchingThreadId = state.appThreadsLoaded ? matchingThreadIdForTopic(state.appThreads, selectedTopic) : "";
+  const matchingThreadId = state.appThreadsLoaded ? matchingThreadIdByTopicName(state.appThreads, selectedTopic) : "";
   const selectedThreadForTopic = boundThreadId || matchingThreadId || null;
   if (selectedThreadForTopic && matchingThreadId && !boundThreadId) {
     bindThreadToTopic(matchingThreadId, selectedTopic);
@@ -361,6 +370,33 @@ function renderStatus(status) {
   }
   if (state.appThreads.length || selectedThreadForTopic || selectedThreadId()) {
     renderThreadOptions(state.appThreads, selectedThreadForTopic);
+  }
+  ensureBoundThreadForExistingTopic(selectedTopic);
+}
+
+function displayVaultPath(workspaceRoot, vault) {
+  if (!vault) return workspaceRoot;
+  if (vault.startsWith("/")) return vault;
+  return `${workspaceRoot}/${vault}`;
+}
+
+function ensureBoundThreadForExistingTopic(topicInfo) {
+  if (!state.appThreadsLoaded || state.isCreatingTopic || state.dlwStartupBusy || state.currentRunId) return;
+  if (!topicInfo?.active || !topicInfo.topic || !topicInfo.vault) return;
+  if (boundThreadIdForTopic(topicInfo)) return;
+  const key = topicThreadKey(topicInfo);
+  if (!key) return;
+  const matchingThreadId = matchingThreadIdByTopicName(state.appThreads, topicInfo);
+  if (matchingThreadId) {
+    bindThreadToTopic(matchingThreadId, topicInfo);
+    ensureThreadInList(matchingThreadId, `DLW: ${topicInfo.topic || matchingThreadId}`);
+    renderThreadOptions(state.appThreads, matchingThreadId);
+    state.missingThreadNotices.delete(key);
+    return;
+  }
+  if (!state.missingThreadNotices.has(key)) {
+    state.missingThreadNotices.add(key);
+    appendLog("meta", `No existing DLW thread matched ${topicInfo.topic}; no new thread was created.`);
   }
 }
 
@@ -475,6 +511,18 @@ function stageStatusText(stage) {
   return stage.status;
 }
 
+function topicHasIncompleteProgress(topic) {
+  const stageList = topic?.stages?.length
+    ? topic.stages
+    : Object.entries(topic?.stageStatus || {}).map(([id, status]) => ({ id, status }));
+  const visibleStages = stageList.filter((stage) => stage.id !== "stage_5c_evidence_matrices");
+  if (!visibleStages.length) {
+    const text = `${topic?.status || ""} ${topic?.nextStage || ""}`.toLowerCase();
+    return !text.includes("all stages complete") && !text.includes("complete");
+  }
+  return visibleStages.some((stage) => (stage.rawStatus || stage.status) !== "done");
+}
+
 function renderTopics(status) {
   const topics = orderedTopics(status.topics || []);
   if (!topics.length) {
@@ -486,52 +534,293 @@ function renderTopics(status) {
   }
   els.topicList.replaceChildren(
     ...topics.map((topic) => {
+      const showActive = topicHasIncompleteProgress(topic);
       const item = document.createElement("div");
-      item.className = `topic-item ${topic.active ? "active" : ""} ${!state.isCreatingTopic && topic.vault === state.selectedVault ? "selected" : ""}`;
+      item.className = `topic-item ${showActive ? "active" : ""} ${!state.isCreatingTopic && topic.vault === state.selectedVault ? "selected" : ""}`;
       item.setAttribute("role", "button");
-      item.setAttribute("draggable", "true");
+      item.setAttribute("draggable", "false");
       item.dataset.vault = topic.vault;
       item.tabIndex = 0;
       item.innerHTML = `
         <span class="topic-name">${escapeHtml(topic.topic)}</span>
-        ${topic.active ? '<span class="active-badge">active</span>' : ""}
+        ${showActive ? '<span class="active-badge">active</span>' : ""}
       `;
-      item.addEventListener("click", () => selectTopic(topic.vault));
+      item.addEventListener("click", (event) => {
+        if (state.suppressTopicClick) {
+          event.preventDefault();
+          state.suppressTopicClick = false;
+          return;
+        }
+        selectTopic(topic.vault);
+      });
       item.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") selectTopic(topic.vault);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          startTopicRename(topic, item);
+        } else if (event.key === " ") {
+          event.preventDefault();
+          selectTopic(topic.vault);
+        }
       });
-      item.addEventListener("dragstart", (event) => {
-        state.draggedTopicVault = topic.vault;
-        item.classList.add("dragging");
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", topic.vault);
-      });
-      item.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        if (state.draggedTopicVault && state.draggedTopicVault !== topic.vault) item.classList.add("drag-over");
-      });
-      item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
-      item.addEventListener("drop", (event) => {
-        event.preventDefault();
-        item.classList.remove("drag-over");
-        const fromVault = state.draggedTopicVault || event.dataTransfer.getData("text/plain");
-        const toVault = topic.vault;
-        if (!fromVault || fromVault === toVault) return;
-        const nextOrder = orderedTopics(status.topics || []).map((entry) => entry.vault);
-        const fromIndex = nextOrder.indexOf(fromVault);
-        const toIndex = nextOrder.indexOf(toVault);
-        if (fromIndex < 0 || toIndex < 0) return;
-        nextOrder.splice(toIndex, 0, nextOrder.splice(fromIndex, 1)[0]);
-        saveTopicOrder(nextOrder);
-        renderTopics(status);
-      });
-      item.addEventListener("dragend", () => {
-        state.draggedTopicVault = null;
-        item.classList.remove("dragging", "drag-over");
-      });
+      item.addEventListener("contextmenu", (event) => showTopicContextMenu(event, topic, item));
+      addTopicPointerDragHandlers(item, topic, status);
       return item;
     })
   );
+}
+
+function reorderTopics(fromVault, toVault, status) {
+  const nextOrder = orderedTopics(status.topics || []).map((entry) => entry.vault);
+  const fromIndex = nextOrder.indexOf(fromVault);
+  const toIndex = nextOrder.indexOf(toVault);
+  if (fromIndex < 0 || toIndex < 0) return;
+  const [moved] = nextOrder.splice(fromIndex, 1);
+  const targetIndex = nextOrder.indexOf(toVault);
+  nextOrder.splice(targetIndex < 0 ? nextOrder.length : targetIndex, 0, moved);
+  saveTopicOrder(nextOrder);
+  renderTopics(status);
+}
+
+function clearTopicDragOver() {
+  document.querySelectorAll(".topic-item.drag-over").forEach((item) => item.classList.remove("drag-over"));
+}
+
+function topicItemAtPoint(x, y, fromVault) {
+  const items = [...document.querySelectorAll(".topic-item")].filter((item) => item.dataset.vault !== fromVault);
+  if (!items.length) return null;
+  const direct = document.elementFromPoint(x, y)?.closest(".topic-item");
+  if (direct?.dataset.vault && direct.dataset.vault !== fromVault) return direct;
+  return items
+    .map((item) => {
+      const rect = item.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      return { item, distance: Math.abs(y - centerY) };
+    })
+    .sort((a, b) => a.distance - b.distance)[0]?.item || null;
+}
+
+function updateTopicPointerDrag(event) {
+  const drag = state.topicPointerDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+  if (!drag.dragging && distance < 4) return;
+  if (!drag.dragging) {
+    drag.dragging = true;
+    state.suppressTopicClick = true;
+    drag.item.classList.add("dragging");
+    createTopicDragGhost(drag);
+  }
+  event.preventDefault();
+  moveTopicDragGhost(event.clientX, event.clientY);
+  const targetItem = topicItemAtPoint(event.clientX, event.clientY, drag.fromVault);
+  clearTopicDragOver();
+  if (targetItem?.dataset.vault) {
+    targetItem.classList.add("drag-over");
+    drag.overVault = targetItem.dataset.vault;
+  } else {
+    drag.overVault = "";
+  }
+}
+
+function finishTopicPointerDrag(event) {
+  const drag = state.topicPointerDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  document.removeEventListener("pointermove", updateTopicPointerDrag);
+  document.removeEventListener("pointerup", finishTopicPointerDrag);
+  document.removeEventListener("pointercancel", finishTopicPointerDrag);
+  clearTopicDragOver();
+  drag.item.classList.remove("dragging");
+  removeTopicDragGhost();
+  state.topicPointerDrag = null;
+  if (!drag.dragging) return;
+  state.suppressTopicClick = true;
+  const targetItem = topicItemAtPoint(event.clientX, event.clientY, drag.fromVault);
+  const toVault = drag.overVault || targetItem?.dataset.vault || "";
+  if (toVault) reorderTopics(drag.fromVault, toVault, drag.status);
+  setTimeout(() => {
+    state.suppressTopicClick = false;
+  }, 0);
+}
+
+function createTopicDragGhost(drag) {
+  removeTopicDragGhost();
+  const rect = drag.item.getBoundingClientRect();
+  const ghost = drag.item.cloneNode(true);
+  ghost.classList.add("topic-drag-ghost");
+  ghost.style.width = `${rect.width}px`;
+  document.body.append(ghost);
+  state.topicDragGhost = ghost;
+  moveTopicDragGhost(drag.startX, drag.startY);
+}
+
+function moveTopicDragGhost(x, y) {
+  if (!state.topicDragGhost) return;
+  state.topicDragGhost.style.transform = `translate(${x + 10}px, ${y + 10}px)`;
+}
+
+function removeTopicDragGhost() {
+  if (!state.topicDragGhost) return;
+  state.topicDragGhost.remove();
+  state.topicDragGhost = null;
+}
+
+function addTopicPointerDragHandlers(item, topic, status) {
+  item.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || state.topicRenameDialog || event.target.closest("input, button")) return;
+    state.topicPointerDrag = {
+      pointerId: event.pointerId,
+      fromVault: topic.vault,
+      startX: event.clientX,
+      startY: event.clientY,
+      overVault: "",
+      item,
+      status,
+      dragging: false
+    };
+    document.addEventListener("pointermove", updateTopicPointerDrag);
+    document.addEventListener("pointerup", finishTopicPointerDrag);
+    document.addEventListener("pointercancel", finishTopicPointerDrag);
+    event.preventDefault();
+  });
+}
+
+function startTopicRename(topic, item) {
+  openTopicRenameDialog(topic);
+}
+
+function closeTopicContextMenu() {
+  if (!state.topicContextMenu) return;
+  state.topicContextMenu.remove();
+  state.topicContextMenu = null;
+}
+
+function showTopicContextMenu(event, topic, item) {
+  event.preventDefault();
+  closeTopicContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "topic-context-menu";
+  menu.innerHTML = `
+    <button type="button" data-action="rename">Rename</button>
+    <button type="button" data-action="remove">Remove from App</button>
+  `;
+  document.body.append(menu);
+  const left = Math.min(event.clientX, window.innerWidth - 190);
+  const top = Math.min(event.clientY, window.innerHeight - 86);
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+  state.topicContextMenu = menu;
+  menu.addEventListener("pointerdown", (clickEvent) => {
+    clickEvent.preventDefault();
+    clickEvent.stopPropagation();
+    const action = clickEvent.target.closest("button")?.dataset.action;
+    if (!action) return;
+    closeTopicContextMenu();
+    if (action === "rename") {
+      startTopicRename(topic, item);
+      return;
+    }
+    if (action === "remove") removeTopicFromApp(topic).catch(showError);
+  });
+  setTimeout(() => {
+    document.addEventListener("pointerdown", closeTopicContextMenu, { once: true });
+  }, 0);
+}
+
+function closeTopicRenameDialog() {
+  if (!state.topicRenameDialog) return;
+  state.topicRenameDialog.remove();
+  state.topicRenameDialog = null;
+}
+
+function openTopicRenameDialog(topic) {
+  if (!topic?.vault) return;
+  closeTopicRenameDialog();
+  const overlay = document.createElement("div");
+  overlay.className = "topic-rename-overlay";
+  overlay.innerHTML = `
+    <div class="topic-rename-dialog" role="dialog" aria-modal="true" aria-label="Rename topic">
+      <div class="topic-rename-title">Rename Topic</div>
+      <input class="topic-rename-dialog-input" type="text" value="${escapeHtml(topic.topic || "")}" aria-label="Topic name" />
+      <div class="topic-rename-actions">
+        <button type="button" data-action="cancel">Cancel</button>
+        <button type="button" data-action="save">Save</button>
+      </div>
+    </div>
+  `;
+  document.body.append(overlay);
+  state.topicRenameDialog = overlay;
+  const input = overlay.querySelector(".topic-rename-dialog-input");
+  const saveButton = overlay.querySelector('[data-action="save"]');
+  const cancelButton = overlay.querySelector('[data-action="cancel"]');
+  let finished = false;
+
+  const cancel = () => {
+    if (finished) return;
+    finished = true;
+    closeTopicRenameDialog();
+  };
+  const save = async () => {
+    if (finished) return;
+    const nextTopic = input.value.trim();
+    if (!nextTopic || nextTopic === topic.topic) {
+      cancel();
+      return;
+    }
+    finished = true;
+    input.disabled = true;
+    saveButton.disabled = true;
+    cancelButton.disabled = true;
+    try {
+      await api("/api/topics/rename", {
+        method: "POST",
+        body: JSON.stringify({ vault: topic.vault, topic: nextTopic })
+      });
+      closeTopicRenameDialog();
+      await refreshStatus();
+      appendLog("meta", `Renamed topic: ${topic.topic} → ${nextTopic}`);
+    } catch (error) {
+      finished = false;
+      input.disabled = false;
+      saveButton.disabled = false;
+      cancelButton.disabled = false;
+      showError(error);
+      input.focus();
+    }
+  };
+
+  overlay.addEventListener("pointerdown", (event) => {
+    if (event.target === overlay) cancel();
+  });
+  cancelButton.addEventListener("click", cancel);
+  saveButton.addEventListener("click", save);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      save();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    }
+  });
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
+}
+
+async function removeTopicFromApp(topic) {
+  if (!topic?.vault) return;
+  const message = `Remove "${topic.topic}" from Deep Survey?\n\nThis only removes it from the app topic list. The original vault folder and files will not be deleted.`;
+  if (!confirm(message)) return;
+  await api("/api/topics/remove", {
+    method: "POST",
+    body: JSON.stringify({ vault: topic.vault })
+  });
+  forgetThreadBinding(topic);
+  state.selectedVault = null;
+  state.isCreatingTopic = false;
+  await refreshStatus();
+  appendLog("meta", `Removed topic from app only: ${topic.topic}`);
 }
 
 async function selectTopic(vault) {
@@ -599,6 +888,7 @@ async function loadVaultFiles() {
 function renderVaultFiles() {
   const query = els.vaultSearch.value.trim().toLowerCase();
   const files = vaultFiles.filter((file) => file.toLowerCase().includes(query));
+  visibleVaultFiles = [];
   if (!files.length) {
     const empty = document.createElement("div");
     empty.className = "topic-meta";
@@ -631,6 +921,7 @@ function renderVaultFiles() {
       }
     }
     if (folder && collapsedFolders.has(folder)) continue;
+    visibleVaultFiles.push(file);
     const button = document.createElement("button");
     button.type = "button";
     button.className = [
@@ -646,11 +937,39 @@ function renderVaultFiles() {
   els.vaultFiles.replaceChildren(...nodes);
 }
 
-async function loadVaultFile(file) {
+function moveVaultSelection(delta) {
+  if (!visibleVaultFiles.length) return;
+  const currentIndex = Math.max(0, visibleVaultFiles.indexOf(selectedVaultFile));
+  const nextIndex = Math.min(visibleVaultFiles.length - 1, Math.max(0, currentIndex + delta));
+  const nextFile = visibleVaultFiles[nextIndex];
+  if (nextFile) loadVaultFile(nextFile, { reveal: true }).catch(showError);
+}
+
+function scrollSelectedVaultFileIntoView() {
+  const selected = els.vaultFiles.querySelector(".vault-file.selected");
+  if (!selected) return;
+  selected.scrollIntoView({ block: "nearest" });
+}
+
+function handleVaultFileKeydown(event) {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    moveVaultSelection(1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    moveVaultSelection(-1);
+  } else if (event.key === "Enter" && selectedVaultFile) {
+    event.preventDefault();
+    loadVaultFile(selectedVaultFile).catch(showError);
+  }
+}
+
+async function loadVaultFile(file, options = {}) {
   const vault = state.status?.selectedTopic?.vault;
   if (!vault) return;
   selectedVaultFile = file;
   renderVaultFiles();
+  if (options.reveal) scrollSelectedVaultFileIntoView();
   els.vaultPreview.textContent = "Loading...";
   const data = await api(
     `/api/vault/file?vault=${encodeURIComponent(vault)}&path=${encodeURIComponent(file)}`
@@ -1271,7 +1590,7 @@ function renderThreadStatus() {
   const status = state.appThreadStatus[threadId];
   const thread = state.appThreads.find((item) => item.id === threadId);
   const name = thread?.name || thread?.preview || (threadId ? threadId.slice(0, 8) : "None selected");
-  const statusText = status ? threadStatusLabel(status) : "Unknown";
+  const statusText = state.dlwStartupBusy && !threadId ? "Preparing" : status ? threadStatusLabel(status) : "Unknown";
   const turnText = status?.turnId ? ` · turn ${status.turnId.slice(0, 8)}` : "";
   const modeText = selectedThreadMode() === "write" ? "Allow Edits" : "Read Only";
   els.threadStatusText.textContent = `Thread: ${name} · ${statusText}${turnText} · ${modeText}`;
@@ -1283,7 +1602,7 @@ function renderThreadStatus() {
   els.sendThreadBtn.setAttribute("aria-label", canStop ? "Stop" : "Send");
   if (!state.currentRunId) {
     const threadToInterrupt = interruptibleThreadId();
-    els.cancelBtn.disabled = !threadToInterrupt;
+    els.cancelBtn.disabled = !threadToInterrupt && !state.dlwStartupBusy;
   }
   renderApprovalPanel();
   renderThreadChat();
@@ -1380,11 +1699,16 @@ function preferredThreadId(threads, topicInfo = state.status?.selectedTopic) {
   const bound = boundThreadIdForTopic(topicInfo);
   if (bound && threadLooksLikeDlwWorkThread(bound, topicInfo)) return bound;
   if (bound) forgetThreadBinding(topicInfo);
-  return matchingThreadIdForTopic(threads, topicInfo) || null;
+  return matchingThreadIdByTopicName(threads, topicInfo) || null;
 }
 
 function matchingThreadIdForTopic(threads, topicInfo = state.status?.selectedTopic) {
-  const match = threads.find((thread) => threadLooksLikeDlwWorkThread(thread.id, topicInfo));
+  if (topicInfo?.vault) return "";
+  return matchingThreadIdByTopicName(threads, topicInfo);
+}
+
+function matchingThreadIdByTopicName(threads, topicInfo = state.status?.selectedTopic, fallbackTopic = "") {
+  const match = threads.find((thread) => threadLooksLikeDlwWorkThread(thread.id, topicInfo, fallbackTopic));
   return match?.id || null;
 }
 
@@ -1396,6 +1720,8 @@ function threadLooksLikeDlwWorkThread(threadId, topicInfo = state.status?.select
   if (!name.toLowerCase().startsWith("dlw:")) return false;
   const text = `${thread.name || ""}\n${thread.preview || ""}`.toLowerCase();
   if (text.includes("probe") || text.includes("mention spike")) return false;
+  const vault = (topicInfo?.vault || "").toLowerCase();
+  if (vault && !vault.includes("_obsidian_workflow") && text.includes("_obsidian_workflow")) return false;
   const topic = (topicInfo?.topic || fallbackTopic || "").toLowerCase();
   const zhName = topic.split("/")[0]?.trim();
   const enName = topic.split("/")[1]?.trim();
@@ -1438,6 +1764,7 @@ async function createBoundThreadForTopic({ mode, selectedTopic, topic }) {
   const topicName = topic || topicInfo?.topic;
   if (!topicName) throw new Error("Cannot create a DLW thread without a topic.");
   els.appServerState.textContent = "Creating...";
+  appendLog("meta", `Creating Codex thread for ${topicName}...`);
   const result = await api("/api/appserver/threads", {
     method: "POST",
     body: JSON.stringify({
@@ -1485,17 +1812,14 @@ async function ensureAppServerThreadForDlw(mode, topicInfo, fallbackTopic, optio
     await listAppServerThreads();
   }
 
-  threadId = matchingThreadIdForTopic(state.appThreads, topicInfo);
+  threadId = matchingThreadIdByTopicName(state.appThreads, topicInfo, fallbackTopic);
   if (threadId) {
     bindThreadToTopic(threadId, topicInfo, fallbackTopic);
     renderThreadOptions(state.appThreads, threadId);
     return threadId;
   }
 
-  const thread = await createBoundThreadForTopic({ mode, selectedTopic: topicInfo, topic: fallbackTopic });
-  threadId = thread?.id || selectedThreadId();
-  if (!threadId) throw new Error("Failed to create app-server thread.");
-  return threadId;
+  throw new Error("No existing DLW thread matches this topic. No new thread was created automatically.");
 }
 
 async function sendDlwActionToThread(action, options = {}) {
@@ -1510,6 +1834,7 @@ async function sendDlwActionToThread(action, options = {}) {
   if (
     action === "start" &&
     state.status?.state?.topic &&
+    !options.skipSwitchConfirm &&
     !confirm(`This will switch the active topic to:\n${topic}\n\nContinue?`)
   ) {
     return;
@@ -1530,6 +1855,14 @@ async function sendDlwActionToThread(action, options = {}) {
     return;
   }
 
+  state.dlwStartupBusy = true;
+  const startupStage = inferRunningStageForAction(action, actionTopic);
+  state.localRunningStage = startupStage;
+  els.appServerState.textContent = action === "start" ? "Preparing topic..." : "Preparing DLW...";
+  appendLog("meta", action === "start" ? `Preparing new topic: ${topic}` : `Preparing DLW ${action}...`);
+  if (state.status) renderStatus(state.status);
+  renderThreadStatus();
+
   const threadId = await ensureAppServerThreadForDlw(mode, actionTopic, topic, { forceNew: action === "start" });
   const runningStage = inferRunningStageForAction(action, actionTopic);
   state.activeDlwThreadId = threadId;
@@ -1537,75 +1870,32 @@ async function sendDlwActionToThread(action, options = {}) {
   if (runningStage) state.appThreadRunningStages[threadId] = runningStage;
   saveThreadPreferences();
   els.appServerState.textContent = "Sending DLW...";
+  appendLog("meta", "Starting Deep Literature Workflow in the bound Codex thread...");
   if (state.status) renderStatus(state.status);
-  const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/dlw-action`, {
-    method: "POST",
-    body: JSON.stringify({
-      action,
-      topic,
-      selectedTopic: actionTopic,
-      mode,
-      model: selectedThreadModel(),
-      effort: selectedReasoningEffort(),
-      workspaceDirectory
-    })
-  });
-  if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
-  bindThreadToTopic(threadId, actionTopic, topic);
-  els.appServerState.textContent = "DLW turn started";
-  appendLog("meta", `DLW ${action} sent via plugin mention. turn=${result.turn?.id || ""}`);
-  renderThreadStatus();
-}
-
-async function runPluginMentionProbe() {
-  connectAppServerEvents();
-  saveThreadPreferences();
-  els.pluginProbeBtn.disabled = true;
-  if (els.pluginProbeRunBtn) els.pluginProbeRunBtn.disabled = true;
-  els.appServerState.textContent = "Plugin probe...";
-  appendLog("meta", "Plugin Mention Spike: checking app-server skills/list and structured plugin mention...");
   try {
-    const result = await api("/api/appserver/plugin-mention-probe", {
+    const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/dlw-action`, {
       method: "POST",
       body: JSON.stringify({
-        variant: "structured",
+        action,
+        topic,
+        selectedTopic: actionTopic,
+        mode,
         model: selectedThreadModel(),
-        effort: "low"
+        effort: selectedReasoningEffort(),
+        workspaceDirectory
       })
     });
-    const skill = result.deepLiterature?.skill;
-    appendLog(
-      "meta",
-      skill
-        ? `skills/list: found ${skill.name} · enabled=${skill.enabled} · ${skill.path || ""}`
-        : "skills/list: deep-literature-workflow not found"
-    );
-    appendLog(
-      "meta",
-      `structured plugin mention accepted. thread=${result.thread?.id || ""} turn=${result.turn?.id || ""}`
-    );
-    if (result.thread?.id) {
-      state.appThreads = [result.thread, ...state.appThreads.filter((item) => item.id !== result.thread.id)];
-      mergeAppThreadStatus(result.thread.id, result.status || {
-        status: "running",
-        turnId: result.turn?.id || null,
-        summary: "Plugin mention probe"
-      });
-      renderThreadOptions(state.appThreads, result.thread.id);
-      loadThreadMessages(result.thread.id).catch(showError);
-    }
-    els.appServerState.textContent = "Plugin probe started";
+    const boundTopic = result.selectedTopic || actionTopic;
+    if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
+    bindThreadToTopic(threadId, boundTopic, topic);
+    els.appServerState.textContent = "DLW turn started";
+    appendLog("meta", `DLW ${action} sent via plugin mention. turn=${result.turn?.id || ""}`);
+    renderThreadStatus();
   } finally {
-    els.pluginProbeBtn.disabled = false;
-    if (els.pluginProbeRunBtn) els.pluginProbeRunBtn.disabled = false;
+    state.dlwStartupBusy = false;
+    if (state.status) renderStatus(state.status);
+    renderThreadStatus();
   }
-}
-
-function togglePluginHint(force) {
-  if (!els.pluginHint || !els.pluginProbeBtn) return;
-  const shouldShow = typeof force === "boolean" ? force : els.pluginHint.classList.contains("hidden");
-  els.pluginHint.classList.toggle("hidden", !shouldShow);
-  els.pluginProbeBtn.setAttribute("aria-expanded", shouldShow ? "true" : "false");
 }
 
 async function sendToAppServerThread() {
@@ -1727,7 +2017,7 @@ function canInterruptThread(threadId) {
 }
 
 function hasRunningProcess() {
-  return Boolean(state.currentRunId || interruptibleThreadId());
+  return Boolean(state.currentRunId || state.dlwStartupBusy || interruptibleThreadId());
 }
 
 function interruptibleThreadId(topicInfo = state.status?.selectedTopic) {
@@ -1977,8 +2267,70 @@ async function chooseTopicDirectory() {
   }
 }
 
-els.startBtn.addEventListener("click", () => sendDlwActionToThread("start").catch(showError));
+async function bindSelectedTopicToExistingThread(topicInfo = state.status?.selectedTopic) {
+  if (!topicInfo?.topic) return "";
+  if (!state.appThreadsLoaded) await listAppServerThreads();
+  const existing = boundThreadIdForTopic(topicInfo);
+  if (existing && threadLooksLikeDlwWorkThread(existing, topicInfo)) {
+    renderThreadOptions(state.appThreads, existing);
+    loadThreadMessages(existing, { force: true }).catch(showError);
+    return existing;
+  }
+  if (existing) forgetThreadBinding(topicInfo);
+  const threadId = matchingThreadIdByTopicName(state.appThreads, topicInfo);
+  const key = topicThreadKey(topicInfo);
+  if (!threadId) {
+    if (key && !state.missingThreadNotices.has(key)) {
+      state.missingThreadNotices.add(key);
+      appendLog("meta", `No existing DLW thread matched ${topicInfo.topic}; no new thread was created.`);
+    }
+    renderThreadOptions(state.appThreads, null);
+    renderThreadStatus();
+    return "";
+  }
+  bindThreadToTopic(threadId, topicInfo);
+  state.missingThreadNotices.delete(key);
+  renderThreadOptions(state.appThreads, threadId);
+  loadThreadMessages(threadId, { force: true }).catch(showError);
+  appendLog("meta", `Bound existing Codex thread for ${topicInfo.topic}: ${threadId.slice(0, 8)}`);
+  return threadId;
+}
+
+async function importExistingVault() {
+  const previousLabel = els.importVaultBtn.textContent;
+  els.importVaultBtn.disabled = true;
+  els.importVaultBtn.textContent = "Importing...";
+  state.dlwStartupBusy = true;
+  els.appServerState.textContent = "Importing vault...";
+  appendLog("meta", "Choose an existing Deep Survey vault to import.");
+  try {
+    const result = await api("/api/vaults/import", { method: "POST", body: "{}" });
+    if (result.cancelled) {
+      appendLog("meta", "Import cancelled.");
+      return;
+    }
+    state.isCreatingTopic = false;
+    state.selectedVault = result.topic?.vault || result.state?.vault_root || state.selectedVault;
+    await refreshStatus();
+    await bindSelectedTopicToExistingThread(state.status?.selectedTopic || result.topic);
+    appendLog("meta", `Imported vault: ${state.status?.selectedTopic?.topic || result.state?.topic || "existing topic"}`);
+  } finally {
+    state.dlwStartupBusy = false;
+    els.importVaultBtn.disabled = false;
+    els.importVaultBtn.textContent = previousLabel;
+    if (state.status) renderStatus(state.status);
+  }
+}
+
+els.startBtn.addEventListener("click", () => {
+  sendDlwActionToThread("start", {
+    ensureWrite: true,
+    skipSwitchConfirm: true,
+    skipWriteConfirm: true
+  }).catch(showError);
+});
 els.chooseDirectoryBtn.addEventListener("click", () => chooseTopicDirectory().catch(showError));
+els.importVaultBtn.addEventListener("click", () => importExistingVault().catch(showError));
 els.newTopicBtn.addEventListener("click", () => {
   state.isCreatingTopic = true;
   els.topicInput.value = "";
@@ -2037,21 +2389,14 @@ els.refreshBtn.addEventListener("click", async () => {
 els.runTabBtn.addEventListener("click", () => setActiveTab("run"));
 els.vaultTabBtn.addEventListener("click", () => setActiveTab("vault"));
 els.vaultSearch.addEventListener("input", renderVaultFiles);
+els.vaultFiles.tabIndex = 0;
+els.vaultFiles.addEventListener("keydown", handleVaultFileKeydown);
 els.setupRetryBtn.addEventListener("click", () => runSetupCheck({ install: false }).catch(showError));
 els.setupInstallBtn.addEventListener("click", () => runSetupCheck({ install: true }).catch(showError));
 els.codexPill.addEventListener("click", () => {
   if (els.codexPill.classList.contains("actionable")) {
     runSetupCheck({ install: true }).catch(showError);
   }
-});
-els.pluginProbeBtn.addEventListener("click", () => togglePluginHint());
-if (els.pluginProbeRunBtn) {
-  els.pluginProbeRunBtn.addEventListener("click", () => runPluginMentionProbe().catch(showError));
-}
-document.addEventListener("click", (event) => {
-  if (!els.pluginHint || els.pluginHint.classList.contains("hidden")) return;
-  if (event.target.closest(".plugin-control")) return;
-  togglePluginHint(false);
 });
 els.sendThreadBtn.addEventListener("click", () => handleComposerPrimaryAction().catch(showError));
 els.stopThreadBtn.addEventListener("click", () => interruptAppServerThread().catch(showError));

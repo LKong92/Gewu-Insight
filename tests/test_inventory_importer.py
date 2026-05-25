@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paper_monitor.importers.inventory import build_inventory_from_folder, import_library_inventory
+from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from paper_monitor.storage import Storage
 
 
@@ -438,6 +438,40 @@ class InventoryImporterDryRunTests(unittest.TestCase):
             ("10.8888/name",),
         ).fetchone()
         self.assertEqual(row["display_name"], "original-name.pdf")
+
+    def test_dropped_folder_imports_under_selected_library_folder(self) -> None:
+        target = self.storage.create_library_folder(parent_id=1, name="Target")
+        pdf = self.touch("dropped-topic/inside.pdf", b"%PDF fixture")
+        inventory_path = self.root / "dropped-inventory.json"
+        build_inventory_from_paths([self.root / "dropped-topic"], output_path=inventory_path, parse_pdfs=False)
+
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "dropped-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+            library_root_folder_id=int(target["id"]),
+        )
+
+        self.assertFalse(result["errors"])
+        row = self.storage.conn.execute(
+            """
+            SELECT parent.name AS parent_name, parent.parent_id AS parent_parent_id, library_items.display_name
+            FROM library_items
+            JOIN library_folders AS parent ON parent.id = library_items.folder_id
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            WHERE papers.source_path = ?
+            """,
+            (str(pdf.resolve()),),
+        ).fetchone()
+        self.assertEqual(row["parent_name"], "dropped-topic")
+        self.assertEqual(row["parent_parent_id"], int(target["id"]))
+        self.assertEqual(row["display_name"], "inside.pdf")
 
 
 if __name__ == "__main__":

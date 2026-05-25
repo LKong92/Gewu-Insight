@@ -12,6 +12,7 @@
       <aside class="topic-rail">
         <button id="newTopicBtn" class="new-topic-btn">New Topic</button>
         <div id="topicList" class="topic-list"></div>
+        <button id="importVaultBtn" class="import-vault-btn" type="button">Import Vault</button>
       </aside>
 
       <aside class="sidebar">
@@ -171,15 +172,6 @@
                         <option value="write">Allow Edits</option>
                       </select>
                     </div>
-                    <div class="plugin-control">
-                      <button id="pluginProbeBtn" class="probe-button" type="button" aria-haspopup="dialog" aria-expanded="false">Plugin</button>
-                      <div id="pluginHint" class="plugin-hint hidden" role="dialog" aria-label="Plugin mention status">
-                        <div class="plugin-hint-title">Deep Literature Workflow</div>
-                        <div class="plugin-hint-text">DLW controls and the current chat send a structured plugin mention, not just a plain-text hint.</div>
-                        <code>plugin://deep-literature-workflow@deep-research-local</code>
-                        <button id="pluginProbeRunBtn" class="plugin-test-button" type="button">Test Connection</button>
-                      </div>
-                    </div>
                   </div>
                   <div class="composer-actions">
                     <button id="stopThreadBtn" class="stop-button" type="button" disabled>Stop</button>
@@ -214,6 +206,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-    <script src="/app.js?v=setup-pill" ></script>
+    <script src="/app.js?v=import-existing-vaults" ></script>
   </body>
 </html>

@@ -43,7 +43,7 @@ from .config import (
 )
 from .download import download_paper
 from .http import request_with_retries
-from .importers.inventory import ImportCancelled, build_inventory_from_folder, import_library_inventory
+from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
@@ -511,6 +511,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/import-folder/delete":
                 self.handle_delete_library_import_folder_job(payload)
+                return
+            if parsed.path == "/api/library/import-paths":
+                self.handle_library_import_paths(payload)
                 return
             if parsed.path == "/api/library/import-folder":
                 self.handle_library_import_folder(payload)
@@ -1406,6 +1409,68 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     storage=storage,
                     report_path=report_path,
                     library_item_name="filename",
+                )
+                snapshot = library_snapshot(storage)
+            finally:
+                storage.close()
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            return
+        self.send_json({"import_result": summarize_import_result(result), "inventory_path": str(inventory_path), **snapshot})
+
+    def handle_library_import_paths(self, payload: dict[str, Any]) -> None:
+        raw_paths = payload.get("paths")
+        if not isinstance(raw_paths, list) or not raw_paths:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paths must be a non-empty list")
+            return
+        copy_mode = str(payload.get("copy_mode") or "copy")
+        if copy_mode not in {"copy", "link"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
+            return
+        try:
+            target_folder_id = int(payload.get("target_folder_id") or 1)
+        except (TypeError, ValueError):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "target_folder_id must be a Library folder id")
+            return
+
+        paths: list[Path] = []
+        for raw_path in raw_paths:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            try:
+                path = Path(raw_path).expanduser().resolve()
+            except OSError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve dropped path: {exc}")
+                return
+            if not path.exists():
+                self.send_error_json(HTTPStatus.BAD_REQUEST, f"Dropped path does not exist: {path}")
+                return
+            paths.append(path)
+        if not paths:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "No readable dropped paths")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        slug = safe_slug(paths[0].name or "finder-drop", 60)
+        inventory_path = ROOT / "reports" / "imports" / f"finder-drop-inventory-{slug}-{timestamp}.json"
+        report_path = ROOT / "reports" / "imports" / f"finder-drop-import-{slug}-{timestamp}.json"
+        try:
+            build_inventory_from_paths(paths, output_path=inventory_path, parse_pdfs=True)
+            storage = Storage(self.configured_db_path)
+            try:
+                if not storage.get_library_folder(target_folder_id):
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library folder does not exist")
+                    return
+                result = import_library_inventory(
+                    inventory_path,
+                    copy_mode=copy_mode,
+                    preserve_folders=True,
+                    dedupe_by=("doi", "arxiv", "path"),
+                    dry_run=False,
+                    storage=storage,
+                    report_path=report_path,
+                    library_item_name="filename",
+                    library_root_folder_id=target_folder_id,
                 )
                 snapshot = library_snapshot(storage)
             finally:
@@ -9969,6 +10034,70 @@ INDEX_HTML = """<!doctype html>
       font-size: 13px;
     }
     .library-tab-context-menu button:hover { background: #eef2f7; }
+    .finder-drop-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 300;
+      background: rgba(15, 23, 42, 0.22);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .finder-drop-modal {
+      width: min(440px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+      padding: 16px;
+      color: var(--ink);
+    }
+    .finder-drop-modal h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .finder-drop-modal p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .finder-drop-paths {
+      max-height: 112px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 8px;
+      color: #475467;
+      font-size: 12px;
+      line-height: 1.35;
+      word-break: break-all;
+    }
+    .finder-drop-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .finder-drop-actions button {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .finder-drop-actions button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
     .library-column-body {
       min-height: 0;
       overflow-y: auto;
@@ -9996,6 +10125,10 @@ INDEX_HTML = """<!doctype html>
     .library-row.active { background: #e8f3f4; border-color: #b7dadd; }
     .library-row.path-parent { background: #f3f4f6; border-color: #e5e7eb; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
+    .library-shell.finder-drag-over .library-columns {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 2px rgba(20, 184, 166, 0.18);
+    }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-row.special-folder { color: #667085; }
@@ -13711,6 +13844,100 @@ INDEX_HTML = """<!doctype html>
         return JSON.parse(text);
       } catch (error) {
         return {error: text};
+      }
+    }
+
+    async function handleNativeFinderDrop(paths) {
+      const droppedPaths = Array.isArray(paths)
+        ? paths.filter((path) => typeof path === "string" && path.trim())
+        : [];
+      if (!droppedPaths.length) return;
+      if (state.mode !== "library") {
+        renderLibrary();
+      }
+      if (state.libraryTab === "my-publications" || state.libraryTab === "loader") {
+        state.libraryTab = "library";
+        renderLibrary();
+      }
+      const targetFolderId = libraryPasteTargetFolderId();
+      const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
+      const choice = await promptFinderDropMode(droppedPaths, targetFolder?.name || "Library");
+      if (!choice) return;
+      await importFinderDropPaths(droppedPaths, choice, targetFolderId);
+    }
+
+    function promptFinderDropMode(paths, targetName) {
+      return new Promise((resolve) => {
+        document.querySelector(".finder-drop-modal-backdrop")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.className = "finder-drop-modal-backdrop";
+        const count = paths.length;
+        const pathPreview = paths.slice(0, 5).map((path) => `<div>${escapeHtml(path)}</div>`).join("");
+        const more = count > 5 ? `<div>...and ${count - 5} more</div>` : "";
+        backdrop.innerHTML = `
+          <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="finderDropTitle">
+            <h2 id="finderDropTitle">Import into ${escapeHtml(targetName)}</h2>
+            <p>Choose whether Daiqo should copy the original files into Library storage, or keep links to the files in their current Finder location.</p>
+            <div class="finder-drop-paths">${pathPreview}${more}</div>
+            <div class="finder-drop-actions">
+              <button type="button" data-mode="cancel">Cancel</button>
+              <button type="button" data-mode="link">Import Links</button>
+              <button type="button" class="primary" data-mode="copy">Copy Originals</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(backdrop);
+        const finish = (mode) => {
+          backdrop.remove();
+          window.removeEventListener("keydown", onKeyDown);
+          resolve(mode === "copy" || mode === "link" ? mode : "");
+        };
+        const onKeyDown = (event) => {
+          if (event.key === "Escape") finish("");
+        };
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) finish("");
+        });
+        backdrop.querySelectorAll("[data-mode]").forEach((button) => {
+          button.addEventListener("click", () => finish(button.dataset.mode || ""));
+        });
+        window.addEventListener("keydown", onKeyDown);
+        backdrop.querySelector(".primary")?.focus({preventScroll: true});
+      });
+    }
+
+    async function importFinderDropPaths(paths, copyMode, targetFolderId) {
+      stopLibraryImportPolling();
+      state.libraryImportBusy = true;
+      state.libraryImportCopyMode = copyMode;
+      state.libraryImportStatus = `Importing ${paths.length} dropped item${paths.length === 1 ? "" : "s"} into Library...`;
+      state.libraryImportLastResult = null;
+      appendLibraryImportLog(state.libraryImportStatus, "info");
+      updateToolbarLibraryImport();
+      try {
+        const res = await fetch("/api/library/import-paths", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paths, copy_mode: copyMode, target_folder_id: targetFolderId})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not import dropped files");
+        applyLibrarySnapshot(data);
+        state.libraryImportBusy = false;
+        state.libraryImportLastResult = data.import_result || null;
+        const result = state.libraryImportLastResult || {};
+        state.libraryImportStatus = result.errors?.length
+          ? result.errors[0]
+          : `Imported ${result.created_papers || 0} papers, updated ${result.updated_papers || 0}, added ${result.created_resources || 0} resources.`;
+        appendLibraryImportLog(state.libraryImportStatus, result.errors?.length ? "error" : "done");
+        state.libraryTab = "library";
+        focusLibraryFolder(targetFolderId);
+      } catch (error) {
+        state.libraryImportBusy = false;
+        state.libraryImportStatus = error.message || "Could not import dropped files";
+        state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
+        appendLibraryImportLog(state.libraryImportStatus, "error");
+        updateToolbarLibraryImport();
       }
     }
 
@@ -18597,12 +18824,22 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") resizeLibraryViewport();
     });
     window.addEventListener("dragover", (event) => {
-      if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      if (!event.dataTransfer?.types?.includes("Files")) return;
+      event.preventDefault();
+      if (state.mode === "library") $("libraryShell")?.classList.add("finder-drag-over");
+    });
+    window.addEventListener("dragleave", (event) => {
+      if (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight) {
+        $("libraryShell")?.classList.remove("finder-drag-over");
+      }
     });
     window.addEventListener("drop", (event) => {
-      if (event.dataTransfer?.types?.includes("Files")) event.preventDefault();
+      if (!event.dataTransfer?.types?.includes("Files")) return;
+      event.preventDefault();
+      $("libraryShell")?.classList.remove("finder-drag-over");
     });
     wireWindowDragRegion();
+    window.handleNativeFinderDrop = handleNativeFinderDrop;
     window.openCitationSettings = openCitationSettings;
 
     Promise.resolve().then(loadLibrary).catch((error) => {
