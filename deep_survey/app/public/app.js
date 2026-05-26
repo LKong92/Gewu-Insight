@@ -31,7 +31,9 @@ const state = {
   topicRenameDialog: null,
   topicPointerDrag: null,
   topicDragGhost: null,
-  suppressTopicClick: false
+  suppressTopicClick: false,
+  topicOrder: [],
+  topicOrderSaveTimer: null
 };
 
 const els = {
@@ -226,7 +228,7 @@ function saveTopicThreadBindings() {
   localStorage.setItem(threadPreferenceKeys.bindings, JSON.stringify(state.topicThreadBindings));
 }
 
-function loadTopicOrder() {
+function loadLocalTopicOrder() {
   try {
     const order = JSON.parse(localStorage.getItem(threadPreferenceKeys.topicOrder) || "[]");
     return Array.isArray(order) ? order : [];
@@ -235,8 +237,25 @@ function loadTopicOrder() {
   }
 }
 
-function saveTopicOrder(order) {
+function loadTopicOrder() {
+  return state.topicOrder.length ? state.topicOrder : loadLocalTopicOrder();
+}
+
+function persistTopicOrderToServer(order) {
+  if (state.topicOrderSaveTimer) clearTimeout(state.topicOrderSaveTimer);
+  state.topicOrderSaveTimer = setTimeout(() => {
+    state.topicOrderSaveTimer = null;
+    api("/api/preferences/topic-order", {
+      method: "POST",
+      body: JSON.stringify({ topicOrder: order })
+    }).catch(showError);
+  }, 150);
+}
+
+function saveTopicOrder(order, options = {}) {
+  state.topicOrder = order;
   localStorage.setItem(threadPreferenceKeys.topicOrder, JSON.stringify(order));
+  if (options.persist !== false) persistTopicOrderToServer(order);
 }
 
 function orderedTopics(topics) {
@@ -303,6 +322,14 @@ async function refreshStatus() {
   const status = await api(`/api/status${query}`);
   state.status = status;
   state.selectedVault = status.selectedTopic?.vault || state.selectedVault;
+  const serverTopicOrder = Array.isArray(status.topicOrder) ? status.topicOrder : [];
+  if (serverTopicOrder.length) {
+    saveTopicOrder(serverTopicOrder, { persist: false });
+  } else {
+    const localTopicOrder = loadLocalTopicOrder();
+    state.topicOrder = localTopicOrder;
+    if (localTopicOrder.length) saveTopicOrder(localTopicOrder);
+  }
   if (!state.selectedVault && !(status.topics || []).length) state.isCreatingTopic = true;
   renderStatus(status);
 }
@@ -1716,16 +1743,16 @@ function threadLooksLikeDlwWorkThread(threadId, topicInfo = state.status?.select
   if (!threadId) return false;
   const thread = state.appThreads.find((item) => item.id === threadId);
   if (!thread) return state.appThreads.length === 0;
-  const name = String(thread.name || "");
-  if (!name.toLowerCase().startsWith("dlw:")) return false;
   const text = `${thread.name || ""}\n${thread.preview || ""}`.toLowerCase();
   if (text.includes("probe") || text.includes("mention spike")) return false;
-  const vault = (topicInfo?.vault || "").toLowerCase();
-  if (vault && !vault.includes("_obsidian_workflow") && text.includes("_obsidian_workflow")) return false;
+  const looksDlw = text.includes("dlw") || text.includes("deep literature workflow");
+  if (!looksDlw) return false;
   const topic = (topicInfo?.topic || fallbackTopic || "").toLowerCase();
   const zhName = topic.split("/")[0]?.trim();
   const enName = topic.split("/")[1]?.trim();
-  const candidates = [topic, zhName, enName].filter(Boolean);
+  const vault = (topicInfo?.vault || "").toLowerCase();
+  const vaultBase = vault.replace(/_obsidian_workflow$/i, "").replace(/_survay$/i, "").replace(/[-_]+/g, " ").trim();
+  const candidates = [topic, zhName, enName, vault, vaultBase].filter(Boolean);
   if (!candidates.length) return true;
   return candidates.some((candidate) => text.includes(candidate));
 }
@@ -1733,7 +1760,9 @@ function threadLooksLikeDlwWorkThread(threadId, topicInfo = state.status?.select
 async function listAppServerThreads(selectedId = null) {
   connectAppServerEvents();
   els.appServerState.textContent = "Listing...";
-  const result = await api("/api/appserver/threads?limit=20");
+  const params = new URLSearchParams({ limit: "100" });
+  if (state.status?.selectedTopic?.vault) params.set("vault", state.status.selectedTopic.vault);
+  const result = await api(`/api/appserver/threads?${params}`);
   state.appThreads = result.threads || [];
   state.appThreadsLoaded = true;
   for (const thread of state.appThreads) {

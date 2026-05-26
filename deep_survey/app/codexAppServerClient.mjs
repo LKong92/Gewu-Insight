@@ -128,10 +128,10 @@ export class CodexAppServerClient extends EventEmitter {
     });
   }
 
-  async listThreads({ limit = 20 } = {}) {
+  async listThreads({ limit = 20, cwd = this.cwd } = {}) {
     await this.ensureStarted();
     return this.request("thread/list", {
-      cwd: this.cwd,
+      cwd,
       archived: false,
       limit,
       sourceKinds: [],

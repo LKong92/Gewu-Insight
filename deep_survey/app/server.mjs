@@ -18,6 +18,7 @@ const codexDlwPluginCacheDir = path.join(codexHome, "plugins/cache/deep-research
 const codexSkillsDir = path.join(codexHome, "skills");
 const dlwScript = path.join(workspaceRoot, "plugins/deep-literature-workflow/scripts/dlw.py");
 const statePath = path.join(workspaceRoot, ".deep-literature-workflow/state.json");
+const appPreferencesPath = path.join(workspaceRoot, ".deep-literature-workflow/app-preferences.json");
 const rootProjectStatePath = path.join(workspaceRoot, "PROJECT_STATE.md");
 const runs = new Map();
 const appServerEvents = [];
@@ -141,6 +142,19 @@ async function readJsonIfExists(filePath) {
     if (error.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function readAppPreferences() {
+  const preferences = await readJsonIfExists(appPreferencesPath);
+  return preferences && typeof preferences === "object" ? preferences : {};
+}
+
+async function writeAppPreferences(patch) {
+  const current = await readAppPreferences();
+  const next = { ...current, ...patch };
+  await mkdir(path.dirname(appPreferencesPath), { recursive: true });
+  await writeFile(appPreferencesPath, JSON.stringify(next, null, 2) + "\n", "utf8");
+  return next;
 }
 
 async function pathExists(filePath) {
@@ -373,7 +387,10 @@ async function getStatus() {
       }
     })
   );
-  const topics = await readTopicIndex(workflowState);
+  const [topics, appPreferences] = await Promise.all([
+    readTopicIndex(workflowState),
+    readAppPreferences()
+  ]);
 
   const dlwOk = Boolean(existsSync(dlwScript));
 
@@ -392,6 +409,7 @@ async function getStatus() {
     },
     state: workflowState,
     topics,
+    topicOrder: Array.isArray(appPreferences.topicOrder) ? appPreferences.topicOrder : [],
     stages: stages.map(([id, label]) => {
       const rawStatus = workflowState?.stage_status?.[id] ?? "pending";
       const isActive = workflowState?.current_stage === id && rawStatus !== "done";
@@ -1447,6 +1465,20 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === "POST" && url.pathname === "/api/preferences/topic-order") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const topicOrder = Array.isArray(body.topicOrder)
+        ? body.topicOrder.filter((vault) => typeof vault === "string" && vault.trim()).map((vault) => vault.trim())
+        : null;
+      if (!topicOrder) return badRequest(res, "topicOrder must be an array.");
+      const preferences = await writeAppPreferences({ topicOrder });
+      return json(res, 200, { ok: true, topicOrder: preferences.topicOrder });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
   if (req.method === "GET" && url.pathname === "/api/vault/files") {
     const vault = url.searchParams.get("vault");
     const root = safeVaultRoot(vault);
@@ -1470,15 +1502,36 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/appserver/threads") {
     try {
-      const result = await codexAppServer.listThreads({ limit: Number(url.searchParams.get("limit") || 20) });
-      const threads = (result?.data || []).map((thread) => {
-        const normalized = normalizeThread(thread);
-        return { ...normalized, appStatus: appServerStatusSnapshot(normalized.id) };
-      });
+      const limit = Number(url.searchParams.get("limit") || 20);
+      const vaultRoot = safeVaultRoot(url.searchParams.get("vault"));
+      const cwdCandidates = [workspaceRoot];
+      if (vaultRoot) {
+        cwdCandidates.push(vaultRoot, path.dirname(vaultRoot));
+      }
+      const threadsById = new Map();
+      let cursor = null;
+      const errors = [];
+      for (const cwd of [...new Set(cwdCandidates.filter(Boolean))]) {
+        try {
+          const result = await codexAppServer.listThreads({ limit, cwd });
+          if (!cursor && result?.cursor) cursor = result.cursor;
+          for (const thread of result?.data || []) {
+            const normalized = normalizeThread(thread);
+            if (!normalized.id || threadsById.has(normalized.id)) continue;
+            threadsById.set(normalized.id, { ...normalized, appStatus: appServerStatusSnapshot(normalized.id) });
+          }
+        } catch (error) {
+          errors.push(`${cwd}: ${error.message || String(error)}`);
+        }
+      }
+      if (!threadsById.size && errors.length) {
+        return json(res, 500, { ok: false, error: errors.join("; ") });
+      }
       return json(res, 200, {
         ok: true,
-        threads,
-        cursor: result?.cursor || null
+        threads: [...threadsById.values()],
+        cursor,
+        errors
       });
     } catch (error) {
       return json(res, 500, { ok: false, error: error.message || String(error) });
