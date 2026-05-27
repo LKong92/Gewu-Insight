@@ -525,6 +525,13 @@ textarea {
   font-weight: 850;
 }
 
+.confirm-dialog-text {
+  white-space: pre-wrap;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .topic-rename-dialog-input {
   width: 100%;
   min-height: 42px;
@@ -560,6 +567,15 @@ textarea {
   color: var(--bg);
 }
 
+.topic-rename-actions button.danger-action {
+  background: #fff2f0;
+  color: var(--danger);
+}
+
+.topic-rename-actions button.danger-action:hover:not(:disabled) {
+  background: #ffe3df;
+}
+
 .timeline {
   display: grid;
   gap: 6px;
@@ -591,6 +607,10 @@ textarea {
   background: var(--danger);
 }
 
+.stage-row.paused .stage-dot {
+  background: var(--warn);
+}
+
 .stage-row.active {
   border-color: transparent;
   background: var(--bg);
@@ -600,6 +620,11 @@ textarea {
   border-radius: 8px;
   animation: stage-running-pulse 1.6s ease-in-out infinite;
   animation-delay: 0s;
+}
+
+.stage-row.paused {
+  border-radius: 8px;
+  background: rgba(165, 93, 18, 0.04);
 }
 
 .stage-row.running .stage-dot {
@@ -1675,6 +1700,9 @@ textarea {
 .vault-preview .md-link {
   color: var(--accent-strong);
   font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 .vault-preview .math-inline {

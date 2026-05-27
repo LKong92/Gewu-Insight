@@ -1,7 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface DaiqoWebView : WKWebView <NSDraggingDestination>
+@interface DaiqoWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
+@property(nonatomic, copy) NSString *nativeDragPath;
+@property(nonatomic, copy) NSString *nativeDragName;
 @end
 
 @implementation DaiqoWebView
@@ -41,6 +43,40 @@
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@)", json ?: @"[]"];
     [self evaluateJavaScript:script completionHandler:nil];
+    return YES;
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    if (self.nativeDragPath.length > 0) {
+        NSString *path = self.nativeDragPath;
+        self.nativeDragPath = nil;
+        self.nativeDragName = nil;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            NSURL *fileURL = [NSURL fileURLWithPath:path];
+            NSDraggingItem *draggingItem = [[NSDraggingItem alloc] initWithPasteboardWriter:fileURL];
+            NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:path];
+            icon.size = NSMakeSize(48, 48);
+            NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+            NSRect frame = NSMakeRect(point.x - 24, point.y - 24, 48, 48);
+            [draggingItem setDraggingFrame:frame contents:icon];
+            [self beginDraggingSessionWithItems:@[draggingItem] event:event source:self];
+            return;
+        }
+    }
+    [super mouseDragged:event];
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    self.nativeDragPath = nil;
+    self.nativeDragName = nil;
+    [super mouseUp:event];
+}
+
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    return NSDragOperationCopy;
+}
+
+- (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session {
     return YES;
 }
 
@@ -119,6 +155,7 @@
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
+    [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
     configuration.userContentController = userContentController;
     self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -155,6 +192,18 @@
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
         [self.loaderWindow orderOut:nil];
+        return;
+    }
+    if ([message.name isEqualToString:@"nativeFileDrag"]) {
+        if (![message.body isKindOfClass:[NSDictionary class]] || ![self.webView isKindOfClass:[DaiqoWebView class]]) {
+            return;
+        }
+        NSDictionary *payload = (NSDictionary *)message.body;
+        NSString *path = [payload[@"path"] isKindOfClass:[NSString class]] ? payload[@"path"] : @"";
+        NSString *name = [payload[@"name"] isKindOfClass:[NSString class]] ? payload[@"name"] : @"";
+        DaiqoWebView *webView = (DaiqoWebView *)self.webView;
+        webView.nativeDragPath = path;
+        webView.nativeDragName = name;
         return;
     }
     if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {

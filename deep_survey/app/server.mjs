@@ -62,10 +62,14 @@ const dlwPluginMention = {
   name: "Deep Literature Workflow"
 };
 const stage3DownloadProcessMarkers = [
+  "chrome-literature-downloader",
   "/chrome-literature-downloader/scripts/download_literature_chrome.py",
   "/chrome-literature-downloader/scripts/batch_download_literature_chrome.py",
+  "download_literature_chrome",
+  "batch_download_literature_chrome",
   "download_literature_chrome.py",
   "batch_download_literature_chrome.py",
+  "stage3_fetch",
   "stage3_fetch_pdfs_and_upgrade_notes.py",
   "stage2_deep_reading_queue",
   "08_stage3_pdf_inventory",
@@ -113,6 +117,23 @@ function normalizeReasoningEffort(effort) {
 
 function sandboxForMode(mode) {
   return mode === "read" ? "read-only" : codexSandbox;
+}
+
+function externalUrlAllowed(url) {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:", "mailto:"].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalUrl(url) {
+  if (!externalUrlAllowed(url)) {
+    return { ok: false, error: "Only http, https, and mailto links can be opened." };
+  }
+  const result = await execFileText("open", [url], { cwd: workspaceRoot });
+  return { ok: result.ok, url, error: result.stderr.trim() || result.error };
 }
 
 function forbidden(res, message) {
@@ -299,36 +320,146 @@ function isStage3DownloadCommand(command) {
   return stage3DownloadProcessMarkers.some((marker) => command.includes(marker));
 }
 
-async function listStage3DownloadProcesses() {
-  const result = await execFileText("ps", ["-axo", "pid=,command="], { cwd: workspaceRoot });
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runningStageForDlwAction(action) {
+  if (action === "start") return "stage_1_discovery";
+  if (action === "stage3" || action === "importManual") return "stage_3_pdf_acquisition";
+  return null;
+}
+
+function statusLooksLikeStage3(status = {}) {
+  return (
+    status.runningStage === "stage_3_pdf_acquisition" ||
+    status.dlwAction === "stage3" ||
+    status.dlwAction === "importManual"
+  );
+}
+
+async function listSystemProcessTree() {
+  const result = await execFileText("ps", ["-axo", "pid=,ppid=,command="], { cwd: workspaceRoot });
   if (!result.ok) return [];
   return result.stdout
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const match = line.match(/^(\d+)\s+(.+)$/);
+      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
       if (!match) return null;
-      return { pid: Number(match[1]), command: match[2] };
+      return { pid: Number(match[1]), ppid: Number(match[2]), command: match[3] };
     })
-    .filter((item) => item && item.pid !== process.pid && isStage3DownloadCommand(item.command));
+    .filter((item) => item && item.pid !== process.pid);
+}
+
+async function listStage3DownloadProcesses() {
+  const processes = await listSystemProcessTree();
+  const byParent = new Map();
+  for (const item of processes) {
+    const siblings = byParent.get(item.ppid) || [];
+    siblings.push(item);
+    byParent.set(item.ppid, siblings);
+  }
+  const selected = new Map();
+  const addTree = (item, reason) => {
+    if (!item || selected.has(item.pid)) return;
+    selected.set(item.pid, { ...item, reason });
+    for (const child of byParent.get(item.pid) || []) {
+      addTree(child, reason === "matched" ? "child" : reason);
+    }
+  };
+  for (const item of processes) {
+    if (isStage3DownloadCommand(item.command)) addTree(item, "matched");
+  }
+  return [...selected.values()].sort((a, b) => a.pid - b.pid);
 }
 
 async function cancelStage3DownloadProcesses() {
   const processes = await listStage3DownloadProcesses();
   const killed = [];
+  const forceKilled = [];
   const failed = [];
-  for (const item of processes) {
-    try {
-      process.kill(item.pid, "SIGTERM");
-      killed.push(item);
-    } catch (error) {
-      if (error.code !== "ESRCH") {
-        failed.push({ ...item, error: error.message || String(error) });
+  const signalProcesses = (items, signal, target) => {
+    for (const item of items) {
+      try {
+        process.kill(item.pid, signal);
+        target.push(item);
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          failed.push({ ...item, signal, error: error.message || String(error) });
+        }
       }
     }
+  };
+  signalProcesses(processes, "SIGTERM", killed);
+  if (processes.length) await wait(1200);
+  const remaining = await listStage3DownloadProcesses();
+  const remainingKilledByTerm = remaining.filter((item) => killed.some((killedItem) => killedItem.pid === item.pid));
+  if (remainingKilledByTerm.length) {
+    signalProcesses(remainingKilledByTerm, "SIGKILL", forceKilled);
+    if (remainingKilledByTerm.length) await wait(300);
   }
-  return { killed, failed, count: killed.length };
+  const stillRunning = await listStage3DownloadProcesses();
+  return { killed, forceKilled, failed, remaining: stillRunning, count: killed.length + forceKilled.length };
+}
+
+async function processTreeForPid(rootPid) {
+  if (!rootPid) return [];
+  const processes = await listSystemProcessTree();
+  const byParent = new Map();
+  for (const item of processes) {
+    const siblings = byParent.get(item.ppid) || [];
+    siblings.push(item);
+    byParent.set(item.ppid, siblings);
+  }
+  const selected = new Map();
+  const addTree = (item, depth = 0) => {
+    if (!item || selected.has(item.pid)) return;
+    selected.set(item.pid, { ...item, depth });
+    for (const child of byParent.get(item.pid) || []) addTree(child, depth + 1);
+  };
+  addTree(processes.find((item) => item.pid === rootPid) || { pid: rootPid, ppid: 0, command: "run process" });
+  return [...selected.values()].sort((a, b) => b.depth - a.depth || b.pid - a.pid);
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function cancelRunProcessTree(run) {
+  const rootPid = run?.child?.pid;
+  if (!rootPid) return { killed: [], forceKilled: [], failed: [], remaining: [], count: 0 };
+  const processes = await processTreeForPid(rootPid);
+  const killed = [];
+  const forceKilled = [];
+  const failed = [];
+  const signalProcesses = (items, signal, target) => {
+    for (const item of items) {
+      try {
+        process.kill(item.pid, signal);
+        target.push(item);
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          failed.push({ ...item, signal, error: error.message || String(error) });
+        }
+      }
+    }
+  };
+  signalProcesses(processes, "SIGTERM", killed);
+  if (processes.length) await wait(1200);
+  const remainingAfterTerm = processes.filter((item) => processIsAlive(item.pid));
+  if (remainingAfterTerm.length) {
+    signalProcesses(remainingAfterTerm, "SIGKILL", forceKilled);
+    await wait(300);
+  }
+  const remaining = processes.filter((item) => processIsAlive(item.pid));
+  return { killed, forceKilled, failed, remaining, count: killed.length + forceKilled.length };
 }
 
 function runLooksLikeStage3(run) {
@@ -342,12 +473,13 @@ function runLooksLikeStage3(run) {
 }
 
 async function getStatus() {
-  const [codexVersion, nodeVersion, dlwStatus] = await Promise.all([
+  const [codexVersion, nodeVersion, dlwStatus, stage3DownloadProcesses] = await Promise.all([
     execFileText("codex", ["--version"], { cwd: workspaceRoot }),
     Promise.resolve({ ok: true, stdout: process.version }),
     existsSync(dlwScript)
       ? execFileText("python3", [dlwScript, "status"], { cwd: workspaceRoot })
-      : Promise.resolve({ ok: false, stdout: "", stderr: "dlw.py not found" })
+      : Promise.resolve({ ok: false, stdout: "", stderr: "dlw.py not found" }),
+    listStage3DownloadProcesses()
   ]);
 
   let workflowState = await readJsonIfExists(statePath);
@@ -410,6 +542,7 @@ async function getStatus() {
     state: workflowState,
     topics,
     topicOrder: Array.isArray(appPreferences.topicOrder) ? appPreferences.topicOrder : [],
+    selectedVault: typeof appPreferences.selectedVault === "string" ? appPreferences.selectedVault : "",
     stages: stages.map(([id, label]) => {
       const rawStatus = workflowState?.stage_status?.[id] ?? "pending";
       const isActive = workflowState?.current_stage === id && rawStatus !== "done";
@@ -428,6 +561,10 @@ async function getStatus() {
       manualQueue: manualQueuePath
     },
     manualPdfCount: workflowState?.manual_pdf_queue?.length ?? 0,
+    stage3Downloads: {
+      count: stage3DownloadProcesses.length,
+      processes: stage3DownloadProcesses.map((item) => ({ pid: item.pid, command: item.command }))
+    },
     nextStage: inferNextStage(workflowState?.stage_status)
   };
 }
@@ -555,6 +692,21 @@ async function readVaultMarkdown(vault, relativePath) {
   } catch (error) {
     return { error: error.message || String(error), status: 404 };
   }
+}
+
+async function openVaultPath(vault, relativePath) {
+  const root = safeVaultRoot(vault);
+  if (!root) return { error: "Invalid vault path", status: 403 };
+  if (!relativePath || relativePath.includes("..") || path.isAbsolute(relativePath)) {
+    return { error: "Invalid file path", status: 403 };
+  }
+  const resolved = path.resolve(root, relativePath);
+  if (!resolved.startsWith(`${root}${path.sep}`)) {
+    return { error: "Path escapes vault", status: 403 };
+  }
+  if (!(await pathExists(resolved))) return { error: "Linked file not found", status: 404 };
+  const result = await execFileText("open", [resolved], { cwd: workspaceRoot });
+  return { ok: result.ok, path: resolved, error: result.stderr.trim() || result.error };
 }
 
 async function readTopicIndex(workflowState) {
@@ -1093,6 +1245,8 @@ function updateAppServerThreadStatusFromNotification(message) {
     updateAppServerThreadStatus(threadId, {
       status: params.turn?.status?.type || "completed",
       turnId,
+      runningStage: null,
+      dlwAction: null,
       summary: `Turn completed ${turnId || ""}`.trim()
     });
   } else if (method === "thread/status/changed") {
@@ -1101,6 +1255,9 @@ function updateAppServerThreadStatusFromNotification(message) {
     }
     updateAppServerThreadStatus(threadId, {
       threadStatus: params.status,
+      ...(params.status?.type && ["idle", "completed", "interrupted", "failed"].includes(params.status.type)
+        ? { runningStage: null, dlwAction: null }
+        : {}),
       summary: `Thread status: ${params.status?.type || params.status || "changed"}`
     });
   }
@@ -1203,6 +1360,7 @@ function startCodexRun({ title, prompt, sandbox = "workspace-write" }) {
     events: [],
     clients: new Set(),
     child: null,
+    cancelRequested: false,
     stdoutBuffer: "",
     stderrBuffer: ""
   };
@@ -1275,7 +1433,7 @@ function startCodexRun({ title, prompt, sandbox = "workspace-write" }) {
     if (run.stderrBuffer.trim()) {
       addRunEvent(run, "log", { stream: "stderr", message: run.stderrBuffer.trim() });
     }
-    run.status = code === 0 ? "complete" : "failed";
+    run.status = run.cancelRequested ? "cancelled" : code === 0 ? "complete" : "failed";
     run.finishedAt = new Date().toISOString();
     run.child = null;
     addRunEvent(run, "done", { status: run.status, code, signal });
@@ -1395,9 +1553,12 @@ function findDeepLiteratureSkill(skillsResult) {
 async function handleApi(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/status") {
     const status = await getStatus();
-    const selected = buildSelectedTopic(status.state, status.topics, url.searchParams.get("vault"));
+    const requestedVault = url.searchParams.get("vault");
+    const orderedFallbackVault = (status.topicOrder || []).find((vault) => status.topics.some((topic) => topic.vault === vault)) || "";
+    const selected = buildSelectedTopic(status.state, status.topics, requestedVault || status.selectedVault || orderedFallbackVault);
     return json(res, 200, {
       ...status,
+      selectedVault: selected.vault || requestedVault || status.selectedVault || "",
       selectedTopic: selected
     });
   }
@@ -1479,6 +1640,30 @@ async function handleApi(req, res, url) {
     }
   }
 
+  if (req.method === "POST" && url.pathname === "/api/preferences/selected-vault") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const selectedVault = typeof body.selectedVault === "string" ? body.selectedVault.trim() : "";
+      if (selectedVault && !safeVaultRoot(selectedVault)) return badRequest(res, "selectedVault is invalid.");
+      const preferences = await writeAppPreferences({ selectedVault });
+      return json(res, 200, { ok: true, selectedVault: preferences.selectedVault || "" });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/open-url") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const targetUrl = typeof body.url === "string" ? body.url.trim() : "";
+      const result = await openExternalUrl(targetUrl);
+      if (!result.ok) return json(res, 400, { ok: false, error: result.error || "Could not open URL." });
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
   if (req.method === "GET" && url.pathname === "/api/vault/files") {
     const vault = url.searchParams.get("vault");
     const root = safeVaultRoot(vault);
@@ -1498,6 +1683,17 @@ async function handleApi(req, res, url) {
     );
     if (result.error) return json(res, result.status || 500, { error: result.error });
     return json(res, 200, result);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/vault/open-path") {
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const result = await openVaultPath(body.vault, body.path);
+      if (result.error) return json(res, result.status || 500, { ok: false, error: result.error });
+      return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
   }
 
   if (req.method === "GET" && url.pathname === "/api/appserver/threads") {
@@ -1650,6 +1846,8 @@ async function handleApi(req, res, url) {
       const status = updateAppServerThreadStatus(threadId, {
         status: "running",
         turnId: result?.turn?.id || null,
+        runningStage: null,
+        dlwAction: null,
         summary: `Running turn ${result?.turn?.id || ""}`.trim()
       });
       addAppServerEvent("appserver", {
@@ -1704,6 +1902,8 @@ async function handleApi(req, res, url) {
       const status = updateAppServerThreadStatus(threadId, {
         status: "running",
         turnId: result?.turn?.id || null,
+        runningStage: runningStageForDlwAction(action),
+        dlwAction: action,
         summary: `DLW ${action} ${result?.turn?.id || ""}`.trim()
       });
       addAppServerEvent("appserver", {
@@ -1729,16 +1929,23 @@ async function handleApi(req, res, url) {
     const currentStatus = appServerStatusSnapshot(threadId);
     const turnId = body.turnId || currentStatus.turnId;
     if (!turnId) return badRequest(res, "No running turn is known for this thread.");
+    const shouldCancelStage3Downloads = Boolean(body.cancelStage3Downloads || statusLooksLikeStage3(currentStatus));
+    let stage3Downloads = null;
     try {
       updateAppServerThreadStatus(threadId, {
         status: "stopping",
         turnId,
         summary: `Stopping turn ${turnId}`
       });
+      if (shouldCancelStage3Downloads) {
+        stage3Downloads = await cancelStage3DownloadProcesses();
+      }
       const result = await codexAppServer.interruptTurn({ threadId, turnId });
       const status = updateAppServerThreadStatus(threadId, {
         status: "interrupted",
         turnId,
+        runningStage: null,
+        dlwAction: null,
         summary: `Interrupted turn ${turnId}`
       });
       addAppServerEvent("appserver", {
@@ -1746,9 +1953,10 @@ async function handleApi(req, res, url) {
         summary: `Interrupted turn: ${turnId}`,
         threadId,
         turnId,
-        status
+        status,
+        stage3Downloads
       });
-      return json(res, 200, { ok: true, status, raw: result });
+      return json(res, 200, { ok: true, status, stage3Downloads, raw: result });
     } catch (error) {
       const status = updateAppServerThreadStatus(threadId, {
         status: "interrupt_failed",
@@ -1824,9 +2032,18 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && cancelMatch) {
     const run = runs.get(cancelMatch[1]);
     if (!run) return notFound(res);
+    let processTree = null;
     if (run.child) {
-      run.child.kill("SIGTERM");
-      addRunEvent(run, "meta", { message: "Cancellation requested." });
+      run.cancelRequested = true;
+      run.status = "cancelling";
+      processTree = await cancelRunProcessTree(run);
+      addRunEvent(run, "meta", {
+        message: `Cancellation requested. Stopped ${processTree.count} process signal(s).`,
+        killed: processTree.killed.map((item) => item.pid),
+        forceKilled: processTree.forceKilled.map((item) => item.pid),
+        failed: processTree.failed,
+        remaining: processTree.remaining.map((item) => item.pid)
+      });
     }
     let stage3Downloads = null;
     if (runLooksLikeStage3(run)) {
@@ -1837,7 +2054,7 @@ async function handleApi(req, res, url) {
         failed: stage3Downloads.failed
       });
     }
-    return json(res, 200, { ok: true, stage3Downloads });
+    return json(res, 200, { ok: true, processTree, stage3Downloads });
   }
 
   return notFound(res);

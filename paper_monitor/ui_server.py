@@ -10545,6 +10545,8 @@ INDEX_HTML = """<!doctype html>
       justify-self: center;
       flex: 0 0 auto;
     }
+    .library-entry-icon.native-file-drag-handle { cursor: grab; }
+    .library-entry-icon.native-file-drag-handle:active { cursor: grabbing; }
     .library-entry-icon.folder::before {
       content: "";
       position: absolute;
@@ -15867,6 +15869,7 @@ INDEX_HTML = """<!doctype html>
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
       const iconClass = libraryEntryIconClass(type, entry);
       const meta = type === "folder" ? "Folder" : (paper.journal || "Paper");
+      const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       return `
         <button class="library-row${selected ? " active" : ""}"
           type="button"
@@ -15876,7 +15879,7 @@ INDEX_HTML = """<!doctype html>
           data-library-parent-folder="${parentFolderId}"
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected ? "true" : "false"}">
-          <span class="library-entry-icon ${iconClass}" aria-hidden="true"></span>
+          <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs} aria-hidden="true"></span>
           <span class="library-name">
             ${escapeHtml(name)}
             <span class="library-search-path">${escapeHtml(path || "")}</span>
@@ -15908,6 +15911,7 @@ INDEX_HTML = """<!doctype html>
       const nameMarkup = renaming
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
         : escapeHtml(name);
+      const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       return `
         <${rowTag} class="library-row${rangeSelected ? " range-selected" : ""}${selected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
@@ -15916,11 +15920,19 @@ INDEX_HTML = """<!doctype html>
           data-library-parent-folder="${parentFolderId}"
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected || rangeSelected ? "true" : "false"}">
-          <span class="library-entry-icon ${iconClass}" aria-hidden="true"></span>
+          <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs} aria-hidden="true"></span>
           <span class="library-name" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
+    }
+
+    function libraryNativeDragHandleAttrs(type, entry, fallbackName) {
+      if (type !== "item") return "";
+      const path = libraryNativeItemPath(entry);
+      if (!path) return "";
+      const fileName = sanitizeDragFileName(entry?.paper?.original_filename || fileNameFromPath(path) || fallbackName || "paper.pdf");
+      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName)}" title="Drag PDF to Finder"`;
     }
 
     function libraryEntryIconClass(type, entry) {
@@ -17623,6 +17635,16 @@ INDEX_HTML = """<!doctype html>
         renameInput.addEventListener("blur", () => finish(true));
       }
       shell.querySelectorAll(".library-row").forEach((row) => {
+        row.querySelectorAll("[data-native-file-drag-handle]").forEach((handle) => {
+          handle.addEventListener("mousedown", (event) => {
+            event.stopPropagation();
+            prepareNativeFileDrag(handle);
+          });
+          handle.addEventListener("dragstart", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+        });
         row.addEventListener("click", (event) => {
           if (event.target.closest("[data-library-rename-input]")) return;
           const type = row.dataset.libraryType;
@@ -17748,6 +17770,24 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         return state.libraryDragPayload || null;
       }
+    }
+
+    function prepareNativeFileDrag(handle) {
+      const path = handle?.dataset?.nativeDragPath || "";
+      if (!path || !window.webkit?.messageHandlers?.nativeFileDrag) return;
+      window.webkit.messageHandlers.nativeFileDrag.postMessage({
+        path,
+        name: handle.dataset.nativeDragName || fileNameFromPath(path) || "paper.pdf"
+      });
+    }
+
+    function fileNameFromPath(path) {
+      return String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+    }
+
+    function sanitizeDragFileName(name) {
+      const cleanName = String(name || "").replace(/[\\r\\n:]/g, " ").trim() || "paper.pdf";
+      return cleanName.toLowerCase().endsWith(".pdf") ? cleanName : `${cleanName}.pdf`;
     }
 
     function libraryDropIsReorder(payload, row, event) {

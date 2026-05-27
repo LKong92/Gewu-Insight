@@ -448,12 +448,16 @@ def restore_frontmost_app(app_name: str, result: dict, mode: str = "auto") -> No
         if current != "Google Chrome":
             return
     script = f'''
-try
-    tell application {applescript_string(app_name)} to activate
-end try
+tell application "System Events"
+    if exists application process {applescript_string(app_name)} then
+        set frontmost of application process {applescript_string(app_name)} to true
+        return "restored"
+    end if
+end tell
+return "missing"
 '''
     code, out, err = run_osascript(script, timeout=5)
-    if code == 0:
+    if code == 0 and out.strip() == "restored":
         result.setdefault("log", []).append(f"Restored foreground app: {app_name}")
     else:
         result.setdefault("log", []).append(f"Could not restore foreground app {app_name}: {out or err}")
@@ -509,10 +513,10 @@ if previousApp is not "" and previousApp is not "Google Chrome" then
     try
         tell application "System Events"
             set currentApp to name of first application process whose frontmost is true
+            if currentApp is "Google Chrome" and exists application process previousApp then
+                set frontmost of application process previousApp to true
+            end if
         end tell
-        if currentApp is "Google Chrome" then
-            tell application previousApp to activate
-        end if
     end try
 end if
 return resultId
@@ -1063,7 +1067,11 @@ end tell
 delay 0.2
 if previousApp is not "" and previousApp is not "Google Chrome" then
     try
-        tell application previousApp to activate
+        tell application "System Events"
+            if exists application process previousApp then
+                set frontmost of application process previousApp to true
+            end if
+        end tell
     end try
 end if
 return "clicked"

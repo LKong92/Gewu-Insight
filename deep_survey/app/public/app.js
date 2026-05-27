@@ -29,11 +29,14 @@ const state = {
   dismissedStagePrompts: new Set(),
   topicContextMenu: null,
   topicRenameDialog: null,
+  confirmDialog: null,
   topicPointerDrag: null,
   topicDragGhost: null,
   suppressTopicClick: false,
   topicOrder: [],
-  topicOrderSaveTimer: null
+  topicOrderSaveTimer: null,
+  selectedVaultSaveTimer: null,
+  stage3DownloadCount: 0
 };
 
 const els = {
@@ -258,6 +261,17 @@ function saveTopicOrder(order, options = {}) {
   if (options.persist !== false) persistTopicOrderToServer(order);
 }
 
+function persistSelectedVaultToServer(vault) {
+  if (state.selectedVaultSaveTimer) clearTimeout(state.selectedVaultSaveTimer);
+  state.selectedVaultSaveTimer = setTimeout(() => {
+    state.selectedVaultSaveTimer = null;
+    api("/api/preferences/selected-vault", {
+      method: "POST",
+      body: JSON.stringify({ selectedVault: vault || "" })
+    }).catch(showError);
+  }, 150);
+}
+
 function orderedTopics(topics) {
   const order = loadTopicOrder();
   if (!order.length) return topics;
@@ -321,7 +335,8 @@ async function refreshStatus() {
   const query = state.selectedVault ? `?vault=${encodeURIComponent(state.selectedVault)}` : "";
   const status = await api(`/api/status${query}`);
   state.status = status;
-  state.selectedVault = status.selectedTopic?.vault || state.selectedVault;
+  state.selectedVault = status.selectedTopic?.vault || status.selectedVault || state.selectedVault;
+  state.stage3DownloadCount = status.stage3Downloads?.count ?? 0;
   const serverTopicOrder = Array.isArray(status.topicOrder) ? status.topicOrder : [];
   if (serverTopicOrder.length) {
     saveTopicOrder(serverTopicOrder, { persist: false });
@@ -516,7 +531,8 @@ function renderStageRow(stage, nextStage) {
   const row = document.createElement("div");
   const classes = ["stage-row"];
   if (stage.status === "done") classes.push("done");
-  if (stage.status === "in_progress" || stage.isLocalRunning) classes.push("running");
+  if (stage.isLocalRunning) classes.push("running");
+  else if (stage.status === "in_progress") classes.push("paused");
   if (stage.id === nextStage || stage.isActive) classes.push("active");
   if (stage.id === "stage_3_pdf_acquisition" && stage.id === nextStage) classes.push("pending-stage3");
   if (stage.status === "blocked") classes.push("blocked");
@@ -533,7 +549,8 @@ function stageStatusText(stage) {
   if (stage.isLocalRunning && stage.id === "stage_4_paper_deep_reading") return "deep reading";
   if (stage.isWaitingApproval) return "waiting approval";
   if (stage.isStopping) return "stopping";
-  if (stage.isLocalRunning || stage.status === "in_progress") return "running";
+  if (stage.isLocalRunning) return "running";
+  if (stage.status === "in_progress") return "paused";
   if (stage.isActive) return "next";
   return stage.status;
 }
@@ -759,6 +776,80 @@ function closeTopicRenameDialog() {
   state.topicRenameDialog = null;
 }
 
+function closeConfirmDialog() {
+  if (!state.confirmDialog) return;
+  state.confirmDialog.remove();
+  state.confirmDialog = null;
+}
+
+function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false } = {}) {
+  closeConfirmDialog();
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "topic-rename-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "topic-rename-dialog confirm-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-label", title || "Confirm action");
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "topic-rename-title";
+    titleEl.textContent = title || "Confirm Action";
+
+    const messageEl = document.createElement("div");
+    messageEl.className = "confirm-dialog-text";
+    messageEl.textContent = message || "Continue?";
+
+    const actions = document.createElement("div");
+    actions.className = "topic-rename-actions";
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.textContent = cancelLabel;
+
+    const confirmButton = document.createElement("button");
+    confirmButton.type = "button";
+    confirmButton.dataset.action = "confirm";
+    confirmButton.textContent = confirmLabel;
+    if (danger) confirmButton.classList.add("danger-action");
+
+    actions.append(cancelButton, confirmButton);
+    dialog.append(titleEl, messageEl, actions);
+    overlay.append(dialog);
+    document.body.append(overlay);
+    state.confirmDialog = overlay;
+
+    let finished = false;
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      closeConfirmDialog();
+      resolve(value);
+    };
+
+    overlay.addEventListener("pointerdown", (event) => {
+      if (event.target === overlay) finish(false);
+    });
+    cancelButton.addEventListener("click", () => finish(false));
+    confirmButton.addEventListener("click", () => finish(true));
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      }
+    });
+    requestAnimationFrame(() => {
+      confirmButton.focus();
+    });
+  });
+}
+
 function openTopicRenameDialog(topic) {
   if (!topic?.vault) return;
   closeTopicRenameDialog();
@@ -837,14 +928,20 @@ function openTopicRenameDialog(topic) {
 
 async function removeTopicFromApp(topic) {
   if (!topic?.vault) return;
-  const message = `Remove "${topic.topic}" from Deep Survey?\n\nThis only removes it from the app topic list. The original vault folder and files will not be deleted.`;
-  if (!confirm(message)) return;
+  const confirmed = await openConfirmDialog({
+    title: "Remove Topic",
+    message: `Remove "${topic.topic}" from Deep Survey?\n\nThis only removes it from the app topic list. The original vault folder and files will not be deleted.`,
+    confirmLabel: "Remove",
+    danger: true
+  });
+  if (!confirmed) return;
   await api("/api/topics/remove", {
     method: "POST",
     body: JSON.stringify({ vault: topic.vault })
   });
   forgetThreadBinding(topic);
   state.selectedVault = null;
+  persistSelectedVaultToServer("");
   state.isCreatingTopic = false;
   await refreshStatus();
   appendLog("meta", `Removed topic from app only: ${topic.topic}`);
@@ -852,6 +949,7 @@ async function removeTopicFromApp(topic) {
 
 async function selectTopic(vault) {
   state.selectedVault = vault;
+  persistSelectedVaultToServer(vault);
   state.isCreatingTopic = false;
   vaultFiles = [];
   selectedVaultFile = null;
@@ -1004,6 +1102,65 @@ async function loadVaultFile(file, options = {}) {
   els.vaultPreview.innerHTML = renderMarkdown(data.content);
 }
 
+function normalizeVaultLink(href, currentFile = selectedVaultFile) {
+  const clean = decodeURIComponent(String(href || "").split("#")[0]).trim();
+  if (!clean) return "";
+  if (clean.startsWith("/")) return clean.replace(/^\/+/, "");
+  const baseParts = currentFile?.includes("/") ? currentFile.split("/").slice(0, -1) : [];
+  for (const part of clean.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") baseParts.pop();
+    else baseParts.push(part);
+  }
+  return baseParts.join("/");
+}
+
+function markdownLinkTargetExists(href) {
+  const normalized = normalizeVaultLink(href);
+  if (!normalized) return "";
+  const candidates = [normalized, normalized.endsWith(".md") ? normalized : `${normalized}.md`];
+  const exact = candidates.find((candidate) => vaultFiles.includes(candidate));
+  if (exact) return exact;
+  if (!normalized.includes("/")) {
+    const basename = normalized.endsWith(".md") ? normalized : `${normalized}.md`;
+    return vaultFiles.find((file) => file.split("/").at(-1) === basename) || "";
+  }
+  return "";
+}
+
+async function openMarkdownLink(href) {
+  const target = String(href || "").trim();
+  if (!target) return;
+  if (/^(https?:|mailto:)/i.test(target)) {
+    await api("/api/open-url", {
+      method: "POST",
+      body: JSON.stringify({ url: target })
+    });
+    appendLog("meta", `Opened link: ${target}`);
+    return;
+  }
+  const vaultTarget = markdownLinkTargetExists(target);
+  if (vaultTarget) {
+    await loadVaultFile(vaultTarget, { reveal: true });
+    return;
+  }
+  const vault = state.status?.selectedTopic?.vault;
+  const vaultPath = normalizeVaultLink(target);
+  if (vault && vaultPath) {
+    try {
+      await api("/api/vault/open-path", {
+        method: "POST",
+        body: JSON.stringify({ vault, path: vaultPath })
+      });
+      appendLog("meta", `Opened output file link: ${vaultPath}`);
+      return;
+    } catch {
+      // Fall through to the visible not-found message below.
+    }
+  }
+  appendLog("meta", `Link target not found in output files: ${target}`);
+}
+
 function renderMarkdown(markdown) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const html = [];
@@ -1130,8 +1287,18 @@ function inlineMarkdown(text) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/\[\[([^\]]+)\]\]/g, '<span class="md-link">[[$1]]</span>')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '<span class="md-link">$1</span>');
+    .replace(/\[\[([^\]]+)\]\]/g, (_, target) => {
+      const href = target.split("|")[0].trim();
+      const label = target.includes("|") ? target.split("|").slice(1).join("|").trim() : target.trim();
+      return `<a class="md-link" href="${escapeHtml(href)}" data-md-href="${escapeHtml(href)}">[[${escapeHtml(label)}]]</a>`;
+    })
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      const cleanHref = href.trim();
+      return `<a class="md-link" href="${escapeHtml(cleanHref)}" data-md-href="${escapeHtml(cleanHref)}">${label}</a>`;
+    })
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, prefix, url) => {
+      return `${prefix}<a class="md-link" href="${escapeHtml(url)}" data-md-href="${escapeHtml(url)}">${escapeHtml(url)}</a>`;
+    });
   mathTokens.forEach((value, index) => {
     html = html.replace(`@@MATH${index}@@`, value);
   });
@@ -1291,6 +1458,8 @@ function mergeAppThreadStatus(threadId, patch) {
     delete state.appThreadRunningStages[threadId];
     if (state.activeDlwThreadId === threadId) state.activeDlwThreadId = null;
     if (!state.currentRunId) state.localRunningStage = null;
+    delete state.appThreadStatus[threadId].dlwAction;
+    delete state.appThreadStatus[threadId].runningStage;
   }
   renderThreadStatus();
   if (state.status) renderStatus(state.status);
@@ -1309,6 +1478,8 @@ function bufferKey(threadId, turnId) {
 function renderThreadChat() {
   const threadId = selectedThreadId();
   const messages = chatForThread(threadId);
+  const previousScrollTop = els.threadChat.scrollTop;
+  const wasAtBottom = els.threadChat.scrollHeight - els.threadChat.scrollTop - els.threadChat.clientHeight < 24;
   const hasPendingAssistant = Object.entries(state.appThreadAssistantBuffers).some(
     ([key, value]) => key.startsWith(`${threadId}:`) && value.text.trim()
   );
@@ -1321,7 +1492,7 @@ function renderThreadChat() {
   if (hasPendingAssistant) nodes.push(renderChatMessage({ role: "assistant", text: "Codex is replying...", pending: true }));
   if (!nodes.length) nodes.push(emptyChatNode("Send a message and the full reply will appear here."));
   els.threadChat.replaceChildren(...nodes);
-  els.threadChat.scrollTop = els.threadChat.scrollHeight;
+  els.threadChat.scrollTop = wasAtBottom ? els.threadChat.scrollHeight : previousScrollTop;
   const status = state.appThreadStatus[threadId];
   els.threadChatState.textContent = status?.status === "running" ? "Codex is replying..." : threadStatusLabel(status);
 }
@@ -1621,12 +1792,15 @@ function renderThreadStatus() {
   const turnText = status?.turnId ? ` · turn ${status.turnId.slice(0, 8)}` : "";
   const modeText = selectedThreadMode() === "write" ? "Allow Edits" : "Read Only";
   els.threadStatusText.textContent = `Thread: ${name} · ${statusText}${turnText} · ${modeText}`;
-  const canStop = threadId && status?.turnId && ["running", "stopping", "waiting_approval"].includes(status.status);
-  els.stopThreadBtn.disabled = !canStop;
+  const canStop = composerCanStopThread(threadId, status);
+  const busyWithoutComposerStop = Boolean(selectedThreadIsBusy() && !canStop);
+  els.stopThreadBtn.disabled = true;
+  els.stopThreadBtn.classList.add("hidden");
+  els.sendThreadBtn.disabled = busyWithoutComposerStop;
   els.sendThreadBtn.classList.toggle("running", Boolean(canStop));
   els.sendThreadBtn.textContent = canStop ? "■" : "↑";
-  els.sendThreadBtn.title = canStop ? "Stop" : "Send";
-  els.sendThreadBtn.setAttribute("aria-label", canStop ? "Stop" : "Send");
+  els.sendThreadBtn.title = canStop ? "Stop" : busyWithoutComposerStop ? "Running" : "Send";
+  els.sendThreadBtn.setAttribute("aria-label", canStop ? "Stop" : busyWithoutComposerStop ? "Running" : "Send");
   if (!state.currentRunId) {
     const threadToInterrupt = interruptibleThreadId();
     els.cancelBtn.disabled = !threadToInterrupt && !state.dlwStartupBusy;
@@ -1848,7 +2022,14 @@ async function ensureAppServerThreadForDlw(mode, topicInfo, fallbackTopic, optio
     return threadId;
   }
 
-  throw new Error("No existing DLW thread matches this topic. No new thread was created automatically.");
+  if (options.createIfMissing) {
+    const thread = await createBoundThreadForTopic({ mode, selectedTopic: topicInfo, topic: fallbackTopic });
+    threadId = thread?.id || selectedThreadId();
+    if (!threadId) throw new Error("Failed to create app-server thread.");
+    return threadId;
+  }
+
+  throw new Error("No existing DLW thread matches this topic.");
 }
 
 async function sendDlwActionToThread(action, options = {}) {
@@ -1863,10 +2044,14 @@ async function sendDlwActionToThread(action, options = {}) {
   if (
     action === "start" &&
     state.status?.state?.topic &&
-    !options.skipSwitchConfirm &&
-    !confirm(`This will switch the active topic to:\n${topic}\n\nContinue?`)
+    !options.skipSwitchConfirm
   ) {
-    return;
+    const confirmed = await openConfirmDialog({
+      title: "Switch Topic",
+      message: `This will switch the active topic to:\n${topic}\n\nContinue?`,
+      confirmLabel: "Continue"
+    });
+    if (!confirmed) return;
   }
 
   let mode = selectedThreadMode();
@@ -1875,7 +2060,12 @@ async function sendDlwActionToThread(action, options = {}) {
       setSelectedThreadMode("write");
       mode = "write";
     } else {
-      if (!confirm('This DLW action usually writes to the vault. Switch to "Allow Edits" and continue?')) return;
+      const confirmed = await openConfirmDialog({
+        title: "Allow Edits",
+        message: 'This DLW action usually writes to the vault. Switch to "Allow Edits" and continue?',
+        confirmLabel: "Allow Edits"
+      });
+      if (!confirmed) return;
       setSelectedThreadMode("write");
       mode = "write";
     }
@@ -1888,16 +2078,20 @@ async function sendDlwActionToThread(action, options = {}) {
   if (state.status) renderStatus(state.status);
   renderThreadStatus();
 
-  const threadId = await ensureAppServerThreadForDlw(mode, actionTopic, topic, { forceNew: action === "start" });
-  const runningStage = inferRunningStageForAction(action, actionTopic);
-  state.activeDlwThreadId = threadId;
-  state.localRunningStage = runningStage;
-  if (runningStage) state.appThreadRunningStages[threadId] = runningStage;
-  saveThreadPreferences();
-  els.appServerState.textContent = "Sending DLW...";
-  appendLog("meta", "Starting Deep Literature Workflow in the bound Codex thread...");
-  if (state.status) renderStatus(state.status);
   try {
+    const threadId = await ensureAppServerThreadForDlw(mode, actionTopic, topic, {
+      forceNew: action === "start",
+      createIfMissing: action !== "start"
+    });
+    const runningStage = inferRunningStageForAction(action, actionTopic);
+    state.activeDlwThreadId = threadId;
+    state.localRunningStage = runningStage;
+    if (runningStage) state.appThreadRunningStages[threadId] = runningStage;
+    saveThreadPreferences();
+    els.appServerState.textContent = "Sending DLW...";
+    appendLog("meta", "Starting Deep Literature Workflow in the bound Codex thread...");
+    if (state.status) renderStatus(state.status);
+
     const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/dlw-action`, {
       method: "POST",
       body: JSON.stringify({
@@ -1935,6 +2129,17 @@ async function sendToAppServerThread() {
     appendLog("meta", "Enter a message to send to the thread.");
     return;
   }
+  if (selectedThreadIsBusy()) {
+    const status = state.appThreadStatus[threadId];
+    const label = status?.dlwAction || state.appThreadRunningStages[threadId] ? "The workflow is running. Use Cancel Run before sending another message." : "The thread is running. Stop it before sending another message.";
+    appendLog("meta", label);
+    return;
+  }
+  delete state.appThreadRunningStages[threadId];
+  if (state.appThreadStatus[threadId]) {
+    delete state.appThreadStatus[threadId].dlwAction;
+    delete state.appThreadStatus[threadId].runningStage;
+  }
   const mode = selectedThreadMode();
   saveThreadPreferences();
   els.appServerState.textContent = "Sending...";
@@ -1971,7 +2176,7 @@ async function sendToAppServerThread() {
 async function handleComposerPrimaryAction() {
   const threadId = selectedThreadId();
   const status = state.appThreadStatus[threadId];
-  if (threadId && status?.turnId && ["running", "stopping", "waiting_approval"].includes(status.status)) {
+  if (composerCanStopThread(threadId, status)) {
     await interruptAppServerThread(threadId);
     return;
   }
@@ -1984,7 +2189,16 @@ async function interruptAppServerThread(threadId = selectedThreadId(), options =
     appendLog("meta", "The current thread has no turn to stop.");
     return;
   }
-  if (!options.skipConfirm && !confirm(`Stop the current Codex turn?\n\nthread: ${threadId}\nturn: ${status.turnId}`)) return;
+  if (!options.skipConfirm) {
+    const confirmed = await openConfirmDialog({
+      title: "Stop Codex Turn",
+      message: `Stop the current Codex turn?\nthread: ${threadId}\nturn: ${status.turnId}`,
+      confirmLabel: "Stop",
+      danger: true
+    });
+    if (!confirmed) return;
+  }
+  setCancellationStatus("Cancelling Codex turn...");
   mergeAppThreadStatus(threadId, {
     status: "stopping",
     summary: `Stopping · ${status.turnId.slice(0, 8)}`
@@ -1992,10 +2206,18 @@ async function interruptAppServerThread(threadId = selectedThreadId(), options =
   els.appServerState.textContent = "Stopping...";
   const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/interrupt`, {
     method: "POST",
-    body: JSON.stringify({ turnId: status.turnId })
+    body: JSON.stringify({
+      turnId: status.turnId,
+      cancelStage3Downloads: isStage3CancellationContext(threadId)
+    })
   });
+  if (result.stage3Downloads) {
+    state.stage3DownloadCount = result.stage3Downloads.remaining?.length ?? 0;
+    logStage3CancellationResult(result.stage3Downloads);
+  }
   if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
   els.appServerState.textContent = "turn stopped";
+  setCancellationStatus("Cancelled");
   appendLog("meta", `Interrupted app-server turn. turn=${status.turnId}`);
 }
 
@@ -2033,13 +2255,18 @@ function selectedThreadIsBusy() {
   return Boolean(threadId && status?.turnId && ["running", "stopping", "waiting_approval"].includes(status.status));
 }
 
+function composerCanStopThread(threadId = selectedThreadId(), status = state.appThreadStatus[threadId]) {
+  if (!threadId || !status?.turnId || !["running", "stopping", "waiting_approval"].includes(status.status)) return false;
+  return !status.dlwAction && !state.appThreadRunningStages[threadId];
+}
+
 function canInterruptThread(threadId) {
   const status = state.appThreadStatus[threadId];
   return Boolean(threadId && status?.turnId && ["running", "stopping", "waiting_approval"].includes(status.status));
 }
 
 function hasRunningProcess() {
-  return Boolean(state.currentRunId || state.dlwStartupBusy || interruptibleThreadId());
+  return Boolean(state.currentRunId || state.dlwStartupBusy || interruptibleThreadId() || state.stage3DownloadCount > 0);
 }
 
 function interruptibleThreadId(topicInfo = state.status?.selectedTopic) {
@@ -2060,17 +2287,42 @@ function topicStagePromptKey(topicInfo, action) {
 }
 
 function stageActionInfo(topicInfo) {
-  if (!topicInfo?.vault || topicInfo.nextStage !== "stage_3_pdf_acquisition") return null;
+  if (!topicInfo?.vault || !topicInfo.nextStage || topicInfo.nextStage === "complete") return null;
   if (interruptibleThreadId(topicInfo) || state.currentRunId || state.isCreatingTopic || state.stagePromptInFlight) return null;
-  const action = (topicInfo.manualPdfCount ?? 0) > 0 ? "importManual" : "stage3";
+  const action = topicInfo.nextStage === "stage_3_pdf_acquisition"
+    ? ((topicInfo.manualPdfCount ?? 0) > 0 ? "importManual" : "stage3")
+    : "resume";
   const key = topicStagePromptKey(topicInfo, action);
   if (state.dismissedStagePrompts.has(key)) return null;
   return {
     action,
     key,
     topic: topicInfo.topic || "current topic",
-    manualCount: topicInfo.manualPdfCount ?? 0
+    manualCount: topicInfo.manualPdfCount ?? 0,
+    nextStage: topicInfo.nextStage
   };
+}
+
+function stageConfirmTitle(info) {
+  if (info.action === "importManual") return "Manual PDFs Ready To Import";
+  if (info.action === "stage3") return "Stage 3 Waiting For Confirmation";
+  return `${labelStage(info.nextStage)} Waiting For Confirmation`;
+}
+
+function stageConfirmText(info) {
+  if (info.action === "importManual") {
+    return `${info.topic} has ${info.manualCount} manual PDF queue item(s). Confirm to import them in the current thread with Allow Edits.`;
+  }
+  if (info.action === "stage3") {
+    return `${info.topic} has reached PDF Acquisition. Confirm to start Stage 3 in the current thread with Allow Edits.`;
+  }
+  return `${info.topic} is ready for ${labelStage(info.nextStage)}. Confirm to continue the workflow in the current thread with Allow Edits.`;
+}
+
+function stageConfirmButtonText(info) {
+  if (info.action === "importManual") return "Confirm Import";
+  if (info.action === "stage3") return "Confirm Start";
+  return "Confirm Resume";
 }
 
 function renderStageConfirmPanel(topicInfo) {
@@ -2082,11 +2334,9 @@ function renderStageConfirmPanel(topicInfo) {
     return;
   }
   els.stageConfirmPanel.classList.remove("hidden");
-  els.stageConfirmTitle.textContent = info.action === "importManual" ? "Manual PDFs Ready To Import" : "Stage 3 Waiting For Confirmation";
-  els.stageConfirmText.textContent = info.action === "importManual"
-    ? `${info.topic} has ${info.manualCount} manual PDF queue item(s). Confirm to import them in the current thread with Allow Edits.`
-    : `${info.topic} has reached PDF Acquisition. Confirm to start Stage 3 in the current thread with Allow Edits.`;
-  els.stageConfirmBtn.textContent = info.action === "importManual" ? "Confirm Import" : "Confirm Start";
+  els.stageConfirmTitle.textContent = stageConfirmTitle(info);
+  els.stageConfirmText.textContent = stageConfirmText(info);
+  els.stageConfirmBtn.textContent = stageConfirmButtonText(info);
 }
 
 function maybePromptStageAction(topicInfo) {
@@ -2133,10 +2383,14 @@ async function startRun(action) {
   }
   if (
     action === "start" &&
-    state.status?.state?.topic &&
-    !confirm(`This will switch the active topic to:\n${topic}\n\nContinue?`)
+    state.status?.state?.topic
   ) {
-    return;
+    const confirmed = await openConfirmDialog({
+      title: "Switch Topic",
+      message: `This will switch the active topic to:\n${topic}\n\nContinue?`,
+      confirmLabel: "Continue"
+    });
+    if (!confirmed) return;
   }
 
   const run = await api("/api/runs", {
@@ -2253,17 +2507,56 @@ function appendLog(kind, message) {
   els.log.scrollTop = els.log.scrollHeight;
 }
 
+function setCancellationStatus(message) {
+  if (els.runState) els.runState.textContent = message;
+  appendLog("meta", message);
+}
+
+function logStage3CancellationResult(result = {}) {
+  const termCount = result.killed?.length ?? 0;
+  const forceCount = result.forceKilled?.length ?? 0;
+  const remainingCount = result.remaining?.length ?? 0;
+  appendLog("meta", `Stage 3 downloader cleanup: SIGTERM ${termCount}, SIGKILL ${forceCount}, remaining ${remainingCount}.`);
+  if (remainingCount > 0) {
+    const pids = result.remaining.map((item) => item.pid).join(", ");
+    appendLog("stderr", `Stage 3 downloader still running after cancel: ${pids}`);
+  }
+}
+
+function logProcessTreeCancellationResult(result = {}) {
+  const termCount = result.killed?.length ?? 0;
+  const forceCount = result.forceKilled?.length ?? 0;
+  const remainingCount = result.remaining?.length ?? 0;
+  appendLog("meta", `Run process cleanup: SIGTERM ${termCount}, SIGKILL ${forceCount}, remaining ${remainingCount}.`);
+  if (remainingCount > 0) {
+    const pids = result.remaining.map((item) => item.pid).join(", ");
+    appendLog("stderr", `Run process still alive after cancel: ${pids}`);
+  }
+}
+
 async function cancelRun() {
   if (!state.currentRunId) return;
+  setCancellationStatus("Cancelling current run...");
   const result = await api(`/api/runs/${state.currentRunId}/cancel`, { method: "POST", body: "{}" });
-  const killed = result.stage3Downloads?.count ?? null;
-  if (killed !== null) appendLog("meta", `Stage 3 downloader cleanup killed ${killed} process(es).`);
+  if (result.processTree) logProcessTreeCancellationResult(result.processTree);
+  if (result.stage3Downloads) {
+    state.stage3DownloadCount = result.stage3Downloads.remaining?.length ?? 0;
+    logStage3CancellationResult(result.stage3Downloads);
+  }
+  await refreshStatus().catch(() => {});
+  const processRemaining = result.processTree?.remaining?.length ?? 0;
+  setCancellationStatus(
+    state.stage3DownloadCount > 0 || processRemaining > 0
+      ? "Cancel requested; processes still running"
+      : "Cancelled"
+  );
 }
 
 function isStage3CancellationContext(threadId = interruptibleThreadId()) {
   return (
     state.localRunningStage === "stage_3_pdf_acquisition" ||
     state.appThreadRunningStages[threadId] === "stage_3_pdf_acquisition" ||
+    state.stage3DownloadCount > 0 ||
     state.status?.selectedTopic?.nextStage === "stage_3_pdf_acquisition" ||
     state.status?.selectedTopic?.currentStage === "stage_3_pdf_acquisition"
   );
@@ -2271,8 +2564,12 @@ function isStage3CancellationContext(threadId = interruptibleThreadId()) {
 
 async function cancelStage3DownloadsIfNeeded(threadId = interruptibleThreadId()) {
   if (!isStage3CancellationContext(threadId)) return null;
+  setCancellationStatus("Cancelling Stage 3 downloaders...");
   const result = await api("/api/stage3/downloads/cancel", { method: "POST", body: "{}" });
-  appendLog("meta", `Stage 3 downloader cleanup killed ${result.count ?? 0} process(es).`);
+  state.stage3DownloadCount = result.remaining?.length ?? 0;
+  logStage3CancellationResult(result);
+  await refreshStatus().catch(() => {});
+  setCancellationStatus(state.stage3DownloadCount > 0 ? "Cancel requested; downloaders still running" : "Cancelled");
   return result;
 }
 
@@ -2361,11 +2658,11 @@ els.newTopicBtn.addEventListener("click", () => {
   els.topicInput.focus();
 });
 els.resumeBtn.addEventListener("click", () => {
-  const topic = state.status?.selectedTopic?.topic || "current active topic";
-  if (!confirm(`Resume auto run: ${topic}\n\nIf the next step is not Stage 3, Codex will continue the current stage. Continue?`)) {
+  if (state.pendingStageAction) {
+    confirmPendingStageAction(state.pendingStageAction.action).catch(showError);
     return;
   }
-  sendDlwActionToThread("resume").catch(showError);
+  sendDlwActionToThread("resume", { ensureWrite: true }).catch(showError);
 });
 if (els.stage3Btn) {
   els.stage3Btn.addEventListener("click", () => confirmPendingStageAction("stage3").catch(showError));
@@ -2376,25 +2673,53 @@ if (els.stageConfirmBtn) {
 if (els.manualBtn) {
   els.manualBtn.addEventListener("click", () => confirmPendingStageAction("importManual").catch(showError));
 }
-els.cancelBtn.addEventListener("click", () => {
+async function handleCancelRunClick() {
   if (state.currentRunId) {
-    if (!confirm("Cancel the currently running Codex task? Files already written will not be rolled back automatically.")) return;
-    cancelRun().catch(showError);
+    const confirmed = await openConfirmDialog({
+      title: "Cancel Current Run",
+      message: "Cancel the currently running Codex task? Files already written will not be rolled back automatically.",
+      confirmLabel: "Cancel Run",
+      danger: true
+    });
+    if (!confirmed) return;
+    const previousLabel = els.cancelBtn.textContent;
+    els.cancelBtn.disabled = true;
+    els.cancelBtn.textContent = "Cancelling...";
+    try {
+      await cancelRun();
+    } finally {
+      els.cancelBtn.textContent = previousLabel;
+      if (state.status) renderStatus(state.status);
+    }
     return;
   }
   const threadId = interruptibleThreadId();
   const cleanupText = isStage3CancellationContext(threadId)
     ? "\n\nThis is a Stage 3 context, so Chrome PDF download scripts will also be stopped."
     : "";
-  if (!confirm(`Cancel the currently running Codex task? Files already written will not be rolled back automatically.${cleanupText}`)) return;
-  if (!threadId) {
-    cancelStage3DownloadsIfNeeded(threadId).catch(showError);
-    return;
+  const confirmed = await openConfirmDialog({
+    title: "Cancel Current Run",
+    message: `Cancel the currently running Codex task? Files already written will not be rolled back automatically.${cleanupText}`,
+    confirmLabel: "Cancel Run",
+    danger: true
+  });
+  if (!confirmed) return;
+  const previousLabel = els.cancelBtn.textContent;
+  els.cancelBtn.disabled = true;
+  els.cancelBtn.textContent = "Cancelling...";
+  try {
+    if (!threadId) {
+      await cancelStage3DownloadsIfNeeded(threadId);
+      return;
+    }
+    await interruptAppServerThread(threadId, { skipConfirm: true });
+  } finally {
+    els.cancelBtn.textContent = previousLabel;
+    if (state.status) renderStatus(state.status);
   }
-  cancelStage3DownloadsIfNeeded(threadId)
-    .catch(showError)
-    .finally(() => interruptAppServerThread(threadId, { skipConfirm: true }).catch(showError));
-});
+}
+
+els.cancelBtn.addEventListener("click", () => handleCancelRunClick().catch(showError));
 els.refreshBtn.addEventListener("click", async () => {
   const previousText = els.refreshBtn.textContent;
   els.refreshBtn.disabled = true;
@@ -2413,6 +2738,12 @@ els.vaultTabBtn.addEventListener("click", () => setActiveTab("vault"));
 els.vaultSearch.addEventListener("input", renderVaultFiles);
 els.vaultFiles.tabIndex = 0;
 els.vaultFiles.addEventListener("keydown", handleVaultFileKeydown);
+els.vaultPreview.addEventListener("click", (event) => {
+  const link = event.target.closest?.("a[data-md-href]");
+  if (!link) return;
+  event.preventDefault();
+  openMarkdownLink(link.dataset.mdHref || link.getAttribute("href") || "").catch(showError);
+});
 els.setupRetryBtn.addEventListener("click", () => runSetupCheck({ install: false }).catch(showError));
 els.setupInstallBtn.addEventListener("click", () => runSetupCheck({ install: true }).catch(showError));
 els.codexPill.addEventListener("click", () => {
