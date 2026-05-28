@@ -499,9 +499,11 @@ def normalize_doi(value: str | None) -> str:
 
 def journal_name_for_doi(journal_name: Any, doi: str | None) -> str:
     normalized_doi = normalize_doi(doi)
+    journal = clean_text(journal_name)
+    if normalized_doi.startswith("10.5281/") or "zenodo" in journal.lower():
+        return "Zenodo"
     if normalized_doi.startswith("10.32388/"):
         return "Qeios"
-    journal = clean_text(journal_name)
     if journal.lower() in {"[]", "{}", "none", "null"}:
         return ""
     return journal

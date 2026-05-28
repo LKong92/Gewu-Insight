@@ -19,6 +19,7 @@ import time
 import uuid
 import webbrowser
 import zipfile
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,6 +79,8 @@ LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 ADS_API_TOKEN_SETTING = "ads_api_token"
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
+NCBI_EUTILS_TOOL = "PaperMonitor"
+NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
@@ -410,6 +413,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/delete-file":
                 self.handle_delete_library_item_file(payload)
+                return
+            if parsed.path == "/api/library/special-folder/clear":
+                self.handle_clear_library_special_folder(payload)
                 return
             if parsed.path == "/api/library/recover":
                 self.handle_recover_library_entry(payload)
@@ -825,6 +831,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                     return
                 publication = storage.add_my_publication(paper_id=paper_id)
+                sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
             elif isinstance(paper_ids, list):
                 valid_ids = []
                 for raw_id in paper_ids:
@@ -836,12 +843,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     return
                 for candidate_id in valid_ids:
                     publication = storage.add_my_publication(paper_id=candidate_id)
+                    sync_my_publication_existing_pubmed_marks(storage, paper_id=candidate_id)
             elif paper_id:
                 paper = storage.get_paper(paper_id)
                 if not paper_id or not paper:
                     self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                     return
                 publication = storage.add_my_publication(paper_id=paper_id)
+                sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                 return
@@ -1284,8 +1293,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             storage.upsert_paper(paper)
             paper_id = str(paper.get("paper_id") or "")
-            refreshed = refresh_semantic_scholar_if_possible(storage, storage.get_paper(paper_id), timeout=8, max_retries=1)
-            refresh_ads_if_possible(storage, refreshed or storage.get_paper(paper_id), timeout=8, max_retries=1)
+            stored_paper = storage.get_paper(paper_id)
+            stored_paper = refresh_pubmed_if_possible(storage, stored_paper, doi=doi, timeout=8, max_retries=1) or stored_paper
+            refreshed = refresh_semantic_scholar_if_possible(storage, stored_paper, timeout=8, max_retries=1)
+            refresh_ads_if_possible(storage, refreshed or stored_paper or storage.get_paper(paper_id), timeout=8, max_retries=1)
             tabs = library_workspace_tabs(storage)
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
@@ -1541,7 +1552,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
-            paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
+            if payload.get("refresh_metadata"):
+                paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
             item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
             if item and not item.get("display_name"):
                 naming_rule = library_naming_rule(storage)
@@ -1835,6 +1847,41 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"deleted": deleted, **snapshot})
 
+    def handle_clear_library_special_folder(self, payload: dict[str, Any]) -> None:
+        folder_id = int(payload.get("folder_id") or 0)
+        delete_files = bool(payload.get("delete_files"))
+        confirmed = bool(payload.get("confirmed"))
+        if not folder_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "folder_id is required")
+            return
+        if not confirmed:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            special = ensure_library_special_folders(storage)
+            allowed_ids = {
+                int(special["unsorted"].get("id") or 0),
+                int(special["recycle"].get("id") or 0),
+            }
+            folder = storage.get_library_folder(folder_id)
+            if not folder or folder_id not in allowed_ids:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Only unsorted and Recycle can be cleared")
+                return
+            paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
+            deleted_files = delete_library_paper_files(storage, paper_ids) if delete_files else []
+            removed = clear_library_folder_contents(storage, folder_id=folder_id)
+            snapshot = library_snapshot(storage)
+        except IsADirectoryError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
+            return
+        except PermissionError as exc:
+            self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"deleted_files": deleted_files, "removed": removed, **snapshot})
+
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
@@ -1923,6 +1970,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
+            pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
+            if pubmed_doi and looks_like_doi(pubmed_doi):
+                paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=12, max_retries=1) or paper
             semantic_lookup_paper = dict(paper)
             if doi and looks_like_doi(doi):
                 semantic_lookup_paper["doi"] = doi
@@ -2634,7 +2684,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
     return {
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
-        "journal": paper.get("journal") or "",
+        "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
         "doi": paper.get("doi") or "",
         "url": paper.get("url") or paper.get("landing_url") or "",
@@ -2673,6 +2723,7 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "citation_label": citation_label(paper),
         "citation_metrics": citation_metrics(paper),
         "semantic_scholar": semantic_scholar_summary(paper),
+        "pubmed": pubmed_summary(paper),
         "ads": ads_summary(paper),
         "google_scholar_url": google_scholar_url(paper),
         "late_arrival": paper_is_late_arrival(paper),
@@ -2782,7 +2833,7 @@ def publication_metadata_from_datacite_doi(
     descriptions = attrs.get("descriptions") if isinstance(attrs.get("descriptions"), list) else []
     abstract = clean_text(next((item.get("description") for item in descriptions if isinstance(item, dict) and item.get("description")), ""))
     year = clean_text(str(attrs.get("publicationYear") or ""))
-    publisher = clean_text(attrs.get("publisher") or "DataCite")
+    publisher = journal_name_for_doi(clean_text(attrs.get("publisher") or "DataCite"), doi)
     resource_type = attrs.get("types") if isinstance(attrs.get("types"), dict) else {}
     creators = attrs.get("creators") if isinstance(attrs.get("creators"), list) else []
     url = clean_text(attrs.get("url") or f"https://doi.org/{doi}")
@@ -2886,7 +2937,7 @@ def publication_metrics_metadata_from_arxiv_id(
         return None
     raw = paper.setdefault("raw", {})
     arxiv_doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    if arxiv_doi and looks_like_doi(arxiv_doi) and not doi_is_likely_data_repository(arxiv_doi):
+    if doi_is_likely_published_version(arxiv_doi):
         published = publication_metrics_metadata_from_doi(arxiv_doi, timeout=timeout, max_retries=max_retries)
         if published:
             return attach_arxiv_preprint_metadata(published, paper)
@@ -2916,7 +2967,7 @@ def publication_metrics_metadata_from_arxiv_id(
                 if not paper.get("doi"):
                     paper["doi"] = normalize_publication_doi(clean_text(item.get("doi") or ""))
                 doi = normalize_publication_doi(clean_text(item.get("doi") or ""))
-                if doi and looks_like_doi(doi) and not doi_is_likely_data_repository(doi):
+                if doi_is_likely_published_version(doi):
                     published = publication_metrics_metadata_from_doi(doi, timeout=timeout, max_retries=max_retries)
                     if published:
                         return attach_arxiv_preprint_metadata(published, paper)
@@ -2924,6 +2975,406 @@ def publication_metrics_metadata_from_arxiv_id(
         except Exception:
             pass
     return paper
+
+
+def pubmed_metadata_from_doi(
+    doi: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    doi = normalize_publication_doi(doi)
+    if not doi or not looks_like_doi(doi):
+        return None
+    pmid = ""
+    pmcid = ""
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            params={
+                "db": "pubmed",
+                "term": f"{doi}[AID]",
+                "retmode": "json",
+                "retmax": "1",
+                "tool": NCBI_EUTILS_TOOL,
+                "email": NCBI_EUTILS_EMAIL,
+            },
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        ids = ((response.json().get("esearchresult") or {}).get("idlist") or [])
+        pmid = clean_text(str(ids[0] if ids else ""))
+    except Exception:
+        pmid = ""
+    if not pmid:
+        try:
+            response = request_with_retries(
+                "GET",
+                "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/",
+                params={"ids": doi, "format": "json", "tool": NCBI_EUTILS_TOOL, "email": NCBI_EUTILS_EMAIL},
+                timeout=timeout,
+                max_retries=max_retries,
+            )
+            records = response.json().get("records") or []
+            record = records[0] if records and isinstance(records[0], dict) else {}
+            pmid = clean_text(str(record.get("pmid") or ""))
+            pmcid = clean_text(str(record.get("pmcid") or ""))
+        except Exception:
+            pmid = ""
+    if not pmid:
+        return None
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            params={"db": "pubmed", "id": pmid, "retmode": "xml", "tool": NCBI_EUTILS_TOOL, "email": NCBI_EUTILS_EMAIL},
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        root = ET.fromstring(response.content)
+    except Exception:
+        return {"pmid": pmid, "pmcid": pmcid, "doi": doi}
+    article = root.find(".//PubmedArticle")
+    if article is None:
+        return {"pmid": pmid, "pmcid": pmcid, "doi": doi}
+    parsed = parse_pubmed_article(article)
+    parsed["pmid"] = clean_text(parsed.get("pmid") or pmid)
+    parsed["pmcid"] = clean_text(parsed.get("pmcid") or pmcid)
+    parsed["doi"] = normalize_publication_doi(str(parsed.get("doi") or doi))
+    return parsed
+
+
+def refresh_pubmed_if_possible(
+    storage: Storage,
+    paper: dict[str, Any] | None,
+    *,
+    doi: str = "",
+    timeout: int = 20,
+    max_retries: int = 2,
+) -> dict[str, Any] | None:
+    if not paper:
+        return paper
+    paper_id = clean_text(paper.get("paper_id") or "")
+    normalized_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
+    if not paper_id or not normalized_doi or not looks_like_doi(normalized_doi):
+        return paper
+    try:
+        pubmed = pubmed_metadata_from_doi(normalized_doi, timeout=timeout, max_retries=max_retries)
+    except Exception:
+        return paper
+    if not pubmed:
+        return paper
+    raw = parse_raw_json(paper)
+    raw["pubmed"] = pubmed
+    if pubmed.get("pmid"):
+        raw["pmid"] = pubmed.get("pmid")
+    if pubmed.get("pmcid"):
+        raw["pmcid"] = pubmed.get("pmcid")
+    updated = storage.update_paper_raw_json(paper_id, raw) or paper
+    sync_my_publication_pubmed_author_marks(storage, paper_id=paper_id, pubmed=pubmed)
+    if not clean_text(updated.get("abstract") or "") and clean_text(pubmed.get("abstract") or ""):
+        updated = storage.refresh_paper_metadata(
+            paper_id,
+            merge_refreshed_metadata(
+                updated,
+                {
+                    "paper_id": paper_id,
+                    "doi": updated.get("doi") or normalized_doi,
+                    "title": updated.get("title") or pubmed.get("title") or "",
+                    "journal": updated.get("journal") or pubmed.get("journal") or "",
+                    "publication_date": updated.get("publication_date") or pubmed.get("publication_date") or "",
+                    "abstract": clean_text(pubmed.get("abstract") or ""),
+                    "abstract_source": "pubmed",
+                    "source": updated.get("source") or "pubmed",
+                    "raw": raw,
+                },
+            ),
+        ) or updated
+    return updated
+
+
+def pubmed_author_entry_roles(item: dict[str, Any], *, index: int) -> dict[str, Any]:
+    roles = item.get("roles") if isinstance(item.get("roles"), dict) else {}
+    first_author = bool(roles.get("first_author"))
+    co_first_author = bool(roles.get("co_first_author"))
+    corresponding_author = bool(roles.get("corresponding_author"))
+    notes = [clean_text(str(value)) for value in roles.get("notes") or [] if clean_text(str(value))]
+    if first_author or co_first_author or corresponding_author or notes:
+        return {
+            "first_author": first_author,
+            "co_first_author": co_first_author,
+            "corresponding_author": corresponding_author,
+            "notes": notes,
+        }
+    text = " ".join(clean_text(str(value)) for value in item.get("affiliations") or []).lower()
+    equal = any(
+        phrase in text
+        for phrase in [
+            "equal contribution",
+            "contributed equally",
+            "equally contributed",
+            "co-first",
+            "co first",
+            "joint first",
+            "shared first",
+        ]
+    )
+    corresponding = pubmed_text_has_email(text) or any(
+        phrase in text
+        for phrase in [
+            "corresponding author",
+            "correspondence",
+            "corresponding authors",
+            "electronic address",
+            "e-mail",
+            "email:",
+        ]
+    )
+    inferred_notes = []
+    if index == 0 and not equal:
+        inferred_notes.append("first author")
+    if equal:
+        inferred_notes.append("equal contribution")
+    if corresponding:
+        inferred_notes.append("corresponding author")
+    return {
+        "first_author": bool(index == 0 and not equal),
+        "co_first_author": bool(equal),
+        "corresponding_author": bool(corresponding),
+        "notes": inferred_notes,
+    }
+
+
+def pubmed_author_marks(pubmed: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    entries = pubmed.get("author_affiliations") if isinstance(pubmed.get("author_affiliations"), list) else []
+    marks: dict[str, dict[str, Any]] = {}
+    for index, item in enumerate(entries):
+        if not isinstance(item, dict):
+            continue
+        roles = pubmed_author_entry_roles(item, index=index)
+        first_author = bool(roles.get("first_author"))
+        co_first_author = bool(roles.get("co_first_author"))
+        corresponding_author = bool(roles.get("corresponding_author"))
+        if not (first_author or co_first_author or corresponding_author):
+            continue
+        marks[str(index)] = {
+            "name": clean_text(item.get("name") or ""),
+            "first_author": first_author,
+            "co_first_author": co_first_author,
+            "corresponding_author": corresponding_author,
+            "source": "pubmed_auto",
+        }
+    return marks
+
+
+def sync_my_publication_pubmed_author_marks(storage: Storage, *, paper_id: str, pubmed: dict[str, Any]) -> None:
+    marks = pubmed_author_marks(pubmed)
+    if not marks:
+        return
+    rows = storage.conn.execute(
+        "SELECT id, author_marks FROM my_publications WHERE paper_id = ?",
+        (paper_id,),
+    ).fetchall()
+    if not rows:
+        return
+    aggregate_co_first = any(mark.get("co_first_author") for mark in marks.values())
+    aggregate_corresponding = any(mark.get("corresponding_author") for mark in marks.values())
+    timestamp = now_iso()
+    for row in rows:
+        try:
+            existing_marks = json.loads(row["author_marks"] or "{}")
+        except json.JSONDecodeError:
+            existing_marks = {}
+        if isinstance(existing_marks, dict) and existing_marks:
+            continue
+        storage.conn.execute(
+            """
+            UPDATE my_publications
+            SET author_marks = ?,
+                first_author = ?,
+                corresponding_author = ?,
+                starred = CASE WHEN ? OR ? THEN 1 ELSE starred END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(marks, ensure_ascii=False),
+                1 if aggregate_co_first else 0,
+                1 if aggregate_corresponding else 0,
+                1 if aggregate_co_first else 0,
+                1 if aggregate_corresponding else 0,
+                timestamp,
+                int(row["id"]),
+            ),
+        )
+    storage.conn.commit()
+
+
+def sync_my_publication_existing_pubmed_marks(storage: Storage, *, paper_id: str) -> None:
+    paper = storage.get_paper(paper_id)
+    if not paper:
+        return
+    raw = parse_raw_json(paper)
+    pubmed = raw.get("pubmed") if isinstance(raw.get("pubmed"), dict) else {}
+    if pubmed:
+        sync_my_publication_pubmed_author_marks(storage, paper_id=paper_id, pubmed=pubmed)
+
+
+def pubmed_text(element: ET.Element | None) -> str:
+    if element is None:
+        return ""
+    return clean_text(" ".join("".join(element.itertext()).split()))
+
+
+def pubmed_first_text(root: ET.Element | None, path: str) -> str:
+    if root is None:
+        return ""
+    return pubmed_text(root.find(path))
+
+
+def parse_pubmed_article(article: ET.Element) -> dict[str, Any]:
+    journal = article.find(".//Article/Journal")
+    pub_date = journal.find("./JournalIssue/PubDate") if journal is not None else None
+    article_ids = {
+        clean_text(node.attrib.get("IdType") or "").lower(): pubmed_text(node)
+        for node in article.findall(".//PubmedData/ArticleIdList/ArticleId")
+    }
+    abstract_parts = []
+    for node in article.findall(".//Article/Abstract/AbstractText"):
+        label = clean_text(node.attrib.get("Label") or "")
+        text = pubmed_text(node)
+        if text:
+            abstract_parts.append(f"{label}: {text}" if label else text)
+    authors = []
+    affiliations = []
+    author_affiliations = []
+    for index, node in enumerate(article.findall(".//Article/AuthorList/Author")):
+        collective = pubmed_first_text(node, "./CollectiveName")
+        current_affiliations = []
+        for aff in node.findall("./AffiliationInfo/Affiliation"):
+            text = pubmed_text(aff)
+            if text:
+                affiliations.append(text)
+                current_affiliations.append(text)
+        roles = pubmed_author_roles(node, current_affiliations, index=index)
+        if collective:
+            authors.append(collective)
+            author_affiliations.append({"name": collective, "affiliations": current_affiliations, "roles": roles})
+            continue
+        last = pubmed_first_text(node, "./LastName")
+        fore = pubmed_first_text(node, "./ForeName")
+        initials = pubmed_first_text(node, "./Initials")
+        name = " ".join(part for part in [fore or initials, last] if part)
+        if name:
+            authors.append(name)
+            author_affiliations.append({"name": name, "affiliations": current_affiliations, "roles": roles})
+    mesh = []
+    for node in article.findall(".//MeshHeadingList/MeshHeading"):
+        descriptor = node.find("./DescriptorName")
+        if descriptor is None:
+            continue
+        qualifiers = [pubmed_text(item) for item in node.findall("./QualifierName") if pubmed_text(item)]
+        mesh.append(
+            {
+                "descriptor": pubmed_text(descriptor),
+                "ui": clean_text(descriptor.attrib.get("UI") or ""),
+                "major": clean_text(descriptor.attrib.get("MajorTopicYN") or "").upper() == "Y",
+                "qualifiers": qualifiers,
+            }
+        )
+    keywords = [pubmed_text(node) for node in article.findall(".//KeywordList/Keyword") if pubmed_text(node)]
+    publication_types = [pubmed_text(node) for node in article.findall(".//PublicationTypeList/PublicationType") if pubmed_text(node)]
+    return {
+        "pmid": pubmed_first_text(article, ".//MedlineCitation/PMID"),
+        "pmcid": clean_text(article_ids.get("pmc") or ""),
+        "doi": normalize_publication_doi(str(article_ids.get("doi") or "")),
+        "title": normalize_publication_title(pubmed_first_text(article, ".//Article/ArticleTitle")),
+        "journal": pubmed_first_text(journal, "./Title") if journal is not None else "",
+        "journal_iso_abbrev": pubmed_first_text(journal, "./ISOAbbreviation") if journal is not None else "",
+        "issn": pubmed_first_text(journal, "./ISSN") if journal is not None else "",
+        "publication_date": pubmed_publication_date(pub_date),
+        "volume": pubmed_first_text(journal, "./JournalIssue/Volume") if journal is not None else "",
+        "issue": pubmed_first_text(journal, "./JournalIssue/Issue") if journal is not None else "",
+        "pages": pubmed_first_text(article, ".//Article/Pagination/MedlinePgn"),
+        "abstract": clean_text("\n\n".join(abstract_parts)),
+        "authors": authors,
+        "affiliations": affiliations[:20],
+        "author_affiliations": author_affiliations,
+        "mesh": mesh,
+        "keywords": keywords,
+        "publication_types": publication_types,
+        "nlm_unique_id": pubmed_first_text(article, ".//MedlineJournalInfo/NlmUniqueID"),
+        "medline_ta": pubmed_first_text(article, ".//MedlineJournalInfo/MedlineTA"),
+    }
+
+
+def pubmed_author_roles(node: ET.Element, affiliations: list[str], *, index: int) -> dict[str, Any]:
+    text = " ".join(affiliations).lower()
+    equal = clean_text(node.attrib.get("EqualContrib") or "").upper() == "Y"
+    equal = equal or any(
+        phrase in text
+        for phrase in [
+            "equal contribution",
+            "contributed equally",
+            "equally contributed",
+            "co-first",
+            "co first",
+            "joint first",
+            "shared first",
+        ]
+    )
+    corresponding = pubmed_text_has_email(text) or any(
+        phrase in text
+        for phrase in [
+            "corresponding author",
+            "correspondence",
+            "corresponding authors",
+            "electronic address",
+            "e-mail",
+            "email:",
+        ]
+    )
+    notes = []
+    if index == 0 and not equal:
+        notes.append("first author")
+    if equal:
+        notes.append("equal contribution")
+    if corresponding:
+        notes.append("corresponding author")
+    return {
+        "first_author": bool(index == 0 and not equal),
+        "co_first_author": bool(equal),
+        "corresponding_author": bool(corresponding),
+        "notes": notes,
+    }
+
+
+def pubmed_text_has_email(text: str) -> bool:
+    value = clean_text(str(text or ""))
+    if "@" not in value:
+        return False
+    return bool(re.search(r"[\w.+%-]+@[\w.-]+\.[A-Za-z]{2,}", value))
+
+
+def pubmed_publication_date(pub_date: ET.Element | None) -> str:
+    if pub_date is None:
+        return ""
+    year = pubmed_first_text(pub_date, "./Year")
+    month = pubmed_first_text(pub_date, "./Month")
+    day = pubmed_first_text(pub_date, "./Day")
+    if not year:
+        return pubmed_first_text(pub_date, "./MedlineDate")
+    if month.isalpha():
+        month = {
+            "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+            "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+        }.get(month[:3].lower(), month)
+    if month and month.isdigit():
+        month = month.zfill(2)
+    if day and day.isdigit():
+        day = day.zfill(2)
+    return "-".join(part for part in [year, month, day] if part)
 
 
 def attach_arxiv_preprint_metadata(published: dict[str, Any], arxiv_paper: dict[str, Any]) -> dict[str, Any]:
@@ -3127,13 +3578,19 @@ def refresh_paper_metadata_from_doi_if_possible(
     if not paper_id or not normalized_doi or not looks_like_doi(normalized_doi):
         return paper
     try:
-        normalized = publication_metadata_from_doi(normalized_doi, timeout=timeout, max_retries=max_retries)
+        normalized = publication_metrics_metadata_from_doi(
+            normalized_doi,
+            timeout=timeout,
+            max_retries=max_retries,
+            allow_data_repository=doi_is_likely_data_repository(normalized_doi),
+        )
     except Exception:
         return paper
     if not normalized:
         return paper
     refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(paper, normalized))
-    return refreshed or paper
+    refreshed = refreshed or paper
+    return refresh_pubmed_if_possible(storage, refreshed, doi=normalized_doi, timeout=timeout, max_retries=max_retries) or refreshed
 
 
 def refresh_paper_metadata_from_arxiv_if_possible(
@@ -3157,7 +3614,11 @@ def refresh_paper_metadata_from_arxiv_if_possible(
     if not normalized:
         return paper
     refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(paper, normalized))
-    return refreshed or paper
+    refreshed = refreshed or paper
+    published_doi = normalize_publication_doi(str(refreshed.get("doi") or ""))
+    if published_doi and looks_like_doi(published_doi):
+        refreshed = refresh_pubmed_if_possible(storage, refreshed, doi=published_doi, timeout=timeout, max_retries=max_retries) or refreshed
+    return refreshed
 
 
 def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None) -> int:
@@ -3192,7 +3653,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
     total = len(eligible)
     if job_id:
         if total:
-            log_library_import_job(job_id, f"Refreshing Details metadata from DOI/arXiv for {total} imported papers")
+            log_library_import_job(job_id, f"Refreshing Details metadata and citation metrics from DOI/arXiv for {total} imported papers")
         else:
             log_library_import_job(job_id, "No imported papers with DOI/arXiv ID were found for Details metadata refresh")
     current = 0
@@ -3211,7 +3672,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         if job_id:
             percent = max(0, min(99, round((current / total) * 100))) if total else 0
             update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
-            log_library_import_job(job_id, f"Refreshing Details metadata from {identifier_kind} {current} / {total}: {identifier}")
+            log_library_import_job(job_id, f"Refreshing Details metadata and metrics from {identifier_kind} {current} / {total}: {identifier}")
         stored_paper = storage.get_paper(paper_id)
         before = dict(stored_paper or {})
         if looks_like_doi(doi):
@@ -4462,6 +4923,21 @@ def doi_is_likely_data_repository(value: str) -> bool:
     return any(re.search(pattern, doi, flags=re.I) for pattern in repository_patterns)
 
 
+def doi_is_arxiv_preprint_doi(value: str) -> bool:
+    doi = normalize_publication_doi(value)
+    return bool(re.match(r"^10\.48550/arxiv[.:/]", doi, flags=re.I))
+
+
+def doi_is_likely_published_version(value: str) -> bool:
+    doi = normalize_publication_doi(value)
+    return bool(
+        doi
+        and looks_like_doi(doi)
+        and not doi_is_likely_data_repository(doi)
+        and not doi_is_arxiv_preprint_doi(doi)
+    )
+
+
 def openalex_item_is_likely_data_repository(item: dict[str, Any]) -> bool:
     item_type = clean_text(item.get("type") or item.get("type_crossref") or "").lower()
     if item_type in {"dataset", "data-set", "data"}:
@@ -4588,7 +5064,7 @@ def citation_label(paper: dict[str, Any]) -> str:
     lead = author_last_name(authors[0]) if authors else "Unknown"
     if len(authors) > 1:
         lead = f"{lead} et al."
-    journal = paper.get("journal") or "Unknown Journal"
+    journal = display_journal_name(paper) or "Unknown Journal"
     preprint_id = preprint_identifier(paper)
     if preprint_id and journal.lower() == ARXIV_JOURNAL_NAME.lower():
         journal = f"{journal}:{preprint_id}"
@@ -4601,6 +5077,10 @@ def citation_label(paper: dict[str, Any]) -> str:
     if page:
         source = f"{source}, {page}"
     return f"{lead} {source} ({year})" if year else f"{lead} {source}"
+
+
+def display_journal_name(paper: dict[str, Any]) -> str:
+    return journal_name_for_doi(paper.get("journal") or "", clean_text(paper.get("doi") or ""))
 
 
 def citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
@@ -4777,6 +5257,51 @@ def semantic_scholar_summary(paper: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def pubmed_summary(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    pubmed = raw.get("pubmed") if isinstance(raw.get("pubmed"), dict) else {}
+    if not pubmed:
+        return {}
+    mesh_values: list[str] = []
+    for item in pubmed.get("mesh") or []:
+        if not isinstance(item, dict):
+            continue
+        descriptor = clean_text(item.get("descriptor") or "")
+        if descriptor:
+            mesh_values.append(descriptor)
+    author_affiliations = []
+    for index, item in enumerate(pubmed.get("author_affiliations") or []):
+        if not isinstance(item, dict):
+            continue
+        affiliations = [clean_text(str(value)) for value in item.get("affiliations") or [] if clean_text(str(value))]
+        roles = pubmed_author_entry_roles(item, index=index)
+        author_affiliations.append({
+            "name": clean_text(item.get("name") or ""),
+            "affiliations": affiliations,
+            "roles": {
+                "first_author": bool(roles.get("first_author")),
+                "co_first_author": bool(roles.get("co_first_author")),
+                "corresponding_author": bool(roles.get("corresponding_author")),
+                "notes": [clean_text(str(value)) for value in roles.get("notes") or [] if clean_text(str(value))],
+            },
+        })
+    return {
+        "pmid": clean_text(pubmed.get("pmid") or raw.get("pmid") or ""),
+        "pmcid": clean_text(pubmed.get("pmcid") or raw.get("pmcid") or ""),
+        "doi": normalize_publication_doi(str(pubmed.get("doi") or "")),
+        "journal_iso_abbrev": clean_text(pubmed.get("journal_iso_abbrev") or ""),
+        "issn": clean_text(pubmed.get("issn") or ""),
+        "medline_ta": clean_text(pubmed.get("medline_ta") or ""),
+        "nlm_unique_id": clean_text(pubmed.get("nlm_unique_id") or ""),
+        "publication_types": [clean_text(str(value)) for value in pubmed.get("publication_types") or [] if clean_text(str(value))],
+        "keywords": [clean_text(str(value)) for value in pubmed.get("keywords") or [] if clean_text(str(value))],
+        "mesh": mesh_values,
+        "author_affiliations": author_affiliations,
+        "url": f"https://pubmed.ncbi.nlm.nih.gov/{quote(clean_text(pubmed.get('pmid') or raw.get('pmid') or ''), safe='')}/" if clean_text(pubmed.get("pmid") or raw.get("pmid") or "") else "",
+        "pmc_url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{quote(clean_text(pubmed.get('pmcid') or raw.get('pmcid') or ''), safe='')}/" if clean_text(pubmed.get("pmcid") or raw.get("pmcid") or "") else "",
+    }
+
+
 def ads_summary(paper: dict[str, Any]) -> dict[str, Any]:
     raw = parse_raw_json(paper)
     ads = raw.get("ads") if isinstance(raw.get("ads"), dict) else {}
@@ -4847,13 +5372,16 @@ def refresh_ads_if_possible(
     raw = parse_raw_json(paper)
     raw["ads"] = record
     ads_dois = [normalize_publication_doi(str(value)) for value in record.get("doi") or [] if normalize_publication_doi(str(value))]
+    published_ads_dois = [doi for doi in ads_dois if doi_is_likely_published_version(doi)]
     paper_doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    if ads_dois and not paper_doi:
-        raw["published_doi"] = ads_dois[0]
+    paper_has_published_doi = doi_is_likely_published_version(paper_doi)
+    if published_ads_dois and not paper_has_published_doi:
+        raw["published_doi"] = published_ads_dois[0]
     updated = storage.update_paper_raw_json(paper_id, raw) or paper
-    if ads_dois and not paper_doi and not doi_is_likely_data_repository(ads_dois[0]):
+    if published_ads_dois and not paper_has_published_doi:
         try:
-            published = publication_metrics_metadata_from_doi(ads_dois[0], timeout=timeout, max_retries=1)
+            published_doi = published_ads_dois[0]
+            published = publication_metrics_metadata_from_doi(published_doi, timeout=timeout, max_retries=1)
             if published:
                 merged = attach_arxiv_preprint_metadata(published, updated)
                 refreshed = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(updated, merged))
@@ -4861,6 +5389,7 @@ def refresh_ads_if_possible(
                     refreshed_raw = parse_raw_json(refreshed)
                     refreshed_raw["ads"] = record
                     updated = storage.update_paper_raw_json(paper_id, refreshed_raw) or refreshed
+                    updated = refresh_pubmed_if_possible(storage, updated, doi=published_doi, timeout=timeout, max_retries=1) or updated
         except Exception:
             return updated
     return updated
@@ -4880,7 +5409,7 @@ def merge_refreshed_metadata(existing: dict[str, Any] | None, refreshed: dict[st
         merged["image_url"] = existing.get("image_url") or ""
     existing_raw = parse_raw_json(existing)
     refreshed_raw = merged.get("raw") if isinstance(merged.get("raw"), dict) else {}
-    for key in ["ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi", "citation_versions", "google_scholar", "crossref"]:
+    for key in ["ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi", "citation_versions", "google_scholar", "crossref", "pubmed", "pmid", "pmcid"]:
         if key not in refreshed_raw and key in existing_raw:
             refreshed_raw[key] = existing_raw[key]
     for key in ["volume", "issue", "page", "article-number", "biblio", "journal-issue"]:
@@ -5592,7 +6121,7 @@ def bibtex_entry(paper: dict[str, Any]) -> str:
 
 def nature_reference(paper: dict[str, Any]) -> dict[str, str]:
     title = clean_text(paper.get("title") or "")
-    journal = clean_text(paper.get("journal") or "")
+    journal = display_journal_name(paper)
     return {
         "authors": nature_author_text(paper),
         "title": title,
@@ -6892,9 +7421,25 @@ def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
                 else:
                     normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=10, max_retries=1)
                 updated = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(publication, normalized)) if normalized else publication
+                pubmed_doi = normalize_publication_doi(str((updated or {}).get("doi") or doi))
+                pubmed_enriched = False
+                if pubmed_doi and looks_like_doi(pubmed_doi):
+                    before_pubmed = parse_raw_json(updated or {})
+                    updated = refresh_pubmed_if_possible(storage, updated, doi=pubmed_doi, timeout=12, max_retries=1) or updated
+                    after_pubmed = parse_raw_json(updated or {})
+                    pubmed_enriched = bool(after_pubmed.get("pubmed")) and after_pubmed.get("pubmed") != before_pubmed.get("pubmed")
+                    updated = storage.get_paper(paper_id) or updated
                 enriched = refresh_semantic_scholar_if_possible(storage, updated, timeout=6, max_retries=1)
                 ads_enriched = refresh_ads_if_possible(storage, enriched or updated, timeout=6, max_retries=1)
-                if normalized or (enriched and enriched.get("semantic_scholar_json")) or (ads_enriched and ads_summary(ads_enriched)):
+                final_paper = ads_enriched or enriched or updated
+                final_raw = parse_raw_json(final_paper or {})
+                final_pubmed_doi = normalize_publication_doi(
+                    str((final_paper or {}).get("doi") or final_raw.get("published_doi") or final_raw.get("doi") or doi)
+                )
+                if final_pubmed_doi and looks_like_doi(final_pubmed_doi) and not final_raw.get("pubmed"):
+                    final_paper = refresh_pubmed_if_possible(storage, final_paper, doi=final_pubmed_doi, timeout=12, max_retries=1) or final_paper
+                    pubmed_enriched = bool(parse_raw_json(final_paper or {}).get("pubmed"))
+                if normalized or pubmed_enriched or (enriched and enriched.get("semantic_scholar_json")) or (ads_enriched and ads_summary(ads_enriched)):
                     refreshed += 1
                 else:
                     skipped += 1
@@ -7659,6 +8204,66 @@ def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[s
     for paper_id in cleared_paper_ids:
         storage.clear_download_status(paper_id)
     return deleted
+
+
+def clear_library_folder_contents(storage: Storage, *, folder_id: int) -> dict[str, int]:
+    folder_id = int(folder_id)
+    tree_sql = """
+        WITH RECURSIVE folder_tree(id) AS (
+          SELECT id FROM library_folders WHERE id = ?
+          UNION ALL
+          SELECT library_folders.id
+          FROM library_folders
+          JOIN folder_tree ON library_folders.parent_id = folder_tree.id
+        )
+    """
+    exists = storage.conn.execute("SELECT 1 FROM library_folders WHERE id = ?", (folder_id,)).fetchone()
+    if not exists:
+        return {"items": 0, "folders": 0}
+    item_count = int(
+        storage.conn.execute(
+            tree_sql
+            + """
+            SELECT COUNT(*) AS count
+            FROM library_items
+            WHERE folder_id IN (SELECT id FROM folder_tree)
+            """,
+            (folder_id,),
+        ).fetchone()["count"]
+        or 0
+    )
+    folder_count = int(
+        storage.conn.execute(
+            tree_sql
+            + """
+            SELECT COUNT(*) AS count
+            FROM library_folders
+            WHERE id != ? AND id IN (SELECT id FROM folder_tree)
+            """,
+            (folder_id, folder_id),
+        ).fetchone()["count"]
+        or 0
+    )
+    storage.conn.execute(
+        tree_sql
+        +
+        """
+        DELETE FROM library_items
+        WHERE folder_id IN (SELECT id FROM folder_tree)
+        """,
+        (folder_id,),
+    )
+    storage.conn.execute(
+        tree_sql
+        +
+        """
+        DELETE FROM library_folders
+        WHERE id != ? AND id IN (SELECT id FROM folder_tree)
+        """,
+        (folder_id, folder_id),
+    )
+    storage.conn.commit()
+    return {"items": item_count, "folders": folder_count}
 
 
 def delete_analysis_file_for_paper(paper: dict[str, Any]) -> list[str]:
@@ -9788,13 +10393,13 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       color: var(--accent);
     }
-    .my-publications-id .journal-name { color: var(--ink); font-style: italic; font-weight: 400; }
-    .my-publications-id strong { font-weight: 400; color: var(--ink); }
+    .my-publications-id .journal-name { color: #526175; font-style: italic; font-weight: 500; }
+    .my-publications-id strong { font-weight: 750; color: var(--ink); }
     .my-publications-stats {
       grid-row: 3;
       position: relative;
       display: grid;
-      grid-template-columns: minmax(120px, 0.8fr) minmax(150px, 1fr) minmax(190px, 1.3fr) minmax(210px, 1.45fr);
+      grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1.18fr) minmax(180px, 1.18fr) minmax(200px, 1.28fr);
       gap: 8px;
       border-top: 0;
       background: #f2f2f2;
@@ -10009,7 +10614,7 @@ INDEX_HTML = """<!doctype html>
     .publication-author-menu {
       position: fixed;
       z-index: 200;
-      width: 230px;
+      width: 310px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
@@ -10031,6 +10636,70 @@ INDEX_HTML = """<!doctype html>
       color: #344054;
     }
     .publication-author-menu input { margin: 0; }
+    .publication-author-menu-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .publication-author-menu-affiliations {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #edf0f5;
+      color: #667085;
+      font-size: 11px;
+      line-height: 1.35;
+      max-height: 150px;
+      overflow: auto;
+    }
+    .publication-author-menu-affiliations b {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--ink);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+    .publication-author-menu-affiliations p { margin: 0 0 6px; }
+    .author-affiliation-hover {
+      display: inline-block;
+      text-decoration: underline dotted rgba(13, 116, 116, 0.45);
+      text-underline-offset: 3px;
+      cursor: help;
+    }
+    .author-affiliation-tooltip {
+      display: none;
+      position: fixed;
+      z-index: 240;
+      width: 320px;
+      overflow: visible;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18);
+      padding: 9px 10px;
+      color: #344054;
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: left;
+      white-space: normal;
+    }
+    .author-affiliation-tooltip b {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--ink);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .02em;
+    }
+    .author-affiliation-tooltip p { margin: 0 0 6px; }
+    .author-role-symbols {
+      margin-left: 2px;
+      color: var(--accent-strong);
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 0;
+      vertical-align: super;
+    }
     .star-button {
       width: 22px;
       height: 22px;
@@ -10350,7 +11019,8 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-shell {
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      column-gap: 22px;
+      grid-template-rows: minmax(0, 1fr) 8px;
+      column-gap: 11px;
       margin-left: -18px;
       width: calc(100% + 18px);
       overflow: hidden;
@@ -10762,6 +11432,29 @@ INDEX_HTML = """<!doctype html>
       background: #78c3ff;
       box-shadow: inset 0 0 0 1px rgba(20, 89, 150, 0.16);
     }
+    .library-entry-icon.trash::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 6px;
+      width: 11px;
+      height: 9px;
+      border: 1.5px solid #667085;
+      border-top: 0;
+      border-radius: 0 0 3px 3px;
+      background: linear-gradient(180deg, #f9fafb 0%, #e4e7ec 100%);
+    }
+    .library-entry-icon.trash::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 3px;
+      width: 13px;
+      height: 3px;
+      border-top: 1.5px solid #667085;
+      border-radius: 2px;
+      box-shadow: 4px -2px 0 -1px #667085;
+    }
     .library-entry-icon.linked-document {
       width: 18px;
       height: 16px;
@@ -11141,7 +11834,8 @@ INDEX_HTML = """<!doctype html>
     .citation-source-cell span { color: var(--accent-strong); font-weight: 750; font-size: 12px; }
     .citation-source-cell small { display: block; font-size: 9px; line-height: 1.15; color: var(--muted); }
     .semantic-panel,
-    .ads-panel {
+    .ads-panel,
+    .pubmed-panel {
       display: none;
       margin-top: 10px;
       border-top: 1px solid #edf0f5;
@@ -11150,12 +11844,15 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       line-height: 1.45;
     }
+    .pubmed-panel { display: block; }
     .citation-panel[data-active-citation-source="semantic_scholar"] .semantic-panel { display: block; }
     .citation-panel[data-active-citation-source="ads"] .ads-panel { display: block; }
     .semantic-panel strong,
-    .ads-panel strong { color: var(--ink); }
+    .ads-panel strong,
+    .pubmed-panel strong { color: var(--ink); }
     .semantic-panel p,
-    .ads-panel p { margin: 5px 0 0; }
+    .ads-panel p,
+    .pubmed-panel p { margin: 5px 0 0; }
     .semantic-detail-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -11340,9 +12037,13 @@ INDEX_HTML = """<!doctype html>
     .library-context-menu button:hover { background: rgba(0, 0, 0, 0.08); }
     .library-context-menu button[data-action="delete-entry"],
     .library-context-menu button[data-action="delete-file-entry"],
+    .library-context-menu button[data-action="delete-special-original-files"],
+    .library-context-menu button[data-action="remove-special-library"],
     .library-context-menu button[data-action="delete-my-publication"] { color: #1f2328; }
     .library-context-menu button[data-action="delete-entry"]:hover,
     .library-context-menu button[data-action="delete-file-entry"]:hover,
+    .library-context-menu button[data-action="delete-special-original-files"]:hover,
+    .library-context-menu button[data-action="remove-special-library"]:hover,
     .library-context-menu button[data-action="delete-my-publication"]:hover { background: rgba(0, 0, 0, 0.08); }
     .my-publication-context-menu {
       min-width: 0;
@@ -11992,7 +12693,7 @@ INDEX_HTML = """<!doctype html>
               <div class="my-publications-tool-left">
                 <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
                 <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
-                <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics from OpenAlex/Semantic Scholar/Crossref" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
+                <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics and PubMed metadata" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
                 <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
                 <button class="smallbtn" id="addMyPublication" type="button">Add</button>
                 <div class="publication-export-menu">
@@ -13612,6 +14313,48 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function libraryFolderContentCounts(folderId) {
+      const folderIds = libraryDescendantFolderIds(folderId);
+      const itemCount = state.libraryItems.filter((item) => folderIds.has(Number(item.folder_id || 0))).length;
+      const folderCount = state.libraryFolders.filter((folder) => folderIds.has(Number(folder.parent_id || 0))).length;
+      return {itemCount, folderCount};
+    }
+
+    async function clearLibrarySpecialFolder(folderId, {deleteFiles = false} = {}) {
+      const folder = libraryFolderById(folderId);
+      if (!folder || !(folder.is_unsorted || folder.is_recycle)) return;
+      const paths = libraryFilePathsForDelete("folder", folderId);
+      const counts = libraryFolderContentCounts(folderId);
+      const totalEntries = counts.itemCount + counts.folderCount;
+      if (!totalEntries) return;
+      const folderName = folder.name || (folder.is_recycle ? "Recycle" : "unsorted");
+      const preview = paths.length ? paths.slice(0, 8).join("\\n") : "No local files found in this folder.";
+      const overflow = paths.length > 8 ? `\\n...and ${paths.length - 8} more` : "";
+      const confirmed = await showLibraryConfirmDialog({
+        title: deleteFiles ? `Delete all original files in ${folderName}?` : `Remove all from ${folderName}?`,
+        body: deleteFiles
+          ? `This cannot be undone. ${paths.length} local file${paths.length === 1 ? "" : "s"} will be deleted, and ${totalEntries} Library entr${totalEntries === 1 ? "y" : "ies"} will be removed.`
+          : `This removes ${totalEntries} Library entr${totalEntries === 1 ? "y" : "ies"} from ${folderName}. Original files on disk are not deleted.`,
+        paths: deleteFiles ? preview + overflow : "",
+        confirmLabel: deleteFiles ? "Delete All Original Files" : "Remove All"
+      });
+      if (!confirmed) return;
+      return withLibraryActivityStatus(deleteFiles ? "Deleting files..." : "Removing...", deleteFiles ? "Delete complete." : "Remove complete.", async () => {
+        const res = await fetch("/api/library/special-folder/clear", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({folder_id: folderId, delete_files: deleteFiles, confirmed: true})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not clear folder");
+        applyLibrarySnapshot(data);
+        setLibraryColumnSelection(parentFolderId(folderId), {type: "folder", id: Number(folderId)});
+        state.libraryActiveFolderId = Number(folderId);
+        state.libraryCurrentFolderId = Number(folderId);
+        renderLibrary();
+      });
+    }
+
     function showLibraryConfirmDialog({title, body, paths, confirmLabel = "Delete"} = {}) {
       return new Promise((resolve) => {
         document.querySelector(".library-confirm-backdrop")?.remove();
@@ -13767,7 +14510,7 @@ INDEX_HTML = """<!doctype html>
       }
       buttons.forEach((button) => button.disabled = true);
       if (status) {
-        status.textContent = "Refreshing metadata and metrics from identifier...";
+        status.textContent = "Refreshing metadata, metrics, and PubMed details from identifier...";
         status.className = "library-detail-status";
       }
       if (state.libraryTab === "my-publications") {
@@ -14660,6 +15403,8 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="paste-entry">Paste</button>
           <button type="button" data-action="recover-entry">Recover</button>
+          <button type="button" data-action="delete-special-original-files">Delete All Original Files</button>
+          <button type="button" data-action="remove-special-library">Remove All from Library</button>
           <button type="button" data-action="delete-entry">Remove from current collection</button>
           <button type="button" data-action="delete-file-entry">Delete File...</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
@@ -14720,12 +15465,15 @@ INDEX_HTML = """<!doctype html>
         seen.add(current);
         const folder = libraryFolderById(current);
         if (!folder) break;
-        folderParts.unshift({type: "folder", name: folder.name || "Library"});
+        folderParts.unshift({type: "folder", name: folder.name || "Library", iconClass: libraryEntryIconClass("folder", folder)});
         if (current === displayRootId) break;
         current = Number(folder.parent_id || displayRootId);
       }
-      if (!folderParts.length) folderParts.push({type: "folder", name: libraryFolderById(displayRootId)?.name || "Library"});
-      if (leafName) folderParts.push({type: "document", name: leafName});
+      if (!folderParts.length) {
+        const displayRoot = libraryFolderById(displayRootId);
+        folderParts.push({type: "folder", name: displayRoot?.name || "Library", iconClass: libraryEntryIconClass("folder", displayRoot || {})});
+      }
+      if (leafName) folderParts.push({type: "document", name: leafName, iconClass: "document"});
       return folderParts;
     }
 
@@ -14738,7 +15486,7 @@ INDEX_HTML = """<!doctype html>
         .map((part, index) => `
           ${index ? `<span class="library-path-separator">›</span>` : ""}
           <span class="library-path-item">
-            <span class="library-entry-icon ${part.type === "folder" ? "folder" : "document"} library-path-icon" aria-hidden="true"></span>
+            <span class="library-entry-icon ${escapeAttr(part.iconClass || (part.type === "folder" ? "folder" : "document"))} library-path-icon" aria-hidden="true"></span>
             <span class="library-path-part">${escapeHtml(part.name)}</span>
           </span>
         `)
@@ -15839,7 +16587,7 @@ INDEX_HTML = """<!doctype html>
             <span>${citationCounts.length} papers with cites</span>
             <div class="my-publications-stat-list">
               <div class="my-publications-stat-row"><b>Rule</b><em>Max per paper</em></div>
-              <div class="my-publications-stat-row sources-row"><b>Sources</b><em><span class="my-publications-source-list"><span class="my-publications-source-list-line">OpenAlex / Semantic</span><span class="my-publications-source-list-line">Crossref / ADS</span></span></em></div>
+              <div class="my-publications-stat-row sources-row"><b>Sources</b><em><span class="my-publications-source-list"><span class="my-publications-source-list-line">OpenAlex / Semantic</span><span class="my-publications-source-list-line">Crossref / ADS / PubMed</span></span></em></div>
               <div class="my-publications-stat-row"><b>Average</b><em>${withDoi ? Math.round(doiCitationTotal / withDoi) : "--"}</em></div>
             </div>
           </div>
@@ -16373,7 +17121,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryEntryIconClass(type, entry) {
-      if (type === "folder") return "folder";
+      if (type === "folder") return (entry?.is_unsorted || entry?.is_recycle) ? "trash" : "folder";
       return entry?.paper?.storage_mode === "link" ? "linked-document" : "document";
     }
 
@@ -16436,11 +17184,11 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
-    function publicationAuthorsSectionMarkup(publication, authors) {
+    function publicationAuthorsSectionMarkup(publication, authors, paper = null) {
       return `
         <section class="library-detail-authors">
           <strong>Authors</strong>
-          <div>${publicationAuthorsMarkup(publication, authors)}</div>
+          <div>${publicationAuthorsMarkup(publication, authors, paper)}</div>
         </section>
       `;
     }
@@ -16467,7 +17215,7 @@ INDEX_HTML = """<!doctype html>
     function libraryDetailMetadataMarkup(paper, authors, publication = null, options = {}) {
       const preprintId = paper.preprint_id || "";
       const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
-      const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors) : authorsMarkup(authors);
+      const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors, paper) : authorsMarkup(authors, paper);
       return `
         <dl>
           <dt>Title</dt><dd class="library-detail-title">${escapeHtml(paper.title || "Untitled paper")}</dd>
@@ -16532,15 +17280,40 @@ INDEX_HTML = """<!doctype html>
       queuePaperFigureHydration(paper.paper_id);
     }
 
-    function authorsMarkup(authors) {
+    function authorsMarkup(authors, paper = null) {
       if (!Array.isArray(authors) || !authors.length) return "Authors unavailable";
-      return authors.map((author) => {
+      return authors.map((author, index) => {
         const escaped = escapeHtml(author);
-        return authorMatchesMyName(author) ? `<strong>${escaped}</strong>` : escaped;
+        const symbols = publicationAuthorRoleSymbols(paper, index, author);
+        const suffix = symbols.text ? `<sup class="author-role-symbols" title="${escapeAttr(symbols.title)}">${escapeHtml(symbols.text)}</sup>` : "";
+        const label = authorMatchesMyName(author) ? `<strong>${escaped}</strong>${suffix}` : `${escaped}${suffix}`;
+        const affiliations = publicationAuthorAffiliations(paper, index, author);
+        if (!affiliations.length) return label;
+        return `
+          <span class="author-affiliation-hover" tabindex="0" data-author-affiliations="${escapeAttr(JSON.stringify(affiliations))}">
+            ${label}
+          </span>
+        `;
       }).join(", ");
     }
 
-    function publicationAuthorsMarkup(publication, authors) {
+    function publicationAuthorRoleSymbols(paper, index, authorName) {
+      const entry = publicationAuthorPubmedEntry(paper, index, authorName);
+      const roles = entry?.roles || {};
+      const parts = [];
+      const labels = [];
+      if (roles.co_first_author) {
+        parts.push("*");
+        labels.push("Equal contribution");
+      }
+      if (roles.corresponding_author) {
+        parts.push("†");
+        labels.push("Corresponding author");
+      }
+      return {text: parts.join(""), title: labels.join("; ")};
+    }
+
+    function publicationAuthorsMarkup(publication, authors, paper = null) {
       if (!Array.isArray(authors) || !authors.length) return "Authors unavailable";
       const marks = publication.author_marks || {};
       return `<span class="publication-author-list">${authors.map((author, index) => {
@@ -16551,8 +17324,22 @@ INDEX_HTML = """<!doctype html>
           mark.corresponding_author ? "corr." : ""
         ].filter(Boolean);
         const mine = authorMatchesMyName(author);
-        return `<button class="publication-author-pill${mine ? " mine" : ""}${badges.length ? " marked" : ""}" type="button" data-action="edit-publication-author" data-author-index="${index}" data-author-name="${escapeAttr(author)}">${escapeHtml(author)}${badges.map((badge) => `<span class="publication-author-badge">${escapeHtml(badge)}</span>`).join("")}</button>`;
+        const affiliations = publicationAuthorAffiliations(paper, index, author);
+        return `<button class="publication-author-pill${mine ? " mine" : ""}${badges.length ? " marked" : ""}" type="button" data-action="edit-publication-author" data-author-index="${index}" data-author-name="${escapeAttr(author)}" data-author-affiliations="${escapeAttr(JSON.stringify(affiliations))}">${escapeHtml(author)}${badges.map((badge) => `<span class="publication-author-badge">${escapeHtml(badge)}</span>`).join("")}</button>`;
       }).join("")}</span>`;
+    }
+
+    function publicationAuthorAffiliations(paper, index, authorName) {
+      const entry = publicationAuthorPubmedEntry(paper, index, authorName);
+      return Array.isArray(entry?.affiliations) ? entry.affiliations.filter(Boolean) : [];
+    }
+
+    function publicationAuthorPubmedEntry(paper, index, authorName) {
+      const values = Array.isArray(paper?.pubmed?.author_affiliations) ? paper.pubmed.author_affiliations : [];
+      const byIndex = values[Number(index) || 0];
+      if (byIndex) return byIndex;
+      const target = String(authorName || "").trim().toLowerCase();
+      return values.find((item) => String(item?.name || "").trim().toLowerCase() === target) || null;
     }
 
     function authorMatchesMyName(author) {
@@ -16719,6 +17506,7 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailMetadataMarkup(paper, authors)}
         ${citationMetricsMarkup(paper)}
         ${libraryDetailAbstractMarkup(paper)}
+        ${pubmedMarkup(paper.pubmed || {})}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
           <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
@@ -16834,8 +17622,9 @@ INDEX_HTML = """<!doctype html>
         ${manualPublicationMetadataMarkup(publication, paper, authors)}
         ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true})}
         ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
-        ${publicationAuthorsSectionMarkup(publication, authors)}
+        ${publicationAuthorsSectionMarkup(publication, authors, paper)}
         ${libraryDetailAbstractMarkup(paper)}
+        ${pubmedMarkup(paper.pubmed || {})}
         <div class="library-reference-head">
           <strong>BibTeX</strong>
           <button class="action" data-action="copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
@@ -17100,6 +17889,39 @@ INDEX_HTML = """<!doctype html>
           <div class="semantic-tags">
             ${properties.map((property) => `<span class="semantic-tag">${escapeHtml(property)}</span>`).join("")}
             ${ads.url ? `<a class="semantic-tag" href="${escapeAttr(ads.url)}" target="_blank" rel="noreferrer">Open ADS</a>` : ""}
+          </div>
+        </div>
+      `;
+    }
+
+    function pubmedMarkup(pubmed) {
+      if (!pubmed || !Object.keys(pubmed).length) return "";
+      const types = Array.isArray(pubmed.publication_types) ? pubmed.publication_types : [];
+      const keywords = Array.isArray(pubmed.keywords) ? pubmed.keywords : [];
+      const mesh = Array.isArray(pubmed.mesh) ? pubmed.mesh : [];
+      const rows = [
+        ["PMID", pubmed.pmid || "--"],
+        ["PMCID", pubmed.pmcid || "--"],
+        ["Journal", [pubmed.journal_iso_abbrev || "", pubmed.medline_ta || ""].filter(Boolean).join(" · ") || "--"],
+        ["ISSN / NLM", [pubmed.issn || "", pubmed.nlm_unique_id || ""].filter(Boolean).join(" · ") || "--"],
+        ["MeSH", mesh.length ? compactList(mesh, 8) : "--"],
+        ["Keywords", keywords.length ? compactList(keywords, 8) : "--"],
+        ["Types", types.length ? compactList(types, 6) : "--"],
+      ];
+      return `
+        <div class="pubmed-panel">
+          <strong>PubMed Details</strong>
+          <div class="semantic-detail-grid">
+            ${rows.map(([label, value]) => `
+              <div class="semantic-detail-row">
+                <b>${escapeHtml(label)}</b>
+                <span>${escapeHtml(value)}</span>
+              </div>
+            `).join("")}
+          </div>
+          <div class="semantic-tags">
+            ${pubmed.url ? `<a class="semantic-tag" href="${escapeAttr(pubmed.url)}" target="_blank" rel="noreferrer">Open PubMed</a>` : ""}
+            ${pubmed.pmc_url ? `<a class="semantic-tag" href="${escapeAttr(pubmed.pmc_url)}" target="_blank" rel="noreferrer">Open PMC</a>` : ""}
           </div>
         </div>
       `;
@@ -17806,6 +18628,13 @@ INDEX_HTML = """<!doctype html>
       closePublicationAuthorMenu();
       const index = Number(button.dataset.authorIndex || 0);
       const authorName = button.dataset.authorName || "";
+      let affiliations = [];
+      try {
+        affiliations = JSON.parse(button.dataset.authorAffiliations || "[]");
+      } catch {
+        affiliations = [];
+      }
+      affiliations = Array.isArray(affiliations) ? affiliations.filter(Boolean) : [];
       const mark = publication.author_marks?.[String(index)] || {};
       const rect = button.getBoundingClientRect();
       const menu = document.createElement("div");
@@ -17813,9 +18642,17 @@ INDEX_HTML = """<!doctype html>
       menu.id = "publicationAuthorMenu";
       menu.innerHTML = `
         <strong>${escapeHtml(authorName)}</strong>
-        <label><input type="checkbox" data-author-menu-field="first_author" ${mark.first_author ? "checked" : ""}> First author</label>
-        <label><input type="checkbox" data-author-menu-field="co_first_author" ${mark.co_first_author ? "checked" : ""}> Co-first author</label>
+        <div class="publication-author-menu-row">
+          <label><input type="checkbox" data-author-menu-field="first_author" ${mark.first_author ? "checked" : ""}> First author</label>
+          <label><input type="checkbox" data-author-menu-field="co_first_author" ${mark.co_first_author ? "checked" : ""}> Co-first author</label>
+        </div>
         <label><input type="checkbox" data-author-menu-field="corresponding_author" ${mark.corresponding_author ? "checked" : ""}> Corresponding author</label>
+        <div class="publication-author-menu-affiliations">
+          <b>Affiliations</b>
+          ${affiliations.length
+            ? affiliations.map((affiliation) => `<p>${escapeHtml(affiliation)}</p>`).join("")
+            : `<p>No PubMed affiliation found for this author.</p>`}
+        </div>
       `;
       document.body.appendChild(menu);
       const top = Math.min(window.innerHeight - menu.offsetHeight - 12, rect.bottom + 6);
@@ -17829,6 +18666,52 @@ INDEX_HTML = """<!doctype html>
 
     function closePublicationAuthorMenu() {
       $("publicationAuthorMenu")?.remove();
+    }
+
+    function showAuthorAffiliationTooltip(anchor) {
+      closeAuthorAffiliationTooltip();
+      let affiliations = [];
+      try {
+        affiliations = JSON.parse(anchor?.dataset?.authorAffiliations || "[]");
+      } catch {
+        affiliations = [];
+      }
+      affiliations = Array.isArray(affiliations) ? affiliations.filter(Boolean) : [];
+      if (!anchor || !affiliations.length) return;
+      const detail = anchor.closest(".library-detail") || $("libraryDetail");
+      const detailRect = detail?.getBoundingClientRect?.();
+      const anchorRect = anchor.getBoundingClientRect();
+      const tooltip = document.createElement("div");
+      tooltip.className = "author-affiliation-tooltip";
+      tooltip.id = "authorAffiliationTooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.innerHTML = `
+        <b>Affiliations</b>
+        ${affiliations.map((affiliation) => `<p>${escapeHtml(affiliation)}</p>`).join("")}
+      `;
+      document.body.appendChild(tooltip);
+      const margin = 8;
+      const panelLeft = detailRect ? Math.max(margin, detailRect.left + margin) : margin;
+      const panelRight = detailRect ? Math.min(window.innerWidth - margin, detailRect.right - margin) : window.innerWidth - margin;
+      const panelTop = detailRect ? Math.max(margin, detailRect.top + margin) : margin;
+      const panelBottom = detailRect ? Math.min(window.innerHeight - margin, detailRect.bottom - margin) : window.innerHeight - margin;
+      const width = Math.max(180, Math.min(320, panelRight - panelLeft));
+      tooltip.style.width = `${width}px`;
+      tooltip.style.display = "block";
+      const tooltipHeight = tooltip.offsetHeight;
+      const preferredLeft = anchorRect.left;
+      const left = Math.max(panelLeft, Math.min(preferredLeft, panelRight - width));
+      const aboveTop = anchorRect.top - tooltipHeight - 7;
+      const belowTop = anchorRect.bottom + 7;
+      const top = aboveTop >= panelTop
+        ? aboveTop
+        : Math.max(panelTop, Math.min(belowTop, panelBottom - tooltipHeight));
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    }
+
+    function closeAuthorAffiliationTooltip() {
+      $("authorAffiliationTooltip")?.remove();
     }
 
     async function updateSelectedMyPublicationAuthorMark(publication, index, authorName, menu) {
@@ -17955,7 +18838,7 @@ INDEX_HTML = """<!doctype html>
       if (state.myPublicationMetricsRefreshing) return;
       const button = $("refreshMyPublicationMetrics");
       state.myPublicationMetricsRefreshing = true;
-      state.myPublicationSearchStatus = "Refreshing citation metrics from OpenAlex/Semantic Scholar/Crossref...";
+      state.myPublicationSearchStatus = "Refreshing citation metrics and PubMed metadata...";
       if (button) button.disabled = true;
       updateMyPublicationSearchStatusText();
       try {
@@ -17993,7 +18876,7 @@ INDEX_HTML = """<!doctype html>
       }
       if (status === "failed") return `Metrics refresh failed${job?.errors?.length ? ` · ${job.errors[0]}` : ""}`;
       if (total) return `Refreshing metrics ${current} / ${total} · ${refreshed} updated${job?.current_title ? ` · ${job.current_title}` : ""}`;
-      return "Refreshing citation metrics from OpenAlex/Semantic Scholar/Crossref...";
+      return "Refreshing citation metrics and PubMed metadata...";
     }
 
     async function pollMyPublicationMetrics(jobId) {
@@ -19470,12 +20353,15 @@ INDEX_HTML = """<!doctype html>
       const colorPicker = menu.querySelector('[data-action="folder-color-picker"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
       const deleteFileButton = menu.querySelector('[data-action="delete-file-entry"]');
+      const deleteSpecialOriginalFilesButton = menu.querySelector('[data-action="delete-special-original-files"]');
+      const removeSpecialLibraryButton = menu.querySelector('[data-action="remove-special-library"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const addToMyPublicationsButton = menu.querySelector('[data-action="add-to-my-publications"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
+      const isClearableSpecialFolder = entryType === "folder" && hasEntry && Boolean(folder?.is_unsorted || folder?.is_recycle);
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -19525,6 +20411,20 @@ INDEX_HTML = """<!doctype html>
           const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => deleteLibraryEntryFiles(type, id));
+        };
+      }
+      if (deleteSpecialOriginalFilesButton) {
+        deleteSpecialOriginalFilesButton.style.display = isClearableSpecialFolder ? "" : "none";
+        deleteSpecialOriginalFilesButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => clearLibrarySpecialFolder(Number(menu.dataset.entryId || 0), {deleteFiles: true}));
+        };
+      }
+      if (removeSpecialLibraryButton) {
+        removeSpecialLibraryButton.style.display = isClearableSpecialFolder ? "" : "none";
+        removeSpecialLibraryButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => clearLibrarySpecialFolder(Number(menu.dataset.entryId || 0), {deleteFiles: false}));
         };
       }
       if (copyButton) {
@@ -20821,6 +21721,7 @@ INDEX_HTML = """<!doctype html>
       if (event.key !== "Escape") return;
       closePublicationAuthorMenu();
       closePublicationExportMenu();
+      closeAuthorAffiliationTooltip();
       if ($("citationSettingsBackdrop").classList.contains("open")) {
         event.preventDefault();
         event.stopPropagation();
@@ -20870,6 +21771,7 @@ INDEX_HTML = """<!doctype html>
       hideLibraryContextMenu();
       hideLibraryTabContextMenu();
       hideMyPublicationContextMenu();
+      closeAuthorAffiliationTooltip();
       if (!event.target.closest?.(".publication-author-menu, .publication-author-pill")) closePublicationAuthorMenu();
       if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
       if (
@@ -20883,6 +21785,29 @@ INDEX_HTML = """<!doctype html>
     });
     window.addEventListener("resize", () => {
       if (state.mode === "library") resizeLibraryViewport();
+      closeAuthorAffiliationTooltip();
+    });
+    window.addEventListener("scroll", closeAuthorAffiliationTooltip, true);
+    document.addEventListener("pointerover", (event) => {
+      const anchor = event.target.closest?.(".author-affiliation-hover");
+      if (anchor) showAuthorAffiliationTooltip(anchor);
+    });
+    document.addEventListener("pointerout", (event) => {
+      const anchor = event.target.closest?.(".author-affiliation-hover");
+      const tooltip = event.target.closest?.("#authorAffiliationTooltip");
+      if (anchor && (anchor.contains(event.relatedTarget) || event.relatedTarget?.closest?.("#authorAffiliationTooltip"))) return;
+      if (tooltip && event.relatedTarget?.closest?.(".author-affiliation-hover, #authorAffiliationTooltip")) return;
+      if (!anchor && !tooltip) return;
+      closeAuthorAffiliationTooltip();
+    });
+    document.addEventListener("focusin", (event) => {
+      const anchor = event.target.closest?.(".author-affiliation-hover");
+      if (anchor) showAuthorAffiliationTooltip(anchor);
+    });
+    document.addEventListener("focusout", (event) => {
+      const anchor = event.target.closest?.(".author-affiliation-hover");
+      if (!anchor || anchor.contains(event.relatedTarget)) return;
+      closeAuthorAffiliationTooltip();
     });
     window.addEventListener("dragover", (event) => {
       if (!event.dataTransfer?.types?.includes("Files")) return;
