@@ -308,6 +308,7 @@ def empty_result(
         "paper_candidates_seen": 0,
         "created_papers": 0,
         "updated_papers": 0,
+        "existing_papers": 0,
         "pdf_attachments_to_import": 0,
         "created_resources": 0,
         "reused_existing_files": 0,
@@ -338,6 +339,7 @@ def empty_result(
         ],
         "papers_to_create": [],
         "papers_to_update": [],
+        "papers_existing": [],
         "resources_to_import": [],
         "aliases": [],
         "missing_sources": [],
@@ -440,8 +442,8 @@ def evaluate_files(
             matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
             plan = paper_plan(record, paper_id=matched_paper_id or new_paper_id(record))
             if matched_paper_id:
-                result["updated_papers"] += 1
-                append_limited(result["papers_to_update"], plan, 500)
+                result["existing_papers"] += 1
+                append_limited(result["papers_existing"], plan, 500)
             else:
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], plan, 500)
@@ -457,8 +459,8 @@ def evaluate_files(
             matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
             plan = paper_plan(record, paper_id=matched_paper_id or new_paper_id(record))
             if matched_paper_id:
-                result["updated_papers"] += 1
-                append_limited(result["papers_to_update"], plan, 500)
+                result["existing_papers"] += 1
+                append_limited(result["papers_existing"], plan, 500)
             else:
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], plan, 500)
@@ -549,6 +551,10 @@ def execute_import(
 
                 matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id:
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
+                    continue
                 stored_path = ""
                 if reusable_path:
                     stored_path = reusable_path
@@ -560,25 +566,28 @@ def execute_import(
                     result["resources_or_attachments_to_import"] += 1
 
                 upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                if matched_paper_id:
-                    result["updated_papers"] += 1
-                    append_limited(result["papers_to_update"], paper_plan(record, paper_id=paper_id), 500)
-                else:
-                    result["created_papers"] += 1
-                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                    add_existing_index(existing, record, paper_id)
+                result["created_papers"] += 1
+                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                add_existing_index(existing, record, paper_id)
                 if stored_path:
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
-                    if library_item_name == "filename" and item and record["filename"]:
-                        storage.rename_library_item(item_id=int(item["id"]), name=record["filename"])
+                    add_imported_library_item(
+                        storage,
+                        paper_id=paper_id,
+                        folder_id=folder_id,
+                        display_name=record["filename"] if library_item_name == "filename" else "",
+                    )
                 continue
 
             if import_as == "resource":
                 matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                if matched_paper_id:
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
+                    continue
                 stored_path = ""
                 if reusable_path:
                     stored_path = reusable_path
@@ -589,20 +598,19 @@ def execute_import(
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
                 upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                if matched_paper_id:
-                    result["updated_papers"] += 1
-                    append_limited(result["papers_to_update"], paper_plan(record, paper_id=paper_id), 500)
-                else:
-                    result["created_papers"] += 1
-                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                    add_existing_index(existing, record, paper_id)
+                result["created_papers"] += 1
+                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                add_existing_index(existing, record, paper_id)
                 upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
-                    if item and record["filename"]:
-                        storage.rename_library_item(item_id=int(item["id"]), name=record["filename"])
+                    add_imported_library_item(
+                        storage,
+                        paper_id=paper_id,
+                        folder_id=folder_id,
+                        display_name=record["filename"],
+                    )
                 continue
 
             result["skipped"] += 1
@@ -1299,6 +1307,22 @@ def ensure_folder_path(storage: Storage, relative_parent_path: str, folder_cache
         current = folder_cache[current_path]
     folder_cache[clean_path] = current
     return current
+
+
+def add_imported_library_item(storage: Storage, *, paper_id: str, folder_id: int, display_name: str = "") -> dict[str, Any]:
+    existing = storage.conn.execute(
+        """
+        SELECT id
+        FROM library_items
+        WHERE folder_id = ? AND paper_id = ?
+        LIMIT 1
+        """,
+        (int(folder_id), str(paper_id)),
+    ).fetchone()
+    item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+    if item and not existing and display_name:
+        return storage.rename_library_item(item_id=int(item["id"]), name=display_name)
+    return item
 
 
 def ensure_import_batch(storage: Storage, *, batch_id: str, result: dict[str, Any], inventory_file: Path) -> None:

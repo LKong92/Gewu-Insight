@@ -2709,6 +2709,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "paper_candidates_seen",
         "created_papers",
         "updated_papers",
+        "existing_papers",
         "pdf_attachments_to_import",
         "created_resources",
         "reused_existing_files",
@@ -7082,6 +7083,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
             job_id,
             (
                 f"Done: {summary.get('created_papers', 0)} created, "
+                f"{summary.get('existing_papers', 0)} existing left unchanged, "
                 f"{summary.get('updated_papers', 0)} updated, "
                 f"{summary.get('pdf_doi_extracted_count', 0)} DOI found, "
                 f"{summary.get('pdf_doi_missing_count', 0)} no DOI, "
@@ -8999,7 +9001,7 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       gap: 6px;
       position: fixed;
-      top: 6px;
+      top: 3px;
       right: 30px;
       z-index: 76;
       width: 292px;
@@ -14426,6 +14428,7 @@ INDEX_HTML = """<!doctype html>
     function loaderResultSummary(result) {
       return [
         `${result.created_papers || 0} created`,
+        `${result.existing_papers || 0} existing`,
         `${result.updated_papers || 0} updated`,
         `${result.resources_or_attachments_to_import || 0} resources/attachments`,
         `${result.reused_existing_files || 0} reused`,
@@ -14508,7 +14511,8 @@ INDEX_HTML = """<!doctype html>
           <h3>Result Guide</h3>
           <p>After an import finishes, this panel explains each number and lists files that need attention.</p>
           <div class="loader-metric"><strong>Created</strong><span>new Library item records for papers and other files.</span></div>
-          <div class="loader-metric"><strong>Updated</strong><span>existing records matched by DOI, arXiv, or source path.</span></div>
+          <div class="loader-metric"><strong>Existing</strong><span>records already in Library are left unchanged during repeated imports.</span></div>
+          <div class="loader-metric"><strong>Updated</strong><span>records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
           <div class="loader-metric"><strong>DOI found</strong><span>PDF files where the loader extracted a DOI from the first page or filename.</span></div>
           <div class="loader-metric"><strong>No DOI</strong><span>PDF files that did not expose a DOI during the loader scan.</span></div>
           <div class="loader-metric"><strong>Resources</strong><span>PDF attachments plus non-PDF resource files.</span></div>
@@ -14525,7 +14529,8 @@ INDEX_HTML = """<!doctype html>
       return `
         <h3>Result Guide</h3>
         <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New Library item records made for papers and other files.</span></div>
-        <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known records matched and refreshed instead of duplicated.</span></div>
+        <div class="loader-metric"><strong>${result.existing_papers || 0} existing</strong><span>Already-known files matched by DOI, arXiv, or source path and were left unchanged.</span></div>
+        <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_extracted_count || 0} DOI found</strong><span>PDF files where the loader found a DOI from the first page or filename.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI</strong><span>PDF files imported by path identity because no DOI was extracted.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
@@ -14831,6 +14836,7 @@ INDEX_HTML = """<!doctype html>
       const result = state.libraryImportLastResult || null;
       const summary = result ? [
         `${result.created_papers || 0} create`,
+        `${result.existing_papers || 0} existing`,
         `${result.updated_papers || 0} update`,
         `${result.pdf_doi_extracted_count || 0} DOI`,
         `${result.pdf_doi_missing_count || 0} no DOI`,
@@ -15133,7 +15139,7 @@ INDEX_HTML = """<!doctype html>
         const result = state.libraryImportLastResult || {};
         state.libraryImportStatus = result.errors?.length
           ? result.errors[0]
-          : `Imported ${result.created_papers || 0} items, updated ${result.updated_papers || 0}, added ${result.created_resources || 0} non-PDF resources.`;
+          : `Imported ${result.created_papers || 0} new items, left ${result.existing_papers || 0} existing unchanged, added ${result.created_resources || 0} non-PDF resources.`;
         appendLibraryImportLog(state.libraryImportStatus, result.errors?.length ? "error" : "done");
         state.libraryTab = "library";
         focusLibraryFolder(targetFolderId);

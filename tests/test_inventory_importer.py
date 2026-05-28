@@ -122,7 +122,7 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(result["duplicate_paper_candidates"], 1)
         self.assertEqual(result["pdf_attachments_to_import"], 1)
 
-    def test_dry_run_updates_existing_doi(self) -> None:
+    def test_dry_run_leaves_existing_doi_unchanged(self) -> None:
         self.storage.upsert_paper(
             {
                 "paper_id": "doi_existing",
@@ -139,10 +139,11 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         result = self.run_dry([self.pdf_record(path, doi="10.5555/existing")])
 
         self.assertEqual(result["created_papers"], 0)
-        self.assertEqual(result["updated_papers"], 1)
-        self.assertEqual(result["papers_to_update"][0]["paper_id"], "doi_existing")
+        self.assertEqual(result["updated_papers"], 0)
+        self.assertEqual(result["existing_papers"], 1)
+        self.assertEqual(result["papers_existing"][0]["paper_id"], "doi_existing")
 
-    def test_dry_run_updates_existing_arxiv(self) -> None:
+    def test_dry_run_leaves_existing_arxiv_unchanged(self) -> None:
         self.storage.upsert_paper(
             {
                 "paper_id": "arxiv_2301.00001",
@@ -159,8 +160,9 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         result = self.run_dry([self.pdf_record(path, arxiv_id="2301.00001v2")])
 
         self.assertEqual(result["created_papers"], 0)
-        self.assertEqual(result["updated_papers"], 1)
-        self.assertEqual(result["papers_to_update"][0]["paper_id"], "arxiv_2301.00001")
+        self.assertEqual(result["updated_papers"], 0)
+        self.assertEqual(result["existing_papers"], 1)
+        self.assertEqual(result["papers_existing"][0]["paper_id"], "arxiv_2301.00001")
 
     def test_pdf_without_doi_or_arxiv_uses_source_path_identity(self) -> None:
         path = self.touch("folder/plain-name.pdf", b"%PDF fixture")
@@ -191,7 +193,7 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["display_name"], "plain-name.pdf")
 
-    def test_repeated_real_import_reuses_existing_copied_file(self) -> None:
+    def test_repeated_real_import_leaves_existing_records_and_labels_unchanged(self) -> None:
         pdf = self.touch("repeat/reuse-me.pdf", b"%PDF fixture")
         inventory_path = self.write_inventory([self.pdf_record(pdf, doi="10.4242/reuse", title="Reuse Me")])
         copied_root = self.root / "copied"
@@ -206,6 +208,17 @@ class InventoryImporterDryRunTests(unittest.TestCase):
             target_root=copied_root,
             library_item_name="filename",
         )
+        row = self.storage.conn.execute(
+            """
+            SELECT library_items.id
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            WHERE papers.doi = ?
+            """,
+            ("10.4242/reuse",),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.storage.rename_library_item(item_id=int(row["id"]), name="Custom reuse label")
         second = import_library_inventory(
             inventory_path,
             storage=self.storage,
@@ -220,9 +233,79 @@ class InventoryImporterDryRunTests(unittest.TestCase):
 
         self.assertFalse(first["errors"])
         self.assertFalse(second["errors"])
-        self.assertEqual(second["updated_papers"], 1)
-        self.assertEqual(second["reused_existing_files"], 1)
+        self.assertEqual(second["updated_papers"], 0)
+        self.assertEqual(second["existing_papers"], 1)
+        self.assertEqual(second["reused_existing_files"], 0)
         self.assertEqual(len(list(copied_root.rglob("reuse-me.pdf"))), 1)
+        label = self.storage.conn.execute("SELECT display_name FROM library_items WHERE id = ?", (int(row["id"]),)).fetchone()
+        self.assertEqual(label["display_name"], "Custom reuse label")
+
+    def test_repeated_import_adds_newly_seen_non_pdf_without_touching_existing_pdf(self) -> None:
+        pdf = self.touch("topic/paper.pdf", b"%PDF fixture")
+        slide = self.touch("topic/slides.pptx", b"ppt")
+        copied_root = self.root / "copied"
+        first_inventory = self.write_inventory([self.pdf_record(pdf, doi="10.4242/supplement", title="Existing PDF")])
+        first = import_library_inventory(
+            first_inventory,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "first-non-pdf-report.json",
+            target_root=copied_root,
+            library_item_name="filename",
+        )
+        self.assertFalse(first["errors"])
+        row = self.storage.conn.execute(
+            """
+            SELECT library_items.id
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            WHERE papers.doi = ?
+            """,
+            ("10.4242/supplement",),
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.storage.rename_library_item(item_id=int(row["id"]), name="Edited PDF label")
+
+        second_inventory = self.write_inventory(
+            [
+                self.pdf_record(pdf, doi="10.4242/supplement", title="Existing PDF"),
+                {
+                    "path": str(slide),
+                    "relative_path": "topic/slides.pptx",
+                    "parent_relative_path": "topic",
+                    "filename": "slides.pptx",
+                    "extension": ".pptx",
+                    "kind": "presentation",
+                    "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    "import_as": "resource",
+                    "size_bytes": slide.stat().st_size,
+                    "modified_at": "2026-01-01T00:00:00+08:00",
+                },
+            ]
+        )
+        second = import_library_inventory(
+            second_inventory,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "second-non-pdf-report.json",
+            target_root=copied_root,
+            library_item_name="filename",
+        )
+
+        self.assertFalse(second["errors"])
+        self.assertEqual(second["existing_papers"], 1)
+        self.assertEqual(second["created_papers"], 1)
+        self.assertEqual(second["created_resources"], 1)
+        pdf_label = self.storage.conn.execute("SELECT display_name FROM library_items WHERE id = ?", (int(row["id"]),)).fetchone()
+        self.assertEqual(pdf_label["display_name"], "Edited PDF label")
+        resource = self.storage.conn.execute("SELECT * FROM papers WHERE original_filename = 'slides.pptx'").fetchone()
+        self.assertIsNotNone(resource)
 
     def test_dry_run_counts_resource_import(self) -> None:
         resource = self.touch("slides/talk.pptx")
@@ -316,7 +399,7 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         )
 
         self.assertFalse(result["errors"])
-        self.assertEqual(result["created_papers"], 1)
+        self.assertEqual(result["created_papers"], 2)
         self.assertEqual(result["created_resources"], 1)
         paper = self.storage.conn.execute("SELECT * FROM papers WHERE doi = ?", ("10.7777/import",)).fetchone()
         self.assertIsNotNone(paper)
