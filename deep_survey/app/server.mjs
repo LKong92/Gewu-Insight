@@ -16,6 +16,9 @@ const workspaceDlwPluginDir = path.join(workspaceRoot, "plugins/deep-literature-
 const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"));
 const codexDlwPluginCacheDir = path.join(codexHome, "plugins/cache/deep-research-local/deep-literature-workflow/0.1.0");
 const codexSkillsDir = path.join(codexHome, "skills");
+const codexConfigPath = path.join(codexHome, "config.toml");
+const deepResearchMarketplaceName = "deep-research-local";
+const deepResearchMarketplaceFile = path.join(workspaceRoot, ".agents/plugins/marketplace.json");
 const dlwScript = path.join(workspaceRoot, "plugins/deep-literature-workflow/scripts/dlw.py");
 const statePath = path.join(workspaceRoot, ".deep-literature-workflow/state.json");
 const appPreferencesPath = path.join(workspaceRoot, ".deep-literature-workflow/app-preferences.json");
@@ -255,10 +258,84 @@ async function ensureBundledDlwPluginInstalled() {
   for (const skillName of requiredCodexSkillNames) {
     bundledSkills[skillName] = await copyBundledSkillIfMissing(skillName);
   }
-  if (workspace.installed || cache.installed || Object.values(bundledSkills).some((item) => item.installed)) {
+  const marketplace = await ensureDeepResearchMarketplace();
+  const config = await ensureCodexDeepResearchPluginEnabled();
+  if (workspace.installed || cache.installed || Object.values(bundledSkills).some((item) => item.installed) || marketplace.changed || config.changed) {
     codexAppServer.stop();
   }
-  return { workspace, cache, bundledSkills };
+  return { workspace, cache, bundledSkills, marketplace, config };
+}
+
+async function ensureDeepResearchMarketplace() {
+  const marketplace = {
+    name: deepResearchMarketplaceName,
+    interface: {
+      displayName: "Deep Research Local"
+    },
+    plugins: [
+      {
+        name: "deep-literature-workflow",
+        source: {
+          source: "local",
+          path: "./plugins/deep-literature-workflow"
+        },
+        policy: {
+          installation: "AVAILABLE",
+          authentication: "ON_INSTALL"
+        },
+        category: "Research"
+      }
+    ]
+  };
+  const next = `${JSON.stringify(marketplace, null, 2)}\n`;
+  let current = "";
+  try {
+    current = await readFile(deepResearchMarketplaceFile, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (current === next) {
+    return { ok: true, changed: false, path: deepResearchMarketplaceFile };
+  }
+  await mkdir(path.dirname(deepResearchMarketplaceFile), { recursive: true });
+  await writeFile(deepResearchMarketplaceFile, next, "utf8");
+  return { ok: true, changed: true, path: deepResearchMarketplaceFile };
+}
+
+function replaceTomlSection(text, header, body) {
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const section = `${header}\n${body.trimEnd()}\n`;
+  const pattern = new RegExp(`(?:^|\\n)${escaped}\\n[\\s\\S]*?(?=\\n\\[|$)`);
+  if (pattern.test(text)) {
+    return text.replace(pattern, (match) => `${match.startsWith("\n") ? "\n" : ""}${section.trimEnd()}`);
+  }
+  const prefix = text.trimEnd() ? `${text.trimEnd()}\n\n` : "";
+  return `${prefix}${section}`;
+}
+
+async function ensureCodexDeepResearchPluginEnabled() {
+  let current = "";
+  try {
+    current = await readFile(codexConfigPath, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  let next = replaceTomlSection(
+    current,
+    `[marketplaces.${deepResearchMarketplaceName}]`,
+    `source_type = "local"\nsource = ${JSON.stringify(workspaceRoot)}`
+  );
+  next = replaceTomlSection(
+    next,
+    `[plugins."deep-literature-workflow@${deepResearchMarketplaceName}"]`,
+    "enabled = true"
+  );
+  if (next === current) {
+    return { ok: true, changed: false, path: codexConfigPath };
+  }
+  await mkdir(path.dirname(codexConfigPath), { recursive: true });
+  await writeFile(codexConfigPath, next.endsWith("\n") ? next : `${next}\n`, "utf8");
+  return { ok: true, changed: true, path: codexConfigPath };
 }
 
 async function getSetupStatus({ install = false } = {}) {
@@ -1146,12 +1223,39 @@ function summarizeAppServerNotification(message) {
   const method = message.method;
   const params = message.params || {};
   if (method === "item/agentMessage/delta") return "";
+  if (method === "error" || method === "warning") {
+    return appServerDiagnosticSummary(params, method);
+  }
   if (method === "turn/started") return `Turn started: ${params.turn?.id || ""}`;
   if (method === "turn/completed") return `Turn completed: ${params.turn?.status?.type || params.turn?.status || ""}`;
   if (method === "thread/started") return `Thread started: ${params.thread?.id || ""}`;
   if (method === "thread/status/changed") return `Thread status changed: ${params.status?.type || ""}`;
   if (method === "item/completed") return `Item completed: ${params.item?.type || params.item?.kind || ""}`;
   return method;
+}
+
+function appServerDiagnosticSummary(params = {}, fallback = "event") {
+  const candidates = [
+    params.message,
+    params.error?.message,
+    params.error,
+    params.warning?.message,
+    params.warning,
+    params.reason,
+    params.detail,
+    params.details,
+    params.status?.message
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  try {
+    const text = JSON.stringify(params);
+    if (text && text !== "{}") return text;
+  } catch {
+    // Fall through to the generic label.
+  }
+  return fallback;
 }
 
 function summarizeApprovalRequest(message) {
@@ -1250,15 +1354,26 @@ function updateAppServerThreadStatusFromNotification(message) {
       summary: `Turn completed ${turnId || ""}`.trim()
     });
   } else if (method === "thread/status/changed") {
+    const statusType = params.status?.type;
+    const status = statusType === "active" ? "running" : statusType;
     if (!params.status?.activeFlags?.includes("waitingOnApproval") && ["idle", "completed", "interrupted", "failed"].includes(params.status?.type)) {
       clearAppServerApprovalRequestsForThread(threadId, turnId);
     }
     updateAppServerThreadStatus(threadId, {
+      ...(status ? { status } : {}),
       threadStatus: params.status,
       ...(params.status?.type && ["idle", "completed", "interrupted", "failed"].includes(params.status.type)
         ? { runningStage: null, dlwAction: null }
         : {}),
       summary: `Thread status: ${params.status?.type || params.status || "changed"}`
+    });
+  } else if (threadId && (String(method).startsWith("item/") || method === "error" || method === "warning")) {
+    const previous = appServerThreadStatus.get(threadId) || {};
+    const previousStatus = previous.status || "";
+    updateAppServerThreadStatus(threadId, {
+      status: ["running", "waiting_approval", "stopping"].includes(previousStatus) ? previousStatus : "running",
+      turnId: turnId || previous.turnId || null,
+      summary: summarizeAppServerNotification(message) || previous.summary || "Running"
     });
   }
 }

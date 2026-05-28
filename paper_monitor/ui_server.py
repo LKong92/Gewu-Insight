@@ -433,6 +433,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/delete":
                 self.handle_delete_library_entry(payload)
                 return
+            if parsed.path == "/api/library/delete-batch":
+                self.handle_delete_library_entries(payload)
+                return
             if parsed.path == "/api/library/delete-file":
                 self.handle_delete_library_item_file(payload)
                 return
@@ -450,6 +453,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/paste":
                 self.handle_paste_library_entry(payload)
+                return
+            if parsed.path == "/api/library/paste-batch":
+                self.handle_paste_library_entries(payload)
                 return
             if parsed.path == "/api/my-publications/add":
                 self.handle_add_my_publication(payload)
@@ -1711,42 +1717,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         entry_id = int(payload.get("id") or 0)
         storage = Storage(self.configured_db_path)
         try:
-            special = ensure_library_special_folders(storage)
-            unsorted_id = int(special["unsorted"].get("id") or 1)
-            recycle_id = int(special["recycle"].get("id") or 1)
-            if entry_type == "item":
-                item = storage.get_library_item(entry_id)
-                if not item:
-                    raise ValueError("Library item not found")
-                folder_id = int(item.get("folder_id") or 1)
-                paper_id = str(item.get("paper_id") or "")
-                if folder_id == recycle_id:
-                    storage.delete_library_item(item_id=entry_id)
-                    if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
-                elif folder_id == unsorted_id:
-                    storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
-                else:
-                    storage.delete_library_item(item_id=entry_id)
-                    if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
-            elif entry_type == "folder":
-                folder = storage.get_library_folder(entry_id)
-                if not folder:
-                    raise ValueError("Folder not found")
-                if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
-                    raise ValueError("This folder cannot be deleted")
-                if int(folder.get("parent_id") or 0) == recycle_id:
-                    paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
-                    storage.delete_library_folder(folder_id=entry_id)
-                    for paper_id in paper_ids:
-                        if storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                            storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
-                else:
-                    storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
-            else:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
-                return
+            self.delete_library_entry_in_storage(storage, entry_type, entry_id)
             snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1754,6 +1725,67 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_delete_library_entries(self, payload: dict[str, Any]) -> None:
+        entries = payload.get("entries")
+        if not isinstance(entries, list) or not entries:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "entries must be a non-empty list")
+            return
+        storage = Storage(self.configured_db_path)
+        deleted: list[dict[str, Any]] = []
+        try:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("Each entry must be an object")
+                entry_type = str(entry.get("type") or "")
+                entry_id = int(entry.get("id") or 0)
+                self.delete_library_entry_in_storage(storage, entry_type, entry_id)
+                deleted.append({"type": entry_type, "id": entry_id})
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"deleted": deleted, **snapshot})
+
+    def delete_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int) -> None:
+        special = ensure_library_special_folders(storage)
+        unsorted_id = int(special["unsorted"].get("id") or 1)
+        recycle_id = int(special["recycle"].get("id") or 1)
+        if entry_type == "item":
+            item = storage.get_library_item(entry_id)
+            if not item:
+                raise ValueError("Library item not found")
+            folder_id = int(item.get("folder_id") or 1)
+            paper_id = str(item.get("paper_id") or "")
+            if folder_id == recycle_id:
+                storage.delete_library_item(item_id=entry_id)
+                if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                    storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
+            elif folder_id == unsorted_id:
+                storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
+            else:
+                storage.delete_library_item(item_id=entry_id)
+                if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                    storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
+            return
+        if entry_type == "folder":
+            folder = storage.get_library_folder(entry_id)
+            if not folder:
+                raise ValueError("Folder not found")
+            if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
+                raise ValueError("This folder cannot be deleted")
+            if int(folder.get("parent_id") or 0) == recycle_id:
+                paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
+                storage.delete_library_folder(folder_id=entry_id)
+                for paper_id in paper_ids:
+                    if storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
+                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
+            else:
+                storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
+            return
+        raise ValueError("type must be item or folder")
 
     def handle_delete_library_item_file(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -1923,14 +1955,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         target_folder_id = int(payload.get("target_folder_id") or 1)
         storage = Storage(self.configured_db_path)
         try:
-            pasted: dict[str, Any] | None = None
-            if entry_type == "item":
-                pasted = storage.copy_library_item(item_id=entry_id, folder_id=target_folder_id)
-            elif entry_type == "folder":
-                pasted = storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
-            else:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
-                return
+            pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
             snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1938,6 +1963,43 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"pasted": dict(pasted or {}), **snapshot})
+
+    def handle_paste_library_entries(self, payload: dict[str, Any]) -> None:
+        target_folder_id = int(payload.get("target_folder_id") or 1)
+        entries = payload.get("entries")
+        if not isinstance(entries, list) or not entries:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "entries must be a non-empty list")
+            return
+        storage = Storage(self.configured_db_path)
+        pasted_entries: list[dict[str, Any]] = []
+        try:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ValueError("Each entry must be an object")
+                entry_type = str(entry.get("type") or "")
+                entry_id = int(entry.get("id") or 0)
+                pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
+                pasted_entries.append({"type": entry_type, "id": int(pasted.get("id") or 0), "source_id": entry_id})
+            snapshot = library_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"pasted": pasted_entries, **snapshot})
+
+    def paste_library_entry_in_storage(
+        self,
+        storage: Storage,
+        entry_type: str,
+        entry_id: int,
+        target_folder_id: int,
+    ) -> dict[str, Any]:
+        if entry_type == "item":
+            return storage.copy_library_item(item_id=entry_id, folder_id=target_folder_id)
+        if entry_type == "folder":
+            return storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
+        raise ValueError("type must be item or folder")
 
     def handle_delete_pdf(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -9517,9 +9579,19 @@ INDEX_HTML = """<!doctype html>
     .my-publications-col-resizer:hover::after { background: var(--accent); }
     .my-publications-row {
       cursor: default;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .my-publications-row:nth-child(even):not(.active) td { background: #f3f3f3; }
+    .my-publications-row.selected:not(.active) td {
+      background: #d9ebff;
+      color: var(--ink);
+    }
+    .my-publications-row.selected:not(.active) td:first-child {
+      box-shadow: inset 3px 0 #6aa7ff;
+    }
     .my-publications-row.review-article:not(.active) td { color: #7b8796; background: #fafafa; }
+    .my-publications-row.review-article.selected:not(.active) td { background: #d9ebff; color: var(--ink); }
     .my-publications-row.review-article .my-publications-title-text { color: #8b95a5; font-weight: 400; }
     .my-publications-row.review-article .my-publications-id .journal-name { color: #687484; font-weight: 400; }
     .my-publications-row.review-article .my-publications-id strong { color: #687484; font-weight: 400; }
@@ -9540,6 +9612,10 @@ INDEX_HTML = """<!doctype html>
     .my-publications-row.head-excluded .my-publications-id strong {
       color: rgba(102, 112, 133, 0.42);
       font-weight: 400;
+    }
+    .my-publications-row.head-excluded.selected:not(.active) td {
+      background: #d9ebff;
+      color: var(--ink);
     }
     .my-publications-row.active td {
       background: var(--accent);
@@ -10502,6 +10578,8 @@ INDEX_HTML = """<!doctype html>
       overflow-y: auto;
       overscroll-behavior: contain;
       padding: 4px 8px;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .library-row {
       width: 100%;
@@ -10519,14 +10597,17 @@ INDEX_HTML = """<!doctype html>
       cursor: default;
       font-size: 13px;
       line-height: 1.15;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .library-row + .library-row { margin-top: 1px; }
     .library-row:hover { background: #f2f2f3; }
     .library-row.range-selected { background: #d9ebff; border-color: #b9d7fb; }
-    .library-row.active { background: #0b67d8; border-color: #0b67d8; color: #fff; }
+    .library-row.range-selected .library-meta { color: #45637f; }
+    .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
     .library-row.path-parent { background: #dedede; border-color: #dedede; color: #1f2328; }
     .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
-    .library-row.active .library-meta { color: rgba(255, 255, 255, 0.86); }
+    .library-row.active:not(.range-selected) .library-meta { color: rgba(255, 255, 255, 0.86); }
     .library-row.path-parent .library-meta { color: #717171; }
     .library-shell.finder-drag-over .library-columns {
       border-color: var(--accent);
@@ -10535,7 +10616,22 @@ INDEX_HTML = """<!doctype html>
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-row.special-folder { color: #667085; }
-    .library-row.special-folder.active { color: #fff; }
+    .library-row.special-folder.active:not(.range-selected) { color: #fff; }
+    .selection-marquee {
+      position: fixed;
+      z-index: 10000;
+      pointer-events: none;
+      border: 1px solid #0b67d8;
+      background: rgba(11, 103, 216, 0.14);
+      border-radius: 3px;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+    }
+    body.marquee-selecting,
+    body.marquee-selecting * {
+      -webkit-user-select: none !important;
+      user-select: none !important;
+      cursor: crosshair !important;
+    }
     .library-row.special-folder.path-parent { color: #1f2328; }
     .library-entry-icon {
       width: 18px;
@@ -10634,6 +10730,44 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       user-select: text;
     }
+    .library-path-parts {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+    }
+    .library-activity-status {
+      margin-left: auto;
+      max-width: min(360px, 42vw);
+      min-height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      color: #667085;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 0 1 auto;
+      user-select: none;
+    }
+    .library-activity-status.live {
+      color: var(--accent-strong);
+      font-weight: 700;
+    }
+    .library-activity-status.live::after {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 rgba(15, 107, 110, 0.35);
+      animation: livePulse 1.1s infinite;
+      flex: 0 0 auto;
+    }
+    .library-activity-status.ok { color: #14845f; }
+    .library-activity-status.err { color: #b42318; }
     .library-path-item {
       min-width: 0;
       display: inline-flex;
@@ -11149,6 +11283,9 @@ INDEX_HTML = """<!doctype html>
       overflow: visible;
       padding-right: 0;
     }
+    .app.deep-survey-mode #papers {
+      display: none;
+    }
     .papers.deep-survey-view {
       display: block;
       height: 100%;
@@ -11156,6 +11293,18 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       padding-right: 0;
       background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .deep-survey-host {
+      display: none;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
+    }
+    .app.deep-survey-mode .deep-survey-host {
+      display: block;
+      grid-column: 1;
+      grid-row: 1 / -1;
     }
     .deep-survey-frame {
       width: 100%;
@@ -11763,6 +11912,7 @@ INDEX_HTML = """<!doctype html>
             </div>
           </div>
           <div class="papers" id="papers"></div>
+          <div class="deep-survey-host" id="deepSurveyHost" aria-hidden="true"></div>
         </section>
         <button class="workspace-toggle" id="toggleReportPanel" title="Hide list">&lsaquo;&lsaquo;</button>
         <div class="workspace-resizer" id="workspaceResizer" title="Drag to resize panels"></div>
@@ -11928,6 +12078,9 @@ INDEX_HTML = """<!doctype html>
       libraryColumnWidths: {},
       libraryDetailWidth: 340,
       libraryClipboard: null,
+      libraryActivityText: "",
+      libraryActivityLive: false,
+      libraryActivityTimer: 0,
       libraryDragPayload: null,
       libraryRevealColumnFolderId: 0,
       libraryRevealColumnDirection: "",
@@ -11943,6 +12096,8 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookPdfHasFocus: false,
       myPublications: [],
       myPublicationSelectionId: 0,
+      myPublicationSelectedIds: new Set(),
+      myPublicationRangeAnchorId: 0,
       myPublicationSort: "manual",
       myPublicationSortDir: "asc",
       myPublicationSearchResults: [],
@@ -11980,6 +12135,8 @@ INDEX_HTML = """<!doctype html>
       fetchSnapshotPolls: {},
       fetchSnapshotInflight: {},
       fetchCompletionWatchers: new Set(),
+      deepSurveyUrl: "",
+      deepSurveyLoadingPromise: null,
       logoRequests: {},
       figureRequests: {},
       figureQueue: [],
@@ -11987,6 +12144,9 @@ INDEX_HTML = """<!doctype html>
       activeFigureHydrations: 0,
       maxFigureHydrations: 2,
       figureFailures: new Set(),
+      selectionMarquee: null,
+      suppressClickOnce: false,
+      suppressContextMenuOnce: false,
       internalBrowserUrl: "",
       showFigures: true,
       arxivCountdownTimer: null
@@ -12533,6 +12693,7 @@ INDEX_HTML = """<!doctype html>
       if (state.myPublicationSelectionId && !myPublicationById(state.myPublicationSelectionId)) {
         state.myPublicationSelectionId = Number(sortedMyPublications()[0]?.id || 0);
       }
+      pruneMyPublicationSelection();
     }
 
     function myPublicationById(id) {
@@ -12620,7 +12781,7 @@ INDEX_HTML = """<!doctype html>
           delete state.libraryColumnSelections[folderId];
         }
       });
-      if (state.libraryClipboard && !librarySelectionExists(state.libraryClipboard)) state.libraryClipboard = null;
+      pruneLibraryClipboard();
       pruneLibraryRangeSelection();
       ensureLibraryColumnSelection(displayRootId);
     }
@@ -12993,6 +13154,19 @@ INDEX_HTML = """<!doctype html>
       return libraryEntriesForFolder(folderId).filter((entry) => state.libraryRangeSelectionKeys.has(libraryEntryKey(entry)));
     }
 
+    function selectedLibraryEntriesForAction() {
+      const rangeEntries = libraryRangeSelectionEntries();
+      if (rangeEntries.length > 1) return rangeEntries;
+      const selection = state.librarySelection;
+      return selection?.type && selection.id ? [{type: selection.type, id: Number(selection.id)}] : [];
+    }
+
+    function libraryEntryIsInActionSelection(parentFolderId, entry) {
+      const target = {type: entry.type, id: Number(entry.id)};
+      if (libraryEntryIsRangeSelected(parentFolderId, target)) return true;
+      return libraryEntryKey(state.librarySelection) === libraryEntryKey(target);
+    }
+
     function ensureLibraryColumnSelection(folderId) {
       const id = Number(folderId || libraryDisplayRootId());
       const selection = state.libraryColumnSelections[id];
@@ -13089,6 +13263,15 @@ INDEX_HTML = """<!doctype html>
 
     function selectedEntryInFolder(folderId) {
       return ensureLibraryColumnSelection(folderId);
+    }
+
+    function selectLibraryColumnFolder(folderId) {
+      const targetFolderId = Number(folderId || libraryDisplayRootId());
+      if (!libraryFolderById(targetFolderId)) return;
+      clearLibraryRangeSelection();
+      state.libraryActiveFolderId = targetFolderId;
+      state.libraryCurrentFolderId = targetFolderId;
+      state.librarySelection = {type: "folder", id: targetFolderId};
     }
 
     async function createLibraryFolder(parentId) {
@@ -13193,29 +13376,33 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function moveLibraryEntry(type, id, targetFolderId) {
-      const res = await fetch("/api/library/move", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id, target_folder_id: targetFolderId})
+      return withLibraryActivityStatus("Moving...", "Move complete.", async () => {
+        const res = await fetch("/api/library/move", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type, id, target_folder_id: targetFolderId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not move library entry");
+        applyLibrarySnapshot(data);
+        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not move library entry");
-      applyLibrarySnapshot(data);
-      setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
-      renderLibrary();
     }
 
     async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
-      const res = await fetch("/api/library/reorder", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id, parent_folder_id: parentFolderId, target_id: targetId, position})
+      return withLibraryActivityStatus("Moving...", "Move complete.", async () => {
+        const res = await fetch("/api/library/reorder", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type, id, parent_folder_id: parentFolderId, target_id: targetId, position})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not reorder library entry");
+        applyLibrarySnapshot(data);
+        setLibraryColumnSelection(Number(parentFolderId || state.libraryRootId), {type, id: Number(data.reordered?.id || id)});
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not reorder library entry");
-      applyLibrarySnapshot(data);
-      setLibraryColumnSelection(Number(parentFolderId || state.libraryRootId), {type, id: Number(data.reordered?.id || id)});
-      renderLibrary();
     }
 
     async function colorLibraryFolder(folderId, color) {
@@ -13234,40 +13421,44 @@ INDEX_HTML = """<!doctype html>
     async function deleteLibraryEntry(type, id) {
       if (!type || !id) return;
       if (type === "folder" && libraryFolderById(id)?.protected) return;
-      const parentId = type === "item"
-        ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
-        : parentFolderId(id);
-      const deletedEntry = {type, id: Number(id)};
-      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
-      const res = await fetch("/api/library/delete", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id})
+      return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
+        const parentId = type === "item"
+          ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
+          : parentFolderId(id);
+        const deletedEntry = {type, id: Number(id)};
+        const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+        const res = await fetch("/api/library/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type, id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        applyLibrarySnapshot(data);
+        selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not delete library entry");
-      applyLibrarySnapshot(data);
-      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
-      renderLibrary();
     }
 
     async function removeLibraryItemFromCurrentCollection(itemId) {
       if (!itemId) return;
       const item = libraryItemById(itemId);
       if (!item) return;
-      const parentId = Number(item.folder_id || state.libraryActiveFolderId || state.libraryRootId);
-      const deletedEntry = {type: "item", id: Number(itemId)};
-      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
-      const res = await fetch("/api/library/remove-item", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({item_id: itemId})
+      return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
+        const parentId = Number(item.folder_id || state.libraryActiveFolderId || state.libraryRootId);
+        const deletedEntry = {type: "item", id: Number(itemId)};
+        const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+        const res = await fetch("/api/library/remove-item", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({item_id: itemId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not remove paper from current collection");
+        applyLibrarySnapshot(data);
+        selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not remove paper from current collection");
-      applyLibrarySnapshot(data);
-      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
-      renderLibrary();
     }
 
     function libraryFilePathsForDelete(type, id) {
@@ -13308,16 +13499,18 @@ INDEX_HTML = """<!doctype html>
         confirmLabel: type === "folder" ? "Delete Folder" : "Delete File"
       });
       if (!confirmed) return;
-      const res = await fetch("/api/library/delete-file", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id, confirmed: true})
+      return withLibraryActivityStatus("Deleting files...", "Delete complete.", async () => {
+        const res = await fetch("/api/library/delete-file", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type, id, confirmed: true})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not delete files");
+        applyLibrarySnapshot(data);
+        selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not delete files");
-      applyLibrarySnapshot(data);
-      selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
-      renderLibrary();
     }
 
     function showLibraryConfirmDialog({title, body, paths, confirmLabel = "Delete"} = {}) {
@@ -13368,24 +13561,27 @@ INDEX_HTML = """<!doctype html>
         if (selection?.type && selection.id) await deleteLibraryEntry(selection.type, Number(selection.id));
         return;
       }
-      const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
-      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
-      for (const entry of selectedEntries.slice().reverse()) {
-        const stillExists = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
-        if (!stillExists) continue;
-        const res = await fetch("/api/library/delete", {
+      return withLibraryActivityStatus(`Deleting ${selectedEntries.length} items...`, "Delete complete.", async () => {
+        const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
+        const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+        const entriesToDelete = selectedEntries
+          .slice()
+          .reverse()
+          .filter((entry) => entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id));
+        if (!entriesToDelete.length) return;
+        const res = await fetch("/api/library/delete-batch", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type: entry.type, id: entry.id})
+          body: JSON.stringify({entries: entriesToDelete})
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        if (!res.ok) throw new Error(data.error || "Could not delete library entries");
         applyLibrarySnapshot(data);
-      }
-      clearLibraryRangeSelection();
-      const lastDeleted = selectedEntries[selectedEntries.length - 1];
-      selectLibraryDeletionFallback(parentId, lastDeleted, entriesBeforeDelete);
-      renderLibrary();
+        clearLibraryRangeSelection();
+        const lastDeleted = selectedEntries[selectedEntries.length - 1];
+        selectLibraryDeletionFallback(parentId, lastDeleted, entriesBeforeDelete);
+        renderLibrary();
+      });
     }
 
     function selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete) {
@@ -13431,20 +13627,28 @@ INDEX_HTML = """<!doctype html>
 
     async function pasteLibraryEntry(targetFolderId) {
       if (!state.libraryClipboard) return;
-      const clipboard = state.libraryClipboard;
-      const res = await fetch("/api/library/paste", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type: clipboard.type, id: clipboard.id, target_folder_id: targetFolderId})
+      const entries = libraryClipboardEntries();
+      if (!entries.length) return;
+      return withLibraryActivityStatus(`Pasting ${entries.length} item${entries.length === 1 ? "" : "s"}...`, "Paste complete.", async () => {
+        let lastPasted = null;
+        const res = await fetch("/api/library/paste-batch", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({entries, target_folder_id: targetFolderId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not paste library entries");
+        applyLibrarySnapshot(data);
+        const pastedEntries = Array.isArray(data.pasted) ? data.pasted : [];
+        const finalPasted = pastedEntries[pastedEntries.length - 1];
+        if (finalPasted?.id) {
+          lastPasted = {type: finalPasted.type, id: Number(finalPasted.id)};
+        }
+        if (lastPasted) {
+          setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), lastPasted);
+        }
+        renderLibrary();
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not paste library entry");
-      applyLibrarySnapshot(data);
-      const pastedId = Number(data.pasted?.id || 0);
-      if (pastedId) {
-        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type: clipboard.type, id: pastedId});
-      }
-      renderLibrary();
     }
 
     async function refreshLibraryMetadataFromDoi(paper) {
@@ -14337,7 +14541,8 @@ INDEX_HTML = """<!doctype html>
             <div class="library-detail" id="libraryDetail"></div>
           </aside>
           <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
-            ${librarySelectionPathMarkup()}
+            <span class="library-path-parts">${librarySelectionPathMarkup()}</span>
+            <span class="${libraryActivityStatusClass()}" id="libraryActivityStatus">${escapeHtml(libraryActivityStatusText())}</span>
           </div>
         </div>
         <div class="library-tab-context-menu" id="libraryTabContextMenu">
@@ -14435,6 +14640,55 @@ INDEX_HTML = """<!doctype html>
           </span>
         `)
         .join("");
+    }
+
+    function libraryActivityStatusText() {
+      return state.libraryActivityText || "";
+    }
+
+    function libraryActivityStatusClass() {
+      const base = "library-activity-status";
+      if (!state.libraryActivityText) return base;
+      if (state.libraryActivityLive) return `${base} live`;
+      if (/failed|could not|error/i.test(state.libraryActivityText)) return `${base} err`;
+      return `${base} ok`;
+    }
+
+    function updateLibraryActivityStatus(text = "", options = {}) {
+      if (state.libraryActivityTimer) {
+        window.clearTimeout(state.libraryActivityTimer);
+        state.libraryActivityTimer = 0;
+      }
+      state.libraryActivityText = text;
+      state.libraryActivityLive = Boolean(options.live);
+      const status = $("libraryActivityStatus");
+      if (status) {
+        status.textContent = libraryActivityStatusText();
+        status.className = libraryActivityStatusClass();
+      }
+      if (text && !options.live && options.clear !== false) {
+        state.libraryActivityTimer = window.setTimeout(() => {
+          state.libraryActivityText = "";
+          state.libraryActivityLive = false;
+          const current = $("libraryActivityStatus");
+          if (current) {
+            current.textContent = "";
+            current.className = libraryActivityStatusClass();
+          }
+        }, Number(options.delay || 1800));
+      }
+    }
+
+    async function withLibraryActivityStatus(liveText, doneText, action) {
+      updateLibraryActivityStatus(liveText, {live: true, clear: false});
+      try {
+        const result = await action();
+        updateLibraryActivityStatus(doneText, {live: false});
+        return result;
+      } catch (error) {
+        updateLibraryActivityStatus(error.message || "Library action failed", {live: false});
+        throw error;
+      }
     }
 
     function libraryPaneHeaderMarkup(options = {}) {
@@ -15069,6 +15323,7 @@ INDEX_HTML = """<!doctype html>
       if (visibleSelected) state.myPublicationSelectionId = Number(selected.id);
       else if (rows[0]) state.myPublicationSelectionId = Number(rows[0].id);
       else state.myPublicationSelectionId = 0;
+      pruneMyPublicationSelection();
       $("summary").textContent = "";
       const root = $("papers");
       root.classList.remove("deep-survey-view");
@@ -15296,9 +15551,11 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationRowMarkup(entry, index) {
       const paper = entry.paper || {};
-      const active = Number(entry.id) === Number(state.myPublicationSelectionId);
+      const multiSelected = (state.myPublicationSelectedIds || new Set()).size > 1;
+      const active = !multiSelected && Number(entry.id) === Number(state.myPublicationSelectionId);
+      const selected = (state.myPublicationSelectedIds || new Set()).has(Number(entry.id));
       return `
-        <tr class="my-publications-row${active ? " active" : ""}${entry.review_article ? " review-article" : ""}${entry.head ? " head-excluded" : ""}" data-publication-id="${Number(entry.id)}" draggable="true">
+        <tr class="my-publications-row${selected ? " selected" : ""}${active ? " active" : ""}${entry.review_article ? " review-article" : ""}${entry.head ? " head-excluded" : ""}" data-publication-id="${Number(entry.id)}" draggable="true" aria-selected="${selected || active ? "true" : "false"}">
           <td>${index + 1}</td>
           <td>
             <div class="my-publications-title-cell">
@@ -15331,6 +15588,82 @@ INDEX_HTML = """<!doctype html>
 
     function visibleMyPublicationRows() {
       return myPublicationFilteredRows(sortedMyPublications());
+    }
+
+    function visibleMyPublicationIds() {
+      return visibleMyPublicationRows().map((entry) => Number(entry.id));
+    }
+
+    function pruneMyPublicationSelection() {
+      const visibleIds = new Set(visibleMyPublicationIds());
+      state.myPublicationSelectedIds = new Set(
+        [...(state.myPublicationSelectedIds || new Set())]
+          .map((id) => Number(id))
+          .filter((id) => visibleIds.has(id) && myPublicationById(id))
+      );
+      if (state.myPublicationSelectionId && (!visibleIds.has(Number(state.myPublicationSelectionId)) || !myPublicationById(state.myPublicationSelectionId))) {
+        state.myPublicationSelectionId = Number([...state.myPublicationSelectedIds][0] || visibleMyPublicationRows()[0]?.id || 0);
+      }
+      if (state.myPublicationSelectionId && !state.myPublicationSelectedIds.size) {
+        state.myPublicationSelectedIds = new Set([Number(state.myPublicationSelectionId)]);
+      }
+      if (state.myPublicationRangeAnchorId && !visibleIds.has(Number(state.myPublicationRangeAnchorId))) {
+        state.myPublicationRangeAnchorId = Number(state.myPublicationSelectionId || [...state.myPublicationSelectedIds][0] || 0);
+      }
+    }
+
+    function selectedMyPublicationIdsForAction() {
+      pruneMyPublicationSelection();
+      const selected = [...(state.myPublicationSelectedIds || new Set())]
+        .map((id) => Number(id))
+        .filter((id) => myPublicationById(id));
+      if (selected.length) return selected;
+      return state.myPublicationSelectionId && myPublicationById(state.myPublicationSelectionId)
+        ? [Number(state.myPublicationSelectionId)]
+        : [];
+    }
+
+    function setMyPublicationSingleSelection(id) {
+      const publicationId = Number(id || 0);
+      if (!myPublicationById(publicationId)) return;
+      state.myPublicationSelectionId = publicationId;
+      state.myPublicationSelectedIds = new Set([publicationId]);
+      state.myPublicationRangeAnchorId = publicationId;
+    }
+
+    function setMyPublicationRangeSelection(id) {
+      const rows = visibleMyPublicationRows();
+      const targetId = Number(id || 0);
+      const targetIndex = rows.findIndex((entry) => Number(entry.id) === targetId);
+      if (targetIndex < 0) {
+        setMyPublicationSingleSelection(targetId);
+        return;
+      }
+      const anchorId = Number(state.myPublicationRangeAnchorId || state.myPublicationSelectionId || targetId);
+      let anchorIndex = rows.findIndex((entry) => Number(entry.id) === anchorId);
+      if (anchorIndex < 0) anchorIndex = targetIndex;
+      const start = Math.min(anchorIndex, targetIndex);
+      const end = Math.max(anchorIndex, targetIndex);
+      state.myPublicationSelectedIds = new Set(rows.slice(start, end + 1).map((entry) => Number(entry.id)));
+      state.myPublicationSelectionId = targetId;
+      state.myPublicationRangeAnchorId = Number(rows[anchorIndex]?.id || targetId);
+    }
+
+    function toggleMyPublicationSelection(id) {
+      const publicationId = Number(id || 0);
+      if (!myPublicationById(publicationId)) return;
+      const next = new Set(state.myPublicationSelectedIds || []);
+      if (next.has(publicationId) && next.size > 1) {
+        next.delete(publicationId);
+        if (Number(state.myPublicationSelectionId) === publicationId) {
+          state.myPublicationSelectionId = Number([...next][0] || 0);
+        }
+      } else {
+        next.add(publicationId);
+        state.myPublicationSelectionId = publicationId;
+      }
+      state.myPublicationSelectedIds = next;
+      state.myPublicationRangeAnchorId = publicationId;
     }
 
     function myPublicationMatchesRoleFilter(entry, key) {
@@ -15913,7 +16246,7 @@ INDEX_HTML = """<!doctype html>
         : escapeHtml(name);
       const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       return `
-        <${rowTag} class="library-row${rangeSelected ? " range-selected" : ""}${selected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
+        <${rowTag} class="library-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
           ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
@@ -16674,10 +17007,23 @@ INDEX_HTML = """<!doctype html>
       if (!shell) return;
       shell.querySelectorAll(".my-publications-row").forEach((row) => {
         row.addEventListener("click", (event) => {
+          if (state.suppressClickOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.target.closest(".star-button")) return;
-          selectMyPublication(Number(row.dataset.publicationId || 0));
+          selectMyPublication(Number(row.dataset.publicationId || 0), {
+            extendRange: event.shiftKey,
+            toggle: event.metaKey || event.ctrlKey
+          });
         });
         row.addEventListener("contextmenu", (event) => {
+          if (state.suppressContextMenuOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           showMyPublicationContextMenu(event, Number(row.dataset.publicationId || 0));
         });
         row.addEventListener("dblclick", async (event) => {
@@ -16691,6 +17037,11 @@ INDEX_HTML = """<!doctype html>
           });
         });
         row.addEventListener("dragstart", (event) => {
+          if (state.selectionMarquee) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           event.dataTransfer?.setData("text/plain", row.dataset.publicationId || "");
           event.dataTransfer?.setData("application/x-my-publication-id", row.dataset.publicationId || "");
           row.classList.add("dragging");
@@ -16778,6 +17129,7 @@ INDEX_HTML = """<!doctype html>
       results?.addEventListener("scroll", () => {
         state.myPublicationSearchScrollTop = results.scrollTop;
       });
+      shell.querySelector(".my-publications-table-wrap")?.addEventListener("pointerdown", (event) => startDragSelection(event, "my-publications"));
       shell.addEventListener("click", (event) => {
         if (shouldPreserveInteractiveFocus(event.target)) return;
         shell.focus({preventScroll: true});
@@ -16888,6 +17240,144 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function rightDragSelectIsInteractiveTarget(target) {
+      return Boolean(target?.closest?.("input, textarea, select, a, [contenteditable='true'], [data-library-rename-input], .star-button, .my-publications-col-resizer, .library-column-resizer, .library-detail, .publication-search-results"));
+    }
+
+    function marqueeRect(startX, startY, currentX, currentY) {
+      const left = Math.min(startX, currentX);
+      const top = Math.min(startY, currentY);
+      const right = Math.max(startX, currentX);
+      const bottom = Math.max(startY, currentY);
+      return {left, top, right, bottom, width: right - left, height: bottom - top};
+    }
+
+    function rectsIntersect(a, b) {
+      return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
+    }
+
+    function showSelectionMarquee(rect) {
+      let box = document.querySelector(".selection-marquee");
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "selection-marquee";
+        document.body.appendChild(box);
+      }
+      box.style.left = `${rect.left}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+    }
+
+    function clearSelectionMarquee() {
+      document.querySelector(".selection-marquee")?.remove();
+      document.body.classList.remove("marquee-selecting");
+      state.selectionMarquee = null;
+    }
+
+    function updateLibraryMarqueeSelection(marquee, rect) {
+      const folderId = Number(marquee.folderId || 0);
+      const rows = [...document.querySelectorAll(`.library-row[data-library-parent-folder="${folderId}"]`)];
+      const selectedEntries = [];
+      rows.forEach((row) => {
+        const rowRect = row.getBoundingClientRect();
+        const selected = rectsIntersect(rect, rowRect);
+        row.classList.toggle("range-selected", selected);
+        row.classList.toggle("active", false);
+        row.setAttribute("aria-selected", selected ? "true" : "false");
+        if (selected) {
+          selectedEntries.push({
+            type: row.dataset.libraryType,
+            id: Number(row.dataset.libraryId || 0)
+          });
+        }
+      });
+      if (!selectedEntries.length) return;
+      const last = selectedEntries[selectedEntries.length - 1];
+      state.libraryActiveFolderId = folderId;
+      state.librarySelection = last;
+      state.libraryColumnSelections[folderId] = last;
+      state.libraryRangeFolderId = folderId;
+      state.libraryRangeAnchor = selectedEntries[0];
+      state.libraryRangeSelectionKeys = new Set(selectedEntries.map(libraryEntryKey));
+    }
+
+    function updateMyPublicationMarqueeSelection(rect) {
+      const rows = [...document.querySelectorAll(".my-publications-row")];
+      const selectedIds = [];
+      rows.forEach((row) => {
+        const rowRect = row.getBoundingClientRect();
+        const selected = rectsIntersect(rect, rowRect);
+        row.classList.toggle("selected", selected);
+        row.classList.toggle("active", false);
+        row.setAttribute("aria-selected", selected ? "true" : "false");
+        if (selected) selectedIds.push(Number(row.dataset.publicationId || 0));
+      });
+      if (!selectedIds.length) return;
+      state.myPublicationSelectedIds = new Set(selectedIds);
+      state.myPublicationSelectionId = selectedIds[selectedIds.length - 1];
+      state.myPublicationRangeAnchorId = selectedIds[0];
+    }
+
+    function startDragSelection(event, surface) {
+      if (state.selectionMarquee) return;
+      if (event.button !== 0 || rightDragSelectIsInteractiveTarget(event.target)) return;
+      if (surface === "library" && event.target.closest(".library-row")) return;
+      if (surface === "my-publications" && event.target.closest(".my-publications-row")) return;
+      const column = surface === "library" ? event.target.closest("[data-library-column-folder]") : null;
+      const tableWrap = surface === "my-publications" ? event.target.closest(".my-publications-table-wrap") : null;
+      if (surface === "library" && !column) return;
+      if (surface === "my-publications" && !tableWrap) return;
+      state.selectionMarquee = {
+        surface,
+        folderId: Number(column?.dataset.libraryColumnFolder || 0),
+        startX: event.clientX,
+        startY: event.clientY,
+        currentX: event.clientX,
+        currentY: event.clientY,
+        moved: false
+      };
+      const move = (moveEvent) => {
+        const marquee = state.selectionMarquee;
+        if (!marquee) return;
+        marquee.currentX = moveEvent.clientX;
+        marquee.currentY = moveEvent.clientY;
+        const distance = Math.hypot(marquee.currentX - marquee.startX, marquee.currentY - marquee.startY);
+        if (distance < 4 && !marquee.moved) return;
+        marquee.moved = true;
+        moveEvent.preventDefault();
+        moveEvent.stopPropagation();
+        document.body.classList.add("marquee-selecting");
+        const rect = marqueeRect(marquee.startX, marquee.startY, marquee.currentX, marquee.currentY);
+        showSelectionMarquee(rect);
+        if (marquee.surface === "library") updateLibraryMarqueeSelection(marquee, rect);
+        if (marquee.surface === "my-publications") updateMyPublicationMarqueeSelection(rect);
+      };
+      const stop = (upEvent) => {
+        const marquee = state.selectionMarquee;
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", stop, true);
+        if (!marquee) return;
+        const moved = marquee.moved;
+        clearSelectionMarquee();
+        if (!moved) return;
+        upEvent.preventDefault();
+        upEvent.stopPropagation();
+        state.suppressClickOnce = true;
+        window.setTimeout(() => { state.suppressClickOnce = false; }, 250);
+        if (surface === "library") {
+          renderLibraryDetail();
+          refreshLibraryQuickLookForSelection();
+        } else {
+          renderPublicationDetail();
+          refreshLibraryQuickLookForSelection();
+        }
+        $("libraryShell")?.focus({preventScroll: true});
+      };
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", stop, true);
+    }
+
     function closeMyPublicationSearchResults() {
       if (!state.myPublicationSearchResults.length) return;
       state.myPublicationSearchResults = [];
@@ -16936,10 +17426,12 @@ INDEX_HTML = """<!doctype html>
       window.addEventListener("pointerup", stop);
     }
 
-    function selectMyPublication(id) {
+    function selectMyPublication(id, options = {}) {
       if (!myPublicationById(id)) return;
       clearScheduledMyPublicationDetailRender();
-      state.myPublicationSelectionId = Number(id);
+      if (options.extendRange) setMyPublicationRangeSelection(id);
+      else if (options.toggle) toggleMyPublicationSelection(id);
+      else setMyPublicationSingleSelection(id);
       updateMyPublicationActiveRow();
       renderPublicationDetail();
       refreshLibraryQuickLookForSelection();
@@ -16947,8 +17439,15 @@ INDEX_HTML = """<!doctype html>
 
     function updateMyPublicationActiveRow() {
       const activeId = Number(state.myPublicationSelectionId || 0);
+      const selectedIds = state.myPublicationSelectedIds || new Set();
+      const multiSelected = selectedIds.size > 1;
       document.querySelectorAll(".my-publications-row").forEach((row) => {
-        row.classList.toggle("active", Number(row.dataset.publicationId || 0) === activeId);
+        const id = Number(row.dataset.publicationId || 0);
+        const active = !multiSelected && id === activeId;
+        const selected = selectedIds.has(id);
+        row.classList.toggle("active", active);
+        row.classList.toggle("selected", selected);
+        row.setAttribute("aria-selected", active || selected ? "true" : "false");
       });
     }
 
@@ -17029,6 +17528,30 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not update Hide");
       applyMyPublications(data);
       state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
+      renderMyPublications();
+    }
+
+    async function setMyPublicationHeadById(publicationId, head) {
+      const res = await fetch("/api/my-publications/head", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({publication_id: publicationId, head})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not update Hide");
+      applyMyPublications(data);
+      return data.publication || null;
+    }
+
+    async function toggleSelectedMyPublicationsHead(publicationIds, head) {
+      const ids = [...new Set((publicationIds || []).map((id) => Number(id)).filter(Boolean))];
+      if (!ids.length) return;
+      for (const id of ids) {
+        if (myPublicationById(id)) await setMyPublicationHeadById(id, head);
+      }
+      state.myPublicationSelectedIds = new Set(ids.filter((id) => myPublicationById(id)));
+      state.myPublicationSelectionId = Number(ids.find((id) => myPublicationById(id)) || state.myPublicationSelectionId || 0);
+      state.myPublicationSearchStatus = `${head ? "Hidden" : "Shown"} ${ids.length} publication${ids.length === 1 ? "" : "s"}.`;
       renderMyPublications();
     }
 
@@ -17189,6 +17712,30 @@ INDEX_HTML = """<!doctype html>
         state.myPublicationSelectionId = Number(rows[0]?.id || 0);
       }
       state.myPublicationSearchStatus = "Publication deleted.";
+      renderMyPublications();
+      refreshLibraryQuickLookForSelection();
+    }
+
+    async function deleteMyPublications(publicationIds) {
+      const ids = [...new Set((publicationIds || []).map((id) => Number(id)).filter(Boolean))];
+      if (!ids.length) return;
+      for (const id of ids) {
+        if (!myPublicationById(id)) continue;
+        const res = await fetch("/api/my-publications/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({publication_id: id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not delete publication");
+        applyMyPublications(data);
+      }
+      state.myPublicationSelectedIds = new Set();
+      const rows = visibleMyPublicationRows();
+      state.myPublicationSelectionId = Number(rows[0]?.id || 0);
+      if (state.myPublicationSelectionId) state.myPublicationSelectedIds = new Set([state.myPublicationSelectionId]);
+      state.myPublicationRangeAnchorId = state.myPublicationSelectionId;
+      state.myPublicationSearchStatus = `Deleted ${ids.length} publication${ids.length === 1 ? "" : "s"}.`;
       renderMyPublications();
       refreshLibraryQuickLookForSelection();
     }
@@ -17580,6 +18127,11 @@ INDEX_HTML = """<!doctype html>
         else showLibraryQuickLookPlaceholder({open: true});
         return true;
       }
+      if (key === "Delete" || key === "Backspace") {
+        const ids = selectedMyPublicationIdsForAction();
+        if (ids.length) runLibraryMenuAction(() => deleteMyPublications(ids));
+        return true;
+      }
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return false;
       const currentIndex = rows.findIndex((entry) => Number(entry.id) === Number(state.myPublicationSelectionId));
       const movingDown = key === "ArrowDown" || key === "ArrowRight";
@@ -17588,7 +18140,8 @@ INDEX_HTML = """<!doctype html>
         ? fallback
         : Math.max(0, Math.min(rows.length - 1, currentIndex + (movingDown ? 1 : -1)));
       const nextId = Number(rows[nextIndex].id);
-      state.myPublicationSelectionId = nextId;
+      if (event.shiftKey) setMyPublicationRangeSelection(nextId);
+      else setMyPublicationSingleSelection(nextId);
       updateMyPublicationActiveRow();
       scrollMyPublicationKeyboardTarget(nextId, movingDown ? "down" : "up");
       scheduleMyPublicationDetailRender(nextId);
@@ -17646,6 +18199,11 @@ INDEX_HTML = """<!doctype html>
           });
         });
         row.addEventListener("click", (event) => {
+          if (state.suppressClickOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.target.closest("[data-library-rename-input]")) return;
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
@@ -17670,6 +18228,11 @@ INDEX_HTML = """<!doctype html>
           }
         });
         row.addEventListener("dragstart", (event) => {
+          if (state.selectionMarquee) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (row.getAttribute("draggable") === "false") {
             event.preventDefault();
             return;
@@ -17705,11 +18268,18 @@ INDEX_HTML = """<!doctype html>
           await reorderLibraryEntry(payload.type, Number(payload.id), Number(payload.parent_folder_id), Number(row.dataset.libraryId), position);
         });
         row.addEventListener("contextmenu", (event) => {
+          if (state.suppressContextMenuOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           event.stopPropagation();
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          setLibraryColumnSelection(parentFolderId, {type, id});
+          if (!libraryEntryIsInActionSelection(parentFolderId, {type, id})) {
+            setLibraryColumnSelection(parentFolderId, {type, id});
+          }
           renderLibraryDetail();
           refreshLibraryQuickLookForSelection();
           const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
@@ -17737,14 +18307,20 @@ INDEX_HTML = """<!doctype html>
       shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
         const body = column.querySelector(".library-column-body");
         const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        column.addEventListener("pointerdown", (event) => startDragSelection(event, "library"));
         body?.addEventListener("scroll", () => {
           if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
         });
         column.addEventListener("click", (event) => {
+          if (state.suppressClickOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.target.closest(".library-row")) return;
-          state.libraryActiveFolderId = Number(column.dataset.libraryColumnFolder || state.libraryRootId);
-          clearLibraryRangeSelection();
+          selectLibraryColumnFolder(Number(column.dataset.libraryColumnFolder || state.libraryRootId));
           renderLibrary();
+          refreshLibraryQuickLookForSelection();
         });
       });
       $("libraryColumns")?.addEventListener("scroll", (event) => {
@@ -17755,6 +18331,11 @@ INDEX_HTML = """<!doctype html>
       });
       $("libraryDetailDivider")?.addEventListener("pointerdown", startLibraryDetailResize);
       shell.addEventListener("contextmenu", (event) => {
+        if (state.suppressContextMenuOnce) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         const column = event.target.closest?.("[data-library-column-folder]");
         const folderId = Number(column?.dataset.libraryColumnFolder || state.libraryActiveFolderId || state.libraryRootId);
         state.libraryActiveFolderId = folderId;
@@ -18400,9 +18981,38 @@ INDEX_HTML = """<!doctype html>
       return false;
     }
 
+    function libraryClipboardEntries() {
+      const clipboard = state.libraryClipboard;
+      if (!clipboard) return [];
+      const entries = Array.isArray(clipboard.entries)
+        ? clipboard.entries
+        : (clipboard.type && clipboard.id ? [{type: clipboard.type, id: Number(clipboard.id)}] : []);
+      return entries
+        .map((entry) => ({type: entry.type, id: Number(entry.id)}))
+        .filter((entry) => libraryEntryIsCopyable(entry.type, entry.id));
+    }
+
+    function pruneLibraryClipboard() {
+      const entries = libraryClipboardEntries();
+      if (!entries.length) {
+        state.libraryClipboard = null;
+      } else if (entries.length === 1) {
+        state.libraryClipboard = entries[0];
+      } else {
+        state.libraryClipboard = {entries};
+      }
+    }
+
     function copyLibraryEntryToClipboard(type, id) {
-      if (!libraryEntryIsCopyable(type, id)) return false;
-      state.libraryClipboard = {type, id: Number(id)};
+      const explicitEntry = {type, id: Number(id)};
+      const actionEntries = selectedLibraryEntriesForAction();
+      const useActionSelection = actionEntries.length > 1
+        && actionEntries.some((entry) => libraryEntryKey(entry) === libraryEntryKey(explicitEntry));
+      const entries = (useActionSelection ? actionEntries : [explicitEntry])
+        .filter((entry) => libraryEntryIsCopyable(entry.type, entry.id));
+      if (!entries.length) return false;
+      state.libraryClipboard = entries.length === 1 ? entries[0] : {entries};
+      updateLibraryActivityStatus(`Copied ${entries.length} item${entries.length === 1 ? "" : "s"}.`, {live: false});
       return true;
     }
 
@@ -18421,7 +19031,11 @@ INDEX_HTML = """<!doctype html>
       const publication = myPublicationById(publicationId);
       const menu = $("myPublicationContextMenu");
       if (!publication || !menu) return;
-      selectMyPublication(publicationId);
+      if (!(state.myPublicationSelectedIds || new Set()).has(Number(publicationId))) {
+        selectMyPublication(publicationId);
+      }
+      const selectedIds = selectedMyPublicationIdsForAction();
+      const selectedPublications = selectedIds.map(myPublicationById).filter(Boolean);
       menu.dataset.publicationId = String(publicationId);
       menu.style.left = `${event.clientX}px`;
       menu.style.top = `${event.clientY}px`;
@@ -18430,18 +19044,22 @@ INDEX_HTML = """<!doctype html>
       const headButton = menu.querySelector('[data-action="toggle-my-publication-head"]');
       const deleteButton = menu.querySelector('[data-action="delete-my-publication"]');
       if (headButton) {
-        headButton.textContent = publication.head ? "Show" : "Hide";
+        const shouldHide = selectedPublications.some((item) => !item.head);
+        headButton.textContent = selectedPublications.length > 1
+          ? `${shouldHide ? "Hide" : "Show"} ${selectedPublications.length} selected`
+          : (publication.head ? "Show" : "Hide");
         headButton.onclick = async () => {
-          const current = myPublicationById(Number(menu.dataset.publicationId || 0));
+          const ids = selectedMyPublicationIdsForAction();
           hideMyPublicationContextMenu();
-          if (current) await runLibraryMenuAction(() => toggleMyPublicationHead(current, !current.head));
+          if (ids.length) await runLibraryMenuAction(() => toggleSelectedMyPublicationsHead(ids, shouldHide));
         };
       }
       if (deleteButton) {
+        deleteButton.textContent = selectedPublications.length > 1 ? `Delete ${selectedPublications.length} selected` : "Delete";
         deleteButton.onclick = async () => {
-          const id = Number(menu.dataset.publicationId || 0);
+          const ids = selectedMyPublicationIdsForAction();
           hideMyPublicationContextMenu();
-          if (id) await runLibraryMenuAction(() => deleteMyPublication(id));
+          if (ids.length) await runLibraryMenuAction(() => deleteMyPublications(ids));
         };
       }
     }
@@ -18466,6 +19084,12 @@ INDEX_HTML = """<!doctype html>
       const hasEntry = Boolean(entryType && entryId);
       const folder = entryType === "folder" ? libraryFolderById(entryId) : null;
       const item = entryType === "item" ? libraryItemById(entryId) : null;
+      const selectedEntries = selectedLibraryEntriesForAction();
+      const contextEntrySelected = hasEntry && selectedEntries.some((entry) => libraryEntryKey(entry) === libraryEntryKey({type: entryType, id: entryId}));
+      const actionEntries = contextEntrySelected ? selectedEntries : (hasEntry ? [{type: entryType, id: Number(entryId)}] : []);
+      const multiCount = actionEntries.length;
+      const allActionEntriesCopyable = actionEntries.length && actionEntries.every((entry) => libraryEntryIsCopyable(entry.type, entry.id));
+      const hasProtectedActionFolder = actionEntries.some((entry) => entry.type === "folder" && (libraryFolderById(entry.id)?.protected || Number(entry.id) === Number(state.libraryRootId)));
       const recycleId = libraryRecycleFolderId();
       const isRoot = entryType === "folder" && Number(entryId) === Number(state.libraryRootId);
       const isProtectedFolder = Boolean(folder?.protected || isRoot);
@@ -18505,13 +19129,16 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (deleteButton) {
-        deleteButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
-        deleteButton.textContent = entryType === "item" ? "Remove from current collection" : "Remove Folder";
+        deleteButton.style.display = hasEntry && !hasProtectedActionFolder ? "" : "none";
+        deleteButton.textContent = multiCount > 1
+          ? `Remove ${multiCount} selected`
+          : (entryType === "item" ? "Remove from current collection" : "Remove Folder");
         deleteButton.onclick = async () => {
           const type = menu.dataset.entryType;
           const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => {
+            if (contextEntrySelected && selectedLibraryEntriesForAction().length > 1) return deleteSelectedLibraryEntries();
             if (type === "item") return removeLibraryItemFromCurrentCollection(id);
             return deleteLibraryEntry(type, id);
           });
@@ -18530,7 +19157,8 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (copyButton) {
-        copyButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
+        copyButton.style.display = hasEntry && allActionEntriesCopyable ? "" : "none";
+        copyButton.textContent = multiCount > 1 ? `Copy ${multiCount} selected` : "Copy";
         copyButton.onclick = () => {
           copyLibraryEntryToClipboard(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
           hideLibraryContextMenu();
@@ -18562,7 +19190,9 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (pasteButton) {
-        pasteButton.style.display = state.libraryClipboard ? "" : "none";
+        const pasteCount = libraryClipboardEntries().length;
+        pasteButton.style.display = pasteCount ? "" : "none";
+        pasteButton.textContent = pasteCount > 1 ? `Paste ${pasteCount} items` : "Paste";
         pasteButton.onclick = async () => {
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => pasteLibraryEntry(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
@@ -18617,12 +19247,12 @@ INDEX_HTML = """<!doctype html>
       };
       const key = keyAliases[event.key] || event.key;
       if (state.libraryTab === "my-publications") {
-        const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(key);
+        const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Delete", "Backspace"].includes(key);
         if (!handled) return false;
         event.preventDefault();
         return handleMyPublicationKeydown(event, key);
       }
-      if (event.metaKey && !event.altKey && !event.shiftKey && key.toLowerCase() === "c") {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key.toLowerCase() === "c") {
         const selection = state.librarySelection;
         if (copyLibraryEntryToClipboard(selection?.type, Number(selection?.id || 0))) {
           event.preventDefault();
@@ -18630,8 +19260,8 @@ INDEX_HTML = """<!doctype html>
         }
         return false;
       }
-      if (event.metaKey && !event.altKey && !event.shiftKey && key.toLowerCase() === "v") {
-        if (!state.libraryClipboard) return false;
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key.toLowerCase() === "v") {
+        if (!libraryClipboardEntries().length) return false;
         event.preventDefault();
         runLibraryMenuAction(() => pasteLibraryEntry(libraryPasteTargetFolderId()));
         return true;
@@ -19609,18 +20239,35 @@ INDEX_HTML = """<!doctype html>
       $("reportTabs").innerHTML = "";
       $("libraryControls").classList.remove("open");
       const root = $("papers");
-      root.classList.remove("library-view");
-      root.classList.add("deep-survey-view");
+      const host = $("deepSurveyHost");
+      root.classList.remove("library-view", "deep-survey-view");
       root.style.height = "";
       root.style.minHeight = "";
-      root.innerHTML = `<div class="deep-survey-loading">Starting Deep Survey...</div>`;
-      try {
-        const data = await fetchJson("/api/deep-survey/status");
-        if (!data.ok || !data.url) throw new Error(data.error || "Deep Survey could not start");
-        root.innerHTML = `<iframe class="deep-survey-frame" title="Deep Survey" src="${escapeAttr(data.url)}"></iframe>`;
-      } catch (error) {
-        root.innerHTML = `<div class="empty">${escapeHtml(error.message || "Deep Survey could not start")}</div>`;
+      if (!host) return;
+      host.setAttribute("aria-hidden", "false");
+      if (!state.deepSurveyLoadingPromise) {
+        const existingFrame = host.querySelector(".deep-survey-frame");
+        if (!existingFrame) {
+          host.innerHTML = `<div class="deep-survey-loading">Starting Deep Survey...</div>`;
+        }
+        state.deepSurveyLoadingPromise = (async () => {
+          try {
+            const data = await fetchJson("/api/deep-survey/status");
+            if (!data.ok || !data.url) throw new Error(data.error || "Deep Survey could not start");
+            if (existingFrame && state.deepSurveyUrl === data.url && existingFrame.getAttribute("src") === data.url) {
+              return;
+            }
+            state.deepSurveyUrl = data.url;
+            host.innerHTML = `<iframe class="deep-survey-frame" title="Deep Survey" src="${escapeAttr(data.url)}"></iframe>`;
+          } catch (error) {
+            state.deepSurveyUrl = "";
+            host.innerHTML = `<div class="empty">${escapeHtml(error.message || "Deep Survey could not start")}</div>`;
+          } finally {
+            state.deepSurveyLoadingPromise = null;
+          }
+        })();
       }
+      await state.deepSurveyLoadingPromise;
     }
 
     function setPrimaryView(view) {
@@ -19634,6 +20281,7 @@ INDEX_HTML = """<!doctype html>
       $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
       $("sideDeepSurveyMode")?.classList.toggle("active", view === "deep-survey");
+      $("deepSurveyHost")?.setAttribute("aria-hidden", view === "deep-survey" ? "false" : "true");
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");

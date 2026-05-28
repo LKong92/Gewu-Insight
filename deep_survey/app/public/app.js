@@ -36,7 +36,11 @@ const state = {
   topicOrder: [],
   topicOrderSaveTimer: null,
   selectedVaultSaveTimer: null,
-  stage3DownloadCount: 0
+  stage3DownloadCount: 0,
+  appServerReconnectTimer: null,
+  threadStatusRenderTimer: null,
+  threadStatusPollTimer: null,
+  threadStatusPollInFlight: false
 };
 
 const els = {
@@ -1446,13 +1450,14 @@ function renderApprovalPanel() {
 
 function mergeAppThreadStatus(threadId, patch) {
   if (!threadId) return;
+  const normalizedPatch = normalizeAppThreadStatus(patch);
   state.appThreadStatus[threadId] = {
     threadId,
     status: "idle",
     summary: "Idle",
     turnId: null,
     ...(state.appThreadStatus[threadId] || {}),
-    ...patch
+    ...normalizedPatch
   };
   if (!isActiveAppThreadStatus(state.appThreadStatus[threadId])) {
     delete state.appThreadRunningStages[threadId];
@@ -1480,21 +1485,26 @@ function renderThreadChat() {
   const messages = chatForThread(threadId);
   const previousScrollTop = els.threadChat.scrollTop;
   const wasAtBottom = els.threadChat.scrollHeight - els.threadChat.scrollTop - els.threadChat.clientHeight < 24;
-  const hasPendingAssistant = Object.entries(state.appThreadAssistantBuffers).some(
-    ([key, value]) => key.startsWith(`${threadId}:`) && value.text.trim()
-  );
+  const pendingAssistantMessages = Object.entries(state.appThreadAssistantBuffers)
+    .filter(([key, value]) => key.startsWith(`${threadId}:`) && value.text.trim())
+    .map(([, value]) => ({
+      role: "assistant",
+      text: value.text.trim(),
+      pending: true,
+      turnId: value.turnId || null
+    }));
   if (!threadId) {
     els.threadChat.replaceChildren(emptyChatNode("Select or create a thread."));
     els.threadChatState.textContent = "Idle";
     return;
   }
   const nodes = messages.map(renderChatMessage);
-  if (hasPendingAssistant) nodes.push(renderChatMessage({ role: "assistant", text: "Codex is replying...", pending: true }));
+  nodes.push(...pendingAssistantMessages.map(renderChatMessage));
   if (!nodes.length) nodes.push(emptyChatNode("Send a message and the full reply will appear here."));
   els.threadChat.replaceChildren(...nodes);
   els.threadChat.scrollTop = wasAtBottom ? els.threadChat.scrollHeight : previousScrollTop;
   const status = state.appThreadStatus[threadId];
-  els.threadChatState.textContent = status?.status === "running" ? "Codex is replying..." : threadStatusLabel(status);
+  els.threadChatState.textContent = threadStatusDetail(status);
 }
 
 function emptyChatNode(text) {
@@ -1528,6 +1538,7 @@ function renderSetupPanel(setup = state.setupStatus) {
   els.setupPanel.classList.add("hidden");
   renderCodexPill();
   if (!setup) {
+    els.setupPanel.classList.remove("hidden");
     els.setupPanel.classList.remove("ready", "warn");
     els.setupTitle.textContent = "Checking Codex Setup";
     els.setupText.textContent = "On startup, Deep Survey connects to Codex and installs the bundled Deep Literature Workflow plugin if needed.";
@@ -1545,6 +1556,7 @@ function renderSetupPanel(setup = state.setupStatus) {
   const cacheOk = Boolean(setup.codexPlugin?.ok);
   const skillOk = Boolean(setup.skills?.deepLiterature);
   const allOk = Boolean(setup.ok);
+  els.setupPanel.classList.toggle("hidden", allOk);
   els.setupPanel.classList.toggle("ready", allOk);
   els.setupPanel.classList.toggle("warn", !allOk);
   els.setupTitle.textContent = allOk ? "Codex Setup Ready" : "Codex Setup Needs Attention";
@@ -1612,6 +1624,34 @@ function appendThreadChatMessage(threadId, role, text, options = {}) {
   renderThreadChat();
 }
 
+function normalizeAppThreadStatus(status = {}) {
+  const threadStatus = status.threadStatus || {};
+  const activeFlags = threadStatus.activeFlags || [];
+  let normalizedStatus = status.status || "idle";
+  if (activeFlags.includes("waitingOnApproval")) {
+    normalizedStatus = "waiting_approval";
+  } else if (threadStatus.type === "active" && ["idle", "completed", "interrupted", "failed"].includes(normalizedStatus)) {
+    normalizedStatus = "running";
+  } else if (threadStatus.type && threadStatus.type !== "active") {
+    normalizedStatus = threadStatus.type;
+  }
+  return {
+    ...status,
+    status: normalizedStatus
+  };
+}
+
+async function refreshThreadStatus(threadId = selectedThreadId()) {
+  if (!threadId || state.threadStatusPollInFlight) return;
+  state.threadStatusPollInFlight = true;
+  try {
+    const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/status`);
+    if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
+  } finally {
+    state.threadStatusPollInFlight = false;
+  }
+}
+
 function applyAppServerChatEvent(data) {
   const method = data.method;
   const threadId = threadIdFromAppServerEvent(data);
@@ -1663,6 +1703,23 @@ function flushAssistantBuffer(threadId, turnId) {
   renderThreadChat();
 }
 
+function recordAppThreadActivity(threadId, turnId, summary = "") {
+  if (!threadId) return;
+  const previous = state.appThreadStatus[threadId] || {};
+  const isActive = isActiveAppThreadStatus(previous);
+  const patch = {
+    status: isActive ? previous.status : "running",
+    lastEventAt: new Date().toISOString(),
+    turnId: turnId || previous.turnId || null
+  };
+  if (isActive) {
+    patch.summary = summary || previous.summary || "Running";
+  } else {
+    patch.summary = summary || "Running";
+  }
+  mergeAppThreadStatus(threadId, patch);
+}
+
 function threadIdForTurn(turnId) {
   if (!turnId) return "";
   return Object.entries(state.appThreadStatus).find(([, status]) => status.turnId === turnId)?.[0] || "";
@@ -1699,6 +1756,12 @@ function applyAppServerEventStatus(data) {
   const turnId = turnIdFromAppServerEvent(data);
   const threadStatus = data.params?.thread?.status || data.params?.status || data.status?.threadStatus;
   const activeFlags = threadStatus?.activeFlags || data.status?.threadStatus?.activeFlags || [];
+  if (
+    threadId &&
+    !["turn/start/local", "turn/started", "turn/completed", "turn/interrupt/local", "thread/status/changed"].includes(method)
+  ) {
+    recordAppThreadActivity(threadId, turnId, data.summary || "");
+  }
   if (method === "dlwAction/start" && data.action) {
     const runningStage = inferRunningStageForAction(data.action);
     state.activeDlwThreadId = threadId;
@@ -1783,12 +1846,29 @@ function threadStatusLabel(status) {
   return labels[value] || value;
 }
 
+function statusEventAgeSeconds(status) {
+  const timestamp = status?.lastEventAt || status?.updatedAt;
+  if (!timestamp) return null;
+  const ageMs = Date.now() - new Date(timestamp).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) return null;
+  return Math.floor(ageMs / 1000);
+}
+
+function threadStatusDetail(status) {
+  if (!status) return "Idle";
+  const label = threadStatusLabel(status);
+  const age = statusEventAgeSeconds(status);
+  if (status.status === "running" && age !== null && age >= 120) return `${label} · no new event for ${Math.floor(age / 60)} min`;
+  if (status.status === "running") return "Codex is replying...";
+  return label;
+}
+
 function renderThreadStatus() {
   const threadId = selectedThreadId();
   const status = state.appThreadStatus[threadId];
   const thread = state.appThreads.find((item) => item.id === threadId);
   const name = thread?.name || thread?.preview || (threadId ? threadId.slice(0, 8) : "None selected");
-  const statusText = state.dlwStartupBusy && !threadId ? "Preparing" : status ? threadStatusLabel(status) : "Unknown";
+  const statusText = state.dlwStartupBusy && !threadId ? "Preparing" : status ? threadStatusDetail(status) : "Unknown";
   const turnText = status?.turnId ? ` · turn ${status.turnId.slice(0, 8)}` : "";
   const modeText = selectedThreadMode() === "write" ? "Allow Edits" : "Read Only";
   els.threadStatusText.textContent = `Thread: ${name} · ${statusText}${turnText} · ${modeText}`;
@@ -1811,8 +1891,15 @@ function renderThreadStatus() {
 
 function connectAppServerEvents() {
   if (state.appServerEventSource) return;
+  if (state.appServerReconnectTimer) {
+    clearTimeout(state.appServerReconnectTimer);
+    state.appServerReconnectTimer = null;
+  }
   const source = new EventSource("/api/appserver/events");
   state.appServerEventSource = source;
+  source.onopen = () => {
+    els.appServerState.textContent = "Connected";
+  };
   source.addEventListener("appserver", (event) => {
     const data = JSON.parse(event.data);
     applyAppServerEventStatus(data);
@@ -1824,9 +1911,15 @@ function connectAppServerEvents() {
     appendLog(kind, `[app-server:${data.method}] ${summary}`);
   });
   source.onerror = () => {
-    els.appServerState.textContent = "Disconnected";
+    els.appServerState.textContent = "Reconnecting";
     state.appServerEventSource = null;
     source.close();
+    if (!state.appServerReconnectTimer) {
+      state.appServerReconnectTimer = setTimeout(() => {
+        state.appServerReconnectTimer = null;
+        connectAppServerEvents();
+      }, 1500);
+    }
   };
 }
 
@@ -1941,16 +2034,12 @@ async function listAppServerThreads(selectedId = null) {
   state.appThreadsLoaded = true;
   for (const thread of state.appThreads) {
     if (thread.appStatus) {
-      const status = thread.appStatus.threadStatus?.activeFlags?.includes("waitingOnApproval")
-        ? "waiting_approval"
-        : thread.appStatus.status;
+      const appStatus = normalizeAppThreadStatus(thread.appStatus);
+      const status = appStatus.status;
       if (["idle", "completed", "interrupted", "failed"].includes(status)) {
-        clearPendingApprovalsForThread(thread.id, thread.appStatus.turnId);
+        clearPendingApprovalsForThread(thread.id, appStatus.turnId);
       }
-      state.appThreadStatus[thread.id] = {
-        ...thread.appStatus,
-        status
-      };
+      state.appThreadStatus[thread.id] = appStatus;
     }
   }
   renderThreadOptions(state.appThreads, selectedId || preferredThreadId(state.appThreads));
@@ -2024,9 +2113,9 @@ async function ensureAppServerThreadForDlw(mode, topicInfo, fallbackTopic, optio
 
   if (options.createIfMissing) {
     const thread = await createBoundThreadForTopic({ mode, selectedTopic: topicInfo, topic: fallbackTopic });
-    threadId = thread?.id || selectedThreadId();
-    if (!threadId) throw new Error("Failed to create app-server thread.");
-    return threadId;
+    const createdThreadId = thread?.id || selectedThreadId();
+    if (!createdThreadId) throw new Error("Failed to create app-server thread.");
+    return createdThreadId;
   }
 
   throw new Error("No existing DLW thread matches this topic.");
@@ -2091,7 +2180,6 @@ async function sendDlwActionToThread(action, options = {}) {
     els.appServerState.textContent = "Sending DLW...";
     appendLog("meta", "Starting Deep Literature Workflow in the bound Codex thread...");
     if (state.status) renderStatus(state.status);
-
     const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/dlw-action`, {
       method: "POST",
       body: JSON.stringify({
@@ -2109,6 +2197,7 @@ async function sendDlwActionToThread(action, options = {}) {
     bindThreadToTopic(threadId, boundTopic, topic);
     els.appServerState.textContent = "DLW turn started";
     appendLog("meta", `DLW ${action} sent via plugin mention. turn=${result.turn?.id || ""}`);
+    await refreshThreadStatus(threadId).catch(showError);
     renderThreadStatus();
   } finally {
     state.dlwStartupBusy = false;
@@ -2726,6 +2815,7 @@ els.refreshBtn.addEventListener("click", async () => {
   els.refreshBtn.textContent = "...";
   try {
     await refreshStatus();
+    await refreshThreadStatus().catch(showError);
   } catch (error) {
     showError(error);
   } finally {
@@ -2830,6 +2920,12 @@ function showError(error) {
 restoreThreadPreferences();
 resizeThreadMessage();
 renderSetupPanel(null);
+state.threadStatusRenderTimer = setInterval(renderThreadStatus, 15000);
+state.threadStatusPollTimer = setInterval(() => {
+  const threadId = selectedThreadId() || state.activeDlwThreadId;
+  const status = state.appThreadStatus[threadId];
+  if (isActiveAppThreadStatus(status)) refreshThreadStatus(threadId).catch(() => {});
+}, 5000);
 
 refreshStatus()
   .then(() => runSetupCheck({ install: true }).catch(showError))

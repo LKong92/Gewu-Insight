@@ -87,6 +87,7 @@ button.danger {
   display: grid;
   grid-template-columns: 220px 280px minmax(0, 1fr);
   min-height: 100vh;
+  padding-top: 14px;
   overflow-x: hidden;
   overflow-y: visible;
   background: linear-gradient(to right, var(--sidebar-bg) 0 220px, var(--bg) 220px);
