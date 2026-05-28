@@ -2701,6 +2701,8 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "source_path": source_path,
         "native_file_path": native_file_path,
         "storage_mode": storage_mode,
+        "source": paper.get("source") or "",
+        "import_batch_id": paper.get("import_batch_id") or "",
         "import_kind": paper.get("import_kind") or "",
         "import_as": paper.get("import_as") or "",
         "file_mime_type": file_meta.get("mime_type") or "",
@@ -3810,6 +3812,8 @@ def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
         "title": paper.get("title") or "",
         "full_detail": False,
         "storage_mode": storage_mode,
+        "source": paper.get("source") or "",
+        "import_batch_id": paper.get("import_batch_id") or "",
         "import_kind": paper.get("import_kind") or "",
         "import_as": paper.get("import_as") or "",
         "file_mime_type": file_meta.get("mime_type") or "",
@@ -9515,10 +9519,29 @@ INDEX_HTML = """<!doctype html>
       gap: 8px;
       align-items: stretch;
       overflow-x: auto;
-      padding-bottom: 8px;
-      margin: -8px 0 14px;
+      overflow-y: hidden;
+      padding: 0 2px 8px;
+      margin: -8px -2px 14px;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+      -webkit-mask-image: linear-gradient(90deg, #000 0, #000 100%);
+      mask-image: linear-gradient(90deg, #000 0, #000 100%);
+      transition: -webkit-mask-image 120ms ease, mask-image 120ms ease;
     }
+    .report-tabs::-webkit-scrollbar { display: none; }
     .report-tabs.open { display: flex; }
+    .report-tabs.has-overflow-right {
+      -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+      mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 34px), transparent 100%);
+    }
+    .report-tabs.has-overflow-left {
+      -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 34px, #000 100%);
+      mask-image: linear-gradient(90deg, transparent 0, #000 34px, #000 100%);
+    }
+    .report-tabs.has-overflow-left.has-overflow-right {
+      -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
+      mask-image: linear-gradient(90deg, transparent 0, #000 34px, #000 calc(100% - 34px), transparent 100%);
+    }
     .journal-tab {
       position: relative;
       flex: 0 0 auto;
@@ -10240,7 +10263,7 @@ INDEX_HTML = """<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
       background: #fff;
-      transition: transform 0.16s ease, opacity 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+      transition: none;
     }
     .my-publications-table td:first-child {
       border-right: 0;
@@ -10343,14 +10366,17 @@ INDEX_HTML = """<!doctype html>
       opacity: 0.68;
       background: #ffffff;
       box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+      transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
     }
     .my-publications-row.drag-over-before td {
       transform: translateY(24px);
       box-shadow: 0 -20px 0 rgba(15, 107, 110, 0.14), inset 0 3px 0 var(--accent);
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
     .my-publications-row.drag-over-after td {
       transform: translateY(-24px);
       box-shadow: 0 20px 0 rgba(15, 107, 110, 0.14), inset 0 -3px 0 var(--accent);
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
     .my-publications-title-cell {
       display: flex;
@@ -11541,10 +11567,22 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
       flex: 0 1 auto;
       user-select: none;
+      border-radius: 999px;
+      padding: 2px 10px;
+      background: transparent;
+      border: 1px solid transparent;
+      transition: background 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+    }
+    .library-activity-status:empty {
+      display: none;
     }
     .library-activity-status.live {
       color: var(--accent-strong);
       font-weight: 700;
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(224,245,241,0.72) 18%, rgba(219,243,239,0.95) 50%, rgba(224,245,241,0.72) 82%, rgba(255,255,255,0) 100%);
+      border-color: rgba(15, 107, 110, 0.16);
+      box-shadow: 0 0 0 1px rgba(15, 107, 110, 0.04);
+      animation: libraryActivityGlow 1.45s ease-in-out infinite;
     }
     .library-activity-status.live::after {
       content: "";
@@ -11556,8 +11594,24 @@ INDEX_HTML = """<!doctype html>
       animation: livePulse 1.1s infinite;
       flex: 0 0 auto;
     }
-    .library-activity-status.ok { color: #14845f; }
-    .library-activity-status.err { color: #b42318; }
+    .library-activity-status.ok {
+      color: #14845f;
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(229,246,238,0.8) 20%, rgba(230,248,239,0.95) 50%, rgba(229,246,238,0.8) 80%, rgba(255,255,255,0) 100%);
+      border-color: rgba(20, 132, 95, 0.12);
+    }
+    .library-activity-status.err {
+      color: #b42318;
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,235,231,0.82) 20%, rgba(255,239,236,0.98) 50%, rgba(255,235,231,0.82) 80%, rgba(255,255,255,0) 100%);
+      border-color: rgba(180, 35, 24, 0.12);
+    }
+    @keyframes livePulse {
+      0%, 100% { transform: scale(0.78); opacity: 0.55; box-shadow: 0 0 0 0 rgba(15, 107, 110, 0.28); }
+      50% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 5px rgba(15, 107, 110, 0); }
+    }
+    @keyframes libraryActivityGlow {
+      0%, 100% { filter: brightness(0.98); }
+      50% { filter: brightness(1.06); }
+    }
     .library-path-item {
       min-width: 0;
       display: inline-flex;
@@ -12126,6 +12180,22 @@ INDEX_HTML = """<!doctype html>
       border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 16px;
+      outline: 0;
+      transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+      cursor: pointer;
+    }
+    .paper.report-selected {
+      border-color: rgba(15, 107, 110, 0.68);
+      background: #f7fcfb;
+      box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.18), var(--shadow);
+    }
+    .paper.report-selected::after {
+      content: "";
+      position: absolute;
+      inset: 7px;
+      border: 1px solid rgba(15, 107, 110, 0.22);
+      border-radius: 6px;
+      pointer-events: none;
     }
     .paper.late-unread::before {
       content: "";
@@ -12919,6 +12989,8 @@ INDEX_HTML = """<!doctype html>
       myPublicationKeyboardDetailTimer: 0,
       mode: "library",
       activeReportJournal: "",
+      reportSelectedPaperId: "",
+      reportQuickLookPaperId: "",
       noteWidth: 460,
       query: "",
       reportSequence: 0,
@@ -14516,6 +14588,7 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab === "my-publications") {
         setMyPublicationActivity(activityId, "Refreshing metadata...");
       }
+      updateLibraryActivityStatus("Refreshing metadata...", {live: true, clear: false});
       try {
         const res = await fetch("/api/library/refresh-metadata", {
           method: "POST",
@@ -14530,9 +14603,12 @@ INDEX_HTML = """<!doctype html>
         state.figureFailures.delete(paper.paper_id);
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
+        updateLibraryActivityStatus("Metadata refreshed.", {delay: 2600});
       } catch (error) {
+        const message = error.message || "Could not refresh metadata";
+        updateLibraryActivityStatus(`Metadata refresh failed: ${message}`, {delay: 4200});
         if (status) {
-          status.textContent = error.message || "Could not refresh metadata";
+          status.textContent = message;
           status.className = "library-detail-status err";
         }
         buttons.forEach((button) => button.disabled = false);
@@ -14888,6 +14964,7 @@ INDEX_HTML = """<!doctype html>
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
+      ensureReportPaperSelection(activePapers);
       activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
       markVisibleLateArrivalsSeen(activePapers);
       if (!activePapers.length) {
@@ -14933,6 +15010,7 @@ INDEX_HTML = """<!doctype html>
         button.className = `journal-tab${group.journal === state.activeReportJournal ? " active" : ""}`;
         button.type = "button";
         button.title = group.journal;
+        button.dataset.journal = group.journal;
         const logoUrl = journalLogoUrl(group.journal);
         const hasUnreadLateArrival = group.papers.some((paper) => paper.late_arrival_unread);
         button.innerHTML = `
@@ -14954,6 +15032,168 @@ INDEX_HTML = """<!doctype html>
         });
         root.appendChild(button);
       });
+      root.onscroll = () => updateReportTabsOverflow();
+      window.requestAnimationFrame(() => {
+        updateReportTabsOverflow();
+        revealActiveReportTab();
+      });
+    }
+
+    function updateReportTabsOverflow() {
+      const root = $("reportTabs");
+      if (!root || !root.classList.contains("open")) return;
+      const maxScroll = Math.max(0, root.scrollWidth - root.clientWidth);
+      const left = root.scrollLeft > 2;
+      const right = root.scrollLeft < maxScroll - 2;
+      root.classList.toggle("has-overflow-left", left);
+      root.classList.toggle("has-overflow-right", right);
+    }
+
+    function revealActiveReportTab(options = {}) {
+      const root = $("reportTabs");
+      const active = root?.querySelector(".journal-tab.active");
+      if (!root || !active) return;
+      const rootRect = root.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      const gutter = 28;
+      let delta = 0;
+      if (activeRect.left < rootRect.left + gutter) {
+        delta = activeRect.left - rootRect.left - gutter;
+      } else if (activeRect.right > rootRect.right - gutter) {
+        delta = activeRect.right - rootRect.right + gutter;
+      }
+      if (delta) {
+        root.scrollBy({left: delta, behavior: options.smooth ? "smooth" : "auto"});
+        window.setTimeout(updateReportTabsOverflow, options.smooth ? 180 : 0);
+      } else {
+        updateReportTabsOverflow();
+      }
+    }
+
+    function activeReportPapers() {
+      const groups = groupedReportPapers(reportVisiblePapers());
+      if (!groups.length) return [];
+      const group = groups.find((item) => item.journal === state.activeReportJournal) || groups[0];
+      return group?.papers || [];
+    }
+
+    function ensureReportPaperSelection(papers) {
+      if (!papers.length) {
+        state.reportSelectedPaperId = "";
+        return;
+      }
+      if (!state.reportSelectedPaperId || !papers.some((paper) => paper.paper_id === state.reportSelectedPaperId)) {
+        state.reportSelectedPaperId = papers[0].paper_id || "";
+      }
+    }
+
+    function selectedReportPaper() {
+      const papers = activeReportPapers();
+      ensureReportPaperSelection(papers);
+      return papers.find((paper) => paper.paper_id === state.reportSelectedPaperId) || papers[0] || null;
+    }
+
+    function updateReportPaperSelectionDom(options = {}) {
+      const selectedId = String(state.reportSelectedPaperId || "");
+      document.querySelectorAll("#papers .paper[data-paper-id]").forEach((article) => {
+        const selected = article.dataset.paperId === selectedId;
+        article.classList.toggle("report-selected", selected);
+        article.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      if (options.scroll && selectedId) {
+        const selected = document.querySelector(`#papers .paper[data-paper-id="${CSS.escape(selectedId)}"]`);
+        selected?.scrollIntoView({block: "nearest"});
+      }
+    }
+
+    function selectReportPaper(paperId, options = {}) {
+      if (!paperId) return;
+      state.reportSelectedPaperId = paperId;
+      updateReportPaperSelectionDom(options);
+    }
+
+    function switchReportJournalTab(delta) {
+      const groups = groupedReportPapers(reportVisiblePapers()).filter((group) => group.papers.length);
+      if (!groups.length) return true;
+      const currentIndex = groups.findIndex((group) => group.journal === state.activeReportJournal);
+      const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+      const nextIndex = (baseIndex + delta + groups.length) % groups.length;
+      state.activeReportJournal = groups[nextIndex].journal;
+      state.reportSelectedPaperId = groups[nextIndex].papers[0]?.paper_id || "";
+      renderReport();
+      revealActiveReportTab({smooth: true});
+      updateReportPaperSelectionDom({scroll: true});
+      return true;
+    }
+
+    function openSelectedReportPaperQuickLook() {
+      const paper = selectedReportPaper();
+      if (!paper) return;
+      if (paper.merged_pdf_path || paper.main_pdf_path) {
+        const previewPaper = paper.merged_pdf_path
+          ? paper
+          : {...paper, merged_pdf_path: paper.main_pdf_path, merged_pdf_url: paper.main_pdf_url || ""};
+        quickLookLibraryPdf(previewPaper, {toggle: true, silent: true});
+        state.reportQuickLookPaperId = paper.paper_id || "";
+        return;
+      }
+      if (state.libraryQuickLookOpen && state.libraryQuickLookKind === "placeholder" && state.reportQuickLookPaperId === paper.paper_id) {
+        closeLibraryQuickLook();
+        return;
+      }
+      state.reportQuickLookPaperId = paper.paper_id || "";
+      showLibraryQuickLookPlaceholder({open: true});
+    }
+
+    function reportKeyboardTargetIsEditable(target) {
+      if (!target?.closest) return false;
+      return Boolean(target.closest("input, textarea, select, button, a, [contenteditable='true']"));
+    }
+
+    function handleReportKeydown(event) {
+      if (state.mode !== "report") return false;
+      const keyAliases = {
+        "Up": "ArrowUp",
+        "Down": "ArrowDown",
+        "Left": "ArrowLeft",
+        "Right": "ArrowRight",
+        "Spacebar": " "
+      };
+      const key = keyAliases[event.key] || event.key;
+      if (key === " " && state.libraryQuickLookOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryQuickLook();
+        return true;
+      }
+      if (reportKeyboardTargetIsEditable(event.target)) return false;
+      if (event.metaKey || event.ctrlKey || event.altKey) return false;
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        event.preventDefault();
+        event.stopPropagation();
+        return switchReportJournalTab(key === "ArrowRight" ? 1 : -1);
+      }
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        const papers = activeReportPapers();
+        if (!papers.length) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        ensureReportPaperSelection(papers);
+        const currentIndex = papers.findIndex((paper) => paper.paper_id === state.reportSelectedPaperId);
+        const fallback = key === "ArrowDown" ? 0 : papers.length - 1;
+        const nextIndex = currentIndex < 0
+          ? fallback
+          : Math.max(0, Math.min(papers.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+        selectReportPaper(papers[nextIndex].paper_id, {scroll: true});
+        return true;
+      }
+      if (key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        openSelectedReportPaperQuickLook();
+        return true;
+      }
+      return false;
     }
 
     function renderArxivUpdateCountdown(root, journal) {
@@ -15537,7 +15777,7 @@ INDEX_HTML = """<!doctype html>
         updateLibraryActivityStatus(doneText, {live: false});
         return result;
       } catch (error) {
-        updateLibraryActivityStatus(error.message || "Library action failed", {live: false});
+        updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {live: false});
         throw error;
       }
     }
@@ -17142,7 +17382,14 @@ INDEX_HTML = """<!doctype html>
 
     function libraryPaperIsPdfLike(paper) {
       const kind = String(paper?.import_kind || "").toLowerCase();
-      return Boolean(paper?.merged_pdf_path || paper?.main_pdf_path || kind === "pdf" || (!kind && paper?.doi));
+      const extension = String(paper?.file_extension || "").toLowerCase().replace(/^\./, "");
+      const importedFile = Boolean(paper?.import_batch_id || (kind && kind !== "pdf"));
+      const hasIdentifier = Boolean(paper?.doi || paper?.preprint_id || String(paper?.paper_id || "").startsWith("arxiv_"));
+      const journalMonitorRecord = !importedFile && Boolean(paper?.journal || paper?.publication_date || paper?.url || paper?.source);
+      if (paper?.merged_pdf_path || paper?.main_pdf_path || kind === "pdf") return true;
+      if (kind && kind !== "pdf") return false;
+      if (importedFile && extension && extension !== "pdf") return false;
+      return Boolean(hasIdentifier || journalMonitorRecord);
     }
 
     function fileSizeLabel(bytes) {
@@ -19785,6 +20032,7 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryTab === "my-publications") {
         setMyPublicationActivity(activityId, options.force ? "Refreshing PDF..." : "Downloading PDF...");
       }
+      updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
       try {
         const res = await fetch("/api/download", {
           method: "POST",
@@ -19800,9 +20048,12 @@ INDEX_HTML = """<!doctype html>
         }
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
+        updateLibraryActivityStatus(options.force ? "PDF refreshed." : "PDF downloaded.", {delay: 2600});
       } catch (error) {
+        const message = error.message || "download failed";
+        updateLibraryActivityStatus(`PDF download failed: ${message}`, {delay: 4200});
         if (status) {
-          status.textContent = error.message;
+          status.textContent = message;
           status.className = "library-detail-status err";
         }
         buttons.forEach((button) => button.disabled = false);
@@ -19817,6 +20068,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = "";
       state.libraryQuickLookUrl = "";
+      state.reportQuickLookPaperId = "";
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
       state.libraryQuickLookPdfHasFocus = false;
@@ -19879,6 +20131,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function selectedLibraryQuickLookPlaceholder() {
+      if (state.mode === "report") {
+        const paper = selectedReportPaper();
+        return {icon: "○", title: paper?.citation_label || paper?.title || "Paper", type: paper ? "No PDF" : "Journal Monitor"};
+      }
       if (state.libraryTab === "my-publications") {
         const paper = selectedMyPublicationPaper();
         return {icon: "○", title: paper?.citation_label || paper?.title || "Publication", type: paper ? "No PDF" : "My Publications"};
@@ -20022,7 +20278,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     function handleLibraryQuickLookPdfKeydown(event) {
-      if (event.key !== "Escape") return;
+      const key = event.key === "Spacebar" ? " " : event.key;
+      if (key === " " && state.mode === "report") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryQuickLook();
+        return;
+      }
+      if (key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
       reclaimLibraryQuickLookFocus();
@@ -20645,8 +20908,12 @@ INDEX_HTML = """<!doctype html>
     function renderPaper(paper) {
       const article = document.createElement("article");
       const reserveFigure = state.showFigures && (paper.image_url || (paper.paper_id && !state.figureFailures.has(paper.paper_id)));
-      article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}`;
+      const selected = paper.paper_id && paper.paper_id === state.reportSelectedPaperId;
+      article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${selected ? " report-selected" : ""}`;
       article.dataset.paperId = paper.paper_id;
+      article.tabIndex = -1;
+      article.setAttribute("role", "option");
+      article.setAttribute("aria-selected", selected ? "true" : "false");
       const authorText = authorLine(paper);
       const identifierText = paper.doi || paper.preprint_id || "no DOI";
       const preprintCategoryText = paper.preprint_category || "";
@@ -20693,6 +20960,7 @@ INDEX_HTML = """<!doctype html>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
       if (openPageButton) openPageButton.addEventListener("click", () => openUrlExternally(paper.url));
+      article.addEventListener("click", () => selectReportPaper(paper.paper_id));
       article.querySelector('[data-action="add-library"]').addEventListener("click", () => addPaperToLibrary(article, paper.paper_id));
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
       article.querySelector('[data-action="analyze"]').addEventListener("click", () => runAction(article, paper.paper_id, "analyze"));
@@ -21718,6 +21986,7 @@ INDEX_HTML = """<!doctype html>
       if (handleSearchShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
+      if (handleReportKeydown(event)) return;
       if (event.key !== "Escape") return;
       closePublicationAuthorMenu();
       closePublicationExportMenu();
@@ -21785,6 +22054,10 @@ INDEX_HTML = """<!doctype html>
     });
     window.addEventListener("resize", () => {
       if (state.mode === "library") resizeLibraryViewport();
+      if (state.mode === "report") {
+        revealActiveReportTab();
+        updateReportTabsOverflow();
+      }
       closeAuthorAffiliationTooltip();
     });
     window.addEventListener("scroll", closeAuthorAffiliationTooltip, true);
