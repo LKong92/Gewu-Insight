@@ -454,6 +454,14 @@ def evaluate_files(
             if source_path and source_exists:
                 result["created_resources"] += 1
                 result["resources_or_attachments_to_import"] += 1
+            matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+            plan = paper_plan(record, paper_id=matched_paper_id or new_paper_id(record))
+            if matched_paper_id:
+                result["updated_papers"] += 1
+                append_limited(result["papers_to_update"], plan, 500)
+            else:
+                result["created_papers"] += 1
+                append_limited(result["papers_to_create"], plan, 500)
             append_limited(result["resources_to_import"], resource_plan(record), 500)
             continue
 
@@ -569,6 +577,8 @@ def execute_import(
                 continue
 
             if import_as == "resource":
+                matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+                paper_id = matched_paper_id or new_paper_id(record)
                 stored_path = ""
                 if reusable_path:
                     stored_path = reusable_path
@@ -578,8 +588,21 @@ def execute_import(
                 if stored_path:
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
-                upsert_resource(storage, record, batch_id=batch_id, paper_id=None, stored_path=stored_path)
+                upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
+                if matched_paper_id:
+                    result["updated_papers"] += 1
+                    append_limited(result["papers_to_update"], paper_plan(record, paper_id=paper_id), 500)
+                else:
+                    result["created_papers"] += 1
+                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                    add_existing_index(existing, record, paper_id)
+                upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
+                if result["preserve_folders"]:
+                    folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
+                    item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+                    if item and record["filename"]:
+                        storage.rename_library_item(item_id=int(item["id"]), name=record["filename"])
                 continue
 
             result["skipped"] += 1
@@ -1026,6 +1049,89 @@ def upsert_imported_paper(
             stored_path,
             stored_path,
             stored_path,
+            stored_path,
+            now_text(),
+            paper_id,
+        ),
+    )
+    storage.conn.commit()
+
+
+def upsert_imported_file_paper(
+    storage: Storage,
+    record: dict[str, Any],
+    *,
+    paper_id: str,
+    batch_id: str,
+    stored_path: str,
+) -> None:
+    title = record["filename"] or record["title"] or "(Untitled imported file)"
+    raw = {
+        "import": import_metadata(record, batch_id=batch_id, stored_path=stored_path),
+        "file": {
+            "kind": record["kind"],
+            "mime_type": record["mime_type"],
+            "extension": record["extension"],
+        },
+    }
+    storage.upsert_paper(
+        {
+            "paper_id": paper_id,
+            "doi": "",
+            "title": title,
+            "journal": "Imported File",
+            "publication_date": "",
+            "abstract": "",
+            "abstract_source": "inventory",
+            "url": "",
+            "landing_url": "",
+            "pdf_url": "",
+            "source": "inventory",
+            "type": "imported_file",
+            "type_crossref": "",
+            "publisher_section": "imported",
+            "section_allowed": True,
+            "raw": raw,
+        }
+    )
+    storage.conn.execute(
+        """
+        UPDATE papers
+        SET source_path = ?,
+            original_relative_path = ?,
+            original_parent_relative_path = ?,
+            original_filename = ?,
+            import_batch_id = ?,
+            import_kind = ?,
+            import_as = ?,
+            doi_source = ?,
+            parse_status = ?,
+            parse_error = ?,
+            size_bytes = ?,
+            modified_at = ?,
+            page_count = ?,
+            download_status = CASE WHEN ? != '' THEN 'success' ELSE download_status END,
+            download_message = CASE WHEN ? != '' THEN ? ELSE download_message END,
+            downloaded_at = CASE WHEN ? != '' THEN ? ELSE downloaded_at END
+        WHERE paper_id = ?
+        """,
+        (
+            record["source_path"],
+            record["relative_path"],
+            record["parent_relative_path"],
+            record["filename"],
+            batch_id,
+            record["kind"],
+            record["import_as"],
+            record["doi_source"],
+            record["parse_status"],
+            record["parse_error"],
+            record["size_bytes"],
+            record["modified_at"],
+            record["page_count"],
+            stored_path,
+            stored_path,
+            f"imported from inventory ({'copied' if stored_path != record['source_path'] else 'linked'})",
             stored_path,
             now_text(),
             paper_id,

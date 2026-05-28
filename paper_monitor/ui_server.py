@@ -78,8 +78,6 @@ LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 ADS_API_TOKEN_SETTING = "ads_api_token"
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
-QUICK_LOOK_LOCK = threading.Lock()
-QUICK_LOOK_PROCESS: Any = None
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
@@ -216,32 +214,6 @@ class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
         self.server_port = port
 
 
-def activate_native_app_later(delay: float = 0.25) -> None:
-    def activate() -> None:
-        try:
-            subprocess.Popen(
-                ["osascript", "-e", 'tell application id "local.paper-monitor" to activate'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            return
-
-    threading.Timer(delay, activate).start()
-
-
-def open_single_quick_look(path: Path) -> None:
-    global QUICK_LOOK_PROCESS
-    with QUICK_LOOK_LOCK:
-        if QUICK_LOOK_PROCESS and QUICK_LOOK_PROCESS.poll() is None:
-            QUICK_LOOK_PROCESS.terminate()
-        QUICK_LOOK_PROCESS = subprocess.Popen(
-            ["qlmanage", "-p", str(path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-
 def run_ui_server(
     *,
     host: str = "127.0.0.1",
@@ -353,6 +325,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/files":
                 self.handle_file(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/native-file-preview":
+                self.handle_native_file_preview(parse_qs(parsed.query))
+                return
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown route")
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
@@ -384,9 +359,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/open-native-file":
                 self.handle_open_native_file(payload)
-                return
-            if parsed.path == "/api/quick-look":
-                self.handle_quick_look(payload)
                 return
             if parsed.path == "/api/open-url":
                 self.handle_open_url(payload)
@@ -839,20 +811,40 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_add_my_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("paper")
         paper_id = str(payload.get("paper_id") or "")
+        paper_ids = payload.get("paper_ids")
         storage = Storage(self.configured_db_path)
         try:
             paper: dict[str, Any] | None = None
+            publication: dict[str, Any] = {}
             if isinstance(candidate, dict):
                 normalized = paper_from_publication_candidate(candidate)
                 storage.upsert_paper(normalized)
                 paper = storage.get_paper(normalized["paper_id"])
                 paper_id = normalized["paper_id"]
+                if not paper_id or not paper:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
+                    return
+                publication = storage.add_my_publication(paper_id=paper_id)
+            elif isinstance(paper_ids, list):
+                valid_ids = []
+                for raw_id in paper_ids:
+                    candidate_id = str(raw_id or "").strip()
+                    if candidate_id and storage.get_paper(candidate_id):
+                        valid_ids.append(candidate_id)
+                if not valid_ids:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_ids must include at least one known paper")
+                    return
+                for candidate_id in valid_ids:
+                    publication = storage.add_my_publication(paper_id=candidate_id)
             elif paper_id:
                 paper = storage.get_paper(paper_id)
-            if not paper_id or not paper:
+                if not paper_id or not paper:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
+                    return
+                publication = storage.add_my_publication(paper_id=paper_id)
+            else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                 return
-            publication = storage.add_my_publication(paper_id=paper_id)
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
@@ -2101,22 +2093,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             subprocess.run(["open", str(requested)], check=True)
         self.send_json({"status": "opened", "path": str(requested), "mode": "open"})
 
-    def handle_quick_look(self, payload: dict[str, Any]) -> None:
-        raw_path = str(payload.get("path") or "")
-        if not raw_path:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
-            return
-        requested = Path(raw_path).expanduser().resolve()
-        if not is_allowed_file(requested, allowed_pdf_roots()):
-            self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
-            return
-        if not requested.exists() or requested.suffix.lower() != ".pdf":
-            self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
-            return
-        open_single_quick_look(requested)
-        activate_native_app_later()
-        self.send_json({"status": "opened", "path": str(requested)})
-
     def handle_open_url(self, payload: dict[str, Any]) -> None:
         url = str(payload.get("url") or "")
         parsed = urlparse(url)
@@ -2296,6 +2272,23 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not is_allowed_file(requested, [*allowed_pdf_roots(), DEFAULT_ANALYSIS_DIR.resolve()]):
             self.send_error_json(HTTPStatus.FORBIDDEN, "File is outside allowed report/PDF folders")
             return
+        if not requested.exists() or not requested.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
+            return
+        content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
+        data = requested.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_native_file_preview(self, query: dict[str, list[str]]) -> None:
+        raw_path = first(query, "path")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(unquote(raw_path)).expanduser().resolve()
         if not requested.exists() or not requested.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
@@ -2632,6 +2625,10 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
+    imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
+    file_meta = raw.get("file") if isinstance(raw.get("file"), dict) else {}
+    stored_import_path = existing_path_or_empty(imported.get("stored_path") or "")
+    native_file_path = merged_pdf or main_pdf or stored_import_path or source_path
     analysis_path = existing_path_or_empty(paper.get("analysis_path") or "")
     storage_mode = paper_storage_mode(paper, merged_pdf=merged_pdf, main_pdf=main_pdf, source_path=source_path)
     return {
@@ -2652,7 +2649,13 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "merged_pdf_url": file_url(merged_pdf),
         "main_pdf_path": main_pdf,
         "source_path": source_path,
+        "native_file_path": native_file_path,
         "storage_mode": storage_mode,
+        "import_kind": paper.get("import_kind") or "",
+        "import_as": paper.get("import_as") or "",
+        "file_mime_type": file_meta.get("mime_type") or "",
+        "file_extension": file_meta.get("extension") or Path(str(paper.get("original_filename") or "")).suffix.lower(),
+        "file_size_bytes": int(paper.get("size_bytes") or 0),
         "original_relative_path": paper.get("original_relative_path") or "",
         "original_parent_relative_path": paper.get("original_parent_relative_path") or "",
         "original_filename": paper.get("original_filename") or "",
@@ -3331,15 +3334,25 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
 
 
 def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
     merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
     main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
     source_path = existing_path_or_empty(paper.get("source_path") or "")
+    imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
+    file_meta = raw.get("file") if isinstance(raw.get("file"), dict) else {}
+    stored_import_path = existing_path_or_empty(imported.get("stored_path") or "")
+    native_file_path = merged_pdf or main_pdf or stored_import_path or source_path
     storage_mode = paper_storage_mode(paper, merged_pdf=merged_pdf, main_pdf=main_pdf, source_path=source_path)
     summary = {
         "paper_id": paper.get("paper_id") or "",
         "title": paper.get("title") or "",
         "full_detail": False,
         "storage_mode": storage_mode,
+        "import_kind": paper.get("import_kind") or "",
+        "import_as": paper.get("import_as") or "",
+        "file_mime_type": file_meta.get("mime_type") or "",
+        "file_extension": file_meta.get("extension") or Path(str(paper.get("original_filename") or "")).suffix.lower(),
+        "file_size_bytes": int(paper.get("size_bytes") or 0),
     }
     for key in ["journal", "publication_date", "doi"]:
         value = paper.get(key) or ""
@@ -3361,6 +3374,8 @@ def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
         summary["preprint_category"] = preprint_category
     if main_pdf and main_pdf != merged_pdf:
         summary["main_pdf_path"] = main_pdf
+    if native_file_path:
+        summary["native_file_path"] = native_file_path
     if source_path and not merged_pdf and not main_pdf:
         summary["source_path"] = source_path
     return summary
@@ -8494,6 +8509,86 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       box-shadow: none;
     }
+    .library-file-thumb-preview {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      aspect-ratio: 0.76;
+      border: 1px solid #d0d5dd;
+      border-radius: 4px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      overflow: hidden;
+    }
+    .library-file-preview {
+      width: 100%;
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      background: #fff;
+    }
+    .library-file-preview.image {
+      padding: 18px;
+      background: #eef1f5;
+    }
+    .library-file-preview.image img {
+      max-width: 100%;
+      max-height: calc(100vh - 160px);
+      object-fit: contain;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+    }
+    .library-file-preview.text {
+      display: block;
+      place-items: initial;
+      padding: 0;
+      background: #fff;
+    }
+    .library-file-preview-text {
+      min-height: 100%;
+      margin: 0;
+      padding: 18px 22px;
+      color: #182230;
+      background: #fff;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .library-file-preview.media {
+      padding: 18px;
+      background: #101828;
+    }
+    .library-file-preview video,
+    .library-file-preview audio {
+      max-width: 100%;
+      max-height: 100%;
+    }
+    .library-file-preview-card {
+      width: min(440px, calc(100% - 36px));
+      display: grid;
+      gap: 12px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    }
+    .library-file-preview-card strong {
+      color: var(--ink);
+      font-size: 15px;
+      overflow-wrap: anywhere;
+    }
+    .library-file-preview-card span {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .library-file-preview-card button {
+      justify-self: start;
+    }
     .library-quicklook-placeholder {
       min-height: 100%;
       width: 100%;
@@ -12087,6 +12182,8 @@ INDEX_HTML = """<!doctype html>
       libraryRenamingFolderId: 0,
       libraryRenamingItemId: 0,
       libraryQuickLookOpen: false,
+      libraryQuickLookKind: "",
+      libraryQuickLookRenderToken: 0,
       libraryQuickLookPath: "",
       libraryQuickLookUrl: "",
       libraryQuickLookPage: 1,
@@ -14410,8 +14507,8 @@ INDEX_HTML = """<!doctype html>
         return `
           <h3>Result Guide</h3>
           <p>After an import finishes, this panel explains each number and lists files that need attention.</p>
-          <div class="loader-metric"><strong>Created</strong><span>new paper records.</span></div>
-          <div class="loader-metric"><strong>Updated</strong><span>existing paper records matched by DOI, arXiv, or source path.</span></div>
+          <div class="loader-metric"><strong>Created</strong><span>new Library item records for papers and other files.</span></div>
+          <div class="loader-metric"><strong>Updated</strong><span>existing records matched by DOI, arXiv, or source path.</span></div>
           <div class="loader-metric"><strong>DOI found</strong><span>PDF files where the loader extracted a DOI from the first page or filename.</span></div>
           <div class="loader-metric"><strong>No DOI</strong><span>PDF files that did not expose a DOI during the loader scan.</span></div>
           <div class="loader-metric"><strong>Resources</strong><span>PDF attachments plus non-PDF resource files.</span></div>
@@ -14427,8 +14524,8 @@ INDEX_HTML = """<!doctype html>
       const selectedDoi = missingDoi[doiIndex] || null;
       return `
         <h3>Result Guide</h3>
-        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New paper records made in Journal Monitor.</span></div>
-        <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known papers matched and refreshed instead of duplicated.</span></div>
+        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New Library item records made for papers and other files.</span></div>
+        <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Already-known records matched and refreshed instead of duplicated.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_extracted_count || 0} DOI found</strong><span>PDF files where the loader found a DOI from the first page or filename.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI</strong><span>PDF files imported by path identity because no DOI was extracted.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
@@ -14552,6 +14649,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="new-folder">New Folder</button>
           <button type="button" data-action="rename-entry">Rename</button>
           <button type="button" data-action="copy-entry">Copy</button>
+          <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
           <button type="button" data-action="color-folder">Color</button>
@@ -15035,7 +15133,7 @@ INDEX_HTML = """<!doctype html>
         const result = state.libraryImportLastResult || {};
         state.libraryImportStatus = result.errors?.length
           ? result.errors[0]
-          : `Imported ${result.created_papers || 0} papers, updated ${result.updated_papers || 0}, added ${result.created_resources || 0} resources.`;
+          : `Imported ${result.created_papers || 0} items, updated ${result.updated_papers || 0}, added ${result.created_resources || 0} non-PDF resources.`;
         appendLibraryImportLog(state.libraryImportStatus, result.errors?.length ? "error" : "done");
         state.libraryTab = "library";
         focusLibraryFolder(targetFolderId);
@@ -16264,8 +16362,8 @@ INDEX_HTML = """<!doctype html>
       if (type !== "item") return "";
       const path = libraryNativeItemPath(entry);
       if (!path) return "";
-      const fileName = sanitizeDragFileName(entry?.paper?.original_filename || fileNameFromPath(path) || fallbackName || "paper.pdf");
-      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName)}" title="Drag PDF to Finder"`;
+      const fileName = sanitizeDragFileName(entry?.paper?.original_filename || fileNameFromPath(path) || fallbackName || "file");
+      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName)}" title="Drag file to Finder"`;
     }
 
     function libraryEntryIconClass(type, entry) {
@@ -16286,6 +16384,31 @@ INDEX_HTML = """<!doctype html>
     function libraryPaperDisplayName(paper) {
       const label = paper?.citation_label || paper?.title || "Untitled paper";
       return String(label).replace(/^(.+?) et al\.(\s+)/, "$1$2");
+    }
+
+    function libraryPaperIsPdfLike(paper) {
+      const kind = String(paper?.import_kind || "").toLowerCase();
+      return Boolean(paper?.merged_pdf_path || paper?.main_pdf_path || kind === "pdf" || (!kind && paper?.doi));
+    }
+
+    function fileSizeLabel(bytes) {
+      const value = Number(bytes || 0);
+      if (!Number.isFinite(value) || value <= 0) return "";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let size = value;
+      let index = 0;
+      while (size >= 1024 && index < units.length - 1) {
+        size /= 1024;
+        index += 1;
+      }
+      return index === 0 ? `${value} ${units[index]}` : `${size.toFixed(size >= 10 ? 1 : 2)} ${units[index]}`;
+    }
+
+    function importedFileFormatLabel(paper) {
+      const extension = String(paper?.file_extension || "").trim();
+      const kind = String(paper?.import_kind || "").trim();
+      const mime = String(paper?.file_mime_type || "").trim();
+      return [extension, kind, mime].filter(Boolean).join(" · ") || "file";
     }
 
     function libraryDetailFigureMarkup(paper) {
@@ -16329,7 +16452,8 @@ INDEX_HTML = """<!doctype html>
     function libraryDetailFilesMarkup(paper) {
       const lines = [];
       if (paper?.merged_pdf_path) lines.push(`<span class="library-file-line">PDF: ${escapeHtml(paper.merged_pdf_path)}</span>`);
-      else lines.push(`<span class="library-file-line">PDF: No local PDF</span>`);
+      else if (paper?.native_file_path || paper?.source_path) lines.push(`<span class="library-file-line">File: ${escapeHtml(paper.native_file_path || paper.source_path)}</span>`);
+      else lines.push(`<span class="library-file-line">${libraryPaperIsPdfLike(paper) ? "PDF" : "File"}: No local file</span>`);
       if (paper?.pdf_url) lines.push(`<span class="library-file-line">Source PDF: ${escapeHtml(paper.pdf_url)}</span>`);
       return lines.join("");
     }
@@ -16349,6 +16473,23 @@ INDEX_HTML = """<!doctype html>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>`}
+        </dl>
+      `;
+    }
+
+    function libraryNonPdfDetailMarkup(paper) {
+      const path = paperNativePath(paper);
+      const size = fileSizeLabel(paper?.file_size_bytes);
+      return `
+        <h3>${escapeHtml(paper?.title || paper?.original_filename || "Imported file")}</h3>
+        <div class="actions">
+          ${path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
+        </div>
+        <div class="library-detail-status" id="libraryDetailStatus"></div>
+        <dl>
+          <dt>Path</dt><dd>${escapeHtml(path || "No local file path")}</dd>
+          <dt>Format</dt><dd>${escapeHtml(importedFileFormatLabel(paper))}</dd>
+          <dt>Size</dt><dd>${escapeHtml(size || "--")}</dd>
         </dl>
       `;
     }
@@ -16520,7 +16661,7 @@ INDEX_HTML = """<!doctype html>
           <h3>${escapeHtml(folder?.name || "Folder")}</h3>
           <dl>
             <dt>Type</dt><dd>Folder</dd>
-            <dt>Contains</dt><dd>${folders} folders · ${items} papers</dd>
+            <dt>Contains</dt><dd>${folders} folders · ${items} items</dd>
           </dl>
           <div class="library-detail-status" id="libraryDetailStatus"></div>
         `;
@@ -16528,6 +16669,14 @@ INDEX_HTML = """<!doctype html>
       }
       const item = libraryItemById(selection.id);
       const paper = item?.paper || {};
+      if (paper.paper_id && !libraryPaperIsPdfLike(paper)) {
+        root.innerHTML = libraryNonPdfDetailMarkup(paper);
+        root.querySelector('[data-action="open-native-paper-file"]')?.addEventListener("click", () => openNativePaperFile(paper, {
+          missingMessage: "No local file path is available for this item."
+        }));
+        if (!paper.full_detail) loadLibraryItemPaperDetail(item);
+        return;
+      }
       if (paper.paper_id && !paper.full_detail) {
         root.innerHTML = `
           <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
@@ -16540,12 +16689,21 @@ INDEX_HTML = """<!doctype html>
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
         ? paper.full_authors
         : (Array.isArray(paper.authors) ? paper.authors : []);
+      const isPdfLike = libraryPaperIsPdfLike(paper);
+      if (!isPdfLike) {
+        root.innerHTML = libraryNonPdfDetailMarkup(paper);
+        root.querySelector('[data-action="open-native-paper-file"]')?.addEventListener("click", () => openNativePaperFile(paper, {
+          missingMessage: "No local file path is available for this item."
+        }));
+        return;
+      }
       root.innerHTML = `
         <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
-          ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${!paper.merged_pdf_path && isPdfLike ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -16568,6 +16726,9 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      root.querySelector('[data-action="open-native-paper-file"]')?.addEventListener("click", () => openNativePaperFile(paper, {
+        missingMessage: "No local file path is available for this item."
+      }));
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
@@ -18124,7 +18285,7 @@ INDEX_HTML = """<!doctype html>
       if (key === " ") {
         const paper = selectedMyPublicationPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
-        else showLibraryQuickLookPlaceholder({open: true});
+        else quickLookLibraryFile(paper, {toggle: true, openPlaceholder: true});
         return true;
       }
       if (key === "Delete" || key === "Backspace") {
@@ -18367,8 +18528,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function sanitizeDragFileName(name) {
-      const cleanName = String(name || "").replace(/[\\r\\n:]/g, " ").trim() || "paper.pdf";
-      return cleanName.toLowerCase().endsWith(".pdf") ? cleanName : `${cleanName}.pdf`;
+      return String(name || "").replace(/[\\r\\n:]/g, " ").trim() || "file";
     }
 
     function libraryDropIsReorder(payload, row, event) {
@@ -18450,7 +18610,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function paperNativePath(paper) {
-      return paper.merged_pdf_path || paper.main_pdf_path || paper.source_path || "";
+      return paper.native_file_path || paper.merged_pdf_path || paper.main_pdf_path || paper.source_path || "";
     }
 
     function libraryNativeItemPath(item) {
@@ -18529,6 +18689,167 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function nativeFilePreviewUrl(path) {
+      return `/api/native-file-preview?path=${encodeURIComponent(path)}`;
+    }
+
+    function libraryFileExtension(paper) {
+      const explicit = String(paper?.file_extension || "").trim().replace(/^\./, "");
+      if (explicit) return explicit.toLowerCase();
+      const path = paperNativePath(paper || {});
+      const name = path.split(/[\\/]/).pop() || "";
+      const match = name.match(/\.([^.]+)$/);
+      return match ? match[1].toLowerCase() : "";
+    }
+
+    function libraryFilePreviewKind(paper) {
+      const mime = String(paper?.file_mime_type || "").toLowerCase();
+      const ext = libraryFileExtension(paper);
+      const textExtensions = new Set(["txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "html", "htm", "css", "js", "ts", "py", "c", "cc", "cpp", "h", "hpp", "java", "m", "mm", "tex", "bib", "ris", "log", "ini", "yaml", "yml", "toml", "rtf"]);
+      if (mime.startsWith("image/")) return "image";
+      if (mime.startsWith("video/")) return "video";
+      if (mime.startsWith("audio/")) return "audio";
+      if (mime.startsWith("text/") || textExtensions.has(ext) || mime === "application/json" || mime.endsWith("+json") || mime.endsWith("+xml")) return "text";
+      return "file";
+    }
+
+    function libraryFilePreviewTitle(paper) {
+      return paper?.citation_label || paper?.title || paper?.original_filename || "File Preview";
+    }
+
+    function renderLibraryQuickLookFileThumb(paper) {
+      const root = $("libraryQuickLookThumbs");
+      if (!root) return;
+      const ext = libraryFileExtension(paper) || "file";
+      root.innerHTML = `
+        <button class="library-page-thumb active" type="button">
+          <span class="library-file-thumb-preview">${escapeHtml(ext.slice(0, 8))}</span>
+          <span>File</span>
+        </button>
+      `;
+    }
+
+    function renderLibraryFilePreviewCard(root, paper, message = "") {
+      const path = paperNativePath(paper || {});
+      const size = fileSizeLabel(paper?.file_size_bytes);
+      root.innerHTML = `
+        <div class="library-file-preview">
+          <div class="library-file-preview-card">
+            <strong>${escapeHtml(libraryFilePreviewTitle(paper))}</strong>
+            <span>${escapeHtml([importedFileFormatLabel(paper), size].filter(Boolean).join(" · "))}</span>
+            ${message ? `<span>${escapeHtml(message)}</span>` : ""}
+            <span>${escapeHtml(path)}</span>
+            ${path ? `<button class="action" type="button" data-open-native-preview>Open File</button>` : ""}
+          </div>
+        </div>
+      `;
+      root.querySelector("[data-open-native-preview]")?.addEventListener("click", () => openNativePaperFile(paper));
+    }
+
+    async function renderLibraryQuickLookFilePreview(paper, token) {
+      const root = $("libraryQuickLookPages");
+      if (!root) return;
+      const path = paperNativePath(paper || {});
+      const url = nativeFilePreviewUrl(path);
+      const kind = libraryFilePreviewKind(paper);
+      root.onscroll = null;
+      if (!path) {
+        renderLibraryFilePreviewCard(root, paper, "No local file path is available.");
+        return;
+      }
+      if (kind === "image") {
+        root.innerHTML = `
+          <div class="library-file-preview image">
+            <img src="${escapeAttr(url)}" alt="${escapeAttr(libraryFilePreviewTitle(paper))}">
+          </div>
+        `;
+        root.querySelector("img")?.addEventListener("error", () => renderLibraryFilePreviewCard(root, paper, "Preview could not be rendered."));
+        return;
+      }
+      if (kind === "video") {
+        root.innerHTML = `
+          <div class="library-file-preview media">
+            <video controls src="${escapeAttr(url)}"></video>
+          </div>
+        `;
+        return;
+      }
+      if (kind === "audio") {
+        root.innerHTML = `
+          <div class="library-file-preview media">
+            <audio controls src="${escapeAttr(url)}"></audio>
+          </div>
+        `;
+        return;
+      }
+      if (kind === "text") {
+        root.innerHTML = `<div class="library-file-preview text"><pre class="library-file-preview-text">Loading...</pre></div>`;
+        try {
+          const res = await fetch(url, {cache: "no-store"});
+          const text = await res.text();
+          if (token !== state.libraryQuickLookRenderToken || path !== state.libraryQuickLookPath) return;
+          if (!res.ok) throw new Error(text || "Preview failed");
+          const limit = 350000;
+          const clipped = text.length > limit ? `${text.slice(0, limit)}\n\n[Preview truncated]` : text;
+          root.innerHTML = `<div class="library-file-preview text"><pre class="library-file-preview-text">${escapeHtml(clipped)}</pre></div>`;
+        } catch (error) {
+          if (token === state.libraryQuickLookRenderToken) renderLibraryFilePreviewCard(root, paper, error.message || "Preview failed.");
+        }
+        return;
+      }
+      renderLibraryFilePreviewCard(root, paper, "This file type cannot be rendered inline yet.");
+    }
+
+    async function quickLookLibraryFile(paper, options = {}) {
+      const path = paperNativePath(paper || {});
+      const status = $("libraryDetailStatus");
+      if (!path) {
+        if (status && !options.silent) {
+          status.textContent = options.missingMessage || "No local file path is available for this item.";
+          status.className = "library-detail-status err";
+        }
+        if (options.openPlaceholder) showLibraryQuickLookPlaceholder({open: true});
+        return;
+      }
+      if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "file" && path === state.libraryQuickLookPath) {
+        closeLibraryQuickLook();
+        return;
+      }
+      if (status && !options.silent) {
+        status.textContent = "Previewing file";
+        status.className = "library-detail-status";
+      }
+      const overlay = $("libraryQuickLook");
+      const title = $("libraryQuickLookTitle");
+      const pages = $("libraryQuickLookPages");
+      if (!overlay || !pages) return;
+      const token = ++state.libraryQuickLookRenderToken;
+      const isNewFile = path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "file";
+      state.libraryQuickLookOpen = true;
+      state.libraryQuickLookKind = "file";
+      state.libraryQuickLookPath = path;
+      state.libraryQuickLookUrl = nativeFilePreviewUrl(path);
+      state.libraryQuickLookPage = 1;
+      state.libraryQuickLookPageCount = 1;
+      state.libraryQuickLookPdfHasFocus = false;
+      if (title) title.textContent = libraryFilePreviewTitle(paper);
+      renderLibraryQuickLookFileThumb(paper);
+      overlay.classList.remove("compact");
+      overlay.classList.add("open");
+      overlay.setAttribute("aria-hidden", "false");
+      if (!state.libraryQuickLookManualFrame || !state.libraryQuickLookFrameRect) {
+        applyLibraryQuickLookFrame(defaultLibraryQuickLookFrame());
+      } else {
+        applyLibraryQuickLookFrame();
+      }
+      reclaimLibraryQuickLookFocus();
+      if (isNewFile) await renderLibraryQuickLookFilePreview(paper, token);
+      if (status && !options.silent) {
+        status.textContent = "File preview open";
+        status.className = "library-detail-status ok";
+      }
+    }
+
     async function openNativeTarget(target, messages = {}) {
       const status = $("libraryDetailStatus");
       if (!target.path) {
@@ -18603,6 +18924,8 @@ INDEX_HTML = """<!doctype html>
 
     function closeLibraryQuickLook() {
       state.libraryQuickLookOpen = false;
+      state.libraryQuickLookKind = "";
+      state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = "";
       state.libraryQuickLookUrl = "";
       state.libraryQuickLookPage = 1;
@@ -18692,6 +19015,8 @@ INDEX_HTML = """<!doctype html>
       if (!overlay || !pages) return;
       const placeholder = selectedLibraryQuickLookPlaceholder();
       state.libraryQuickLookOpen = true;
+      state.libraryQuickLookKind = "placeholder";
+      state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = "";
       state.libraryQuickLookUrl = "";
       state.libraryQuickLookPage = 1;
@@ -18856,7 +19181,7 @@ INDEX_HTML = """<!doctype html>
 
     function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
-      if (options.toggle && state.libraryQuickLookOpen && paper.merged_pdf_path === state.libraryQuickLookPath) {
+      if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "pdf" && paper.merged_pdf_path === state.libraryQuickLookPath) {
         closeLibraryQuickLook();
         return;
       }
@@ -18870,8 +19195,10 @@ INDEX_HTML = """<!doctype html>
       const pages = $("libraryQuickLookPages");
       if (!overlay || !pages) return;
       const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
-      const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath;
+      const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "pdf";
       state.libraryQuickLookOpen = true;
+      state.libraryQuickLookKind = "pdf";
+      state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = paper.merged_pdf_path;
       state.libraryQuickLookUrl = pdfUrl;
       state.libraryQuickLookPdfHasFocus = false;
@@ -18955,12 +19282,22 @@ INDEX_HTML = """<!doctype html>
     function refreshLibraryQuickLookForSelection() {
       if (!state.libraryQuickLookOpen) return;
       const paper = selectedLibraryPaper();
-      if (!paper?.merged_pdf_path) {
+      if (!paper) {
         showLibraryQuickLookPlaceholder();
         return;
       }
-      if (paper.merged_pdf_path === state.libraryQuickLookPath) return;
-      quickLookLibraryPdf(paper, {silent: true});
+      if (paper.merged_pdf_path) {
+        if (state.libraryQuickLookKind === "pdf" && paper.merged_pdf_path === state.libraryQuickLookPath) return;
+        quickLookLibraryPdf(paper, {silent: true});
+        return;
+      }
+      const path = paperNativePath(paper);
+      if (path && !libraryPaperIsPdfLike(paper)) {
+        if (state.libraryQuickLookKind === "file" && path === state.libraryQuickLookPath) return;
+        quickLookLibraryFile(paper, {silent: true});
+        return;
+      }
+      showLibraryQuickLookPlaceholder();
     }
 
     async function runLibraryMenuAction(action) {
@@ -19014,6 +19351,33 @@ INDEX_HTML = """<!doctype html>
       state.libraryClipboard = entries.length === 1 ? entries[0] : {entries};
       updateLibraryActivityStatus(`Copied ${entries.length} item${entries.length === 1 ? "" : "s"}.`, {live: false});
       return true;
+    }
+
+    function libraryEntriesWithPapers(entries) {
+      return (entries || [])
+        .filter((entry) => entry?.type === "item")
+        .map((entry) => libraryItemById(entry.id))
+        .filter((item) => item?.paper?.paper_id);
+    }
+
+    async function addLibraryEntriesToMyPublications(entries) {
+      const items = libraryEntriesWithPapers(entries);
+      const paperIds = [...new Set(items.map((item) => item.paper.paper_id).filter(Boolean))];
+      if (!paperIds.length) return;
+      updateLibraryActivityStatus(`Adding ${paperIds.length} item${paperIds.length === 1 ? "" : "s"} to My Publications...`, {live: true});
+      const res = await fetch("/api/my-publications/add", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({paper_ids: paperIds})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        updateLibraryActivityStatus(data.error || "Could not add to My Publications.", {live: false});
+        throw new Error(data.error || "Could not add to My Publications");
+      }
+      applyMyPublications(data);
+      state.myPublicationSelectionId = Number(data.publication?.id || state.myPublicationSelectionId || 0);
+      updateLibraryActivityStatus(`Added ${paperIds.length} item${paperIds.length === 1 ? "" : "s"} to My Publications.`, {live: false});
     }
 
     function libraryPasteTargetFolderId() {
@@ -19101,6 +19465,7 @@ INDEX_HTML = """<!doctype html>
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
       const deleteFileButton = menu.querySelector('[data-action="delete-file-entry"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
+      const addToMyPublicationsButton = menu.querySelector('[data-action="add-to-my-publications"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
@@ -19162,6 +19527,17 @@ INDEX_HTML = """<!doctype html>
         copyButton.onclick = () => {
           copyLibraryEntryToClipboard(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
           hideLibraryContextMenu();
+        };
+      }
+      if (addToMyPublicationsButton) {
+        const publicationItems = libraryEntriesWithPapers(actionEntries);
+        addToMyPublicationsButton.style.display = publicationItems.length ? "" : "none";
+        addToMyPublicationsButton.textContent = publicationItems.length > 1
+          ? `Add ${publicationItems.length} selected to My Publications`
+          : "Add to My Publications";
+        addToMyPublicationsButton.onclick = async () => {
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => addLibraryEntriesToMyPublications(actionEntries));
         };
       }
       if (recoverButton) {
@@ -19276,7 +19652,7 @@ INDEX_HTML = """<!doctype html>
       if (key === " ") {
         const paper = selectedLibraryPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
-        else showLibraryQuickLookPlaceholder({open: true});
+        else quickLookLibraryFile(paper, {toggle: true, openPlaceholder: true});
         return true;
       }
       if (key === "Enter") {
