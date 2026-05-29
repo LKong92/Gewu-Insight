@@ -412,7 +412,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_delete_library_entries(payload)
                 return
             if parsed.path == "/api/library/delete-file":
-                self.handle_delete_library_item_file(payload)
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Use Delete from Recycle to remove Library entries and clean unreferenced local copies")
                 return
             if parsed.path == "/api/library/special-folder/clear":
                 self.handle_clear_library_special_folder(payload)
@@ -421,10 +421,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_recover_library_entry(payload)
                 return
             if parsed.path == "/api/library/remove-item":
-                self.handle_remove_library_item(payload)
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Use Delete")
                 return
             if parsed.path == "/api/library/remove-paper":
-                self.handle_remove_paper_from_library(payload)
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Use Delete")
                 return
             if parsed.path == "/api/library/refresh-metadata":
                 self.handle_refresh_library_metadata(payload)
@@ -1345,10 +1345,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not folder_path.exists() or not folder_path.is_dir():
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
             return
-        copy_mode = str(payload.get("copy_mode") or "copy")
-        if copy_mode not in {"copy", "link"}:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
-            return
+        copy_mode = "copy"
         job_id = create_library_import_job(folder_path=folder_path, copy_mode=copy_mode)
         thread = threading.Thread(
             target=run_library_import_job,
@@ -1405,10 +1402,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not folder_path.exists() or not folder_path.is_dir():
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
             return
-        copy_mode = str(payload.get("copy_mode") or "copy")
-        if copy_mode not in {"copy", "link"}:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
-            return
+        copy_mode = "copy"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(folder_path.name or "library-folder", 60)
         inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
@@ -1440,10 +1434,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not isinstance(raw_paths, list) or not raw_paths:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paths must be a non-empty list")
             return
-        copy_mode = str(payload.get("copy_mode") or "copy")
-        if copy_mode not in {"copy", "link"}:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "copy_mode must be copy or link")
-            return
+        copy_mode = "copy"
         try:
             target_folder_id = int(payload.get("target_folder_id") or 1)
         except (TypeError, ValueError):
@@ -1762,17 +1753,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not item:
                 raise ValueError("Library item not found")
             folder_id = int(item.get("folder_id") or 1)
-            paper_id = str(item.get("paper_id") or "")
-            if folder_id == recycle_id:
+            paper_ids = [str(item.get("paper_id") or "")]
+            if library_folder_is_within(storage, folder_id, recycle_id):
                 storage.delete_library_item(item_id=entry_id)
-                if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                    storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
-            elif folder_id == unsorted_id:
-                storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
+                cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
             else:
-                storage.delete_library_item(item_id=entry_id)
-                if paper_id and storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                    storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
+                storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
             return
         if entry_type == "folder":
             folder = storage.get_library_folder(entry_id)
@@ -1780,12 +1766,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 raise ValueError("Folder not found")
             if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
                 raise ValueError("This folder cannot be deleted")
-            if int(folder.get("parent_id") or 0) == recycle_id:
+            if library_folder_is_within(storage, int(folder.get("parent_id") or 0), recycle_id):
                 paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
                 storage.delete_library_folder(folder_id=entry_id)
-                for paper_id in paper_ids:
-                    if storage.count_active_library_items_for_paper(paper_id=paper_id, recycle_folder_id=recycle_id) == 0:
-                        storage.add_library_item(paper_id=paper_id, folder_id=unsorted_id)
+                cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
             else:
                 storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
             return
@@ -1807,10 +1791,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            special = ensure_library_special_folders(storage)
+            recycle_id = int(special["recycle"].get("id") or 1)
             if entry_type == "item":
                 item = storage.get_library_item(entry_id)
                 if not item:
                     self.send_error_json(HTTPStatus.NOT_FOUND, "Library item not found")
+                    return
+                if not library_folder_is_within(storage, int(item.get("folder_id") or 0), recycle_id):
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Local copies can only be deleted from Recycle")
                     return
                 paper_ids = [str(item.get("paper_id") or "")]
             else:
@@ -1818,7 +1807,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if not folder:
                     self.send_error_json(HTTPStatus.NOT_FOUND, "Folder not found")
                     return
-                special = ensure_library_special_folders(storage)
                 protected_ids = {
                     1,
                     int(special["unsorted"].get("id") or 0),
@@ -1827,10 +1815,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if int(folder.get("id") or 0) in protected_ids or folder.get("parent_id") is None:
                     self.send_error_json(HTTPStatus.BAD_REQUEST, "This folder cannot be deleted")
                     return
+                if not library_folder_is_within(storage, int(folder.get("parent_id") or 0), recycle_id):
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Local copies can only be deleted from Recycle")
+                    return
                 paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
             deleted = delete_library_paper_files(storage, paper_ids)
             if not deleted and entry_type == "item":
-                self.send_error_json(HTTPStatus.NOT_FOUND, "No local files are available for this selection")
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No local copies are available for this selection")
                 return
             if entry_type == "item":
                 storage.delete_library_item(item_id=entry_id)
@@ -1849,7 +1840,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_clear_library_special_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
-        delete_files = bool(payload.get("delete_files"))
         confirmed = bool(payload.get("confirmed"))
         if not folder_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "folder_id is required")
@@ -1861,16 +1851,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             special = ensure_library_special_folders(storage)
             allowed_ids = {
-                int(special["unsorted"].get("id") or 0),
                 int(special["recycle"].get("id") or 0),
             }
             folder = storage.get_library_folder(folder_id)
             if not folder or folder_id not in allowed_ids:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "Only unsorted and Recycle can be cleared")
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Only Recycle can be cleared")
                 return
             paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
-            deleted_files = delete_library_paper_files(storage, paper_ids) if delete_files else []
             removed = clear_library_folder_contents(storage, folder_id=folder_id)
+            cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=folder_id)
             snapshot = library_snapshot(storage)
         except IsADirectoryError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
@@ -1880,7 +1869,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"deleted_files": deleted_files, "removed": removed, **snapshot})
+        self.send_json({"removed": removed, "cleanup": cleanup, **snapshot})
 
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -2765,6 +2754,8 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "existing_papers",
         "pdf_attachments_to_import",
         "created_resources",
+        "library_items_created",
+        "library_items_existing",
         "reused_existing_files",
         "resources_or_attachments_to_import",
         "skipped",
@@ -3624,8 +3615,17 @@ def refresh_paper_metadata_from_arxiv_if_possible(
 
 
 def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None) -> int:
-    batch_id = clean_text(result.get("import_batch_id") or "")
-    if batch_id:
+    candidates = [item for item in (result.get("metadata_refresh_candidates") or []) if isinstance(item, dict)]
+    if candidates:
+        papers = [
+            {"paper_id": item.get("paper_id"), "doi": item.get("doi"), "arxiv_id": item.get("arxiv_id")}
+            for item in candidates
+        ]
+    else:
+        batch_id = clean_text(result.get("import_batch_id") or "")
+        if not batch_id:
+            batch_id = ""
+    if not candidates and batch_id:
         rows = storage.conn.execute(
             """
             SELECT *
@@ -3636,7 +3636,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
             (batch_id,),
         ).fetchall()
         papers = [dict(row) for row in rows]
-    else:
+    elif not candidates:
         plans = list(result.get("papers_to_create") or []) + list(result.get("papers_to_update") or [])
         papers = [
             {"paper_id": plan.get("paper_id"), "doi": plan.get("doi"), "arxiv_id": plan.get("arxiv_id")}
@@ -7595,6 +7595,110 @@ def library_import_progress_callback(job_id: str):
     return progress
 
 
+def resolve_library_loader_copy_target_root(storage: Storage, *, source_folder: Path, timestamp: str, slug: str) -> Path:
+    base_root = DEFAULT_LIBRARY_IMPORT_DIR.resolve()
+    source_root = str(source_folder.expanduser().resolve())
+    existing = existing_loader_copy_target_root(storage, source_root=source_root, base_root=base_root)
+    if existing:
+        return existing
+    return unique_directory_path(base_root / f"{timestamp}-{slug}")
+
+
+def existing_loader_copy_target_root(storage: Storage, *, source_root: str, base_root: Path) -> Path | None:
+    if not source_root:
+        return None
+    rows = storage.conn.execute(
+        """
+        SELECT report_path, started_at
+        FROM inventory_import_batches
+        WHERE source_root = ?
+          AND COALESCE(status, '') != 'deleted'
+        ORDER BY started_at DESC
+        LIMIT 20
+        """,
+        (source_root,),
+    ).fetchall()
+    for row in rows:
+        report = load_import_report_summary(row["report_path"])
+        target = valid_loader_copy_target_root(clean_text((report or {}).get("copy_target_root")), base_root=base_root)
+        if target:
+            return target
+    return inferred_loader_copy_target_root(storage, source_root=source_root, base_root=base_root)
+
+
+def inferred_loader_copy_target_root(storage: Storage, *, source_root: str, base_root: Path) -> Path | None:
+    like_prefix = source_root.rstrip("/") + "/%"
+    rows = storage.conn.execute(
+        """
+        SELECT stored_path, original_relative_path
+        FROM resources
+        WHERE (source_path = ? OR source_path LIKE ?)
+          AND stored_path IS NOT NULL
+          AND stored_path != ''
+          AND stored_path != source_path
+        ORDER BY updated_at DESC
+        LIMIT 50
+        """,
+        (source_root, like_prefix),
+    ).fetchall()
+    for row in rows:
+        target = copy_target_root_from_stored_path(
+            clean_text(row["stored_path"]),
+            clean_text(row["original_relative_path"]),
+            base_root=base_root,
+        )
+        if target:
+            return target
+    return None
+
+
+def copy_target_root_from_stored_path(stored_path: str, original_relative_path: str, *, base_root: Path) -> Path | None:
+    if not stored_path:
+        return None
+    try:
+        stored = Path(stored_path).expanduser().resolve()
+    except OSError:
+        return None
+    relative_parts = safe_inventory_path_parts(original_relative_path)
+    target = stored
+    for _ in relative_parts:
+        target = target.parent
+    if not relative_parts:
+        target = stored.parent
+    return valid_loader_copy_target_root(str(target), base_root=base_root)
+
+
+def safe_inventory_path_parts(value: str) -> list[str]:
+    parts = []
+    for part in Path(value or "").parts:
+        if part in {"", ".", ".."}:
+            continue
+        parts.append(part)
+    return parts
+
+
+def valid_loader_copy_target_root(path_value: str, *, base_root: Path) -> Path | None:
+    if not path_value:
+        return None
+    try:
+        path = Path(path_value).expanduser().resolve()
+    except OSError:
+        return None
+    if path == base_root or not is_relative_to(path, base_root):
+        return None
+    return path
+
+
+def unique_directory_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(2, 10000):
+        candidate = path.parent / f"{path.name}-{index}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(str(path))
+
+
 def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db_path: Path) -> None:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = safe_slug(folder_path.name or "library-folder", 60)
@@ -7609,6 +7713,8 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
         log_library_import_job(job_id, f"Inventory written: {inventory_path}")
         storage = Storage(db_path)
         try:
+            target_root = resolve_library_loader_copy_target_root(storage, source_folder=folder_path, timestamp=timestamp, slug=slug)
+            log_library_import_job(job_id, f"Local copy folder: {target_root}")
             result = import_library_inventory(
                 inventory_path,
                 copy_mode=copy_mode,
@@ -7617,6 +7723,7 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
                 dry_run=False,
                 storage=storage,
                 report_path=report_path,
+                target_root=target_root,
                 library_item_name="filename",
                 progress_callback=progress,
             )
@@ -7632,8 +7739,9 @@ def run_library_import_job(*, job_id: str, folder_path: Path, copy_mode: str, db
             job_id,
             (
                 f"Done: {summary.get('created_papers', 0)} created, "
-                f"{summary.get('existing_papers', 0)} existing left unchanged, "
+                f"{summary.get('existing_papers', 0)} existing matched, "
                 f"{summary.get('updated_papers', 0)} updated, "
+                f"{summary.get('library_items_created', 0)} library items created/restored, "
                 f"{summary.get('pdf_doi_extracted_count', 0)} DOI found, "
                 f"{summary.get('pdf_doi_missing_count', 0)} no DOI, "
                 f"{summary.get('doi_metadata_refreshed', 0)} DOI/arXiv metadata refreshed, "
@@ -7736,6 +7844,20 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
         "SELECT COUNT(*) AS count FROM resources WHERE import_batch_id = ?",
         (batch_id,),
     ).fetchone()["count"]
+    resource_paths = [
+        clean_text(row["stored_path"])
+        for row in storage.conn.execute(
+            """
+            SELECT stored_path
+            FROM resources
+            WHERE import_batch_id = ?
+              AND stored_path IS NOT NULL
+              AND stored_path != ''
+              AND stored_path != source_path
+            """,
+            (batch_id,),
+        ).fetchall()
+    ]
     storage.conn.execute("DELETE FROM resources WHERE import_batch_id = ?", (batch_id,))
     storage.conn.execute("DELETE FROM papers WHERE import_batch_id = ?", (batch_id,))
     storage.conn.execute("DELETE FROM inventory_import_batches WHERE id = ?", (batch_id,))
@@ -7744,8 +7866,13 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
 
     deleted_paths: list[str] = []
     copy_target = clean_text(result.get("copy_target_root")) or str(DEFAULT_LIBRARY_IMPORT_DIR / batch_id)
-    if delete_import_path(copy_target, DEFAULT_LIBRARY_IMPORT_DIR):
-        deleted_paths.append(copy_target)
+    for path_value in resource_paths:
+        if delete_import_path(path_value, DEFAULT_LIBRARY_IMPORT_DIR):
+            deleted_paths.append(path_value)
+    if copy_target and Path(copy_target).expanduser().resolve() != DEFAULT_LIBRARY_IMPORT_DIR.resolve():
+        if delete_import_path(copy_target, DEFAULT_LIBRARY_IMPORT_DIR):
+            deleted_paths.append(copy_target)
+    cleanup_empty_parents(deleted_paths, DEFAULT_LIBRARY_IMPORT_DIR.resolve())
     for path_value in [job.get("inventory_path"), result.get("report_path")]:
         if delete_import_path(clean_text(path_value), ROOT / "reports" / "imports"):
             deleted_paths.append(clean_text(path_value))
@@ -7802,11 +7929,10 @@ def delete_import_path(path_value: str, allowed_root: Path) -> bool:
         return False
     if not is_allowed_file(path, [root]) or not path.exists():
         return False
+    if path == root:
+        return False
     try:
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
+        move_path_to_macos_trash(path)
         return True
     except OSError:
         return False
@@ -8149,6 +8275,49 @@ def existing_path_or_empty(path: str) -> str:
     return path if requested.exists() else ""
 
 
+def library_folder_is_within(storage: Storage, folder_id: int, ancestor_id: int) -> bool:
+    current = int(folder_id or 0)
+    target = int(ancestor_id or 0)
+    seen: set[int] = set()
+    while current and current not in seen:
+        if current == target:
+            return True
+        seen.add(current)
+        row = storage.conn.execute("SELECT parent_id FROM library_folders WHERE id = ?", (current,)).fetchone()
+        if not row:
+            return False
+        current = int(row["parent_id"] or 0)
+    return False
+
+
+def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> bool:
+    if not paper_id:
+        return False
+    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone():
+        return True
+    rows = storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id = ?", (paper_id,)).fetchall()
+    for row in rows:
+        if not library_folder_is_within(storage, int(row["folder_id"] or 0), recycle_folder_id):
+            return True
+    return False
+
+
+def cleanup_unreferenced_recycle_papers(storage: Storage, paper_ids: list[str], *, recycle_folder_id: int) -> dict[str, Any]:
+    cleaned: list[str] = []
+    skipped: list[str] = []
+    deleted_files: list[str] = []
+    for paper_id in dict.fromkeys(str(paper_id or "") for paper_id in paper_ids if paper_id):
+        if paper_has_reference_outside_recycle(storage, paper_id, recycle_folder_id):
+            skipped.append(paper_id)
+            continue
+        deleted_files.extend(delete_library_paper_files(storage, [paper_id]))
+        storage.conn.execute("DELETE FROM resources WHERE paper_id = ?", (paper_id,))
+        storage.conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
+        cleaned.append(paper_id)
+    storage.conn.commit()
+    return {"cleaned_papers": cleaned, "skipped_papers": skipped, "deleted_files": deleted_files}
+
+
 def delete_pdf_files_for_paper(paper: dict[str, Any]) -> list[str]:
     paths = []
     for key in ("merged_pdf_path", "main_pdf_path"):
@@ -8166,15 +8335,49 @@ def delete_pdf_files_for_paper(paper: dict[str, Any]) -> list[str]:
     return deleted
 
 
-def library_file_path_for_delete(paper: dict[str, Any]) -> Path | None:
+def daiqo_copy_path(raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    try:
+        path = Path(raw_path).expanduser().resolve()
+    except OSError:
+        return None
+    if not path.exists() or not path.is_file():
+        return None
+    return path if is_allowed_file(path, allowed_pdf_roots()) else None
+
+
+def library_file_paths_for_delete(storage: Storage, paper: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
     for key in ("merged_pdf_path", "main_pdf_path", "source_path"):
         raw_path = str(paper.get(key) or "")
-        if not raw_path:
-            continue
-        path = Path(raw_path).expanduser().resolve()
-        if path.exists() and path.is_file():
-            return path
-    return None
+        path = daiqo_copy_path(raw_path)
+        if path:
+            paths.append(path)
+    paper_id = str(paper.get("paper_id") or "")
+    if paper_id:
+        rows = storage.conn.execute(
+            """
+            SELECT stored_path
+            FROM resources
+            WHERE paper_id = ?
+              AND stored_path IS NOT NULL
+              AND stored_path != ''
+            """,
+            (paper_id,),
+        ).fetchall()
+        for row in rows:
+            path = daiqo_copy_path(str(row["stored_path"] or ""))
+            if path:
+                paths.append(path)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
 
 
 def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[str]:
@@ -8185,19 +8388,20 @@ def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[s
         paper = storage.get_paper(paper_id)
         if not paper:
             continue
-        path = library_file_path_for_delete(paper)
-        if not path:
+        paths = library_file_paths_for_delete(storage, paper)
+        if not paths:
             continue
-        path_key = str(path)
-        if path_key in seen_paths:
-            cleared_paper_ids.add(paper_id)
-            continue
-        seen_paths.add(path_key)
-        try:
-            path.unlink()
-            deleted.append(path_key)
-        except FileNotFoundError:
-            continue
+        for path in paths:
+            path_key = str(path)
+            if path_key in seen_paths:
+                cleared_paper_ids.add(paper_id)
+                continue
+            seen_paths.add(path_key)
+            try:
+                move_path_to_macos_trash(path)
+                deleted.append(path_key)
+            except FileNotFoundError:
+                continue
         cleared_paper_ids.add(paper_id)
     for raw_path in deleted:
         path = Path(raw_path)
@@ -8207,16 +8411,27 @@ def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[s
             cleanup_empty_parents([raw_path], DEFAULT_PDF_DIR.resolve())
     for paper_id in cleared_paper_ids:
         storage.clear_download_status(paper_id)
+    clear_deleted_library_file_references(storage, deleted)
     return deleted
+
+
+def clear_deleted_library_file_references(storage: Storage, deleted_paths: list[str]) -> None:
+    paths = [str(Path(path).expanduser().resolve()) for path in deleted_paths if path]
+    if not paths:
+        return
+    placeholders = ", ".join(["?"] * len(paths))
+    storage.conn.execute(f"DELETE FROM resources WHERE stored_path IN ({placeholders})", paths)
+    storage.conn.execute(f"UPDATE papers SET source_path = NULL WHERE source_path IN ({placeholders})", paths)
+    storage.conn.commit()
 
 
 def clear_library_folder_contents(storage: Storage, *, folder_id: int) -> dict[str, int]:
     folder_id = int(folder_id)
     tree_sql = """
-        WITH RECURSIVE folder_tree(id) AS (
-          SELECT id FROM library_folders WHERE id = ?
+        WITH RECURSIVE folder_tree(id, depth) AS (
+          SELECT id, 0 FROM library_folders WHERE id = ?
           UNION ALL
-          SELECT library_folders.id
+          SELECT library_folders.id, folder_tree.depth + 1
           FROM library_folders
           JOIN folder_tree ON library_folders.parent_id = folder_tree.id
         )
@@ -8248,6 +8463,19 @@ def clear_library_folder_contents(storage: Storage, *, folder_id: int) -> dict[s
         ).fetchone()["count"]
         or 0
     )
+    folders_to_delete = [
+        int(row["id"])
+        for row in storage.conn.execute(
+            tree_sql
+            + """
+            SELECT id
+            FROM folder_tree
+            WHERE id != ?
+            ORDER BY depth DESC, id DESC
+            """,
+            (folder_id, folder_id),
+        ).fetchall()
+    ]
     storage.conn.execute(
         tree_sql
         +
@@ -8257,15 +8485,8 @@ def clear_library_folder_contents(storage: Storage, *, folder_id: int) -> dict[s
         """,
         (folder_id,),
     )
-    storage.conn.execute(
-        tree_sql
-        +
-        """
-        DELETE FROM library_folders
-        WHERE id != ? AND id IN (SELECT id FROM folder_tree)
-        """,
-        (folder_id, folder_id),
-    )
+    for child_folder_id in folders_to_delete:
+        storage.conn.execute("DELETE FROM library_folders WHERE id = ?", (child_folder_id,))
     storage.conn.commit()
     return {"items": item_count, "folders": folder_count}
 
@@ -8280,9 +8501,34 @@ def delete_allowed_files(paths: list[str], roots: list[Path]) -> list[str]:
         requested = Path(raw_path).expanduser().resolve()
         if not is_allowed_file(requested, roots) or not requested.exists() or not requested.is_file():
             continue
-        requested.unlink()
+        move_path_to_macos_trash(requested)
         deleted.append(str(requested))
     return deleted
+
+
+def move_path_to_macos_trash(path: Path) -> Path:
+    requested = path.expanduser().resolve()
+    if not requested.exists():
+        raise FileNotFoundError(str(requested))
+    trash_dir = Path.home() / ".Trash"
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    target = unique_trash_path(trash_dir / requested.name)
+    shutil.move(str(requested), str(target))
+    return target
+
+
+def unique_trash_path(target: Path) -> Path:
+    if not target.exists():
+        return target
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stem = target.stem
+    suffix = target.suffix
+    parent = target.parent
+    for index in range(1, 1000):
+        candidate = parent / f"{stem} {timestamp}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(str(target))
 
 
 def cleanup_empty_parents(deleted_paths: list[str], root: Path) -> None:
@@ -10581,6 +10827,15 @@ INDEX_HTML = """<!doctype html>
     .my-publications-stat-row.first-solo-row .solo-inline {
       white-space: nowrap;
     }
+    .my-publications-stat-row.first-solo-row .my-publications-stat-filter::after {
+      content: none;
+    }
+    .my-publications-stat-row.first-solo-row em {
+      display: inline-flex;
+      align-items: baseline;
+      justify-content: flex-end;
+      gap: 2px;
+    }
     .my-publications-source-list {
       display: inline-block;
       line-height: 1.25;
@@ -12090,14 +12345,8 @@ INDEX_HTML = """<!doctype html>
     }
     .library-context-menu button:hover { background: rgba(0, 0, 0, 0.08); }
     .library-context-menu button[data-action="delete-entry"],
-    .library-context-menu button[data-action="delete-file-entry"],
-    .library-context-menu button[data-action="delete-special-original-files"],
-    .library-context-menu button[data-action="remove-special-library"],
     .library-context-menu button[data-action="delete-my-publication"] { color: #1f2328; }
     .library-context-menu button[data-action="delete-entry"]:hover,
-    .library-context-menu button[data-action="delete-file-entry"]:hover,
-    .library-context-menu button[data-action="delete-special-original-files"]:hover,
-    .library-context-menu button[data-action="remove-special-library"]:hover,
     .library-context-menu button[data-action="delete-my-publication"]:hover { background: rgba(0, 0, 0, 0.08); }
     .my-publication-context-menu {
       min-width: 0;
@@ -12920,7 +13169,6 @@ INDEX_HTML = """<!doctype html>
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
       libraryImportPath: "",
-      libraryImportCopyMode: "copy",
       libraryImportStatus: "",
       libraryImportBusy: false,
       libraryImportLastResult: null,
@@ -14262,6 +14510,29 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    async function moveLibraryEntries(entries, targetFolderId) {
+      const validEntries = (Array.isArray(entries) ? entries : [])
+        .filter((entry) => entry?.type && entry.id)
+        .map((entry) => ({type: entry.type, id: Number(entry.id)}));
+      if (!validEntries.length) return;
+      if (validEntries.length === 1) return moveLibraryEntry(validEntries[0].type, validEntries[0].id, targetFolderId);
+      return withLibraryActivityStatus(`Moving ${validEntries.length} items...`, "Move complete.", async () => {
+        for (const entry of validEntries) {
+          const res = await fetch("/api/library/move", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({type: entry.type, id: entry.id, target_folder_id: targetFolderId})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not move library entry");
+          applyLibrarySnapshot(data);
+        }
+        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), validEntries[validEntries.length - 1]);
+        clearLibraryRangeSelection();
+        renderLibrary();
+      });
+    }
+
     async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
       return withLibraryActivityStatus("Moving...", "Move complete.", async () => {
         const res = await fetch("/api/library/reorder", {
@@ -14312,77 +14583,34 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function removeLibraryItemFromCurrentCollection(itemId) {
-      if (!itemId) return;
-      const item = libraryItemById(itemId);
-      if (!item) return;
-      return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
-        const parentId = Number(item.folder_id || state.libraryActiveFolderId || state.libraryRootId);
-        const deletedEntry = {type: "item", id: Number(itemId)};
-        const entriesBeforeDelete = libraryEntriesForFolder(parentId);
-        const res = await fetch("/api/library/remove-item", {
+    async function deleteAllLibraryRecycle(folderId) {
+      const recycleId = Number(libraryRecycleFolderId());
+      const targetFolderId = Number(folderId || recycleId);
+      if (!recycleId || targetFolderId !== recycleId) return;
+      return withLibraryActivityStatus("Deleting Recycle...", "Delete complete.", async () => {
+        const res = await fetch("/api/library/special-folder/clear", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({item_id: itemId})
+          body: JSON.stringify({folder_id: targetFolderId, confirmed: true})
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not remove paper from current collection");
+        if (!res.ok) throw new Error(data.error || "Could not delete Recycle");
         applyLibrarySnapshot(data);
-        selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
+        clearLibraryRangeSelection();
+        setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
+        state.libraryActiveFolderId = targetFolderId;
+        state.libraryCurrentFolderId = targetFolderId;
         renderLibrary();
       });
     }
 
-    function libraryFilePathsForDelete(type, id) {
-      if (type === "item") {
-        const path = libraryNativeItemPath(libraryItemById(id));
-        return path ? [path] : [];
-      }
-      if (type === "folder") {
-        const folderIds = libraryDescendantFolderIds(id);
-        const paths = state.libraryItems
-          .filter((item) => folderIds.has(Number(item.folder_id || 0)))
-          .map((item) => libraryNativeItemPath(item))
-          .filter(Boolean);
-        return [...new Set(paths)];
-      }
-      return [];
-    }
-
-    async function deleteLibraryEntryFiles(type, id) {
-      const paths = libraryFilePathsForDelete(type, id);
-      if (!paths.length && type !== "folder") return;
-      const parentId = type === "folder"
-        ? parentFolderId(id)
-        : Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId);
-      const deletedEntry = {type, id: Number(id)};
-      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
-      const entryLabel = type === "folder"
-        ? `this Library folder${paths.length ? ` and ${paths.length} file${paths.length === 1 ? "" : "s"}` : ""}`
-        : "the original file from disk";
-      const preview = paths.length ? paths.slice(0, 8).join("\\n") : "No local files found in this folder.";
-      const overflow = paths.length > 8 ? `\\n...and ${paths.length - 8} more` : "";
-      const confirmed = await showLibraryConfirmDialog({
-        title: `Delete ${entryLabel}?`,
-        body: type === "folder"
-          ? "This cannot be undone. The Library folder and these files will be removed."
-          : "This cannot be undone. The original file will be deleted and this paper will be removed from the current collection.",
-        paths: preview + overflow,
-        confirmLabel: type === "folder" ? "Delete Folder" : "Delete File"
-      });
-      if (!confirmed) return;
-      return withLibraryActivityStatus("Deleting files...", "Delete complete.", async () => {
-        const res = await fetch("/api/library/delete-file", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, confirmed: true})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not delete files");
-        applyLibrarySnapshot(data);
-        selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
-        renderLibrary();
-      });
+    function contextRecycleFolderId(parentId, entryType, entryId) {
+      const recycleId = Number(libraryRecycleFolderId());
+      if (!recycleId) return 0;
+      if (entryType === "folder" && Number(entryId) === recycleId) return recycleId;
+      if (Number(parentId || 0) === recycleId) return recycleId;
+      if (Number(state.libraryActiveFolderId || 0) === recycleId) return recycleId;
+      return 0;
     }
 
     function libraryFolderContentCounts(folderId) {
@@ -14390,81 +14618,6 @@ INDEX_HTML = """<!doctype html>
       const itemCount = state.libraryItems.filter((item) => folderIds.has(Number(item.folder_id || 0))).length;
       const folderCount = state.libraryFolders.filter((folder) => folderIds.has(Number(folder.parent_id || 0))).length;
       return {itemCount, folderCount};
-    }
-
-    async function clearLibrarySpecialFolder(folderId, {deleteFiles = false} = {}) {
-      const folder = libraryFolderById(folderId);
-      if (!folder || !(folder.is_unsorted || folder.is_recycle)) return;
-      const paths = libraryFilePathsForDelete("folder", folderId);
-      const counts = libraryFolderContentCounts(folderId);
-      const totalEntries = counts.itemCount + counts.folderCount;
-      if (!totalEntries) return;
-      const folderName = folder.name || (folder.is_recycle ? "Recycle" : "unsorted");
-      const preview = paths.length ? paths.slice(0, 8).join("\\n") : "No local files found in this folder.";
-      const overflow = paths.length > 8 ? `\\n...and ${paths.length - 8} more` : "";
-      const confirmed = await showLibraryConfirmDialog({
-        title: deleteFiles ? `Delete all original files in ${folderName}?` : `Remove all from ${folderName}?`,
-        body: deleteFiles
-          ? `This cannot be undone. ${paths.length} local file${paths.length === 1 ? "" : "s"} will be deleted, and ${totalEntries} Library entr${totalEntries === 1 ? "y" : "ies"} will be removed.`
-          : `This removes ${totalEntries} Library entr${totalEntries === 1 ? "y" : "ies"} from ${folderName}. Original files on disk are not deleted.`,
-        paths: deleteFiles ? preview + overflow : "",
-        confirmLabel: deleteFiles ? "Delete All Original Files" : "Remove All"
-      });
-      if (!confirmed) return;
-      return withLibraryActivityStatus(deleteFiles ? "Deleting files..." : "Removing...", deleteFiles ? "Delete complete." : "Remove complete.", async () => {
-        const res = await fetch("/api/library/special-folder/clear", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({folder_id: folderId, delete_files: deleteFiles, confirmed: true})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not clear folder");
-        applyLibrarySnapshot(data);
-        setLibraryColumnSelection(parentFolderId(folderId), {type: "folder", id: Number(folderId)});
-        state.libraryActiveFolderId = Number(folderId);
-        state.libraryCurrentFolderId = Number(folderId);
-        renderLibrary();
-      });
-    }
-
-    function showLibraryConfirmDialog({title, body, paths, confirmLabel = "Delete"} = {}) {
-      return new Promise((resolve) => {
-        document.querySelector(".library-confirm-backdrop")?.remove();
-        const backdrop = document.createElement("div");
-        backdrop.className = "library-confirm-backdrop";
-        backdrop.innerHTML = `
-          <section class="library-confirm-dialog" role="dialog" aria-modal="true">
-            <header>${escapeHtml(title || "Confirm action")}</header>
-            <div class="library-confirm-body">
-              <div>${escapeHtml(body || "This action cannot be undone.")}</div>
-              ${paths ? `<pre class="library-confirm-paths">${escapeHtml(paths)}</pre>` : ""}
-            </div>
-            <div class="library-confirm-actions">
-              <button type="button" data-action="cancel">Cancel</button>
-              <button class="danger" type="button" data-action="confirm">${escapeHtml(confirmLabel)}</button>
-            </div>
-          </section>
-        `;
-        let onKeydown = null;
-        const finish = (value) => {
-          if (onKeydown) window.removeEventListener("keydown", onKeydown, true);
-          backdrop.remove();
-          resolve(value);
-        };
-        backdrop.querySelector('[data-action="cancel"]')?.addEventListener("click", () => finish(false));
-        backdrop.querySelector('[data-action="confirm"]')?.addEventListener("click", () => finish(true));
-        backdrop.addEventListener("click", (event) => {
-          if (event.target === backdrop) finish(false);
-        });
-        onKeydown = (event) => {
-          if (event.key === "Escape") {
-            finish(false);
-          }
-        };
-        window.addEventListener("keydown", onKeydown, true);
-        document.body.appendChild(backdrop);
-        backdrop.querySelector('[data-action="cancel"]')?.focus({preventScroll: true});
-      });
     }
 
     async function deleteSelectedLibraryEntries() {
@@ -15343,10 +15496,6 @@ INDEX_HTML = """<!doctype html>
         <div class="loader-panel">
           <div class="loader-form">
             <input id="libraryImportPath" type="text" value="${escapeAttr(state.libraryImportPath || "")}" placeholder="/path/to/folder">
-            <select id="libraryImportCopyMode" title="Import mode">
-              <option value="copy"${(state.libraryImportCopyMode || "copy") === "copy" ? " selected" : ""}>Copy</option>
-              <option value="link"${state.libraryImportCopyMode === "link" ? " selected" : ""}>Link</option>
-            </select>
             <button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>
             <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Import</button>
             <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>Stop Import</button>
@@ -15413,6 +15562,7 @@ INDEX_HTML = """<!doctype html>
         `${result.created_papers || 0} created`,
         `${result.existing_papers || 0} existing`,
         `${result.updated_papers || 0} updated`,
+        `${result.library_items_created || 0} library items`,
         `${result.resources_or_attachments_to_import || 0} resources/attachments`,
         `${result.reused_existing_files || 0} reused`,
         `${result.pdf_doi_extracted_count || 0} DOI found`,
@@ -15494,7 +15644,7 @@ INDEX_HTML = """<!doctype html>
           <h3>Result Guide</h3>
           <p>After an import finishes, this panel explains each number and lists files that need attention.</p>
           <div class="loader-metric"><strong>Created</strong><span>new Library item records for papers and other files.</span></div>
-          <div class="loader-metric"><strong>Existing</strong><span>records already in Library are left unchanged during repeated imports.</span></div>
+          <div class="loader-metric"><strong>Existing</strong><span>paper records already known by DOI, arXiv, or source path. Missing Library shortcuts are restored.</span></div>
           <div class="loader-metric"><strong>Updated</strong><span>records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
           <div class="loader-metric"><strong>DOI found</strong><span>PDF files where the loader extracted a DOI from the first page or filename.</span></div>
           <div class="loader-metric"><strong>No DOI</strong><span>PDF files that did not expose a DOI during the loader scan.</span></div>
@@ -15511,8 +15661,9 @@ INDEX_HTML = """<!doctype html>
       const selectedDoi = missingDoi[doiIndex] || null;
       return `
         <h3>Result Guide</h3>
-        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New Library item records made for papers and other files.</span></div>
-        <div class="loader-metric"><strong>${result.existing_papers || 0} existing</strong><span>Already-known files matched by DOI, arXiv, or source path and were left unchanged.</span></div>
+        <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New shared paper/file records created in the database.</span></div>
+        <div class="loader-metric"><strong>${result.library_items_created || 0} library items</strong><span>Folder shortcuts created or restored in Library, including already-known papers.</span></div>
+        <div class="loader-metric"><strong>${result.existing_papers || 0} existing</strong><span>Already-known files matched by DOI, arXiv, or source path; Library shortcuts are still restored when missing.</span></div>
         <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_extracted_count || 0} DOI found</strong><span>PDF files where the loader found a DOI from the first page or filename.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI</strong><span>PDF files imported by path identity because no DOI was extracted.</span></div>
@@ -15643,10 +15794,8 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="paste-entry">Paste</button>
           <button type="button" data-action="recover-entry">Recover</button>
-          <button type="button" data-action="delete-special-original-files">Delete All Original Files</button>
-          <button type="button" data-action="remove-special-library">Remove All from Library</button>
-          <button type="button" data-action="delete-entry">Remove from current collection</button>
-          <button type="button" data-action="delete-file-entry">Delete File...</button>
+          <button type="button" data-action="delete-recycle-all">Delete All</button>
+          <button type="button" data-action="delete-entry">Delete</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
       `;
@@ -15818,9 +15967,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       const pathInput = $("libraryImportPath");
-      const copyMode = $("libraryImportCopyMode");
       if (pathInput && document.activeElement !== pathInput) pathInput.value = state.libraryImportPath || "";
-      if (copyMode) copyMode.value = state.libraryImportCopyMode || "copy";
       const result = state.libraryImportLastResult || null;
       const summary = result ? [
         `${result.created_papers || 0} create`,
@@ -15847,16 +15994,12 @@ INDEX_HTML = """<!doctype html>
 
     function wireLibraryImportTools() {
       const pathInput = $("libraryImportPath");
-      const copyMode = $("libraryImportCopyMode");
-      [pathInput, copyMode].forEach((element) => {
+      [pathInput].forEach((element) => {
         element?.addEventListener("click", (event) => event.stopPropagation());
         element?.addEventListener("keydown", (event) => event.stopPropagation());
       });
       pathInput?.addEventListener("input", () => {
         state.libraryImportPath = pathInput.value;
-      });
-      copyMode?.addEventListener("change", () => {
-        state.libraryImportCopyMode = copyMode.value;
       });
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
       $("libraryRunImport")?.addEventListener("click", runLibraryFolderImport);
@@ -15880,7 +16023,6 @@ INDEX_HTML = """<!doctype html>
 
     async function runLibraryFolderImport() {
       const path = ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
-      const copyMode = $("libraryImportCopyMode")?.value || state.libraryImportCopyMode || "copy";
       if (!path) {
         state.libraryImportStatus = "Folder path is required.";
         state.libraryImportLastResult = {errors: ["Folder path is required"]};
@@ -15890,7 +16032,6 @@ INDEX_HTML = """<!doctype html>
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportPath = path;
-      state.libraryImportCopyMode = copyMode;
       state.libraryImportStatus = "Starting import loader...";
       state.libraryImportLastResult = null;
       state.libraryImportJob = {status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
@@ -15899,7 +16040,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({folder_path: path, copy_mode: copyMode})
+          body: JSON.stringify({folder_path: path})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start loader");
@@ -16022,9 +16163,7 @@ INDEX_HTML = """<!doctype html>
           state.libraryImportBusy = false;
           stopLibraryImportPolling();
           if (job.status === "completed") {
-            const libraryRes = await fetch("/api/library");
-            const libraryData = await libraryRes.json();
-            if (libraryRes.ok) applyLibrarySnapshot(libraryData);
+            await refreshLibraryAfterImportCompletion();
           }
         }
         if (state.libraryLoaderOpen) renderLibraryLoader();
@@ -16033,6 +16172,19 @@ INDEX_HTML = """<!doctype html>
         state.libraryImportBusy = false;
         stopLibraryImportPolling();
         if (state.libraryLoaderOpen) renderLibraryLoader();
+      }
+    }
+
+    async function refreshLibraryAfterImportCompletion() {
+      const libraryRes = await fetch("/api/library");
+      const libraryData = await libraryRes.json();
+      if (!libraryRes.ok) return;
+      applyLibrarySnapshot(libraryData);
+      if (state.mode === "library") {
+        const wasLoaderOpen = state.libraryLoaderOpen;
+        renderLibrary();
+        state.libraryLoaderOpen = wasLoaderOpen;
+        renderLibraryLoader();
       }
     }
 
@@ -16062,7 +16214,7 @@ INDEX_HTML = """<!doctype html>
       const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
       const choice = await promptFinderDropMode(droppedPaths, targetFolder?.name || "Library");
       if (!choice) return;
-      await importFinderDropPaths(droppedPaths, choice, targetFolderId);
+      await importFinderDropPaths(droppedPaths, targetFolderId);
     }
 
     function promptFinderDropMode(paths, targetName) {
@@ -16076,12 +16228,11 @@ INDEX_HTML = """<!doctype html>
         backdrop.innerHTML = `
           <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="finderDropTitle">
             <h2 id="finderDropTitle">Import into ${escapeHtml(targetName)}</h2>
-            <p>Choose whether Daiqo should copy the original files into Library storage, or keep links to the files in their current Finder location.</p>
+            <p>Daiqo will copy these source files into Library storage. Source files in Finder will not be moved or deleted.</p>
             <div class="finder-drop-paths">${pathPreview}${more}</div>
             <div class="finder-drop-actions">
               <button type="button" data-mode="cancel">Cancel</button>
-              <button type="button" data-mode="link">Import Links</button>
-              <button type="button" class="primary" data-mode="copy">Copy Originals</button>
+              <button type="button" class="primary" data-mode="copy">Import Copies</button>
             </div>
           </div>
         `;
@@ -16089,7 +16240,7 @@ INDEX_HTML = """<!doctype html>
         const finish = (mode) => {
           backdrop.remove();
           window.removeEventListener("keydown", onKeyDown);
-          resolve(mode === "copy" || mode === "link" ? mode : "");
+          resolve(mode === "copy" ? mode : "");
         };
         const onKeyDown = (event) => {
           if (event.key === "Escape") finish("");
@@ -16105,10 +16256,9 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function importFinderDropPaths(paths, copyMode, targetFolderId) {
+    async function importFinderDropPaths(paths, targetFolderId) {
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
-      state.libraryImportCopyMode = copyMode;
       state.libraryImportStatus = `Importing ${paths.length} dropped item${paths.length === 1 ? "" : "s"} into Library...`;
       state.libraryImportLastResult = null;
       appendLibraryImportLog(state.libraryImportStatus, "info");
@@ -16117,7 +16267,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/import-paths", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paths, copy_mode: copyMode, target_folder_id: targetFolderId})
+          body: JSON.stringify({paths, target_folder_id: targetFolderId})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not import dropped files");
@@ -16878,13 +17028,18 @@ INDEX_HTML = """<!doctype html>
     function myPublicationFirstSoloRoleFilterRow(firstCount, soloCount) {
       const firstActive = state.myPublicationRoleFilter === "listed-first";
       const soloActive = state.myPublicationRoleFilter === "solo-first";
+      const firstClass = `my-publications-stat-filter${firstActive ? " active" : ""}`;
+      const soloClass = `my-publications-stat-filter${soloActive ? " active" : ""}`;
       return `
         <div class="my-publications-stat-row first-solo-row">
           <b>
-            <button class="my-publications-stat-filter${firstActive ? " active" : ""}" type="button" data-action="publication-role-filter" data-role-filter="listed-first">First as listed</button>
-            <span class="solo-inline">(<button class="my-publications-stat-filter${soloActive ? " active" : ""}" type="button" data-action="publication-role-filter" data-role-filter="solo-first">Solo first</button>)</span>
+            <button class="${firstClass}" type="button" data-action="publication-role-filter" data-role-filter="listed-first">First as listed</button>
+            <span class="solo-inline">(<button class="${soloClass}" type="button" data-action="publication-role-filter" data-role-filter="solo-first">Solo first</button>)</span>
           </b>
-          <em>${escapeHtml(firstCount)} (${escapeHtml(soloCount)})</em>
+          <em>
+            <button class="${firstClass}" type="button" data-action="publication-role-filter" data-role-filter="listed-first">${escapeHtml(firstCount)}</button>
+            <span>(</span><button class="${soloClass}" type="button" data-action="publication-role-filter" data-role-filter="solo-first">${escapeHtml(soloCount)}</button><span>)</span>
+          </em>
         </div>
       `;
     }
@@ -17747,7 +17902,6 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
-          <button class="action danger" data-action="remove-library-paper">Remove from current collection</button>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
@@ -17781,17 +17935,6 @@ INDEX_HTML = """<!doctype html>
         openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
-      root.querySelector('[data-action="remove-library-paper"]')?.addEventListener("click", async () => {
-        const status = $("libraryDetailStatus");
-        try {
-          await removeLibraryItemFromCurrentCollection(item?.id);
-        } catch (error) {
-          if (status) {
-            status.textContent = error.message || "Could not remove paper from current collection";
-            status.className = "library-detail-status err";
-          }
-        }
-      });
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -19539,6 +19682,14 @@ INDEX_HTML = """<!doctype html>
             id: Number(row.dataset.libraryId),
             parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
           };
+          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+          const dragEntry = {type: payload.type, id: payload.id};
+          const selectedEntries = libraryEntryIsInActionSelection(parentFolderId, dragEntry)
+            ? selectedLibraryEntriesForAction()
+            : [];
+          if (selectedEntries.length > 1) {
+            payload.entries = selectedEntries.map((entry) => ({type: entry.type, id: Number(entry.id)}));
+          }
           state.libraryDragPayload = payload;
           event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify(payload));
           event.dataTransfer.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
@@ -19598,7 +19749,8 @@ INDEX_HTML = """<!doctype html>
           event.stopPropagation();
           target.classList.remove("drag-over");
           const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
-          if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
+          if (Array.isArray(payload.entries) && payload.entries.length > 1) await moveLibraryEntries(payload.entries, folderId);
+          else if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
         });
       });
       shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
@@ -20615,16 +20767,13 @@ INDEX_HTML = """<!doctype html>
       const colorButton = menu.querySelector('[data-action="color-folder"]');
       const colorPicker = menu.querySelector('[data-action="folder-color-picker"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
-      const deleteFileButton = menu.querySelector('[data-action="delete-file-entry"]');
-      const deleteSpecialOriginalFilesButton = menu.querySelector('[data-action="delete-special-original-files"]');
-      const removeSpecialLibraryButton = menu.querySelector('[data-action="remove-special-library"]');
+      const deleteRecycleAllButton = menu.querySelector('[data-action="delete-recycle-all"]');
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const addToMyPublicationsButton = menu.querySelector('[data-action="add-to-my-publications"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
-      const isClearableSpecialFolder = entryType === "folder" && hasEntry && Boolean(folder?.is_unsorted || folder?.is_recycle);
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -20650,44 +20799,23 @@ INDEX_HTML = """<!doctype html>
       }
       if (deleteButton) {
         deleteButton.style.display = hasEntry && !hasProtectedActionFolder ? "" : "none";
-        deleteButton.textContent = multiCount > 1
-          ? `Remove ${multiCount} selected`
-          : (entryType === "item" ? "Remove from current collection" : "Remove Folder");
+        deleteButton.textContent = multiCount > 1 ? `Delete ${multiCount} selected` : "Delete";
         deleteButton.onclick = async () => {
           const type = menu.dataset.entryType;
           const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => {
             if (contextEntrySelected && selectedLibraryEntriesForAction().length > 1) return deleteSelectedLibraryEntries();
-            if (type === "item") return removeLibraryItemFromCurrentCollection(id);
             return deleteLibraryEntry(type, id);
           });
         };
       }
-      if (deleteFileButton) {
-        const canDeleteFile = entryType === "item" && hasEntry && Boolean(libraryNativeItemPath(item));
-        const canDeleteFolder = entryType === "folder" && hasEntry && !isProtectedFolder;
-        deleteFileButton.textContent = entryType === "folder" ? "Delete Folder..." : "Delete File...";
-        deleteFileButton.style.display = canDeleteFile || canDeleteFolder ? "" : "none";
-        deleteFileButton.onclick = async () => {
-          const type = menu.dataset.entryType;
-          const id = Number(menu.dataset.entryId || 0);
+      if (deleteRecycleAllButton) {
+        const recycleContextId = contextRecycleFolderId(menu.dataset.parentId, entryType, entryId);
+        deleteRecycleAllButton.style.display = recycleContextId ? "" : "none";
+        deleteRecycleAllButton.onclick = async () => {
           hideLibraryContextMenu();
-          await runLibraryMenuAction(() => deleteLibraryEntryFiles(type, id));
-        };
-      }
-      if (deleteSpecialOriginalFilesButton) {
-        deleteSpecialOriginalFilesButton.style.display = isClearableSpecialFolder ? "" : "none";
-        deleteSpecialOriginalFilesButton.onclick = async () => {
-          hideLibraryContextMenu();
-          await runLibraryMenuAction(() => clearLibrarySpecialFolder(Number(menu.dataset.entryId || 0), {deleteFiles: true}));
-        };
-      }
-      if (removeSpecialLibraryButton) {
-        removeSpecialLibraryButton.style.display = isClearableSpecialFolder ? "" : "none";
-        removeSpecialLibraryButton.onclick = async () => {
-          hideLibraryContextMenu();
-          await runLibraryMenuAction(() => clearLibrarySpecialFolder(Number(menu.dataset.entryId || 0), {deleteFiles: false}));
+          await runLibraryMenuAction(() => deleteAllLibraryRecycle(recycleContextId));
         };
       }
       if (copyButton) {

@@ -15,7 +15,7 @@ from ..storage import Storage
 from ..text import clean_text, make_paper_id, normalize_doi, safe_slug, sha1_short
 
 
-SUPPORTED_COPY_MODES = {"copy", "link"}
+SUPPORTED_COPY_MODES = {"copy"}
 PAPER_CANDIDATE_KIND = "pdf"
 PAPER_CANDIDATE_IMPORT_AS = "paper_candidate"
 REPORT_DIR = ROOT / "reports" / "imports"
@@ -229,11 +229,8 @@ def import_library_inventory(
         dry_run=dry_run,
     )
 
-    if copy_mode == "move":
-        result["errors"].append("copy_mode=move is not supported; it would mutate the original source folder.")
-        return finalize_result(result, report_path)
     if copy_mode not in SUPPORTED_COPY_MODES:
-        result["errors"].append(f"Unsupported copy_mode: {copy_mode}. Use copy or link.")
+        result["errors"].append("Unsupported copy_mode: loader imports must use copy.")
         return finalize_result(result, report_path)
     if not inventory_file.exists():
         result["errors"].append(f"Inventory file does not exist: {inventory_file}")
@@ -340,6 +337,9 @@ def empty_result(
         "papers_to_create": [],
         "papers_to_update": [],
         "papers_existing": [],
+        "metadata_refresh_candidates": [],
+        "library_items_created": 0,
+        "library_items_existing": 0,
         "resources_to_import": [],
         "aliases": [],
         "missing_sources": [],
@@ -485,7 +485,7 @@ def execute_import(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     batch_id = "inventory_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    target_root = library_target_root / batch_id
+    target_root = library_target_root
     result["import_batch_id"] = batch_id
     result["copy_target_root"] = str(target_root)
     ensure_import_batch(storage, batch_id=batch_id, result=result, inventory_file=inventory_file)
@@ -554,13 +554,43 @@ def execute_import(
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                    stored_path = ""
+                    if reusable_path:
+                        stored_path = reusable_path
+                        result["reused_existing_files"] += 1
+                    elif source_exists:
+                        stored_path = copy_record(record, target_root=target_root)
+                    if stored_path:
+                        result["pdf_attachments_to_import"] += 1
+                        result["resources_or_attachments_to_import"] += 1
+                        attach_imported_file_to_existing_paper(
+                            storage,
+                            record,
+                            paper_id=paper_id,
+                            stored_path=stored_path,
+                            pdf_like=True,
+                        )
+                        upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
+                    if result["preserve_folders"]:
+                        folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
+                        _, created = ensure_imported_library_item(
+                            storage,
+                            paper_id=paper_id,
+                            folder_id=folder_id,
+                            display_name=record["filename"] if library_item_name == "filename" else "",
+                        )
+                        if created:
+                            result["library_items_created"] += 1
+                        else:
+                            result["library_items_existing"] += 1
                     continue
                 stored_path = ""
                 if reusable_path:
                     stored_path = reusable_path
                     result["reused_existing_files"] += 1
                 elif source_exists:
-                    stored_path = copy_or_link_record(record, target_root=target_root, copy_mode=result["copy_mode"])
+                    stored_path = copy_record(record, target_root=target_root)
                 if stored_path:
                     result["pdf_attachments_to_import"] += 1
                     result["resources_or_attachments_to_import"] += 1
@@ -568,17 +598,22 @@ def execute_import(
                 upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                queue_metadata_refresh_candidate(result, record, paper_id)
                 add_existing_index(existing, record, paper_id)
                 if stored_path:
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    add_imported_library_item(
+                    _, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
                         display_name=record["filename"] if library_item_name == "filename" else "",
                     )
+                    if created:
+                        result["library_items_created"] += 1
+                    else:
+                        result["library_items_existing"] += 1
                 continue
 
             if import_as == "resource":
@@ -587,30 +622,66 @@ def execute_import(
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                    stored_path = ""
+                    if reusable_path:
+                        stored_path = reusable_path
+                        result["reused_existing_files"] += 1
+                    elif source_exists:
+                        stored_path = copy_record(record, target_root=target_root)
+                    if stored_path:
+                        result["created_resources"] += 1
+                        result["resources_or_attachments_to_import"] += 1
+                        attach_imported_file_to_existing_paper(
+                            storage,
+                            record,
+                            paper_id=paper_id,
+                            stored_path=stored_path,
+                            pdf_like=False,
+                        )
+                        upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
+                        append_limited(result["resources_to_import"], resource_plan(record), 500)
+                    if result["preserve_folders"]:
+                        folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
+                        _, created = ensure_imported_library_item(
+                            storage,
+                            paper_id=paper_id,
+                            folder_id=folder_id,
+                            display_name=record["filename"],
+                        )
+                        if created:
+                            result["library_items_created"] += 1
+                        else:
+                            result["library_items_existing"] += 1
                     continue
                 stored_path = ""
                 if reusable_path:
                     stored_path = reusable_path
                     result["reused_existing_files"] += 1
                 elif source_exists:
-                    stored_path = copy_or_link_record(record, target_root=target_root, copy_mode=result["copy_mode"])
+                    stored_path = copy_record(record, target_root=target_root)
                 if stored_path:
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
                 upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                queue_metadata_refresh_candidate(result, record, paper_id)
                 add_existing_index(existing, record, paper_id)
                 upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
                 if result["preserve_folders"]:
                     folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
-                    add_imported_library_item(
+                    _, created = ensure_imported_library_item(
                         storage,
                         paper_id=paper_id,
                         folder_id=folder_id,
                         display_name=record["filename"],
                     )
+                    if created:
+                        result["library_items_created"] += 1
+                    else:
+                        result["library_items_existing"] += 1
                 continue
 
             result["skipped"] += 1
@@ -1052,7 +1123,7 @@ def upsert_imported_paper(
             record["page_count"],
             stored_path,
             stored_path,
-            f"imported from inventory ({'copied' if stored_path != record['source_path'] else 'linked'})",
+            "imported from inventory (copied)",
             stored_path,
             stored_path,
             stored_path,
@@ -1139,12 +1210,80 @@ def upsert_imported_file_paper(
             record["page_count"],
             stored_path,
             stored_path,
-            f"imported from inventory ({'copied' if stored_path != record['source_path'] else 'linked'})",
+            "imported from inventory (copied)",
             stored_path,
             now_text(),
             paper_id,
         ),
     )
+    storage.conn.commit()
+
+
+def attach_imported_file_to_existing_paper(
+    storage: Storage,
+    record: dict[str, Any],
+    *,
+    paper_id: str,
+    stored_path: str,
+    pdf_like: bool,
+) -> None:
+    paper = storage.get_paper(paper_id) or {}
+    raw = parse_json(paper.get("raw_json"))
+    raw["import"] = import_metadata(record, batch_id=clean_text(paper.get("import_batch_id")), stored_path=stored_path)
+    if not pdf_like:
+        raw["file"] = {
+            "kind": record["kind"],
+            "mime_type": record["mime_type"],
+            "extension": record["extension"],
+        }
+    if record["arxiv_id"]:
+        raw.setdefault("arxiv_id", record["arxiv_id"])
+    assignments = """
+        source_path = ?,
+        original_relative_path = ?,
+        original_parent_relative_path = ?,
+        original_filename = ?,
+        import_kind = ?,
+        import_as = ?,
+        doi_source = COALESCE(NULLIF(?, ''), doi_source),
+        parse_status = ?,
+        parse_error = ?,
+        size_bytes = ?,
+        modified_at = ?,
+        page_count = ?,
+        raw_json = ?,
+        download_status = CASE WHEN ? != '' THEN 'success' ELSE download_status END,
+        download_message = CASE WHEN ? != '' THEN ? ELSE download_message END,
+        downloaded_at = CASE WHEN ? != '' THEN ? ELSE downloaded_at END
+    """
+    values: list[Any] = [
+        record["source_path"],
+        record["relative_path"],
+        record["parent_relative_path"],
+        record["filename"],
+        record["kind"],
+        record["import_as"],
+        record["doi_source"],
+        record["parse_status"],
+        record["parse_error"],
+        record["size_bytes"],
+        record["modified_at"],
+        record["page_count"],
+        json.dumps(raw, ensure_ascii=False),
+        stored_path,
+        stored_path,
+        "imported from inventory (copied)",
+        stored_path,
+        now_text(),
+    ]
+    if pdf_like:
+        assignments += """,
+        main_pdf_path = CASE WHEN ? != '' THEN ? ELSE main_pdf_path END,
+        merged_pdf_path = CASE WHEN ? != '' THEN ? ELSE merged_pdf_path END
+        """
+        values.extend([stored_path, stored_path, stored_path, stored_path])
+    values.append(paper_id)
+    storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
     storage.conn.commit()
 
 
@@ -1224,10 +1363,8 @@ def import_metadata(record: dict[str, Any], *, batch_id: str, stored_path: str) 
     }
 
 
-def copy_or_link_record(record: dict[str, Any], *, target_root: Path, copy_mode: str) -> str:
+def copy_record(record: dict[str, Any], *, target_root: Path) -> str:
     source = Path(record["source_path"])
-    if copy_mode == "link":
-        return str(source)
     relative_path = safe_inventory_relative_path(record["relative_path"] or record["filename"])
     target = unique_target_path(target_root / relative_path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1310,6 +1447,16 @@ def ensure_folder_path(storage: Storage, relative_parent_path: str, folder_cache
 
 
 def add_imported_library_item(storage: Storage, *, paper_id: str, folder_id: int, display_name: str = "") -> dict[str, Any]:
+    item, _created = ensure_imported_library_item(
+        storage,
+        paper_id=paper_id,
+        folder_id=folder_id,
+        display_name=display_name,
+    )
+    return item
+
+
+def ensure_imported_library_item(storage: Storage, *, paper_id: str, folder_id: int, display_name: str = "") -> tuple[dict[str, Any], bool]:
     existing = storage.conn.execute(
         """
         SELECT id
@@ -1321,8 +1468,21 @@ def add_imported_library_item(storage: Storage, *, paper_id: str, folder_id: int
     ).fetchone()
     item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
     if item and not existing and display_name:
-        return storage.rename_library_item(item_id=int(item["id"]), name=display_name)
-    return item
+        item = storage.rename_library_item(item_id=int(item["id"]), name=display_name)
+    return item, not bool(existing)
+
+
+def queue_metadata_refresh_candidate(result: dict[str, Any], record: dict[str, Any], paper_id: str) -> None:
+    if not paper_id or not (record.get("doi") or record.get("arxiv_id")):
+        return
+    candidates = result.setdefault("metadata_refresh_candidates", [])
+    if any(str(item.get("paper_id") or "") == str(paper_id) for item in candidates if isinstance(item, dict)):
+        return
+    candidates.append({
+        "paper_id": paper_id,
+        "doi": record.get("doi") or "",
+        "arxiv_id": record.get("arxiv_id") or "",
+    })
 
 
 def ensure_import_batch(storage: Storage, *, batch_id: str, result: dict[str, Any], inventory_file: Path) -> None:
