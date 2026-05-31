@@ -37,8 +37,11 @@ from .config import (
     DEFAULT_ANALYSIS_DIR,
     DEFAULT_CONFIG_PATH,
     DEFAULT_DB_PATH,
+    DEFAULT_LIBRARY_DIR,
     DEFAULT_LIBRARY_IMPORT_DIR,
+    DEFAULT_MY_PUBLICATIONS_DIR,
     DEFAULT_PDF_DIR,
+    DEFAULT_SPACES_DIR,
     ROOT,
     load_config,
 )
@@ -77,6 +80,9 @@ LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
+LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
+MY_PUBLICATIONS_LOCAL_COPY_ROOT = DEFAULT_MY_PUBLICATIONS_DIR
+SPACES_LOCAL_COPY_ROOT = DEFAULT_SPACES_DIR
 ADS_API_TOKEN_SETTING = "ads_api_token"
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
 NCBI_EUTILS_TOOL = "PaperMonitor"
@@ -705,7 +711,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
-            result = download_paper(storage=storage, paper_id=paper_id, force=bool(payload.get("force")))
+            target_dir = local_copy_dir_for_download_context(storage, payload)
+            if target_dir and not bool(payload.get("force")):
+                move_monitor_pdf_into_context_if_needed(storage, paper_id, target_dir)
+            result = download_paper(storage=storage, paper_id=paper_id, target_dir=target_dir, force=bool(payload.get("force")))
+            if target_dir:
+                context = clean_text(str(payload.get("context") or "")).lower()
+                if context == "my-publications":
+                    sync_my_publication_alias(storage, paper_id)
+                elif context in {"library", "workspace", "space"}:
+                    folder_id = int(payload.get("folder_id") or 0)
+                    item_id = int(payload.get("item_id") or 0)
+                    if item_id:
+                        item = storage.get_library_item(item_id)
+                        if item:
+                            folder_id = int(item.get("folder_id") or folder_id or 1)
+                    if folder_id:
+                        sync_alias_for_library_item(storage, paper_id, folder_id)
             paper = storage.get_paper(paper_id)
         finally:
             storage.close()
@@ -733,9 +755,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
-            target_dir = DEFAULT_PDF_DIR / paper_id
+            target_dir = local_copy_dir_for_download_context(storage, fields) or (DEFAULT_PDF_DIR / paper_id)
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_manual.pdf"
+            target_path = unique_path_in_dir(target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_manual.pdf")
             target_path.write_bytes(data)
             storage.update_download_status(
                 paper_id,
@@ -745,6 +767,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 supplement_pdf_paths=[],
                 merged_pdf_path=str(target_path),
             )
+            sync_all_pdf_aliases_for_paper(storage, paper_id)
             paper = storage.get_paper(paper_id)
         finally:
             storage.close()
@@ -841,6 +864,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     return
                 publication = storage.add_my_publication(paper_id=paper_id)
                 sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
+                move_monitor_pdf_into_context_if_needed(storage, paper_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+                sync_my_publication_alias(storage, paper_id)
             elif isinstance(paper_ids, list):
                 valid_ids = []
                 for raw_id in paper_ids:
@@ -853,6 +878,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 for candidate_id in valid_ids:
                     publication = storage.add_my_publication(paper_id=candidate_id)
                     sync_my_publication_existing_pubmed_marks(storage, paper_id=candidate_id)
+                    move_monitor_pdf_into_context_if_needed(storage, candidate_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+                    sync_my_publication_alias(storage, candidate_id)
             elif paper_id:
                 paper = storage.get_paper(paper_id)
                 if not paper_id or not paper:
@@ -860,6 +887,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     return
                 publication = storage.add_my_publication(paper_id=paper_id)
                 sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
+                move_monitor_pdf_into_context_if_needed(storage, paper_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+                sync_my_publication_alias(storage, paper_id)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                 return
@@ -1264,7 +1293,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             tabs[index]["label"] = label[:80]
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if root_folder_id:
+                pdf_move_plan = folder_tree_pdf_move_plan(storage, root_folder_id)
                 folder = storage.rename_library_folder(folder_id=root_folder_id, name=label[:80])
+                apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
                 tabs[index]["root_folder_id"] = int(folder.get("id") or root_folder_id)
                 tabs[index]["label"] = str(folder.get("name") or label)[:80]
             storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(tabs), ensure_ascii=False))
@@ -1312,6 +1343,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 raise ValueError("Space root folder not found")
             if paper_id:
                 storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
+                move_monitor_pdf_into_context_if_needed(storage, paper_id, local_copy_dir_for_library_folder(storage, root_folder_id))
+                sync_alias_for_library_item(storage, paper_id, root_folder_id)
             storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(tabs), ensure_ascii=False))
             snapshot = library_snapshot(storage)
         except ValueError as exc:
@@ -1568,7 +1601,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         name = str(payload.get("name") or "")
         storage = Storage(self.configured_db_path)
         try:
+            pdf_move_plan = folder_tree_pdf_move_plan(storage, folder_id) if storage.get_library_folder(folder_id) else []
             folder = storage.rename_library_folder(folder_id=folder_id, name=name)
+            apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
             snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1616,6 +1651,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     item_id=int(item["id"]),
                     name=default_library_item_display_name(paper, rule=naming_rule),
                 )
+            if item:
+                move_monitor_pdf_into_context_if_needed(storage, paper_id, local_copy_dir_for_library_folder(storage, folder_id))
+                sync_alias_for_library_item(storage, paper_id, folder_id)
             snapshot = library_snapshot(storage)
         finally:
             storage.close()
@@ -1722,10 +1760,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             moved: dict[str, Any] | None = None
             if entry_type == "item":
                 item_id = int(payload.get("id") or 0)
+                source_item = storage.get_library_item(item_id)
+                if not source_item:
+                    raise ValueError("Library item not found")
+                move_or_alias_library_item_pdf(storage, item=source_item, target_folder_id=target_folder_id)
                 if target_folder_id == recycle_id:
                     moved = storage.move_library_item_to_trash(item_id=item_id, recycle_folder_id=recycle_id)
                 else:
                     moved = storage.move_library_item(item_id=item_id, folder_id=target_folder_id)
+                if moved:
+                    sync_all_pdf_aliases_for_paper(storage, str(moved.get("paper_id") or source_item.get("paper_id") or ""))
             elif entry_type == "folder":
                 folder_id = int(payload.get("id") or 0)
                 folder = storage.get_library_folder(folder_id)
@@ -1733,10 +1777,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     raise ValueError("Folder not found")
                 if folder_id in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
                     raise ValueError("This folder cannot be moved")
+                pdf_move_plan = folder_tree_pdf_move_plan(storage, folder_id)
                 if target_folder_id == recycle_id:
                     moved = storage.move_library_folder_to_trash(folder_id=folder_id, recycle_folder_id=recycle_id)
                 else:
                     moved = storage.move_library_folder(folder_id=folder_id, parent_id=target_folder_id)
+                apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -1819,10 +1865,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             folder_id = int(item.get("folder_id") or 1)
             paper_ids = [str(item.get("paper_id") or "")]
             if library_folder_is_within(storage, folder_id, recycle_id):
+                if paper_has_reference_outside_recycle(storage, paper_ids[0], recycle_id):
+                    promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
                 storage.delete_library_item(item_id=entry_id)
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
             else:
+                move_or_alias_library_item_pdf(storage, item=item, target_folder_id=recycle_id)
                 storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
+                sync_all_pdf_aliases_for_paper(storage, str(item.get("paper_id") or ""))
             return
         if entry_type == "folder":
             folder = storage.get_library_folder(entry_id)
@@ -1832,10 +1882,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 raise ValueError("This folder cannot be deleted")
             if library_folder_is_within(storage, int(folder.get("parent_id") or 0), recycle_id):
                 paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
+                for paper_id in paper_ids:
+                    if paper_has_reference_outside_recycle(storage, paper_id, recycle_id):
+                        promote_canonical_pdf_outside_recycle(storage, paper_id, recycle_id)
                 storage.delete_library_folder(folder_id=entry_id)
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
             else:
+                pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
                 storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
+                apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
             return
         raise ValueError("type must be item or folder")
 
@@ -2091,9 +2146,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         target_folder_id: int,
     ) -> dict[str, Any]:
         if entry_type == "item":
-            return storage.copy_library_item(item_id=entry_id, folder_id=target_folder_id)
+            pasted = storage.copy_library_item(item_id=entry_id, folder_id=target_folder_id)
+            if pasted:
+                sync_alias_for_library_item(storage, str(pasted.get("paper_id") or ""), int(pasted.get("folder_id") or target_folder_id))
+            return pasted
         if entry_type == "folder":
-            return storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
+            pasted = storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
+            if pasted:
+                for paper_id in storage.library_paper_ids_in_folder_tree(folder_id=int(pasted.get("id") or 0)):
+                    sync_all_pdf_aliases_for_paper(storage, paper_id)
+            return pasted
         raise ValueError("type must be item or folder")
 
     def handle_delete_pdf(self, payload: dict[str, Any]) -> None:
@@ -7715,9 +7777,8 @@ def library_import_progress_callback(job_id: str):
 
 
 def library_loader_copy_plan(storage: Storage, *, source_folder: Path, timestamp: str, slug: str) -> dict[str, Any]:
-    base_root = DEFAULT_LIBRARY_IMPORT_DIR.resolve()
+    base_root = DEFAULT_LIBRARY_DIR.resolve()
     source_root = str(source_folder.expanduser().resolve())
-    existing = existing_loader_copy_target_root(storage, source_root=source_root, base_root=base_root)
     previous_batches = int(
         storage.conn.execute(
             """
@@ -7745,12 +7806,8 @@ def library_loader_copy_plan(storage: Storage, *, source_folder: Path, timestamp
         ).fetchone()["count"]
         or 0
     )
-    if existing:
-        target = existing
-        action = "reuse"
-    else:
-        target = unique_directory_path(base_root / f"{timestamp}-{slug}")
-        action = "new"
+    target = base_root
+    action = "reuse" if previous_batches or copied_files else "new"
     return {
         "source_root": source_root,
         "copy_target_root": str(target),
@@ -7758,14 +7815,14 @@ def library_loader_copy_plan(storage: Storage, *, source_folder: Path, timestamp
         "previous_batches": previous_batches,
         "copied_files": copied_files,
         "message": (
-            "This source folder was loaded before. New files will be merged into the existing local-copy folder."
+            "This source folder was loaded before. New files will be merged into the data/Library Finder tree."
             if action == "reuse"
-            else "This source folder has not been loaded before. A new local-copy folder will be created."
+            else "This source folder has not been loaded before. Files will be copied into the data/Library Finder tree."
         ),
         "finder_behavior": (
-            "Existing local copies are reused and not overwritten; newly readable files are copied into matching relative paths."
+            "Existing local copies inside data/Library are reused and not overwritten; newly readable files are copied into matching relative paths."
             if action == "reuse"
-            else "Files are copied into a new Finder folder under data/library_imports while preserving relative paths."
+            else "Files are copied under data/Library while preserving relative paths."
         ),
     }
 
@@ -7775,70 +7832,6 @@ def resolve_library_loader_copy_target_root(storage: Storage, *, source_folder: 
     return Path(str(plan.get("copy_target_root") or ""))
 
 
-def existing_loader_copy_target_root(storage: Storage, *, source_root: str, base_root: Path) -> Path | None:
-    if not source_root:
-        return None
-    rows = storage.conn.execute(
-        """
-        SELECT report_path, started_at
-        FROM inventory_import_batches
-        WHERE source_root = ?
-          AND COALESCE(status, '') != 'deleted'
-        ORDER BY started_at DESC
-        LIMIT 20
-        """,
-        (source_root,),
-    ).fetchall()
-    for row in rows:
-        report = load_import_report_summary(row["report_path"])
-        target = valid_loader_copy_target_root(str((report or {}).get("copy_target_root") or ""), base_root=base_root)
-        if target:
-            return target
-    return inferred_loader_copy_target_root(storage, source_root=source_root, base_root=base_root)
-
-
-def inferred_loader_copy_target_root(storage: Storage, *, source_root: str, base_root: Path) -> Path | None:
-    like_prefix = source_root.rstrip("/") + "/%"
-    rows = storage.conn.execute(
-        """
-        SELECT stored_path, original_relative_path
-        FROM resources
-        WHERE (source_path = ? OR source_path LIKE ?)
-          AND stored_path IS NOT NULL
-          AND stored_path != ''
-          AND stored_path != source_path
-        ORDER BY updated_at DESC
-        LIMIT 50
-        """,
-        (source_root, like_prefix),
-    ).fetchall()
-    for row in rows:
-        target = copy_target_root_from_stored_path(
-            str(row["stored_path"] or ""),
-            str(row["original_relative_path"] or ""),
-            base_root=base_root,
-        )
-        if target:
-            return target
-    return None
-
-
-def copy_target_root_from_stored_path(stored_path: str, original_relative_path: str, *, base_root: Path) -> Path | None:
-    if not stored_path:
-        return None
-    try:
-        stored = Path(stored_path).expanduser().resolve()
-    except OSError:
-        return None
-    relative_parts = safe_inventory_path_parts(original_relative_path)
-    target = stored
-    for _ in relative_parts:
-        target = target.parent
-    if not relative_parts:
-        target = stored.parent
-    return valid_loader_copy_target_root(str(target), base_root=base_root)
-
-
 def safe_inventory_path_parts(value: str) -> list[str]:
     parts = []
     for part in Path(value or "").parts:
@@ -7846,28 +7839,6 @@ def safe_inventory_path_parts(value: str) -> list[str]:
             continue
         parts.append(part)
     return parts
-
-
-def valid_loader_copy_target_root(path_value: str, *, base_root: Path) -> Path | None:
-    if not path_value:
-        return None
-    try:
-        path = Path(path_value).expanduser().resolve()
-    except OSError:
-        return None
-    if path == base_root or not is_relative_to(path, base_root):
-        return None
-    return path
-
-
-def unique_directory_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    for index in range(2, 10000):
-        candidate = path.parent / f"{path.name}-{index}"
-        if not candidate.exists():
-            return candidate
-    raise FileExistsError(str(path))
 
 
 def run_library_import_job(
@@ -8135,13 +8106,23 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
 
     deleted_paths: list[str] = []
     copy_target = str(result.get("copy_target_root") or "") or str(DEFAULT_LIBRARY_IMPORT_DIR / batch_id)
+    deletable_roots = [DEFAULT_LIBRARY_DIR, DEFAULT_SPACES_DIR, DEFAULT_MY_PUBLICATIONS_DIR, DEFAULT_LIBRARY_IMPORT_DIR]
     for path_value in resource_paths:
-        if delete_import_path(path_value, DEFAULT_LIBRARY_IMPORT_DIR):
-            deleted_paths.append(path_value)
-    if copy_target and Path(copy_target).expanduser().resolve() != DEFAULT_LIBRARY_IMPORT_DIR.resolve():
-        if delete_import_path(copy_target, DEFAULT_LIBRARY_IMPORT_DIR):
-            deleted_paths.append(copy_target)
-    cleanup_empty_parents(deleted_paths, DEFAULT_LIBRARY_IMPORT_DIR.resolve())
+        for root in deletable_roots:
+            if delete_import_path(path_value, root):
+                deleted_paths.append(path_value)
+                break
+    try:
+        copy_target_path = Path(copy_target).expanduser().resolve() if copy_target else None
+    except OSError:
+        copy_target_path = None
+    protected_copy_roots = {str(root.resolve()) for root in deletable_roots}
+    if copy_target_path and str(copy_target_path) not in protected_copy_roots:
+        for root in deletable_roots:
+            if delete_import_path(str(copy_target_path), root):
+                deleted_paths.append(str(copy_target_path))
+                break
+    cleanup_local_copy_empty_parents(deleted_paths)
     for path_value in [job.get("inventory_path"), result.get("report_path")]:
         if delete_import_path(clean_text(path_value), ROOT / "reports" / "imports"):
             deleted_paths.append(clean_text(path_value))
@@ -8544,6 +8525,331 @@ def existing_path_or_empty(path: str) -> str:
     return path if requested.exists() else ""
 
 
+def finder_safe_name(value: str, fallback: str = "Untitled") -> str:
+    clean = " ".join(str(value or "").strip().split()) or fallback
+    clean = re.sub(r"[/:\0]+", "-", clean)
+    clean = clean.strip(" .")
+    return clean[:120] or fallback
+
+
+def library_folder_chain(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
+    chain: list[dict[str, Any]] = []
+    current = int(folder_id or 0)
+    seen: set[int] = set()
+    while current and current not in seen:
+        seen.add(current)
+        folder = storage.get_library_folder(current)
+        if not folder:
+            break
+        chain.append(folder)
+        if folder.get("parent_id") is None:
+            break
+        current = int(folder.get("parent_id") or 0)
+    chain.reverse()
+    return chain
+
+
+def local_copy_dir_for_library_folder(storage: Storage, folder_id: int) -> Path:
+    chain = library_folder_chain(storage, folder_id)
+    if not chain:
+        return LIBRARY_LOCAL_COPY_ROOT
+    root = chain[0]
+    root_id = int(root.get("id") or 0)
+    if root_id == 1:
+        base = LIBRARY_LOCAL_COPY_ROOT
+        parts = [finder_safe_name(folder.get("name") or "Folder") for folder in chain[1:]]
+    else:
+        base = SPACES_LOCAL_COPY_ROOT / finder_safe_name(root.get("name") or f"Space {root_id}")
+        parts = [finder_safe_name(folder.get("name") or "Folder") for folder in chain[1:]]
+    return base.joinpath(*parts)
+
+
+def local_copy_dir_for_download_context(storage: Storage, payload: dict[str, Any]) -> Path | None:
+    context = clean_text(str(payload.get("context") or "")).lower()
+    if context == "my-publications":
+        return MY_PUBLICATIONS_LOCAL_COPY_ROOT
+    if context in {"library", "workspace", "space"}:
+        item_id = int(payload.get("item_id") or 0)
+        folder_id = int(payload.get("folder_id") or 0)
+        if item_id:
+            item = storage.get_library_item(item_id)
+            if item:
+                folder_id = int(item.get("folder_id") or folder_id or 1)
+        if not folder_id:
+            folder_id = 1
+        return local_copy_dir_for_library_folder(storage, folder_id)
+    return None
+
+
+def canonical_pdf_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
+    if not paper:
+        return None
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        raw = str(paper.get(key) or "")
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if path.exists() and path.is_file():
+            return path.resolve()
+    return None
+
+
+def unique_path_in_dir(path: Path) -> Path:
+    if not path.exists() and not path.is_symlink():
+        return path
+    parent = path.parent
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate = parent / f"{stem} {index}{suffix}"
+        if not candidate.exists() and not candidate.is_symlink():
+            return candidate
+    raise FileExistsError(str(path))
+
+
+def paper_pdf_basename(paper: dict[str, Any], canonical_path: Path | None = None) -> str:
+    if canonical_path:
+        return finder_safe_name(canonical_path.name, "paper.pdf")
+    title = paper.get("title") or paper.get("paper_id") or "paper"
+    return f"{safe_slug(title, 80)}_merged.pdf"
+
+
+def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, message: str = "local PDF moved") -> None:
+    storage.update_download_status(
+        paper_id,
+        status="success",
+        message=message,
+        main_pdf_path=str(path),
+        supplement_pdf_paths=[],
+        merged_pdf_path=str(path),
+    )
+
+
+def local_copy_roots(*, include_legacy: bool = True) -> list[Path]:
+    roots = [
+        DEFAULT_LIBRARY_DIR.resolve(),
+        DEFAULT_SPACES_DIR.resolve(),
+        DEFAULT_MY_PUBLICATIONS_DIR.resolve(),
+    ]
+    if include_legacy:
+        roots.append(DEFAULT_LIBRARY_IMPORT_DIR.resolve())
+    return roots
+
+
+def cleanup_local_copy_empty_parents(deleted_paths: list[str]) -> None:
+    for root in local_copy_roots(include_legacy=True):
+        cleanup_empty_parents(deleted_paths, root)
+
+
+def is_path_inside_dir(path: Path, folder: Path) -> bool:
+    try:
+        path.resolve().relative_to(folder.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def remove_symlinks_to(target: Path, roots: list[Path]) -> list[str]:
+    removed: list[str] = []
+    try:
+        target_resolved = target.expanduser().resolve()
+    except OSError:
+        return removed
+    for root in roots:
+        if not root.exists():
+            continue
+        for candidate in root.rglob("*"):
+            if not candidate.is_symlink():
+                continue
+            try:
+                if candidate.resolve() == target_resolved:
+                    candidate.unlink()
+                    removed.append(str(candidate))
+            except OSError:
+                continue
+    return removed
+
+
+def create_pdf_alias(canonical_path: Path, target_dir: Path) -> Path | None:
+    canonical = canonical_path.expanduser().resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if canonical.parent.resolve() == target_dir.resolve():
+        return None
+    if target_dir.exists():
+        for candidate in target_dir.iterdir():
+            if candidate.is_symlink():
+                try:
+                    if candidate.resolve() == canonical:
+                        return candidate
+                except OSError:
+                    continue
+    alias_path = unique_path_in_dir(target_dir / canonical.name)
+    os.symlink(str(canonical), str(alias_path))
+    return alias_path
+
+
+def sync_alias_for_library_item(storage: Storage, paper_id: str, folder_id: int) -> Path | None:
+    paper = storage.get_paper(paper_id)
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not paper or not canonical:
+        return None
+    return create_pdf_alias(canonical, local_copy_dir_for_library_folder(storage, folder_id))
+
+
+def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
+    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    if not canonical:
+        return None
+    return create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+
+
+def sync_all_pdf_aliases_for_paper(storage: Storage, paper_id: str, *, old_target: Path | None = None) -> None:
+    if old_target:
+        remove_symlinks_to(old_target, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
+    rows = storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id = ?", (str(paper_id),)).fetchall()
+    for row in rows:
+        sync_alias_for_library_item(storage, paper_id, int(row["folder_id"] or 0))
+    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (str(paper_id),)).fetchone():
+        sync_my_publication_alias(storage, paper_id)
+
+
+def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, target_dir: Path) -> bool:
+    paper = storage.get_paper(paper_id)
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not paper or not canonical:
+        return False
+    try:
+        canonical.relative_to(DEFAULT_PDF_DIR.resolve())
+    except ValueError:
+        return False
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
+    old_path = canonical
+    shutil.move(str(canonical), str(target_path))
+    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved into local Library storage")
+    cleanup_empty_parents([str(old_path)], DEFAULT_PDF_DIR.resolve())
+    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
+    return True
+
+
+def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], target_folder_id: int) -> None:
+    paper_id = str(item.get("paper_id") or "")
+    paper = storage.get_paper(paper_id)
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not paper or not canonical:
+        return
+    source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+    target_dir = local_copy_dir_for_library_folder(storage, int(target_folder_id or 1)).resolve()
+    if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
+        old_path = canonical
+        if old_path != target_path:
+            shutil.move(str(old_path), str(target_path))
+            update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library shortcut")
+            remove_symlinks_to(old_path, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
+            cleanup_local_copy_empty_parents([str(old_path)])
+        return
+    remove_symlinks_to(canonical, [source_dir])
+    create_pdf_alias(canonical, target_dir)
+
+
+def library_items_in_folder_tree(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        WITH RECURSIVE folder_tree(id) AS (
+          SELECT id FROM library_folders WHERE id = ?
+          UNION ALL
+          SELECT library_folders.id
+          FROM library_folders
+          JOIN folder_tree ON library_folders.parent_id = folder_tree.id
+        )
+        SELECT *
+        FROM library_items
+        WHERE folder_id IN (SELECT id FROM folder_tree)
+        ORDER BY id ASC
+        """,
+        (int(folder_id),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+    for item in library_items_in_folder_tree(storage, folder_id):
+        paper = storage.get_paper(str(item.get("paper_id") or ""))
+        canonical = canonical_pdf_path_for_paper(paper)
+        if not paper or not canonical:
+            continue
+        source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+        plan.append({
+            "item_id": int(item.get("id") or 0),
+            "paper_id": str(item.get("paper_id") or ""),
+            "old_path": canonical,
+            "old_dir": source_dir,
+            "basename": paper_pdf_basename(paper, canonical),
+            "is_canonical_here": is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir,
+        })
+    return plan
+
+
+def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]) -> None:
+    for entry in plan:
+        item = storage.get_library_item(int(entry.get("item_id") or 0))
+        paper_id = str(entry.get("paper_id") or "")
+        if not item or not paper_id:
+            continue
+        target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+        old_path = entry.get("old_path")
+        if isinstance(old_path, Path) and entry.get("is_canonical_here") and old_path.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = unique_path_in_dir(target_dir / finder_safe_name(str(entry.get("basename") or old_path.name), old_path.name))
+            if old_path != target_path:
+                shutil.move(str(old_path), str(target_path))
+                update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library folder")
+                sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
+                cleanup_local_copy_empty_parents([str(old_path)])
+            continue
+        sync_alias_for_library_item(storage, paper_id, int(item.get("folder_id") or 1))
+
+
+def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
+    rows = storage.conn.execute(
+        """
+        SELECT folder_id
+        FROM library_items
+        WHERE paper_id = ?
+        ORDER BY id ASC
+        """,
+        (str(paper_id),),
+    ).fetchall()
+    for row in rows:
+        folder_id = int(row["folder_id"] or 0)
+        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
+            return local_copy_dir_for_library_folder(storage, folder_id)
+    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (str(paper_id),)).fetchone():
+        return MY_PUBLICATIONS_LOCAL_COPY_ROOT
+    return None
+
+
+def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
+    paper = storage.get_paper(paper_id)
+    canonical = canonical_pdf_path_for_paper(paper)
+    target_dir = first_outside_reference_dir(storage, paper_id, recycle_folder_id)
+    if not paper or not canonical or not target_dir:
+        return
+    if canonical.parent.resolve() == target_dir.resolve():
+        sync_all_pdf_aliases_for_paper(storage, paper_id)
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
+    old_path = canonical
+    shutil.move(str(old_path), str(target_path))
+    update_paper_pdf_paths(storage, paper_id, target_path, message="PDF kept with remaining Library reference")
+    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
+    cleanup_local_copy_empty_parents([str(old_path)])
+
+
 def library_folder_is_within(storage: Storage, folder_id: int, ancestor_id: int) -> bool:
     current = int(folder_id or 0)
     target = int(ancestor_id or 0)
@@ -8887,7 +9193,7 @@ def is_allowed_file(path: Path, roots: list[Path]) -> bool:
 
 
 def allowed_pdf_roots() -> list[Path]:
-    return [DEFAULT_PDF_DIR.resolve(), DEFAULT_LIBRARY_IMPORT_DIR.resolve()]
+    return [DEFAULT_PDF_DIR.resolve(), *local_copy_roots(include_legacy=True)]
 
 
 PHYSICAL_INCLUDE_KEYWORDS = [
@@ -16018,16 +16324,16 @@ INDEX_HTML = """<!doctype html>
       const action = plan.action || "";
       const isReuse = action === "reuse";
       const message = plan.message || (isReuse
-        ? "This source folder was loaded before. New files will be merged into the existing local-copy folder."
-        : "This import will copy files into the local Library storage folder.");
+        ? "This source folder was loaded before. New files will be merged into the data/Library Finder tree."
+        : "This import will copy files into the data/Library Finder tree.");
       const finderBehavior = plan.finder_behavior || (isReuse
-        ? "Existing local copies are reused and not overwritten; missing/newly readable files are copied into matching relative paths."
-        : "Files are copied while preserving relative paths. Existing files are not overwritten.");
+        ? "Existing data/Library local copies are reused and not overwritten; missing/newly readable files are copied into matching relative paths."
+        : "Files are copied under data/Library while preserving relative paths. Existing files are not overwritten.");
       const previous = Number(plan.previous_batches || 0);
       const copied = Number(plan.copied_files || 0);
       return `
         <h3>Local Copy Plan</h3>
-        <div class="loader-metric"><strong>${isReuse ? "Previously loaded" : "New copy root"}</strong><span>${escapeHtml(message)}</span></div>
+        <div class="loader-metric"><strong>${isReuse ? "Previously loaded" : "Library tree"}</strong><span>${escapeHtml(message)}</span></div>
         ${sourceRoot ? `<div class="loader-metric"><strong>Source</strong><span>${escapeHtml(sourceRoot)}</span></div>` : ""}
         ${copyTargetRoot ? `<div class="loader-metric"><strong>Finder target</strong><span>${escapeHtml(copyTargetRoot)}</span></div>` : ""}
         <div class="loader-metric"><strong>Behavior</strong><span>${escapeHtml(finderBehavior)}</span></div>
@@ -20720,10 +21026,30 @@ INDEX_HTML = """<!doctype html>
       }
       updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
       try {
+        const payload = {
+          paper_id: paper.paper_id,
+          force: Boolean(options.force),
+          context: "library",
+          folder_id: Number(state.libraryActiveFolderId || state.libraryRootId || 1),
+          item_id: 0
+        };
+        if (state.libraryTab === "my-publications") {
+          payload.context = "my-publications";
+          payload.folder_id = 0;
+        } else if (state.libraryTab?.startsWith("workspace-")) {
+          payload.context = "workspace";
+        }
+        if (state.librarySelection?.type === "item") {
+          const selectedItem = libraryItemById(state.librarySelection.id);
+          if (selectedItem?.paper_id === paper.paper_id) {
+            payload.item_id = Number(selectedItem.id || 0);
+            payload.folder_id = Number(selectedItem.folder_id || payload.folder_id || 1);
+          }
+        }
         const res = await fetch("/api/download", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id, force: Boolean(options.force)})
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "download failed");
@@ -22048,6 +22374,11 @@ INDEX_HTML = """<!doctype html>
       status.className = "status";
       const form = new FormData();
       form.append("paper_id", paperId);
+      if (state.mode === "library") {
+        form.append("context", state.libraryTab === "my-publications" ? "my-publications" : (state.libraryTab?.startsWith("workspace-") ? "workspace" : "library"));
+        form.append("folder_id", String(state.libraryActiveFolderId || state.libraryRootId || 1));
+        if (state.librarySelection?.type === "item") form.append("item_id", String(state.librarySelection.id || 0));
+      }
       form.append("pdf", file);
       try {
         const res = await fetch("/api/manual-pdf", {method: "POST", body: form});

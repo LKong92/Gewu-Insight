@@ -13,6 +13,9 @@ DEFAULT_DAILY_REPORT_DIR = ROOT / "reports" / "daily"
 DEFAULT_ANALYSIS_DIR = ROOT / "reports" / "analyses"
 DEFAULT_PDF_DIR = ROOT / "data" / "pdfs"
 DEFAULT_LIBRARY_IMPORT_DIR = ROOT / "data" / "library_imports"
+DEFAULT_LIBRARY_DIR = ROOT / "data" / "Library"
+DEFAULT_SPACES_DIR = ROOT / "data" / "Spaces"
+DEFAULT_MY_PUBLICATIONS_DIR = ROOT / "data" / "My Publications"
 
 
 @dataclass(frozen=True)

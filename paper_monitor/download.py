@@ -21,6 +21,7 @@ def download_paper(
     storage: Storage,
     paper_id: str,
     pdf_dir: Path = DEFAULT_PDF_DIR,
+    target_dir: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     paper = storage.get_paper(paper_id)
@@ -34,7 +35,7 @@ def download_paper(
             "merged_pdf_path": paper.get("merged_pdf_path"),
         }
 
-    target_dir = pdf_dir / paper_id
+    target_dir = target_dir if target_dir is not None else pdf_dir / paper_id
     target_dir.mkdir(parents=True, exist_ok=True)
 
     candidates = collect_pdf_candidates(paper)
@@ -66,7 +67,11 @@ def download_paper(
         storage.update_download_status(paper_id, status=status, message=message)
         return {"status": status, "message": message}
 
-    merged_path = target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf"
+    current_merged_path = str(paper.get("merged_pdf_path") or "")
+    merged_path = unique_download_path(
+        target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf",
+        current_path=current_merged_path,
+    )
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
         merge_pdfs(merge_inputs, merged_path)
@@ -94,6 +99,28 @@ def download_paper(
         "supplement_pdf_paths": [],
         "merged_pdf_path": str(merged_path),
     }
+
+
+def unique_download_path(path: Path, *, current_path: str = "") -> Path:
+    try:
+        current_resolved = Path(current_path).expanduser().resolve() if current_path else None
+    except OSError:
+        current_resolved = None
+    if not path.exists():
+        return path
+    try:
+        if current_resolved and path.resolve() == current_resolved:
+            return path
+    except OSError:
+        pass
+    parent = path.parent
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(2, 1000):
+        candidate = parent / f"{stem} {index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(str(path))
 
 
 def remove_intermediate_pdfs(paths: list[Path], *, keep: Path) -> None:
