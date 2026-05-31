@@ -41,7 +41,10 @@
         return NO;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@)", json ?: @"[]"];
+    NSPoint point = [self convertPoint:sender.draggingLocation fromView:nil];
+    CGFloat clientX = point.x;
+    CGFloat clientY = self.bounds.size.height - point.y;
+    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@, {x:%0.2f,y:%0.2f})", json ?: @"[]", clientX, clientY];
     [self evaluateJavaScript:script completionHandler:nil];
     return YES;
 }

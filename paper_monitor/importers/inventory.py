@@ -131,6 +131,7 @@ def build_inventory_from_paths(
     *,
     output_path: str | Path | None = None,
     parse_pdfs: bool = True,
+    preserve_top_level: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     source_paths = [Path(path).expanduser().resolve() for path in paths]
@@ -149,25 +150,25 @@ def build_inventory_from_paths(
     seen_files: set[str] = set()
     scanned = 0
 
-    def add_directory(path: Path) -> None:
+    def add_directory(path: Path, base_root: Path = root) -> None:
         key = str(path)
         if key in seen_dirs:
             return
         seen_dirs.add(key)
-        relative_dir = "" if path == root else path.relative_to(root).as_posix()
+        relative_dir = "" if path == base_root else path.relative_to(base_root).as_posix()
         directories.append({"path": str(path), "relative_path": relative_dir})
 
-    def add_file(path: Path) -> None:
+    def add_file(path: Path, base_root: Path = root) -> None:
         nonlocal scanned
         key = str(path)
         if key in seen_files:
             return
         seen_files.add(key)
         try:
-            record = scan_inventory_file(path, root, parse_pdfs=parse_pdfs)
+            record = scan_inventory_file(path, base_root, parse_pdfs=parse_pdfs)
             files.append(record)
         except Exception as exc:
-            files.append(scan_error_record(path, root, exc))
+            files.append(scan_error_record(path, base_root, exc))
             scan_errors.append({"path": str(path), "error": str(exc)})
         scanned += 1
         emit_progress(
@@ -182,15 +183,16 @@ def build_inventory_from_paths(
 
     emit_progress(progress_callback, stage="scan", message=f"Scanning dropped paths under: {root}", current=0, total=None)
     for source_path in source_paths:
+        scan_root = source_path.parent if preserve_top_level else root
         if source_path.is_file():
-            add_directory(source_path.parent)
-            add_file(source_path)
+            add_directory(source_path.parent, scan_root)
+            add_file(source_path, scan_root)
             continue
         for current, dirnames, filenames in os_walk_sorted(source_path, scan_errors=scan_errors):
             current_path = Path(current)
-            add_directory(current_path)
+            add_directory(current_path, scan_root)
             for filename in filenames:
-                add_file(current_path / filename)
+                add_file(current_path / filename, scan_root)
 
     summary = inventory_summary(root, directories, files, scan_errors)
     inventory = {"summary": summary, "directories": directories, "files": files}

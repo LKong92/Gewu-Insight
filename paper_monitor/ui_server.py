@@ -1471,37 +1471,93 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"reports": reports})
 
     def handle_start_library_import_folder(self, payload: dict[str, Any]) -> None:
-        folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
-        if not str(folder_path):
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is required")
-            return
+        raw_paths = payload.get("paths")
+        preserve_top_level = False
+        source_paths: list[Path] = []
+        if isinstance(raw_paths, list) and raw_paths:
+            preserve_top_level = True
+            for raw_path in raw_paths:
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    continue
+                try:
+                    path = Path(raw_path).expanduser().resolve()
+                except OSError as exc:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve dropped path: {exc}")
+                    return
+                if not path.exists():
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, f"Dropped path does not exist: {path}")
+                    return
+                source_paths.append(path)
+            if not source_paths:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "No readable dropped paths")
+                return
+        else:
+            folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
+            if not str(folder_path):
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is required")
+                return
+            try:
+                folder_path = folder_path.resolve()
+            except OSError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve folder path: {exc}")
+                return
+            if not folder_path.exists() or not folder_path.is_dir():
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
+                return
+            source_paths = [folder_path]
         try:
-            folder_path = folder_path.resolve()
-        except OSError as exc:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, f"Could not resolve folder path: {exc}")
+            target_folder_id = int(payload.get("target_folder_id") or 1)
+        except (TypeError, ValueError):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "target_folder_id must be a Library folder id")
             return
-        if not folder_path.exists() or not folder_path.is_dir():
+        folder_path = source_paths[0]
+        if not preserve_top_level and (not folder_path.exists() or not folder_path.is_dir()):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Folder path is not a readable directory")
             return
-        copy_mode = "copy"
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        slug = safe_slug(folder_path.name or "library-folder", 60)
-        storage = Storage(self.configured_db_path)
         try:
-            copy_plan = library_loader_copy_plan(storage, source_folder=folder_path, timestamp=timestamp, slug=slug)
-        finally:
-            storage.close()
-        job_id = create_library_import_job(folder_path=folder_path, copy_mode=copy_mode, local_copy_plan=copy_plan)
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            slug = safe_slug(folder_path.name or ("finder-drop" if preserve_top_level else "library-folder"), 60)
+            storage = Storage(self.configured_db_path)
+            try:
+                if not storage.get_library_folder(target_folder_id):
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library folder does not exist")
+                    return
+                copy_plan = library_loader_copy_plan(
+                    storage,
+                    source_folder=folder_path,
+                    timestamp=timestamp,
+                    slug=slug,
+                    source_paths=source_paths,
+                    target_folder_id=target_folder_id,
+                    preserve_top_level=preserve_top_level,
+                )
+            finally:
+                storage.close()
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        copy_mode = "copy"
+        job_id = create_library_import_job(
+            folder_path=folder_path,
+            source_paths=source_paths,
+            copy_mode=copy_mode,
+            local_copy_plan=copy_plan,
+            target_folder_id=target_folder_id,
+            preserve_top_level=preserve_top_level,
+        )
         thread = threading.Thread(
             target=run_library_import_job,
             kwargs={
                 "job_id": job_id,
                 "folder_path": folder_path,
+                "source_paths": source_paths,
                 "copy_mode": copy_mode,
                 "db_path": self.configured_db_path,
                 "timestamp": timestamp,
                 "slug": slug,
                 "copy_plan": copy_plan,
+                "target_folder_id": target_folder_id,
+                "preserve_top_level": preserve_top_level,
             },
             daemon=True,
         )
@@ -7780,15 +7836,27 @@ def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
         storage.close()
 
 
-def create_library_import_job(*, folder_path: Path, copy_mode: str, local_copy_plan: dict[str, Any] | None = None) -> str:
+def create_library_import_job(
+    *,
+    folder_path: Path,
+    copy_mode: str,
+    source_paths: list[Path] | None = None,
+    local_copy_plan: dict[str, Any] | None = None,
+    target_folder_id: int = 1,
+    preserve_top_level: bool = False,
+) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now().astimezone().isoformat(timespec="seconds")
+    import_paths = source_paths or [folder_path]
     with LIBRARY_IMPORT_JOBS_LOCK:
         LIBRARY_IMPORT_JOBS[job_id] = {
             "job_id": job_id,
             "status": "queued",
             "stage": "queued",
             "folder_path": str(folder_path),
+            "source_paths": [str(path) for path in import_paths],
+            "target_folder_id": int(target_folder_id or 1),
+            "preserve_top_level": bool(preserve_top_level),
             "copy_mode": copy_mode,
             "dry_run": False,
             "started_at": now,
@@ -7895,8 +7963,19 @@ def library_import_progress_callback(job_id: str):
     return progress
 
 
-def library_loader_copy_plan(storage: Storage, *, source_folder: Path, timestamp: str, slug: str) -> dict[str, Any]:
-    base_root = DEFAULT_LIBRARY_DIR.resolve()
+def library_loader_copy_plan(
+    storage: Storage,
+    *,
+    source_folder: Path,
+    timestamp: str,
+    slug: str,
+    source_paths: list[Path] | None = None,
+    target_folder_id: int = 1,
+    preserve_top_level: bool = False,
+) -> dict[str, Any]:
+    target_folder_id = int(target_folder_id or 1)
+    base_root = local_copy_dir_for_library_folder(storage, target_folder_id).resolve()
+    paths = [path.expanduser().resolve() for path in (source_paths or [source_folder])]
     source_root = str(source_folder.expanduser().resolve())
     previous_batches = int(
         storage.conn.execute(
@@ -7910,38 +7989,48 @@ def library_loader_copy_plan(storage: Storage, *, source_folder: Path, timestamp
         ).fetchone()["count"]
         or 0
     )
-    source_prefix = source_root.rstrip("/") + "/%"
-    copied_files = int(
-        storage.conn.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM resources
-            WHERE (source_path = ? OR source_path LIKE ?)
-              AND stored_path IS NOT NULL
-              AND stored_path != ''
-              AND stored_path != source_path
-            """,
-            (source_root, source_prefix),
-        ).fetchone()["count"]
-        or 0
-    )
+    copied_files = 0
+    for path in paths:
+        path_text_value = str(path)
+        path_prefix = path_text_value.rstrip("/") + "/%"
+        copied_files += int(
+            storage.conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM resources
+                WHERE (source_path = ? OR source_path LIKE ?)
+                  AND stored_path IS NOT NULL
+                  AND stored_path != ''
+                  AND stored_path != source_path
+                """,
+                (path_text_value, path_prefix),
+            ).fetchone()["count"]
+            or 0
+        )
     target = base_root
     action = "reuse" if previous_batches or copied_files else "new"
+    target_folder = storage.get_library_folder(target_folder_id) or {}
+    target_name = str(target_folder.get("name") or "Library")
+    imported_label = "dropped item" if preserve_top_level and len(paths) == 1 else ("dropped items" if preserve_top_level else "source folder")
     return {
         "source_root": source_root,
+        "source_paths": [str(path) for path in paths],
         "copy_target_root": str(target),
+        "target_folder_id": target_folder_id,
+        "target_folder_name": target_name,
+        "preserve_top_level": bool(preserve_top_level),
         "action": action,
         "previous_batches": previous_batches,
         "copied_files": copied_files,
         "message": (
-            "This source folder was loaded before. New files will be merged into the data/Library Finder tree."
+            f"This {imported_label} was loaded before. New files will be merged into the selected Library folder."
             if action == "reuse"
-            else "This source folder has not been loaded before. Files will be copied into the data/Library Finder tree."
+            else f"This import will copy the {imported_label} into the selected Library folder."
         ),
         "finder_behavior": (
-            "Existing local copies inside data/Library are reused and not overwritten; newly readable files are copied into matching relative paths."
+            "Existing local copies are reused and not overwritten; newly readable files are copied into matching relative paths under the selected Library folder."
             if action == "reuse"
-            else "Files are copied under data/Library while preserving relative paths."
+            else "Files are copied under the selected Library folder while preserving the dragged file/folder structure."
         ),
     }
 
@@ -7964,30 +8053,55 @@ def run_library_import_job(
     *,
     job_id: str,
     folder_path: Path,
+    source_paths: list[Path] | None = None,
     copy_mode: str,
     db_path: Path,
     timestamp: str | None = None,
     slug: str | None = None,
     copy_plan: dict[str, Any] | None = None,
+    target_folder_id: int = 1,
+    preserve_top_level: bool = False,
 ) -> None:
     timestamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = slug or safe_slug(folder_path.name or "library-folder", 60)
-    inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
-    report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
+    source_paths = source_paths or [folder_path]
+    import_prefix = "finder-drop" if preserve_top_level else "folder"
+    inventory_path = ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
+    report_path = ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
     update_library_import_job(job_id, status="running", stage="scan", inventory_path=str(inventory_path))
-    log_library_import_job(job_id, f"Source folder: {folder_path}")
+    if preserve_top_level:
+        log_library_import_job(job_id, f"Source paths: {', '.join(str(path) for path in source_paths)}")
+    else:
+        log_library_import_job(job_id, f"Source folder: {folder_path}")
     log_library_import_job(job_id, f"Mode: import / {copy_mode}")
     try:
         if not copy_plan:
             storage = Storage(db_path)
             try:
-                copy_plan = library_loader_copy_plan(storage, source_folder=folder_path, timestamp=timestamp, slug=slug)
+                copy_plan = library_loader_copy_plan(
+                    storage,
+                    source_folder=folder_path,
+                    timestamp=timestamp,
+                    slug=slug,
+                    source_paths=source_paths,
+                    target_folder_id=target_folder_id,
+                    preserve_top_level=preserve_top_level,
+                )
             finally:
                 storage.close()
         update_library_import_job(job_id, local_copy_plan=copy_plan)
         log_library_import_job(job_id, f"Local copy plan: {copy_plan.get('message')} Target: {copy_plan.get('copy_target_root')}")
-        build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True, progress_callback=progress)
+        if preserve_top_level:
+            build_inventory_from_paths(
+                source_paths,
+                output_path=inventory_path,
+                parse_pdfs=True,
+                preserve_top_level=True,
+                progress_callback=progress,
+            )
+        else:
+            build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True, progress_callback=progress)
         log_library_import_job(job_id, f"Inventory written: {inventory_path}")
         storage = Storage(db_path)
         try:
@@ -8004,6 +8118,7 @@ def run_library_import_job(
                 report_path=report_path,
                 target_root=target_root,
                 library_item_name="filename",
+                library_root_folder_id=target_folder_id,
                 progress_callback=progress,
             )
             refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
@@ -14184,6 +14299,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportReportsLoading: false,
       libraryImportReportsPromise: null,
       libraryImportReportPath: "",
+      libraryFinderDropTargetFolderId: 0,
       libraryLoaderOpen: false,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
@@ -16755,7 +16871,7 @@ INDEX_HTML = """<!doctype html>
       if (message.startsWith("Importing") || message.startsWith("Imported/checkpoint")) return "import";
       if (message.startsWith("Entering ")) return "enter";
       if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
-      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Mode:")) return "file";
+      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Mode:")) return "file";
       if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
       return "info";
     }
@@ -17502,7 +17618,7 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function handleNativeFinderDrop(paths) {
+    async function handleNativeFinderDrop(paths, dropPoint = null) {
       const droppedPaths = Array.isArray(paths)
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
@@ -17514,83 +17630,89 @@ INDEX_HTML = """<!doctype html>
         state.libraryTab = "library";
         renderLibrary();
       }
-      const targetFolderId = libraryPasteTargetFolderId();
+      const targetFolderId = libraryImportDropTargetFolderId(dropPoint);
+      state.libraryFinderDropTargetFolderId = 0;
       const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
-      const choice = await promptFinderDropMode(droppedPaths, targetFolder?.name || "Library");
-      if (!choice) return;
-      await importFinderDropPaths(droppedPaths, targetFolderId);
+      await runLibraryDroppedPathsImport(droppedPaths, targetFolderId, targetFolder?.name || "Library");
     }
 
-    function promptFinderDropMode(paths, targetName) {
-      return new Promise((resolve) => {
-        document.querySelector(".finder-drop-modal-backdrop")?.remove();
-        const backdrop = document.createElement("div");
-        backdrop.className = "finder-drop-modal-backdrop";
-        const count = paths.length;
-        const pathPreview = paths.slice(0, 5).map((path) => `<div>${escapeHtml(path)}</div>`).join("");
-        const more = count > 5 ? `<div>...and ${count - 5} more</div>` : "";
-        backdrop.innerHTML = `
-          <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="finderDropTitle">
-            <h2 id="finderDropTitle">Import into ${escapeHtml(targetName)}</h2>
-            <p>Daiqo will copy these source files into Library storage. Source files in Finder will not be moved or deleted.</p>
-            <div class="finder-drop-paths">${pathPreview}${more}</div>
-            <div class="finder-drop-actions">
-              <button type="button" data-mode="cancel">Cancel</button>
-              <button type="button" class="primary" data-mode="copy">Import Copies</button>
-            </div>
-          </div>
-        `;
-        document.body.appendChild(backdrop);
-        const finish = (mode) => {
-          backdrop.remove();
-          window.removeEventListener("keydown", onKeyDown);
-          resolve(mode === "copy" ? mode : "");
-        };
-        const onKeyDown = (event) => {
-          if (event.key === "Escape") finish("");
-        };
-        backdrop.addEventListener("click", (event) => {
-          if (event.target === backdrop) finish("");
-        });
-        backdrop.querySelectorAll("[data-mode]").forEach((button) => {
-          button.addEventListener("click", () => finish(button.dataset.mode || ""));
-        });
-        window.addEventListener("keydown", onKeyDown);
-        backdrop.querySelector(".primary")?.focus({preventScroll: true});
-      });
+    function libraryImportDropTargetFolderId(dropPoint = null) {
+      const fallback = libraryPasteTargetFolderId();
+      const tracked = Number(state.libraryFinderDropTargetFolderId || 0);
+      if (tracked && libraryFolderById(tracked)) return tracked;
+      const x = Number(dropPoint?.x);
+      const y = Number(dropPoint?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
+      const element = document.elementFromPoint(x, y);
+      return libraryImportTargetFolderIdFromElement(element, fallback);
     }
 
-    async function importFinderDropPaths(paths, targetFolderId) {
+    function libraryImportTargetFolderIdFromElement(element, fallback = 0) {
+      if (!element) return fallback || libraryPasteTargetFolderId();
+      const row = element.closest?.(".library-row[data-library-type]");
+      if (row) {
+        const folderId = row.dataset.libraryType === "folder"
+          ? Number(row.dataset.libraryId || 0)
+          : Number(row.dataset.libraryParentFolder || 0);
+        if (folderId && libraryFolderById(folderId)) return folderId;
+      }
+      const column = element.closest?.("[data-library-column-folder]");
+      if (column) {
+        const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        if (folderId && libraryFolderById(folderId)) return folderId;
+      }
+      const folderTarget = element.closest?.("[data-library-drop-folder]");
+      if (folderTarget) {
+        const folderId = Number(folderTarget.dataset.libraryDropFolder || 0);
+        if (folderId && libraryFolderById(folderId)) return folderId;
+      }
+      return fallback || libraryPasteTargetFolderId();
+    }
+
+    function updateLibraryFinderDropTargetFromEvent(event) {
+      if (state.mode !== "library" || state.libraryTab !== "library") {
+        state.libraryFinderDropTargetFolderId = 0;
+        return;
+      }
+      const targetId = libraryImportTargetFolderIdFromElement(event.target, 0);
+      state.libraryFinderDropTargetFolderId = targetId || 0;
+    }
+
+    async function runLibraryDroppedPathsImport(paths, targetFolderId, targetName = "Library") {
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
-      state.libraryImportStatus = `Importing ${paths.length} dropped item${paths.length === 1 ? "" : "s"} into Library...`;
+      state.libraryLoaderOpen = true;
+      state.libraryImportPath = paths.length === 1 ? paths[0] : `${paths.length} dropped items`;
+      state.libraryImportStatus = `Starting dropped import into ${targetName}...`;
       state.libraryImportLastResult = null;
-      appendLibraryImportLog(state.libraryImportStatus, "info");
-      updateToolbarLibraryImport();
+      state.libraryImportReportPath = "";
+      state.libraryImportReadyRefreshDone = false;
+      state.libraryImportJob = {status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
+      renderLibraryLoader();
       try {
-        const res = await fetch("/api/library/import-paths", {
+        const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({paths, target_folder_id: targetFolderId})
         });
         const data = await parseJsonResponse(res);
-        if (!res.ok) throw new Error(data.error || "Could not import dropped files");
-        applyLibrarySnapshot(data);
-        state.libraryImportBusy = false;
-        state.libraryImportLastResult = data.import_result || null;
-        const result = state.libraryImportLastResult || {};
-        state.libraryImportStatus = result.errors?.length
-          ? result.errors[0]
-          : `Imported ${result.created_papers || 0} new items, left ${result.existing_papers || 0} existing unchanged, added ${result.created_resources || 0} non-PDF resources.`;
-        appendLibraryImportLog(state.libraryImportStatus, result.errors?.length ? "error" : "done");
+        if (!res.ok) throw new Error(data.error || "Could not start dropped import");
+        state.libraryImportJobId = data.job_id || "";
+        state.libraryImportJob = data.job || null;
+        state.libraryImportStatus = "Loader running...";
         state.libraryTab = "library";
-        focusLibraryFolder(targetFolderId);
+        requestLibraryColumnReveal(targetFolderId, "nearest");
+        setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
+        renderLibrary();
+        state.libraryLoaderOpen = true;
+        renderLibraryLoader();
+        startLibraryImportPolling();
       } catch (error) {
         state.libraryImportBusy = false;
-        state.libraryImportStatus = error.message || "Could not import dropped files";
+        state.libraryImportStatus = error.message || "Could not start dropped import";
         state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
         appendLibraryImportLog(state.libraryImportStatus, "error");
-        updateToolbarLibraryImport();
+        renderLibraryLoader();
       }
     }
 
@@ -23609,16 +23731,23 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("dragover", (event) => {
       if (!event.dataTransfer?.types?.includes("Files")) return;
       event.preventDefault();
-      if (state.mode === "library") $("libraryShell")?.classList.add("finder-drag-over");
+      if (state.mode === "library") {
+        updateLibraryFinderDropTargetFromEvent(event);
+        $("libraryShell")?.classList.add("finder-drag-over");
+      }
     });
     window.addEventListener("dragleave", (event) => {
       if (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight) {
+        state.libraryFinderDropTargetFolderId = 0;
         $("libraryShell")?.classList.remove("finder-drag-over");
       }
     });
     window.addEventListener("drop", (event) => {
       if (!event.dataTransfer?.types?.includes("Files")) return;
       event.preventDefault();
+      window.setTimeout(() => {
+        state.libraryFinderDropTargetFolderId = 0;
+      }, 1000);
       $("libraryShell")?.classList.remove("finder-drag-over");
     });
     wireWindowDragRegion();
