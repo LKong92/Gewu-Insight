@@ -747,7 +747,7 @@ def remember_record_identity(
 
 
 def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
-    return {
+    record = {
         "source_path": path_text(raw.get("path")),
         "relative_path": path_text(raw.get("relative_path")),
         "parent_relative_path": path_text(raw.get("parent_relative_path")),
@@ -767,6 +767,11 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
     }
+    filename = record["filename"] or Path(record["source_path"]).name
+    if is_system_metadata_filename(filename):
+        record["kind"] = "system_metadata"
+        record["import_as"] = "ignore_candidate"
+    return record
 
 
 def path_text(value: Any) -> str:
@@ -836,7 +841,7 @@ def scan_error_record(path: Path, root: Path, exc: Exception) -> dict[str, Any]:
 def file_kind(path: Path) -> str:
     name = path.name.lower()
     suffix = path.suffix.lower()
-    if name in SYSTEM_METADATA_FILENAMES or name.startswith("._"):
+    if is_system_metadata_filename(name):
         return "system_metadata"
     if suffix == ".pdf":
         return "pdf"
@@ -855,6 +860,14 @@ def file_kind(path: Path) -> str:
     if suffix in ARCHIVE_EXTENSIONS:
         return "archive"
     return "unknown"
+
+
+def is_system_metadata_filename(name: str) -> bool:
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return False
+    base = lowered.split("__from_", 1)[0]
+    return lowered.startswith("._") or base in SYSTEM_METADATA_FILENAMES
 
 
 def import_as_for_kind(kind: str) -> str:
@@ -984,7 +997,8 @@ def split_pdf_authors(value: str) -> list[str]:
 
 
 def doi_from_text(value: str) -> str:
-    match = DOI_PATTERN.search(value or "")
+    text = re.sub(r"(10\.\d{4,9}/)\s+", r"\1", value or "", flags=re.I)
+    match = DOI_PATTERN.search(text)
     if not match:
         return ""
     return normalize_doi(match.group(0).rstrip(".,;)"))

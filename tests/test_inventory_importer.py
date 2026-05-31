@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
+from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, doi_from_text, import_library_inventory
 from paper_monitor.storage import Storage
 
 
@@ -530,6 +530,12 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         )
         self.assertTrue(
             any("DOI extracted: 10.1234/frontmatter.test" in str(event.get("message") or "") for event in events)
+        )
+
+    def test_doi_extraction_removes_space_after_slash(self) -> None:
+        self.assertEqual(
+            doi_from_text("https://doi.org/10.1038/\ns42254-019-0038-2"),
+            "10.1038/s42254-019-0038-2",
         )
 
     def test_build_inventory_reports_pdfs_without_doi(self) -> None:
