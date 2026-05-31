@@ -78,6 +78,7 @@ LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_SHORTCUT_TAB_COUNT = 5
 LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
+MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
 THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
 THEME_GROUP_OVERRIDES_SETTING = "theme_group_overrides"
@@ -285,6 +286,7 @@ def run_ui_server(
     journals = configured_source_names(config)
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
+    threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -309,6 +311,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/":
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
+                return
+            if parsed.path == "/user-guide":
+                self.send_text(USER_GUIDE_HTML, content_type="text/html; charset=utf-8")
                 return
             if parsed.path == "/api/month":
                 self.handle_month(parse_qs(parsed.query))
@@ -1223,9 +1228,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if export_format not in {"docx", "pdf", "tex", "overleaf"}:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "format must be docx, pdf, tex, or overleaf")
             return
+        use_requested_order = clean_text(first(query, "ordered") or "") == "1"
+        requested_order: list[int] = []
+        for item in clean_text(first(query, "order") or "").split(","):
+            try:
+                publication_id = int(item)
+            except (TypeError, ValueError):
+                continue
+            if publication_id:
+                requested_order.append(publication_id)
         storage = Storage(self.configured_db_path)
         try:
             rows = [row for row in storage.list_my_publications() if not row.get("export_excluded")]
+            if use_requested_order:
+                rows_by_id = {int(row["id"]): row for row in rows}
+                rows = [rows_by_id[publication_id] for publication_id in requested_order if publication_id in rows_by_id]
             my_name = storage.get_setting("my_publications_name", "")
         finally:
             storage.close()
@@ -1946,6 +1963,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         target_folder_id = int(payload.get("target_folder_id") or 1)
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             special = ensure_library_special_folders(storage)
@@ -1980,7 +1998,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -2015,16 +2033,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
         confirmed = bool(payload.get("confirmed"))
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
-            self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
-            snapshot = library_snapshot(storage)
+            deleted = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json(snapshot)
+        self.send_json({"deleted": deleted, **snapshot})
 
     def handle_delete_library_entries(self, payload: dict[str, Any]) -> None:
         entries = payload.get("entries")
@@ -2032,6 +2051,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_REQUEST, "entries must be a non-empty list")
             return
         confirmed = bool(payload.get("confirmed"))
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         deleted: list[dict[str, Any]] = []
         try:
@@ -2040,9 +2060,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     raise ValueError("Each entry must be an object")
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
-                self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
-                deleted.append({"type": entry_type, "id": entry_id})
-            snapshot = library_snapshot(storage)
+                result = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
+                deleted.append(result or {"type": entry_type, "id": entry_id})
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -2070,7 +2090,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"preview": preview})
 
-    def delete_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int, *, confirmed: bool = False) -> None:
+    def delete_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int, *, confirmed: bool = False) -> dict[str, Any]:
         special = ensure_library_special_folders(storage)
         unsorted_id = int(special["unsorted"].get("id") or 1)
         recycle_id = int(special["recycle"].get("id") or 1)
@@ -2089,11 +2109,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
                 storage.delete_library_item(item_id=entry_id)
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
+                return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
             else:
                 move_or_alias_library_item_pdf(storage, item=item, target_folder_id=recycle_id)
-                storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
+                moved = storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
                 sync_all_pdf_aliases_for_paper(storage, str(item.get("paper_id") or ""))
-            return
+                return {"type": "item", "id": entry_id, "mode": "trashed", "moved": dict(moved or {}), "recycle_folder_id": recycle_id}
         if entry_type == "folder":
             folder = storage.get_library_folder(entry_id)
             if not folder:
@@ -2112,11 +2133,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
                 storage.delete_library_folder(folder_id=entry_id)
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
+                return {"type": "folder", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
             else:
                 pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
-                storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
+                moved = storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
-            return
+                return {"type": "folder", "id": entry_id, "mode": "trashed", "moved": dict(moved or {}), "recycle_folder_id": recycle_id}
         raise ValueError("type must be item or folder")
 
     def handle_delete_library_item_file(self, payload: dict[str, Any]) -> None:
@@ -2382,10 +2404,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
         target_folder_id = int(payload.get("target_folder_id") or 1)
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -2396,6 +2419,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_paste_library_entries(self, payload: dict[str, Any]) -> None:
         target_folder_id = int(payload.get("target_folder_id") or 1)
         entries = payload.get("entries")
+        include_snapshot = payload.get("snapshot", True) is not False
         if not isinstance(entries, list) or not entries:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "entries must be a non-empty list")
             return
@@ -2408,8 +2432,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
                 pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
-                pasted_entries.append({"type": entry_type, "id": int(pasted.get("id") or 0), "source_id": entry_id})
-            snapshot = library_snapshot(storage)
+                pasted_entries.append({"type": entry_type, "source_id": entry_id, **dict(pasted or {})})
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -5556,14 +5580,15 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
     return result
 
 
-def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
-    raw = parse_raw_json(paper)
-    merged_pdf = existing_path_or_empty(paper.get("merged_pdf_path") or "")
-    main_pdf = existing_path_or_empty(paper.get("main_pdf_path") or "")
-    source_path = existing_path_or_empty(paper.get("source_path") or "")
+def paper_to_library_summary_api(paper: dict[str, Any], *, verify_paths: bool = False, parse_metadata_json: bool = False) -> dict[str, Any]:
+    raw = parse_raw_json(paper) if parse_metadata_json else {}
+    path_value = existing_path_or_empty if verify_paths else (lambda path: str(path or ""))
+    merged_pdf = path_value(paper.get("merged_pdf_path") or "")
+    main_pdf = path_value(paper.get("main_pdf_path") or "")
+    source_path = path_value(paper.get("source_path") or "")
     imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
     file_meta = raw.get("file") if isinstance(raw.get("file"), dict) else {}
-    stored_import_path = existing_path_or_empty(imported.get("stored_path") or "")
+    stored_import_path = path_value(imported.get("stored_path") or "")
     native_file_path = merged_pdf or main_pdf or stored_import_path or source_path
     storage_mode = paper_storage_mode(paper, merged_pdf=merged_pdf, main_pdf=main_pdf, source_path=source_path)
     summary = {
@@ -5591,12 +5616,13 @@ def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
         summary["analysis_status"] = analysis_status
     if merged_pdf:
         summary["merged_pdf_path"] = merged_pdf
-    preprint_id = preprint_identifier(paper, raw=raw)
-    if preprint_id:
-        summary["preprint_id"] = preprint_id
-    preprint_category = preprint_primary_category(paper, raw=raw)
-    if preprint_category:
-        summary["preprint_category"] = preprint_category
+    if parse_metadata_json:
+        preprint_id = preprint_identifier(paper, raw=raw)
+        if preprint_id:
+            summary["preprint_id"] = preprint_id
+        preprint_category = preprint_primary_category(paper, raw=raw)
+        if preprint_category:
+            summary["preprint_category"] = preprint_category
     if main_pdf and main_pdf != merged_pdf:
         summary["main_pdf_path"] = main_pdf
     if native_file_path:
@@ -10442,6 +10468,134 @@ def cleanup_local_copy_empty_parents(deleted_paths: list[str]) -> None:
         cleanup_empty_parents(deleted_paths, root)
 
 
+def cleanup_monitor_pdf_cache_for_db(db_path: Path, *, retention_days: int = MONITOR_PDF_CACHE_RETENTION_DAYS) -> dict[str, Any]:
+    try:
+        storage = Storage(db_path)
+        try:
+            return cleanup_monitor_pdf_cache(storage, retention_days=retention_days)
+        finally:
+            storage.close()
+    except Exception as exc:
+        return {"deleted": [], "cleared_paper_ids": [], "retention_days": retention_days, "error": str(exc)}
+
+
+def cleanup_monitor_pdf_cache(
+    storage: Storage,
+    *,
+    pdf_dir: Path = DEFAULT_PDF_DIR,
+    retention_days: int = MONITOR_PDF_CACHE_RETENTION_DAYS,
+) -> dict[str, Any]:
+    root = pdf_dir.expanduser().resolve()
+    if retention_days <= 0 or not root.exists():
+        return {"deleted": [], "cleared_paper_ids": [], "retention_days": retention_days}
+    cutoff = time.time() - (retention_days * 24 * 60 * 60)
+    deleted: list[str] = []
+    cleared_paper_ids: list[str] = []
+    rows = storage.conn.execute(
+        """
+        SELECT papers.*
+        FROM papers
+        WHERE (main_pdf_path IS NOT NULL OR merged_pdf_path IS NOT NULL OR supplement_pdf_paths IS NOT NULL)
+          AND NOT EXISTS (
+            SELECT 1 FROM library_items WHERE library_items.paper_id = papers.paper_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM my_publications WHERE my_publications.paper_id = papers.paper_id
+          )
+        """
+    ).fetchall()
+    for row in rows:
+        paper = dict(row)
+        cache_paths = monitor_pdf_cache_paths_for_paper(paper, root)
+        if not cache_paths:
+            continue
+        existing_paths = [path for path in cache_paths if path.exists() and path.is_file()]
+        if not existing_paths:
+            continue
+        stale_paths = [path for path in existing_paths if path_mtime_before(path, cutoff)]
+        if len(stale_paths) != len(existing_paths):
+            continue
+        for path in stale_paths:
+            try:
+                move_path_to_macos_trash(path)
+                deleted.append(str(path))
+            except FileNotFoundError:
+                continue
+        storage.clear_download_status(str(paper.get("paper_id") or ""))
+        cleared_paper_ids.append(str(paper.get("paper_id") or ""))
+
+    referenced_paths = referenced_monitor_pdf_cache_paths(storage, root)
+    for path in sorted(root.rglob("*.pdf")):
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            continue
+        if str(resolved) in referenced_paths or not path_mtime_before(resolved, cutoff):
+            continue
+        try:
+            move_path_to_macos_trash(resolved)
+            deleted.append(str(resolved))
+        except FileNotFoundError:
+            continue
+
+    cleanup_empty_parents(deleted, root)
+    return {
+        "deleted": deleted,
+        "cleared_paper_ids": cleared_paper_ids,
+        "retention_days": retention_days,
+    }
+
+
+def monitor_pdf_cache_paths_for_paper(paper: dict[str, Any], root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        path = monitor_pdf_cache_path(paper.get(key), root)
+        if path:
+            paths.append(path)
+    raw_supplements = paper.get("supplement_pdf_paths") or ""
+    try:
+        supplements = json.loads(raw_supplements) if raw_supplements else []
+    except (TypeError, json.JSONDecodeError):
+        supplements = []
+    if isinstance(supplements, list):
+        for item in supplements:
+            path = monitor_pdf_cache_path(item, root)
+            if path:
+                paths.append(path)
+    unique: dict[str, Path] = {}
+    for path in paths:
+        unique[str(path)] = path
+    return list(unique.values())
+
+
+def monitor_pdf_cache_path(raw_path: Any, root: Path) -> Path | None:
+    if not raw_path:
+        return None
+    try:
+        path = Path(str(raw_path)).expanduser().resolve()
+    except OSError:
+        return None
+    return path if is_relative_to(path.parent, root) else None
+
+
+def referenced_monitor_pdf_cache_paths(storage: Storage, root: Path) -> set[str]:
+    rows = storage.conn.execute(
+        "SELECT main_pdf_path, merged_pdf_path, supplement_pdf_paths FROM papers"
+    ).fetchall()
+    referenced: set[str] = set()
+    for row in rows:
+        for path in monitor_pdf_cache_paths_for_paper(dict(row), root):
+            referenced.add(str(path))
+    return referenced
+
+
+def path_mtime_before(path: Path, cutoff: float) -> bool:
+    try:
+        return path.stat().st_mtime < cutoff
+    except OSError:
+        return False
+
+
 def is_path_inside_dir(path: Path, folder: Path) -> bool:
     try:
         path.resolve().relative_to(folder.resolve())
@@ -11442,6 +11596,260 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+USER_GUIDE_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daiqo User Guide</title>
+  <style>
+    :root {
+      color: #172033;
+      background: #f7f8fb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+      scroll-behavior: smooth;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f7f8fb; }
+    .manual { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
+    .toc {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 22px;
+      border-right: 1px solid #dbe2ee;
+      background: #eef4fb;
+      overflow: auto;
+    }
+    .toc h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: 0; }
+    .toc p { margin: 0 0 18px; color: #667085; font-size: 13px; }
+    .toc a {
+      display: block;
+      padding: 7px 9px;
+      border-radius: 6px;
+      color: #344054;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .toc a:hover { background: rgba(15, 107, 110, .10); color: #0f5558; }
+    .content { max-width: 1040px; padding: 36px 48px 72px; }
+    .hero { border-bottom: 1px solid #dbe2ee; padding-bottom: 24px; margin-bottom: 30px; }
+    .eyebrow { margin: 0 0 8px; color: #0f6b6e; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    h2 { margin: 34px 0 12px; font-size: 25px; letter-spacing: 0; border-bottom: 1px solid #e1e7f0; padding-bottom: 9px; }
+    h3 { margin: 24px 0 8px; font-size: 18px; letter-spacing: 0; }
+    p, li { font-size: 15px; }
+    p { margin: 0 0 12px; }
+    ul, ol { padding-left: 23px; margin-top: 8px; }
+    li { margin: 6px 0; }
+    code { font-family: "SFMono-Regular", Consolas, monospace; background: #edf2f7; border: 1px solid #d9e2ec; border-radius: 5px; padding: 1px 5px; font-size: .93em; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce4ef; border-radius: 8px; overflow: hidden; display: table; margin: 12px 0 18px; }
+    th, td { border-bottom: 1px solid #e6edf5; padding: 10px 12px; text-align: left; vertical-align: top; font-size: 14px; }
+    th { background: #eef4fb; color: #344054; font-weight: 800; }
+    tr:last-child td { border-bottom: 0; }
+    .note { background: #eef8f7; border: 1px solid #c8e6e2; border-left: 4px solid #0f6b6e; border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+    .warning { background: #fff7ed; border-color: #fed7aa; border-left-color: #c46a00; }
+    .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0 20px; }
+    .flow div { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 12px; min-height: 112px; }
+    .flow b { display: block; margin-bottom: 6px; color: #0f5558; }
+    .flow span { display: block; color: #475467; font-size: 13px; }
+    .mini { color: #667085; font-size: 13px; }
+    @media (max-width: 860px) {
+      .manual { grid-template-columns: 1fr; }
+      .toc { position: relative; height: auto; border-right: 0; border-bottom: 1px solid #dbe2ee; }
+      .content { padding: 28px 24px 56px; }
+      .flow { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="manual">
+    <nav class="toc" aria-label="User Guide Sections">
+      <h1>Daiqo User Guide</h1>
+      <p>File system, Library, imports, metadata, and deletion rules.</p>
+      <a href="#overview">1. System Overview</a>
+      <a href="#objects">2. Objects You See</a>
+      <a href="#storage">3. Finder Storage</a>
+      <a href="#database">4. SQLite Records</a>
+      <a href="#import">5. Import Logic</a>
+      <a href="#organize">6. Move, Copy, Paste</a>
+      <a href="#delete">7. Delete and Recycle</a>
+      <a href="#contexts">8. Library, Spaces, My Publications</a>
+      <a href="#metadata">9. Metadata Refresh</a>
+      <a href="#finder">10. Finder Actions</a>
+    </nav>
+
+    <main class="content">
+      <header class="hero">
+        <p class="eyebrow">Chapter 1</p>
+        <h2 id="overview">Daiqo Library File System</h2>
+        <p>Daiqo is a literature library with a Finder-like UI, a SQLite database, and managed local copies in Finder. These three parts are intentionally separate. A row in the Library UI is usually a shortcut, not the paper file itself; the PDF or other file is a local copy managed by Daiqo; the title, DOI, authors, citations, source paths, and refresh history live in SQLite.</p>
+        <div class="flow">
+          <div><b>UI layer</b><span>Folders, paper shortcuts, Recycle, Spaces, and My Publications rows shown in Daiqo.</span></div>
+          <div><b>SQLite layer</b><span>The authoritative records for papers, shortcuts, folders, resources, imports, and metadata refreshes.</span></div>
+          <div><b>Local-copy layer</b><span>Files and aliases under Daiqo's own <code>data/</code> folder.</span></div>
+          <div><b>External source layer</b><span>Original folders or files selected during import. Daiqo records them but does not manage or delete them.</span></div>
+        </div>
+        <div class="note">The most important rule: Daiqo manages its own local copies. It should never delete, move, or overwrite the original files that existed outside Daiqo before import.</div>
+      </header>
+
+      <section id="objects">
+        <h2>2. Objects You See in the UI</h2>
+        <table>
+          <thead><tr><th>UI object</th><th>What it means</th><th>What it is not</th></tr></thead>
+          <tbody>
+            <tr><td>Folder</td><td>A Library container stored in <code>library_folders</code>. It can contain child folders and paper shortcuts.</td><td>It is not the paper metadata itself. It may have a matching Finder folder, but SQLite decides the UI tree.</td></tr>
+            <tr><td>Paper shortcut</td><td>A visible Library row stored in <code>library_items</code>. It points to one shared <code>papers</code> record.</td><td>It is not a duplicate PDF. Copying it creates another shortcut, not another paper record.</td></tr>
+            <tr><td>Paper record</td><td>The shared literature record in <code>papers</code>: title, DOI/arXiv, journal, authors, abstract, citation caches, PDF paths, source path, and import fields.</td><td>It is not tied to only one folder. Many shortcuts can point to it.</td></tr>
+            <tr><td>Resource</td><td>An imported attachment or non-primary file stored in <code>resources</code>, with <code>source_path</code>, <code>stored_path</code>, kind, MIME type, size, and import batch.</td><td>It is not the original external file; it tracks a Daiqo-managed local copy or attachment relationship.</td></tr>
+            <tr><td>Source path</td><td>The original external path Daiqo saw during import, stored on paper/resource/import records for dedupe and diagnosis.</td><td>It is not a path Daiqo is allowed to delete.</td></tr>
+            <tr><td>Local copy</td><td>The managed file under Daiqo's data folder, such as a PDF in <code>data/Library/...</code>.</td><td>It is not necessarily the only shortcut location. Finder aliases may point to it from other folders.</td></tr>
+          </tbody>
+        </table>
+        <h3>Example: one PDF imported into Library</h3>
+        <table>
+          <thead><tr><th>Piece</th><th>Where it lives</th><th>Example meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Original source path</td><td><code>papers.source_path</code> and/or <code>resources.source_path</code></td><td>The external file path selected during import. It is kept for dedupe and diagnostics only.</td></tr>
+            <tr><td>Local copy</td><td><code>data/Library/.../paper.pdf</code>, referenced by paper/resource path fields</td><td>The Daiqo-managed copy that can be opened, previewed, moved, or sent to macOS Trash by Daiqo.</td></tr>
+            <tr><td>Paper metadata</td><td><code>papers</code></td><td>The shared record containing title, DOI/arXiv, authors, journal, abstract, PDF path, source path, and raw metadata.</td></tr>
+            <tr><td>Resource/attachment record</td><td><code>resources</code></td><td>The file-level record containing stored path, original filename, MIME type, size, batch, and parse status.</td></tr>
+            <tr><td>Visible shortcut</td><td><code>library_items</code></td><td>The row you click in the Library UI. Multiple shortcuts can point to the same paper metadata and local copy.</td></tr>
+            <tr><td>Folder path</td><td><code>library_folders</code></td><td>The UI folder tree that decides where the shortcut appears.</td></tr>
+            <tr><td>Refresh history</td><td><code>paper_metadata_refreshes</code></td><td>Records whether metadata refresh was skipped, quick, full, successful, or failed.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="storage">
+        <h2>3. How the UI Maps to Finder</h2>
+        <p>The Library UI is the main organizing surface. Finder is used to store readable local copies and aliases that mirror the organization as much as possible.</p>
+        <table>
+          <thead><tr><th>Finder location</th><th>Role</th><th>Typical contents</th></tr></thead>
+          <tbody>
+            <tr><td><code>data/Library/</code></td><td>Main Library local-copy root</td><td>Folders matching the Library tree; canonical PDFs and other files; aliases for copied shortcuts.</td></tr>
+            <tr><td><code>data/Library/unsorted/</code></td><td>Default Library inbox</td><td>Papers added from Journal Monitor before the user organizes them.</td></tr>
+            <tr><td><code>data/Library/Recycle/</code></td><td>Recoverable delete area</td><td>Shortcuts or folders moved out of normal Library folders before final deletion.</td></tr>
+            <tr><td><code>data/Spaces/</code></td><td>Independent Space storage</td><td>Files downloaded or imported while working inside a green Space.</td></tr>
+            <tr><td><code>data/My Publications/</code></td><td>My Publications storage</td><td>PDFs added by DOI/title lookup or downloaded from a My Publications detail panel.</td></tr>
+            <tr><td><code>data/pdfs/</code></td><td>Journal Monitor staging and legacy storage</td><td>Downloaded monitor PDFs before they are moved into Library, plus older records that still point there.</td></tr>
+          </tbody>
+        </table>
+        <h3>Canonical file and aliases</h3>
+        <p>When a paper appears in only one Library folder, its local PDF normally lives in that folder's matching Finder directory. When the same paper appears in multiple UI folders, Daiqo keeps one canonical local file and can create macOS aliases in the other Finder folders. This avoids duplicating large PDFs while still making Finder folders useful.</p>
+        <p>If a shortcut has no PDF yet, there may be no Finder file for it. After the PDF is downloaded from Details, Daiqo assigns a local copy path and tries to synchronize aliases for other existing shortcuts.</p>
+      </section>
+
+      <section id="database">
+        <h2>4. SQLite Records: What Changes Behind the UI</h2>
+        <p>SQLite is the source of truth. JSON reports are diagnostic exports, not the authoritative state.</p>
+        <table>
+          <thead><tr><th>Table</th><th>What it stores</th><th>Why it matters</th></tr></thead>
+          <tbody>
+            <tr><td><code>papers</code></td><td>One shared literature or imported-file record: metadata, DOI/arXiv, title, journal, abstract, PDF paths, original source path, import fields, analysis status, raw metadata JSON.</td><td>Every Library shortcut and My Publications entry points here.</td></tr>
+            <tr><td><code>library_folders</code></td><td>Folder tree, sort order, color, Recycle state, and original parent for recovery.</td><td>This defines what folders you see in Library and Spaces.</td></tr>
+            <tr><td><code>library_items</code></td><td>Shortcut rows: folder, paper, display name, sort order, Recycle state, original folder for recovery.</td><td>Copying a paper creates a new row here, not a new PDF.</td></tr>
+            <tr><td><code>resources</code></td><td>Imported attachments and non-primary files with source path, stored path, MIME type, size, parse status, and batch ID.</td><td>This keeps related local files connected to the paper/import.</td></tr>
+            <tr><td><code>inventory_import_batches</code></td><td>Import job source root, copy mode, status, report path, counts, warnings, and errors.</td><td>This is how the Loader explains what happened in a run.</td></tr>
+            <tr><td><code>my_publications</code></td><td>Personal publication list flags: star, first/corresponding/review marks, export exclusion, author marks, and order.</td><td>It overlays personal publication state onto shared paper metadata.</td></tr>
+            <tr><td><code>paper_metadata_refreshes</code></td><td>Metadata refresh mode, status, timestamps, source summary, and errors.</td><td>This prevents unnecessary repeated refreshes and explains failures.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="import">
+        <h2>5. Import Logic</h2>
+        <h3>Normal Loader import</h3>
+        <ol>
+          <li>The user chooses a source file or folder. That path is external source data.</li>
+          <li>The Loader scans readable files, preserves relative paths, extracts DOI/arXiv where possible, and records missing/skipped items in the report.</li>
+          <li>Daiqo copies readable files into the selected target under <code>data/Library/</code> or the active Space root. Link mode is not used.</li>
+          <li>It creates or reuses <code>papers</code> records, creates <code>resources</code> rows for attachments/local files, creates <code>library_folders</code> for folders, and creates <code>library_items</code> shortcuts for visible UI rows.</li>
+          <li>Depending on the selected mode, it may skip metadata refresh, run a quick refresh, or run a full refresh.</li>
+        </ol>
+        <h3>Repeated import from the same source</h3>
+        <p>If the same source root is imported again, Daiqo tries to reuse the previous target and merge by relative path. Existing local copies are not overwritten. Newly readable files that were missing before can be added. Existing user organization should not be reset just because the source is loaded again.</p>
+        <h3>Drag import from Finder</h3>
+        <p>Dragging a file or folder from Finder into the Library uses the same Loader pipeline. The difference is target selection: dropping on a folder imports inside that folder; dropping on blank space in a column imports into the current column's folder.</p>
+        <div class="note">The Loader report is part of the audit trail. It is useful for missing files, skipped macOS aliases, PDFs without DOI, duplicate DOI/arXiv merges, and metadata refresh failures.</div>
+      </section>
+
+      <section id="organize">
+        <h2>6. Move, Copy, Paste, and Drag</h2>
+        <h3>Moving a shortcut</h3>
+        <p>Moving a paper shortcut changes its <code>library_items.folder_id</code>. If that shortcut represents the canonical Finder location for the paper, Daiqo also tries to move the local copy to the matching Finder folder and update aliases. The paper metadata in <code>papers</code> stays the same.</p>
+        <h3>Copying a shortcut</h3>
+        <p>Copy/Paste creates another <code>library_items</code> shortcut pointing to the same <code>papers.paper_id</code>. It does not duplicate metadata and does not duplicate the PDF. Finder may receive an alias in the pasted folder so the Finder view still makes sense.</p>
+        <h3>Moving folders</h3>
+        <p>Moving a folder changes the <code>library_folders</code> tree and should keep its child folders and shortcuts together. Daiqo then attempts to keep the matching Finder folder structure, canonical local files, and aliases consistent with the new location.</p>
+        <h3>Dragging out to Finder</h3>
+        <p>Dragging the file icon from a Library row to Desktop or Finder copies the real local file to the external destination. This is an export action. It does not move the Daiqo-managed local copy, and it does not change SQLite records.</p>
+        <h3>Make Copy Desktop</h3>
+        <p>The folder context menu action <code>Make Copy Desktop</code> exports a complete real-file copy of that Library folder to Desktop. It follows Library folder hierarchy but writes actual files, not Library shortcuts and not Finder aliases.</p>
+      </section>
+
+      <section id="delete">
+        <h2>7. Delete and Recycle</h2>
+        <h3>Outside Recycle</h3>
+        <p>Delete is intentionally soft outside Recycle. Pressing Delete or choosing Delete from a normal folder moves the selected shortcut or folder into Recycle. It preserves recovery fields such as <code>original_folder_id</code>, <code>original_parent_id</code>, and <code>trashed_at</code>. It does not immediately delete the local file or metadata.</p>
+        <h3>Inside Recycle</h3>
+        <p>Delete inside Recycle is final, but it is reference-aware.</p>
+        <ul>
+          <li>If the same paper still has a shortcut outside Recycle, Daiqo removes only the Recycle shortcut. The paper metadata, resources, and local file remain.</li>
+          <li>If no shortcut outside Recycle still points to the paper, Daiqo can remove the remaining Library shortcuts, the shared paper metadata, related resources, and managed local copies.</li>
+          <li>Managed local copies are moved to macOS Trash. They are not silently unlinked.</li>
+          <li>Original source files from the pre-import source path are never deleted.</li>
+        </ul>
+        <div class="note warning">Delete All on the Recycle folder applies the same rule item by item. It is not a blind wipe. Each paper is checked for references outside Recycle before metadata or local copies are removed.</div>
+      </section>
+
+      <section id="contexts">
+        <h2>8. Library, Spaces, My Publications, and Journal Monitor</h2>
+        <h3>Main Library</h3>
+        <p>The main Library is the primary folder/shortcut workspace under <code>data/Library/</code>. Yellow shortcut tabs are only alternate entry points into this same tree; they do not create separate storage roots.</p>
+        <h3>Spaces</h3>
+        <p>Green Spaces are independent Library-style roots. A paper can still share the same <code>papers</code> metadata model, but files downloaded or imported while working inside a Space are stored under that Space's local-copy folder.</p>
+        <h3>My Publications</h3>
+        <p>My Publications is a personal publication list over shared paper records. Its entries live in <code>my_publications</code> and point to <code>papers</code>. PDFs added by DOI/title lookup or downloaded from My Publications are stored under <code>data/My Publications/</code>. Export order follows saved sort order, and export-excluded rows are skipped.</p>
+        <h3>Journal Monitor Add to Library</h3>
+        <p>Journal Monitor may first download PDFs into staging under <code>data/pdfs/</code>. When a monitored paper is added to Library, it enters <code>unsorted</code>. If a PDF exists, Daiqo moves the managed local copy into the Library local-copy folder and updates the paper path. If no PDF exists, the Library shows a shortcut first; downloading later assigns the local copy path.</p>
+      </section>
+
+      <section id="metadata">
+        <h2>9. Metadata Refresh and Identifiers</h2>
+        <p>Metadata refresh changes SQLite metadata, not the original source files. Depending on the action, Daiqo may use DOI, arXiv, title lookup, Crossref, OpenAlex, Semantic Scholar, PubMed, ADS, or PDF text extraction.</p>
+        <table>
+          <thead><tr><th>Action</th><th>What it does</th><th>When to use it</th></tr></thead>
+          <tbody>
+            <tr><td>Loader metadata mode: none</td><td>Imports files and shortcuts without refreshing literature metadata.</td><td>Use for very large imports when speed matters.</td></tr>
+            <tr><td>Loader metadata mode: quick</td><td>Refreshes core title, author, journal, date, DOI/arXiv, and basic fields.</td><td>Use for normal imports when you want usable metadata quickly.</td></tr>
+            <tr><td>Loader metadata mode: full</td><td>Runs deeper metadata and metrics enrichment, including slower sources where available.</td><td>Use when accuracy/completeness is worth the time.</td></tr>
+            <tr><td>Refresh in Details</td><td>Refreshes the selected paper's identifier metadata and citation/abstract sources.</td><td>Use for a single paper that looks incomplete.</td></tr>
+            <tr><td>Get Identifier from Files</td><td>Looks at the local PDF title page and title/database matches to recover DOI or arXiv ID.</td><td>Use when import failed to find an identifier.</td></tr>
+            <tr><td>Refresh All Metadata</td><td>Refreshes many papers but skips entries recently refreshed according to the recency rule.</td><td>Use for maintenance after a large import.</td></tr>
+          </tbody>
+        </table>
+        <p>Refresh history is recorded in <code>paper_metadata_refreshes</code>. This lets Daiqo avoid repeating expensive refreshes and makes failed refreshes easier to diagnose.</p>
+      </section>
+
+      <section id="finder">
+        <h2>10. Finder Actions and Practical Rules</h2>
+        <ul>
+          <li><strong>Open in Finder</strong> reveals the local copy or matching folder if Daiqo has one. It cannot reveal a file that has not been downloaded or imported yet.</li>
+          <li><strong>Open in Preview</strong> opens the managed local file, usually a PDF, in macOS Preview.</li>
+          <li><strong>QuickLook with Space</strong> uses Daiqo's internal previewer for PDFs and supported non-PDF file types.</li>
+          <li><strong>Do not manually reorganize <code>data/Library/</code> in Finder</strong> unless you know you are repairing local copies. The UI tree is controlled by SQLite, so manual Finder moves can desynchronize paths.</li>
+          <li><strong>Use the Library UI for organization</strong>: move/copy/delete in Daiqo, then use Open in Finder or Make Copy Desktop when you need real files outside Daiqo.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
+"""
+
+
 INDEX_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -11500,6 +11908,8 @@ INDEX_HTML = """<!doctype html>
       display: flex;
       align-items: center;
       gap: 16px;
+      width: 430px;
+      box-sizing: border-box;
       padding: 28px 32px;
       border: 1px solid rgba(35,31,26,.12);
       border-radius: 18px;
@@ -11518,10 +11928,17 @@ INDEX_HTML = """<!doctype html>
       font-weight: 800;
       box-shadow: 0 10px 22px rgba(15,107,110,.22);
     }
+    .app-startup-copy {
+      min-width: 0;
+      flex: 1;
+    }
     .app-startup-title {
       display: block;
       margin-bottom: 8px;
       font-size: 18px;
+    }
+    #appStartupMessage {
+      min-height: 22px;
     }
     .app::before {
       content: "";
@@ -15842,8 +16259,8 @@ INDEX_HTML = """<!doctype html>
   <div class="app-startup-cover" id="appStartupCover" role="status" aria-live="polite">
     <div class="app-startup-card">
       <div class="app-startup-icon">D</div>
-      <div>
-        <strong class="app-startup-title" id="appStartupTitle">Starting Daiqo...</strong>
+      <div class="app-startup-copy">
+        <strong class="app-startup-title" id="appStartupTitle">Starting Daiqo</strong>
         <div id="appStartupMessage">Loading Library.</div>
       </div>
     </div>
@@ -16940,6 +17357,77 @@ INDEX_HTML = """<!doctype html>
       rebuildLibraryIndexes();
     }
 
+    function removeLibraryItemLocal(id) {
+      const targetId = Number(id || 0);
+      if (!targetId) return;
+      state.libraryItems = state.libraryItems.filter((entry) => Number(entry.id) !== targetId);
+      rebuildLibraryIndexes();
+    }
+
+    function localLibraryItemFromRaw(raw, fallbackItem = null, fallbackPaper = null) {
+      if (!raw?.id && !fallbackItem?.id) return null;
+      const paper = fallbackPaper || fallbackItem?.paper || {};
+      const item = {
+        ...(fallbackItem || {}),
+        id: Number(raw?.id || fallbackItem?.id || 0),
+        folder_id: Number(raw?.folder_id || fallbackItem?.folder_id || state.libraryRootId || 1),
+        paper_id: raw?.paper_id || fallbackItem?.paper_id || paper.paper_id || "",
+        paper
+      };
+      if (raw && Object.prototype.hasOwnProperty.call(raw, "display_name")) {
+        if (raw.display_name) item.display_name = raw.display_name;
+        else delete item.display_name;
+      }
+      if (raw && Object.prototype.hasOwnProperty.call(raw, "sort_order")) item.sort_order = Number(raw.sort_order || 0);
+      if (raw && Object.prototype.hasOwnProperty.call(raw, "original_folder_id")) {
+        if (raw.original_folder_id === null || raw.original_folder_id === undefined) delete item.original_folder_id;
+        else item.original_folder_id = Number(raw.original_folder_id || 0);
+      }
+      if (raw && Object.prototype.hasOwnProperty.call(raw, "trashed_at")) {
+        if (raw.trashed_at) item.trashed_at = raw.trashed_at;
+        else delete item.trashed_at;
+      }
+      return item;
+    }
+
+    function applyLocalLibraryItemMove(id, targetFolderId, rawMoved = null) {
+      const itemId = Number(id || 0);
+      const source = libraryItemById(itemId);
+      if (!source) return null;
+      const movedId = Number(rawMoved?.id || itemId);
+      if (movedId && movedId !== itemId) {
+        removeLibraryItemLocal(itemId);
+        const existing = libraryItemById(movedId);
+        return existing || null;
+      }
+      const moved = localLibraryItemFromRaw(
+        rawMoved || {id: itemId, folder_id: Number(targetFolderId || state.libraryRootId || 1)},
+        source,
+        source.paper
+      );
+      if (moved) upsertLibraryItemLocal(moved);
+      return moved;
+    }
+
+    function applyLocalLibraryItemPaste(sourceId, rawPasted = null, targetFolderId = 0) {
+      const source = libraryItemById(sourceId);
+      if (!source) return null;
+      const pastedId = Number(rawPasted?.id || 0);
+      const existing = pastedId ? libraryItemById(pastedId) : null;
+      if (existing) return existing;
+      const pastedRaw = {
+        ...(rawPasted || {}),
+        folder_id: Number(rawPasted?.folder_id || targetFolderId || state.libraryRootId || 1)
+      };
+      const pasted = localLibraryItemFromRaw(
+        pastedRaw,
+        source,
+        source.paper
+      );
+      if (pasted) upsertLibraryItemLocal(pasted);
+      return pasted;
+    }
+
     function libraryFolderById(id) {
       return state.libraryFoldersById.get(Number(id));
     }
@@ -17543,14 +18031,19 @@ INDEX_HTML = """<!doctype html>
 
     async function moveLibraryEntry(type, id, targetFolderId) {
       return withLibraryActivityStatus("Moving...", "Move complete.", async () => {
+        const fastItemMove = type === "item";
         const res = await fetch("/api/library/move", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, target_folder_id: targetFolderId})
+          body: JSON.stringify({type, id, target_folder_id: targetFolderId, snapshot: !fastItemMove})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not move library entry");
-        applyLibrarySnapshot(data);
+        if (fastItemMove) {
+          applyLocalLibraryItemMove(id, targetFolderId, data.moved || null);
+        } else {
+          applyLibrarySnapshot(data);
+        }
         setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
         renderLibrary();
       });
@@ -17563,17 +18056,23 @@ INDEX_HTML = """<!doctype html>
       if (!validEntries.length) return;
       if (validEntries.length === 1) return moveLibraryEntry(validEntries[0].type, validEntries[0].id, targetFolderId);
       return withLibraryActivityStatus(`Moving ${validEntries.length} items...`, "Move complete.", async () => {
+        const fastItemMove = validEntries.every((entry) => entry.type === "item");
+        let finalSelection = validEntries[validEntries.length - 1];
         for (const entry of validEntries) {
           const res = await fetch("/api/library/move", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({type: entry.type, id: entry.id, target_folder_id: targetFolderId})
+            body: JSON.stringify({type: entry.type, id: entry.id, target_folder_id: targetFolderId, snapshot: !fastItemMove})
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not move library entry");
-          applyLibrarySnapshot(data);
+          if (fastItemMove) {
+            const moved = applyLocalLibraryItemMove(entry.id, targetFolderId, data.moved || null);
+            if (moved?.id) finalSelection = {type: "item", id: Number(moved.id)};
+          }
+          else applyLibrarySnapshot(data);
         }
-        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), validEntries[validEntries.length - 1]);
+        setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), finalSelection);
         clearLibraryRangeSelection();
         renderLibrary();
       });
@@ -17635,19 +18134,28 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("this Recycle item", deletePreview))) return;
       return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
+        const fastItemDelete = type === "item" && !requiresRecycleConfirmation;
         const parentId = type === "item"
           ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
           : parentFolderId(id);
+        const sourceItem = fastItemDelete ? libraryItemById(id) : null;
         const deletedEntry = entry;
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation)})
+          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastItemDelete})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
-        applyLibrarySnapshot(data);
+        if (fastItemDelete) {
+          const moved = data.deleted?.moved || {};
+          if (moved?.id && Number(moved.id) !== Number(id)) removeLibraryItemLocal(id);
+          else applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
+          if (!moved?.id && sourceItem) removeLibraryItemLocal(sourceItem.id);
+        } else {
+          applyLibrarySnapshot(data);
+        }
         selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
         renderLibrary();
       });
@@ -17803,16 +18311,26 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion(`${entriesToDelete.length} selected Recycle items`, deletePreview))) return;
       return withLibraryActivityStatus(`Deleting ${selectedEntries.length} items...`, "Delete complete.", async () => {
+        const fastItemDelete = !requiresRecycleConfirmation && entriesToDelete.every((entry) => entry.type === "item");
         const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete-batch", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({entries: entriesToDelete, confirmed: Boolean(deletePreview.requires_confirmation)})
+          body: JSON.stringify({entries: entriesToDelete, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastItemDelete})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entries");
-        applyLibrarySnapshot(data);
+        if (fastItemDelete) {
+          (Array.isArray(data.deleted) ? data.deleted : []).forEach((result) => {
+            const originalId = Number(result?.id || 0);
+            const moved = result?.moved || {};
+            if (moved?.id && Number(moved.id) !== originalId) removeLibraryItemLocal(originalId);
+            else if (originalId) applyLocalLibraryItemMove(originalId, Number(result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+          });
+        } else {
+          applyLibrarySnapshot(data);
+        }
         clearLibraryRangeSelection();
         const lastDeleted = selectedEntries[selectedEntries.length - 1];
         selectLibraryDeletionFallback(parentId, lastDeleted, entriesBeforeDelete);
@@ -17867,14 +18385,21 @@ INDEX_HTML = """<!doctype html>
       if (!entries.length) return;
       return withLibraryActivityStatus(`Pasting ${entries.length} item${entries.length === 1 ? "" : "s"}...`, "Paste complete.", async () => {
         let lastPasted = null;
+        const fastItemPaste = entries.every((entry) => entry.type === "item");
         const res = await fetch("/api/library/paste-batch", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({entries, target_folder_id: targetFolderId})
+          body: JSON.stringify({entries, target_folder_id: targetFolderId, snapshot: !fastItemPaste})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not paste library entries");
-        applyLibrarySnapshot(data);
+        if (fastItemPaste) {
+          (Array.isArray(data.pasted) ? data.pasted : []).forEach((pasted, index) => {
+            applyLocalLibraryItemPaste(Number(entries[index]?.id || pasted?.source_id || 0), pasted, targetFolderId);
+          });
+        } else {
+          applyLibrarySnapshot(data);
+        }
         const pastedEntries = Array.isArray(data.pasted) ? data.pasted : [];
         const finalPasted = pastedEntries[pastedEntries.length - 1];
         if (finalPasted?.id) {
@@ -20257,6 +20782,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-context-menu my-publication-context-menu" id="myPublicationContextMenu">
           <button type="button" data-action="toggle-my-publication-head">Hide</button>
+          <button type="button" data-action="reveal-my-publication">Open in Finder</button>
           <button type="button" data-action="delete-my-publication">Delete</button>
         </div>
       `;
@@ -22280,7 +22806,11 @@ INDEX_HTML = """<!doctype html>
         window.open("https://www.overleaf.com/project", "_blank", "noopener");
       }
       try {
-        const target = `/api/my-publications/export?format=${encodeURIComponent(requestedFormat)}&response=json`;
+        const exportOrder = visibleMyPublicationRows()
+          .filter((entry) => !entry.head)
+          .map((entry) => Number(entry.id))
+          .filter(Boolean);
+        const target = `/api/my-publications/export?format=${encodeURIComponent(requestedFormat)}&response=json&ordered=1&order=${encodeURIComponent(exportOrder.join(","))}`;
         const res = await fetch(target);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Export failed");
@@ -23698,6 +24228,40 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    async function revealNativePaperFile(paper, options = {}) {
+      const path = paperNativePath(paper || {});
+      const status = $("libraryDetailStatus");
+      if (!path) {
+        if (status) {
+          status.textContent = options.missingMessage || "No local file path is available for this paper.";
+          status.className = "library-detail-status err";
+        }
+        return;
+      }
+      if (status) {
+        status.textContent = "Opening in Finder...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const res = await fetch("/api/reveal-path", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({path})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to open Finder");
+        if (status) {
+          status.textContent = "Opened in Finder";
+          status.className = "library-detail-status ok";
+        }
+      } catch (err) {
+        if (status) {
+          status.textContent = err.message || "Failed to open Finder";
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
     function nativeFilePreviewUrl(path) {
       return `/api/native-file-preview?path=${encodeURIComponent(path)}`;
     }
@@ -24458,6 +25022,7 @@ INDEX_HTML = """<!doctype html>
       menu.classList.add("open");
       menu.onclick = (clickEvent) => clickEvent.stopPropagation();
       const headButton = menu.querySelector('[data-action="toggle-my-publication-head"]');
+      const revealButton = menu.querySelector('[data-action="reveal-my-publication"]');
       const deleteButton = menu.querySelector('[data-action="delete-my-publication"]');
       if (headButton) {
         const shouldHide = selectedPublications.some((item) => !item.head);
@@ -24468,6 +25033,14 @@ INDEX_HTML = """<!doctype html>
           const ids = selectedMyPublicationIdsForAction();
           hideMyPublicationContextMenu();
           if (ids.length) await runLibraryMenuAction(() => toggleSelectedMyPublicationsHead(ids, shouldHide));
+        };
+      }
+      if (revealButton) {
+        revealButton.onclick = async () => {
+          hideMyPublicationContextMenu();
+          await revealNativePaperFile(publication.paper, {
+            missingMessage: "No local file path is available for this publication."
+          });
         };
       }
       if (deleteButton) {
