@@ -15851,7 +15851,20 @@ INDEX_HTML = """<!doctype html>
     .action.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .action.secondary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .action.danger { border-color: var(--accent-2); color: var(--accent-2); background: #fff7f6; }
-    .action:disabled { opacity: 0.55; cursor: wait; }
+    .action:disabled { opacity: 0.55; cursor: default; }
+    .action.is-busy:disabled { cursor: default; }
+    .action.is-busy::after {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border: 2px solid rgba(15, 107, 110, 0.22);
+      border-top-color: var(--accent);
+      border-radius: 999px;
+      animation: actionBusySpin 0.65s linear infinite;
+    }
+    @keyframes actionBusySpin {
+      to { transform: rotate(360deg); }
+    }
     button.action.citation-comments-button,
     .my-publications-shell .library-detail button.action.citation-comments-button,
     button.action.citation-comments-button:hover,
@@ -17993,6 +18006,7 @@ INDEX_HTML = """<!doctype html>
       if (button?.disabled && button.textContent.trim() === "In Library") return;
       if (button) {
         button.disabled = true;
+        button.classList.add("is-busy");
         button.textContent = "Adding...";
       }
       try {
@@ -18011,6 +18025,7 @@ INDEX_HTML = """<!doctype html>
         }
         if (data.paper) updatePaperState(paperId, data.paper);
         if (button) {
+          button.classList.remove("is-busy");
           button.textContent = "In Library";
           button.title = "Already in Library";
           button.disabled = true;
@@ -18018,6 +18033,7 @@ INDEX_HTML = """<!doctype html>
         renderCurrentPaperSurface();
       } catch (error) {
         if (button) {
+          button.classList.remove("is-busy");
           button.disabled = false;
           button.textContent = "Add to Library";
         }
