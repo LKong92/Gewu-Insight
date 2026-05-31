@@ -1601,6 +1601,18 @@ class Storage:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_library_child_folders(self, parent_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM library_folders
+            WHERE parent_id = ?
+            ORDER BY sort_order, name, id
+            """,
+            (int(parent_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_library_items(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
@@ -1636,6 +1648,46 @@ class Storage:
             LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
             ORDER BY library_items.folder_id, library_items.sort_order, papers.title
             """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_library_items_for_folder(self, folder_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              library_items.id,
+              library_items.folder_id,
+              library_items.paper_id,
+              library_items.display_name,
+              library_items.original_folder_id,
+              library_items.trashed_at,
+              library_items.created_at,
+              library_items.sort_order,
+              papers.title,
+              papers.journal,
+              papers.publication_date,
+              papers.doi,
+              papers.url,
+              papers.landing_url,
+              papers.source,
+              papers.download_status,
+              papers.main_pdf_path,
+              papers.merged_pdf_path,
+              papers.source_path,
+              papers.original_filename,
+              papers.import_batch_id,
+              papers.import_kind,
+              papers.import_as,
+              papers.size_bytes,
+              papers.analysis_status,
+              inventory_import_batches.copy_mode AS import_copy_mode
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
+            WHERE library_items.folder_id = ?
+            ORDER BY library_items.sort_order, papers.title, library_items.id
+            """,
+            (int(folder_id),),
         ).fetchall()
         return [dict(row) for row in rows]
 

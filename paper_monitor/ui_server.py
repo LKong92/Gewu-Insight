@@ -375,6 +375,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/page-proxy":
                 self.handle_page_proxy(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/library/bootstrap":
+                self.handle_library_bootstrap(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/folder":
+                self.handle_library_folder_children(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/path":
+                self.handle_library_path(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/library":
                 self.handle_library(parse_qs(parsed.query))
                 return
@@ -893,6 +902,38 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             snapshot = library_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_library_bootstrap(self, query: dict[str, list[str]]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = library_bootstrap_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_library_folder_children(self, query: dict[str, list[str]]) -> None:
+        folder_id = int(first(query, "folder_id") or 1)
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = library_folder_children_snapshot(storage, folder_id)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_library_path(self, query: dict[str, list[str]]) -> None:
+        folder_id = int(first(query, "folder_id") or 1)
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = library_path_snapshot(storage, folder_id)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         finally:
             storage.close()
         self.send_json(snapshot)
@@ -4050,6 +4091,57 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
     }
 
 
+def library_folder_children_snapshot(storage: Storage, folder_id: int) -> dict[str, Any]:
+    ensure_library_special_folders(storage)
+    folder = storage.get_library_folder(int(folder_id))
+    if not folder:
+        raise ValueError("Library folder not found")
+    return {
+        "folder_id": int(folder_id),
+        "folder": library_folder_to_api(folder, storage),
+        "folders": [library_folder_to_api(child, storage) for child in storage.list_library_child_folders(int(folder_id))],
+        "items": [library_item_to_api(item, item) for item in storage.list_library_items_for_folder(int(folder_id))],
+    }
+
+
+def library_bootstrap_snapshot(storage: Storage) -> dict[str, Any]:
+    special = ensure_library_special_folders(storage)
+    workspace_tabs = library_workspace_tabs(storage)
+    root_children = library_folder_children_snapshot(storage, 1)
+    return {
+        "root_id": 1,
+        "unsorted_id": int(special["unsorted"].get("id") or 0),
+        "recycle_id": int(special["recycle"].get("id") or 0),
+        "folders": [
+            library_folder_to_api(folder, storage, include_native_path=False)
+            for folder in storage.list_library_folders()
+        ],
+        "children": root_children,
+        "shortcut_tabs": library_shortcut_tabs(storage),
+        "workspace_tabs": workspace_tabs,
+    }
+
+
+def library_path_snapshot(storage: Storage, folder_id: int) -> dict[str, Any]:
+    ensure_library_special_folders(storage)
+    folder = storage.get_library_folder(int(folder_id))
+    if not folder:
+        raise ValueError("Library folder not found")
+    path_ids: list[int] = []
+    current = folder
+    guard = 0
+    while current and guard < 128:
+        guard += 1
+        path_ids.append(int(current.get("id") or 0))
+        parent_id = current.get("parent_id")
+        if parent_id is None:
+            break
+        current = storage.get_library_folder(int(parent_id))
+    path_ids = [folder_id for folder_id in reversed(path_ids) if folder_id]
+    children = [library_folder_children_snapshot(storage, path_id) for path_id in path_ids]
+    return {"folder_id": int(folder_id), "path_ids": path_ids, "children": children}
+
+
 def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     keys = [
         "dry_run",
@@ -5536,7 +5628,12 @@ def ensure_library_special_folders(storage: Storage) -> dict[str, dict[str, Any]
     }
 
 
-def library_folder_to_api(folder: dict[str, Any], storage: Storage | None = None) -> dict[str, Any]:
+def library_folder_to_api(
+    folder: dict[str, Any],
+    storage: Storage | None = None,
+    *,
+    include_native_path: bool = True,
+) -> dict[str, Any]:
     name = folder.get("name") or "New Folder"
     parent_id = int(folder["parent_id"]) if folder.get("parent_id") is not None else None
     is_recycle = parent_id == 1 and name == LIBRARY_RECYCLE_FOLDER_NAME
@@ -5553,7 +5650,7 @@ def library_folder_to_api(folder: dict[str, Any], storage: Storage | None = None
         "is_unsorted": is_unsorted,
         "protected": parent_id is None or is_unsorted or is_recycle,
     }
-    if storage is not None:
+    if storage is not None and include_native_path:
         result["native_folder_path"] = str(local_copy_dir_for_library_folder(storage, int(folder.get("id") or 0)))
     return result
 
@@ -5698,7 +5795,7 @@ def default_library_item_display_name(paper: dict[str, Any], *, rule: str = DEFA
     return re.sub(r"\s+", "_", label).strip("_") or "Untitled_paper"
 
 
-def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
+def my_publication_to_api(row: dict[str, Any], *, full_detail: bool = False) -> dict[str, Any]:
     return {
         "id": int(row.get("id") or 0),
         "paper_id": row.get("paper_id") or "",
@@ -5712,8 +5809,36 @@ def my_publication_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "sort_order": int(row.get("sort_order") or 0),
         "created_at": row.get("created_at") or "",
         "updated_at": row.get("updated_at") or "",
-        "paper": paper_to_api(row),
+        "paper": paper_to_api(row) if full_detail else paper_to_my_publication_summary_api(row),
     }
+
+
+def paper_to_my_publication_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
+    summary = paper_to_library_summary_api(paper, parse_metadata_json=True)
+    summary.update(
+        {
+            "journal": display_journal_name(paper),
+            "publication_date": paper.get("publication_date") or "",
+            "doi": paper.get("doi") or "",
+            "url": paper.get("url") or paper.get("landing_url") or "",
+            "authors": author_summary(paper),
+            "full_authors": full_author_names(paper),
+            "fields": classify_fields(paper),
+            "citation_label": citation_label(paper),
+            "citation_metrics": citation_metrics(paper),
+            "nature_reference": nature_reference(paper),
+            "google_scholar_url": google_scholar_url(paper),
+            "image_url": paper.get("image_url") or "",
+            "bibtex": "",
+            "abstract": "",
+            "pubmed": {},
+            "semantic_scholar": {},
+            "ads": {},
+            "manual_metadata": {},
+            "full_detail": False,
+        }
+    )
+    return summary
 
 
 def parse_my_publication_author_marks(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -16579,6 +16704,8 @@ INDEX_HTML = """<!doctype html>
       libraryItemsById: new Map(),
       libraryChildFoldersByParent: new Map(),
       libraryItemsByFolder: new Map(),
+      libraryLoadedFolderIds: new Set(),
+      libraryFolderLoadPromises: {},
       libraryLoaded: false,
       libraryLoadingPromise: null,
       libraryRefreshPromise: null,
@@ -16626,6 +16753,8 @@ INDEX_HTML = """<!doctype html>
       librarySearchVersion: 0,
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
+      libraryRestoringColumnScroll: false,
+      libraryProgrammaticScroll: false,
       libraryColumnWidths: {},
       libraryDetailWidth: 340,
       libraryClipboard: null,
@@ -17185,11 +17314,11 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       if (!state.libraryLoadingPromise) {
-        state.libraryLoadingPromise = fetch("/api/library")
+        state.libraryLoadingPromise = fetch("/api/library/bootstrap")
           .then(async (res) => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Could not load Library");
-            applyLibrarySnapshot(data);
+            applyLibraryBootstrap(data);
           })
           .finally(() => {
             state.libraryLoadingPromise = null;
@@ -17311,6 +17440,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
+      state.libraryLoadedFolderIds = new Set(state.libraryFolders.map((folder) => Number(folder.id)).filter(Boolean));
+      state.libraryFolderLoadPromises = {};
       rebuildLibraryIndexes();
       state.libraryLoaded = true;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
@@ -17329,6 +17460,95 @@ INDEX_HTML = """<!doctype html>
       pruneLibraryClipboard();
       pruneLibraryRangeSelection();
       ensureLibraryColumnSelection(displayRootId);
+    }
+
+    function applyLibraryBootstrap(data) {
+      state.libraryRootId = Number(data.root_id || 1);
+      state.libraryFolders = Array.isArray(data.folders) ? data.folders : [];
+      state.libraryItems = [];
+      state.libraryLoadedFolderIds = new Set();
+      state.libraryFolderLoadPromises = {};
+      rebuildLibraryIndexes();
+      state.libraryLoaded = true;
+      state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
+      state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
+      if (data.children) applyLibraryFolderChildren(data.children, {rebuild: true});
+      const displayRootId = libraryDisplayRootId();
+      state.libraryCurrentFolderId = displayRootId;
+      state.libraryActiveFolderId = displayRootId;
+      if (!librarySelectionExists(state.librarySelection)) {
+        state.librarySelection = {type: "folder", id: displayRootId};
+      }
+      pruneLibraryClipboard();
+      pruneLibraryRangeSelection();
+      ensureLibraryColumnSelection(displayRootId);
+    }
+
+    function applyLibraryFolderChildren(data, options = {}) {
+      const folderId = Number(data?.folder_id || data?.folder?.id || 0);
+      if (!folderId) return;
+      const folders = Array.isArray(data.folders) ? data.folders : [];
+      const items = Array.isArray(data.items) ? data.items : [];
+      const folder = data.folder;
+      if (folder?.id) {
+        const id = Number(folder.id);
+        const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
+        if (index >= 0) state.libraryFolders[index] = folder;
+        else state.libraryFolders.push(folder);
+      }
+      folders.forEach((child) => {
+        if (!child?.id) return;
+        const id = Number(child.id);
+        const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
+        if (index >= 0) state.libraryFolders[index] = child;
+        else state.libraryFolders.push(child);
+      });
+      state.libraryItems = state.libraryItems
+        .filter((item) => Number(item.folder_id || 0) !== folderId)
+        .concat(items);
+      state.libraryLoadedFolderIds.add(folderId);
+      rebuildLibraryIndexes();
+    }
+
+    function libraryFolderLoaded(folderId) {
+      return state.libraryLoadedFolderIds.has(Number(folderId || 0));
+    }
+
+    function ensureLibraryFolderLoaded(folderId, options = {}) {
+      const id = Number(folderId || 0);
+      if (!id) return Promise.resolve(null);
+      if (libraryFolderLoaded(id) && !options.force) return Promise.resolve(null);
+      if (state.libraryFolderLoadPromises[id] && !options.force) return state.libraryFolderLoadPromises[id];
+      state.libraryFolderLoadPromises[id] = fetch(`/api/library/folder?folder_id=${encodeURIComponent(id)}`)
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not load Library folder");
+          applyLibraryFolderChildren(data);
+          return data;
+        })
+        .finally(() => {
+          delete state.libraryFolderLoadPromises[id];
+        });
+      return state.libraryFolderLoadPromises[id];
+    }
+
+    function loadLibraryFolderAndRender(folderId, options = {}) {
+      return ensureLibraryFolderLoaded(folderId, options)
+        .then(() => {
+          if (state.mode === "library" && state.libraryTab !== "my-publications") {
+            renderLibrary();
+            refreshLibraryQuickLookForSelection();
+          }
+        })
+        .catch((error) => updateLibraryActivityStatus(error.message || "Could not load Library folder.", {delay: 3600}));
+    }
+
+    function prefetchLibraryFolder(folderId) {
+      const id = Number(folderId || 0);
+      if (!id || libraryFolderLoaded(id) || state.libraryFolderLoadPromises[id]) return;
+      window.setTimeout(() => {
+        if (!libraryFolderLoaded(id)) ensureLibraryFolderLoaded(id).catch(() => {});
+      }, 80);
     }
 
     function rebuildLibraryIndexes() {
@@ -20516,7 +20736,9 @@ INDEX_HTML = """<!doctype html>
       if (document.activeElement !== input) input.value = state.query || "";
       clear.classList.toggle("open", Boolean(state.query));
       const results = open && state.query.trim() ? librarySearchResults().length : 0;
-      count.textContent = state.query.trim() ? `${results} match${results === 1 ? "" : "es"}` : "";
+      count.textContent = state.query.trim()
+        ? `${results} match${results === 1 ? "" : "es"}`
+        : "";
     }
 
     function commitLibrarySearch(value) {
@@ -21435,11 +21657,16 @@ INDEX_HTML = """<!doctype html>
     }
 
     function restoreLibraryColumnScrollTops() {
+      state.libraryRestoringColumnScroll = true;
       document.querySelectorAll("[data-library-column-folder]").forEach((column) => {
         const folderId = Number(column.dataset.libraryColumnFolder || 0);
         const body = column.querySelector(".library-column-body");
         if (!folderId || !body) return;
-        body.scrollTop = state.libraryColumnScrollTops[folderId] || 0;
+        const nextTop = state.libraryColumnScrollTops[folderId] || 0;
+        if (Math.abs(body.scrollTop - nextTop) > 1) body.scrollTop = nextTop;
+      });
+      window.requestAnimationFrame(() => {
+        state.libraryRestoringColumnScroll = false;
       });
     }
 
@@ -21487,11 +21714,18 @@ INDEX_HTML = """<!doctype html>
       const rowRect = row.getBoundingClientRect();
       const padding = 6;
       if (rowRect.bottom > bodyRect.bottom - padding) {
+        state.libraryProgrammaticScroll = true;
         body.scrollTop += rowRect.bottom - bodyRect.bottom + padding;
       } else if (rowRect.top < bodyRect.top + padding) {
+        state.libraryProgrammaticScroll = true;
         body.scrollTop -= bodyRect.top - rowRect.top + padding;
       }
       state.libraryColumnScrollTops[Number(folderId)] = body.scrollTop;
+      if (state.libraryProgrammaticScroll) {
+        window.requestAnimationFrame(() => {
+          state.libraryProgrammaticScroll = false;
+        });
+      }
     }
 
     function revealLibrarySearchSelection() {
@@ -21608,7 +21842,9 @@ INDEX_HTML = """<!doctype html>
 
     function libraryColumnMarkup(folderId, pathFolderIds = new Set()) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
-      const entries = libraryEntriesForFolder(folderId);
+      const loaded = libraryFolderLoaded(folderId);
+      if (!loaded) loadLibraryFolderAndRender(folderId);
+      const entries = loaded ? libraryEntriesForFolder(folderId) : [];
       const rows = entries.map((entry) => {
         const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
         return data ? libraryRowMarkup(entry.type, data, folderId, pathFolderIds) : "";
@@ -21618,7 +21854,9 @@ INDEX_HTML = """<!doctype html>
         <section class="library-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}" style="--library-column-width:${Math.max(180, Math.min(520, width))}px">
           <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
           <div class="library-column-body">
-            ${rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`}
+            ${loaded
+              ? (rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`)
+              : `<div class="empty">Loading folder...</div>`}
           </div>
           <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
         </section>
@@ -22240,6 +22478,37 @@ INDEX_HTML = """<!doctype html>
       return state.libraryPaperDetailRequests[item.paper_id];
     }
 
+    async function loadMyPublicationPaperDetail(publication) {
+      const paperId = publication?.paper_id || publication?.paper?.paper_id || "";
+      if (!paperId || publication?.paper?.full_detail) return;
+      if (state.libraryPaperDetailRequests[paperId]) return state.libraryPaperDetailRequests[paperId];
+      state.libraryPaperDetailRequests[paperId] = fetch(`/api/paper?paper_id=${encodeURIComponent(paperId)}`)
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not load paper details");
+          const paper = data.paper || null;
+          if (!paper) return;
+          state.myPublications.forEach((entry) => {
+            if (entry.paper_id === paperId || entry.paper?.paper_id === paperId) entry.paper = paper;
+          });
+          if (String(selectedMyPublicationPaper()?.paper_id || "") === paperId) {
+            renderPublicationDetail();
+            refreshLibraryQuickLookForSelection();
+          }
+        })
+        .catch((error) => {
+          const status = $("libraryDetailStatus");
+          if (status) {
+            status.textContent = error.message || "Could not load paper details";
+            status.className = "library-detail-status err";
+          }
+        })
+        .finally(() => {
+          delete state.libraryPaperDetailRequests[paperId];
+        });
+      return state.libraryPaperDetailRequests[paperId];
+    }
+
     function renderPublicationDetail() {
       const root = $("libraryDetail");
       if (!root) return;
@@ -22252,6 +22521,18 @@ INDEX_HTML = """<!doctype html>
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
         ? paper.full_authors
         : (Array.isArray(paper.authors) ? paper.authors : []);
+      if (paper.paper_id && !paper.full_detail) {
+        root.innerHTML = `
+          <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
+          ${libraryDetailFigureMarkup(paper)}
+          <div class="library-detail-status" id="libraryDetailStatus">Loading details...</div>
+          ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true})}
+          ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
+          ${publicationAuthorsSectionMarkup(publication, authors, paper)}
+        `;
+        loadMyPublicationPaperDetail(publication);
+        return;
+      }
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
@@ -24116,6 +24397,9 @@ INDEX_HTML = """<!doctype html>
       else setLibraryColumnSelection(parentFolderId, entry);
       if (options.revealChildColumn) requestLibraryColumnReveal(parentFolderId, "right");
       renderLibrary();
+      if (type === "folder" && !options.extendRange) {
+        prefetchLibraryFolder(id);
+      }
       refreshLibraryQuickLookForSelection();
     }
 
@@ -24126,6 +24410,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryActiveFolderId = Number(folderId);
       state.libraryCurrentFolderId = Number(folderId);
       renderLibrary();
+      loadLibraryFolderAndRender(folderId);
       refreshLibraryQuickLookForSelection();
     }
 
@@ -25335,14 +25620,23 @@ INDEX_HTML = """<!doctype html>
         if (selection?.type === "folder") {
           clearLibraryRangeSelection();
           const childFolderId = Number(selection.id);
-          const existing = selectedEntryInFolder(childFolderId);
-          const firstEntry = libraryEntriesForFolder(childFolderId)[0];
-          if (!existing && !firstEntry) return true;
           state.libraryActiveFolderId = childFolderId;
           state.libraryCurrentFolderId = childFolderId;
-          setLibraryColumnSelection(childFolderId, existing || firstEntry);
+          const existing = selectedEntryInFolder(childFolderId);
+          const firstEntry = libraryFolderLoaded(childFolderId) ? libraryEntriesForFolder(childFolderId)[0] : null;
+          if (existing || firstEntry) setLibraryColumnSelection(childFolderId, existing || firstEntry);
           requestLibraryColumnReveal(childFolderId, "right");
           renderLibrary();
+          if (!libraryFolderLoaded(childFolderId)) {
+            loadLibraryFolderAndRender(childFolderId).then(() => {
+              if (Number(state.libraryActiveFolderId || 0) !== childFolderId) return;
+              const loadedExisting = selectedEntryInFolder(childFolderId);
+              const loadedFirst = libraryEntriesForFolder(childFolderId)[0];
+              if (loadedExisting || loadedFirst) setLibraryColumnSelection(childFolderId, loadedExisting || loadedFirst);
+              renderLibrary();
+              refreshLibraryQuickLookForSelection();
+            });
+          }
           refreshLibraryQuickLookForSelection();
         }
         return true;
