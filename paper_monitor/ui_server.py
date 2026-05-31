@@ -11928,6 +11928,11 @@ INDEX_HTML = """<!doctype html>
       font-weight: 650;
       line-height: 1.35;
     }
+    .formula-subscript-delta {
+      font-size: 0.72em;
+      vertical-align: sub;
+      line-height: 0;
+    }
     .library-detail-doi {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -16802,7 +16807,7 @@ INDEX_HTML = """<!doctype html>
           <td>
             <div class="my-publications-title-cell">
               <button class="star-button${entry.starred ? " active" : ""}" type="button" data-action="toggle-publication-star" title="Highlight">${entry.starred ? "★" : "☆"}</button>
-              <span class="my-publications-title-text">${escapeHtml(paper.title || "Untitled paper")}</span>
+              <span class="my-publications-title-text">${publicationTitleMarkup(paper.title || "Untitled paper")}</span>
             </div>
           </td>
           <td class="my-publications-id">${myPublicationIdMarkup(paper)}</td>
@@ -17159,7 +17164,7 @@ INDEX_HTML = """<!doctype html>
         return `
           <div class="publication-search-result${added ? " added" : ""}${candidate.match_status === "resolving" ? " resolving" : ""}" data-search-index="${index}">
             <div>
-              <strong>${escapeHtml(paper.title || "Untitled paper")}</strong>
+              <strong>${publicationTitleMarkup(paper.title || "Untitled paper")}</strong>
               <span>${escapeHtml(meta)}</span>
             </div>
             <div class="publication-search-actions">
@@ -17490,7 +17495,7 @@ INDEX_HTML = """<!doctype html>
         : `type="button" draggable="${draggable ? "true" : "false"}"`;
       const nameMarkup = renaming
         ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
-        : escapeHtml(name);
+        : publicationTitleMarkup(name);
       const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       return `
         <${rowTag} class="library-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
@@ -17620,7 +17625,7 @@ INDEX_HTML = """<!doctype html>
       const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors, paper) : authorsMarkup(authors, paper);
       return `
         <dl>
-          <dt>Title</dt><dd class="library-detail-title">${escapeHtml(paper.title || "Untitled paper")}</dd>
+          <dt>Title</dt><dd class="library-detail-title">${publicationTitleMarkup(paper.title || "Untitled paper")}</dd>
           ${options.hideAuthors ? "" : `<dt>Authors</dt><dd>${authorMarkup}</dd>`}
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
@@ -17874,7 +17879,7 @@ INDEX_HTML = """<!doctype html>
       }
       if (paper.paper_id && !paper.full_detail) {
         root.innerHTML = `
-          <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+          <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
           <div class="library-detail-status">Loading details...</div>
           ${libraryDetailMetadataMarkup(paper, [])}
         `;
@@ -17893,7 +17898,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       root.innerHTML = `
-        <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
@@ -17994,7 +17999,7 @@ INDEX_HTML = """<!doctype html>
         ? paper.full_authors
         : (Array.isArray(paper.authors) ? paper.authors : []);
       root.innerHTML = `
-        <h3>${escapeHtml(paper.title || "Untitled paper")}</h3>
+        <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
@@ -21054,7 +21059,7 @@ INDEX_HTML = """<!doctype html>
           <div class="paper-main">
             <div class="paper-head">
               <div>
-                <h3 style="color:${paper.section_color}">${escapeHtml(paper.title || "(Untitled)")}</h3>
+                <h3 style="color:${paper.section_color}">${publicationTitleMarkup(paper.title || "(Untitled)")}</h3>
                 <div class="meta">
                   <span class="journal-name">${escapeHtml(paper.journal)}</span>
                   <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
@@ -21877,6 +21882,23 @@ INDEX_HTML = """<!doctype html>
 
     function escapeAttr(value) {
       return escapeHtml(value).replace(/`/g, "&#96;");
+    }
+
+    function publicationTitleMarkup(value) {
+      const text = String(value ?? "");
+      const subscriptChars = "₀₁₂₃₄₅₆₇₈₉₊₋₍₎ₓᵧ";
+      let markup = "";
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        const prev = index > 0 ? text[index - 1] : "";
+        const next = index + 1 < text.length ? text[index + 1] : "";
+        if (char === "δ" && (subscriptChars.includes(prev) || subscriptChars.includes(next))) {
+          markup += `<sub class="formula-subscript-delta">δ</sub>`;
+        } else {
+          markup += escapeHtml(char);
+        }
+      }
+      return markup;
     }
 
     $("prevMonth").addEventListener("click", async () => {

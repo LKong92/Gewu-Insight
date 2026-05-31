@@ -42,6 +42,40 @@ class TitleNormalizationTest(unittest.TestCase):
             "Anomalous andreev conductance in InAs-AlSb quantum wells",
         )
 
+    def test_fflo_names_keep_initial_capitals(self):
+        self.assertEqual(
+            normalize_publication_title("fulde ferrell larkin ovchinnikov state in superconductors"),
+            "Fulde Ferrell Larkin Ovchinnikov state in superconductors",
+        )
+        self.assertEqual(
+            normalize_publication_title("Fulde-Ferrell-Larkin-Ovchinnikov phase"),
+            "Fulde-Ferrell-Larkin-Ovchinnikov phase",
+        )
+
+    def test_parenthesized_formula_counts_become_subscripts(self):
+        self.assertEqual(
+            normalize_publication_title("Superconductivity in Ba(Fe1-xCox)2As2"),
+            "Superconductivity in Ba(Fe₁₋ₓCoₓ)₂As₂",
+        )
+        self.assertEqual(
+            normalize_publication_title("Transport in (NH4)2SO4 and La(O1-xFx)1+δBiS2"),
+            "Transport in (NH₄)₂SO₄ and La(O₁₋ₓFₓ)₁₊δBiS₂",
+        )
+        self.assertEqual(
+            normalize_publication_title("La(O1-yFy)1-δBiS2"),
+            "La(O₁₋ᵧFᵧ)₁₋δBiS₂",
+        )
+
+    def test_formula_delta_case_is_preserved(self):
+        self.assertEqual(
+            normalize_publication_title("Bi2Sr2CaCu2O8+Δ and La2CuO4+Δ"),
+            "Bi₂Sr₂CaCu₂O₈₊Δ and La₂CuO₄₊Δ",
+        )
+        self.assertEqual(
+            normalize_publication_title("Bi2Sr2CaCu2O8+δ and La2CuO4+δ"),
+            "Bi₂Sr₂CaCu₂O₈₊δ and La₂CuO₄₊δ",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

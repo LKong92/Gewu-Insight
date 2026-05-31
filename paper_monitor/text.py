@@ -54,8 +54,10 @@ TITLE_PROPER_WORDS = {
     "einstein": "Einstein",
     "fano": "Fano",
     "fermi": "Fermi",
+    "ferrell": "Ferrell",
     "feshbach": "Feshbach",
     "floquet": "Floquet",
+    "fulde": "Fulde",
     "gennes": "Gennes",
     "ginzburg": "Ginzburg",
     "gibbs": "Gibbs",
@@ -81,6 +83,7 @@ TITLE_PROPER_WORDS = {
     "kosterlitz": "Kosterlitz",
     "kramers": "Kramers",
     "landau": "Landau",
+    "larkin": "Larkin",
     "lifshitz": "Lifshitz",
     "lorentz": "Lorentz",
     "luttinger": "Luttinger",
@@ -92,6 +95,7 @@ TITLE_PROPER_WORDS = {
     "neel": "Neel",
     "newton": "Newton",
     "onsager": "Onsager",
+    "ovchinnikov": "Ovchinnikov",
     "pauli": "Pauli",
     "peierls": "Peierls",
     "rabi": "Rabi",
@@ -183,6 +187,7 @@ def normalize_publication_title(value: Any) -> str:
     if not title:
         return ""
     title = normalize_variable_chemical_formulas(title)
+    title = normalize_parenthesized_chemical_formula_counts(title)
     title = join_spaced_chemical_formula_tokens(title)
     letters = re.findall(r"[A-Za-z]", title)
     uppercase = sum(1 for letter in letters if letter.isupper())
@@ -212,6 +217,7 @@ def normalize_publication_title(value: Any) -> str:
 
     normalized_title = TITLE_WORD_RE.sub(replace, title)
     normalized_title = normalize_variable_chemical_formulas(normalized_title)
+    normalized_title = normalize_parenthesized_chemical_formula_counts(normalized_title)
     normalized_title = normalize_wave_symmetry_terms(normalized_title)
     return clean_text(normalized_title)
 
@@ -231,6 +237,93 @@ def normalize_variable_chemical_formulas(title: str) -> str:
         return normalized or match.group(1)
 
     return TITLE_VARIABLE_FORMULA_RE.sub(replace, compact)
+
+
+def normalize_parenthesized_chemical_formula_counts(title: str) -> str:
+    title = TITLE_FORMULA_SIGN_SPACE_RE.sub(r"\1", title)
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}])"
+        rf"([A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]*"
+        rf"(?:\([A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]+\)"
+        rf"[0-9{TITLE_SUBSCRIPT_CHARS}+\-−–—xXyYδΔ]*)+"
+        rf"[A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]*)"
+        rf"(?![A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}])"
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        normalized = _normalize_parenthesized_chemical_formula_token(match.group(1))
+        return normalized or match.group(1)
+
+    return pattern.sub(replace, title)
+
+
+def _normalize_parenthesized_chemical_formula_token(token: str) -> str:
+    pieces: list[str] = []
+    index = 0
+    element_count = 0
+    counted_group_seen = False
+
+    while index < len(token):
+        char = token[index]
+        if char == "(":
+            close = token.find(")", index + 1)
+            if close < 0:
+                return ""
+            inner = token[index + 1 : close]
+            inner_normalized, inner_count = _normalize_formula_fragment(inner)
+            if not inner_normalized or inner_count < 1:
+                return ""
+            element_count += inner_count
+            pieces.append(f"({inner_normalized})")
+            index = close + 1
+            count_chars: list[str] = []
+            while index < len(token):
+                current = token[index]
+                if current == "(" or (current.isalpha() and current not in "xXyYδΔ"):
+                    break
+                if current not in TITLE_FORMULA_COUNT_CHARS:
+                    return ""
+                count_chars.append(current)
+                index += 1
+            if count_chars:
+                normalized_count = _normalize_formula_count_expression("".join(count_chars))
+                if not normalized_count:
+                    return ""
+                pieces.append(normalized_count)
+                counted_group_seen = True
+            continue
+
+        if char.isalpha():
+            start = index
+            while index < len(token) and token[index].isalpha():
+                index += 1
+            letters = token[start:index]
+            parsed, count = _normalize_formula_letters(letters)
+            if not parsed:
+                return ""
+            pieces.append(parsed)
+            element_count += count
+            count_chars = []
+            while index < len(token):
+                current = token[index]
+                if current == "(" or current.isalpha():
+                    break
+                if current not in TITLE_FORMULA_COUNT_CHARS:
+                    return ""
+                count_chars.append(current)
+                index += 1
+            if count_chars:
+                normalized_count = _normalize_formula_count_expression("".join(count_chars))
+                if not normalized_count:
+                    return ""
+                pieces.append(normalized_count)
+            continue
+
+        return ""
+
+    if element_count < 1 or not counted_group_seen:
+        return ""
+    return "".join(pieces)
 
 
 def _normalize_variable_chemical_formula_token(token: str, *, min_elements: int) -> str:
@@ -262,7 +355,7 @@ def _normalize_variable_chemical_formula_token(token: str, *, min_elements: int)
         count_chars: list[str] = []
         while index < len(token):
             current = token[index]
-            if current.isupper():
+            if current.isupper() and current not in "XYΔ":
                 break
             if current not in TITLE_FORMULA_COUNT_CHARS:
                 return ""
@@ -297,8 +390,10 @@ def _normalize_formula_count_expression(value: str) -> str:
             pieces.append("ₓ")
         elif char in "yY":
             pieces.append("ᵧ")
-        elif char in "δΔ":
+        elif char == "δ":
             pieces.append("δ")
+        elif char == "Δ":
+            pieces.append("Δ")
         elif char.isdigit() or char in "()":
             pieces.append(_subscript_text(char))
         elif char in TITLE_SUBSCRIPT_CHARS:
