@@ -18,6 +18,7 @@
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        [self updateFinderDropTargetForDraggingInfo:sender];
         return NSDragOperationCopy;
     }
     return [super draggingEntered:sender];
@@ -25,9 +26,15 @@
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        [self updateFinderDropTargetForDraggingInfo:sender];
         return NSDragOperationCopy;
     }
     return [super draggingUpdated:sender];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self clearFinderDropTarget];
+    [super draggingExited:sender];
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
@@ -41,12 +48,27 @@
         return NO;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSPoint point = [self convertPoint:sender.draggingLocation fromView:nil];
-    CGFloat clientX = point.x;
-    CGFloat clientY = self.bounds.size.height - point.y;
-    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@, {x:%0.2f,y:%0.2f})", json ?: @"[]", clientX, clientY];
+    NSPoint point = [self browserClientPointForDraggingInfo:sender];
+    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@, {x:%0.2f,y:%0.2f})", json ?: @"[]", point.x, point.y];
     [self evaluateJavaScript:script completionHandler:nil];
     return YES;
+}
+
+- (NSPoint)browserClientPointForDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSPoint point = [self convertPoint:sender.draggingLocation fromView:nil];
+    CGFloat clientX = point.x;
+    CGFloat clientY = self.isFlipped ? point.y : self.bounds.size.height - point.y;
+    return NSMakePoint(clientX, clientY);
+}
+
+- (void)updateFinderDropTargetForDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSPoint point = [self browserClientPointForDraggingInfo:sender];
+    NSString *script = [NSString stringWithFormat:@"window.updateNativeFinderDropTarget && window.updateNativeFinderDropTarget({x:%0.2f,y:%0.2f})", point.x, point.y];
+    [self evaluateJavaScript:script completionHandler:nil];
+}
+
+- (void)clearFinderDropTarget {
+    [self evaluateJavaScript:@"window.clearNativeFinderDropTarget && window.clearNativeFinderDropTarget()" completionHandler:nil];
 }
 
 - (void)mouseDragged:(NSEvent *)event {

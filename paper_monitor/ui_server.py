@@ -18809,6 +18809,24 @@ INDEX_HTML = """<!doctype html>
       renderLibraryFinderDropTarget(hit);
     }
 
+    function updateNativeFinderDropTarget(dropPoint = null) {
+      if (state.mode !== "library" || state.libraryTab !== "library") {
+        clearLibraryFinderDropTarget();
+        return;
+      }
+      const x = Number(dropPoint?.x);
+      const y = Number(dropPoint?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        clearLibraryFinderDropTarget();
+        return;
+      }
+      const hit = libraryImportTargetFromPoint(x, y);
+      state.libraryFinderDropTargetFolderId = hit.folderId || 0;
+      state.libraryFinderDropTargetKind = hit.kind || "";
+      $("libraryShell")?.classList.add("finder-drag-over");
+      renderLibraryFinderDropTarget(hit);
+    }
+
     function clearLibraryFinderDropTargetVisuals() {
       document.querySelectorAll(".finder-drop-column-target").forEach((node) => node.classList.remove("finder-drop-column-target"));
       document.querySelectorAll(".finder-drop-row-target").forEach((node) => node.classList.remove("finder-drop-row-target"));
@@ -25447,6 +25465,8 @@ INDEX_HTML = """<!doctype html>
     document.addEventListener("daiqo-open-library-loader", openLibraryLoader);
     window.addEventListener("storage", handleLibraryRefreshSignal);
     window.handleNativeFinderDrop = handleNativeFinderDrop;
+    window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
+    window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;
     window.openCitationSettings = openCitationSettings;
     window.openLibraryLoader = openLibraryLoader;
 
