@@ -3964,6 +3964,9 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "identifier_metadata_refreshed",
         "report_path",
         "copy_target_root",
+        "target_folder_id",
+        "target_folder_name",
+        "target_library_path",
         "import_batch_id",
     ]
     summary = {key: result.get(key) for key in keys if key in result}
@@ -8906,6 +8909,7 @@ def library_loader_copy_plan(
     action = "reuse" if previous_batches or copied_files else "new"
     target_folder = storage.get_library_folder(target_folder_id) or {}
     target_name = str(target_folder.get("name") or "Library")
+    target_library_path = library_folder_path_label(storage, target_folder_id)
     imported_label = "dropped item" if preserve_top_level and len(paths) == 1 else ("dropped items" if preserve_top_level else "source folder")
     return {
         "source_root": source_root,
@@ -8913,6 +8917,7 @@ def library_loader_copy_plan(
         "copy_target_root": str(target),
         "target_folder_id": target_folder_id,
         "target_folder_name": target_name,
+        "target_library_path": target_library_path,
         "preserve_top_level": bool(preserve_top_level),
         "action": action,
         "previous_batches": previous_batches,
@@ -8928,6 +8933,21 @@ def library_loader_copy_plan(
             else "Files are copied under the selected Library folder while preserving the dragged file/folder structure."
         ),
     }
+
+
+def library_folder_path_label(storage: Storage, folder_id: int) -> str:
+    parts: list[str] = []
+    current = storage.get_library_folder(int(folder_id or 1))
+    guard = 0
+    while current and guard < 80:
+        guard += 1
+        parts.append(str(current.get("name") or "Library"))
+        if current.get("parent_id") is None:
+            break
+        current = storage.get_library_folder(int(current.get("parent_id") or 0))
+    if not parts:
+        return "Library"
+    return " / ".join(reversed(parts))
 
 
 def resolve_library_loader_copy_target_root(storage: Storage, *, source_folder: Path, timestamp: str, slug: str) -> Path:
@@ -8987,6 +9007,8 @@ def run_library_import_job(
                 storage.close()
         update_library_import_job(job_id, local_copy_plan=copy_plan)
         log_library_import_job(job_id, f"Local copy plan: {copy_plan.get('message')} Target: {copy_plan.get('copy_target_root')}")
+        if copy_plan.get("target_library_path"):
+            log_library_import_job(job_id, f"Target Library path: {copy_plan.get('target_library_path')}")
         if preserve_top_level:
             build_inventory_from_paths(
                 source_paths,
@@ -9021,6 +9043,11 @@ def run_library_import_job(
                 log_library_import_job(job_id, f"Refreshed DOI/arXiv metadata for {refreshed} imported papers")
         finally:
             storage.close()
+        if copy_plan:
+            result.setdefault("copy_target_root", copy_plan.get("copy_target_root"))
+            result.setdefault("target_folder_id", copy_plan.get("target_folder_id"))
+            result.setdefault("target_folder_name", copy_plan.get("target_folder_name"))
+            result.setdefault("target_library_path", copy_plan.get("target_library_path"))
         summary = summarize_import_result(result)
         level = "error" if summary.get("errors") else "info"
         log_library_import_job(job_id, f"Report written: {summary.get('report_path') or report_path}", level=level)
@@ -13265,6 +13292,28 @@ INDEX_HTML = """<!doctype html>
       border-bottom: 1px solid #edf0f5;
     }
     .loader-metric strong { color: var(--ink); }
+    .loader-target-card {
+      display: grid;
+      gap: 5px;
+      margin: 2px 0 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(11, 103, 216, 0.34);
+      border-radius: 8px;
+      background: linear-gradient(90deg, rgba(234, 244, 255, 0.08), rgba(234, 244, 255, 0.92) 16%, rgba(234, 244, 255, 0.92) 84%, rgba(234, 244, 255, 0.08));
+      color: #16325c;
+    }
+    .loader-target-card strong {
+      font-size: 12px;
+      color: #0b4ea2;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .loader-target-card span {
+      font-size: 13px;
+      font-weight: 800;
+      color: #12243d;
+      overflow-wrap: anywhere;
+    }
     .loader-missing-tools {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
@@ -13702,6 +13751,22 @@ INDEX_HTML = """<!doctype html>
       border-color: var(--accent);
       box-shadow: inset 0 0 0 2px rgba(20, 184, 166, 0.18);
     }
+    .library-column.finder-drop-column-target::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      pointer-events: none;
+      border: 2px solid rgba(11, 103, 216, 0.38);
+      border-radius: 4px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.82);
+      z-index: 2;
+    }
+    .library-row.finder-drop-row-target {
+      background: #0b67d8;
+      border-color: #0b67d8;
+      color: #fff;
+    }
+    .library-row.finder-drop-row-target .library-meta { color: rgba(255, 255, 255, 0.86); }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
     .library-row.special-folder { color: #667085; }
@@ -15343,6 +15408,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportReportsPromise: null,
       libraryImportReportPath: "",
       libraryFinderDropTargetFolderId: 0,
+      libraryFinderDropTargetKind: "",
       libraryLoaderOpen: false,
       libraryRootId: 1,
       libraryCurrentFolderId: 1,
@@ -17925,7 +17991,7 @@ INDEX_HTML = """<!doctype html>
       if (message.startsWith("Importing") || message.startsWith("Imported/checkpoint")) return "import";
       if (message.startsWith("Entering ")) return "enter";
       if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
-      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Mode:")) return "file";
+      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Target Library path") || message.startsWith("Mode:")) return "file";
       if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
       return "info";
     }
@@ -17954,6 +18020,8 @@ INDEX_HTML = """<!doctype html>
     function loaderLocalCopyPlanMarkup(plan = {}, result = {}) {
       const sourceRoot = plan.source_root || result.source_root || "";
       const copyTargetRoot = plan.copy_target_root || result.copy_target_root || "";
+      const targetLibraryPath = plan.target_library_path || result.target_library_path || "";
+      const targetFolderName = plan.target_folder_name || "";
       if (!sourceRoot && !copyTargetRoot) return "";
       const action = plan.action || "";
       const isReuse = action === "reuse";
@@ -17967,6 +18035,7 @@ INDEX_HTML = """<!doctype html>
       const copied = Number(plan.copied_files || 0);
       return `
         <h3>Local Copy Plan</h3>
+        ${targetLibraryPath || targetFolderName ? `<div class="loader-target-card"><strong>Target Library Path</strong><span>${escapeHtml(targetLibraryPath || targetFolderName)}</span></div>` : ""}
         <div class="loader-metric"><strong>${isReuse ? "Previously loaded" : "Library tree"}</strong><span>${escapeHtml(message)}</span></div>
         ${sourceRoot ? `<div class="loader-metric"><strong>Source</strong><span>${escapeHtml(sourceRoot)}</span></div>` : ""}
         ${copyTargetRoot ? `<div class="loader-metric"><strong>Finder target</strong><span>${escapeHtml(copyTargetRoot)}</span></div>` : ""}
@@ -18685,51 +18754,81 @@ INDEX_HTML = """<!doctype html>
         renderLibrary();
       }
       const targetFolderId = libraryImportDropTargetFolderId(dropPoint);
-      state.libraryFinderDropTargetFolderId = 0;
+      clearLibraryFinderDropTarget();
       const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
       await runLibraryDroppedPathsImport(droppedPaths, targetFolderId, targetFolder?.name || "Library");
     }
 
     function libraryImportDropTargetFolderId(dropPoint = null) {
-      const fallback = libraryPasteTargetFolderId();
       const tracked = Number(state.libraryFinderDropTargetFolderId || 0);
       if (tracked && libraryFolderById(tracked)) return tracked;
       const x = Number(dropPoint?.x);
       const y = Number(dropPoint?.y);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) return fallback;
-      const element = document.elementFromPoint(x, y);
-      return libraryImportTargetFolderIdFromElement(element, fallback);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        const hit = libraryImportTargetFromPoint(x, y);
+        if (hit.folderId && libraryFolderById(hit.folderId)) return hit.folderId;
+      }
+      return libraryDisplayRootId();
     }
 
-    function libraryImportTargetFolderIdFromElement(element, fallback = 0) {
-      if (!element) return fallback || libraryPasteTargetFolderId();
-      const row = element.closest?.(".library-row[data-library-type]");
+    function libraryImportTargetFromPoint(x, y) {
+      const columns = [...document.querySelectorAll("[data-library-column-folder]")];
+      const column = columns.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      });
+      if (!column) return {folderId: 0, kind: ""};
+      const columnFolderId = Number(column.dataset.libraryColumnFolder || 0);
+      const rows = [...column.querySelectorAll(".library-row[data-library-type]")];
+      const row = rows.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      });
       if (row) {
         const folderId = row.dataset.libraryType === "folder"
           ? Number(row.dataset.libraryId || 0)
           : Number(row.dataset.libraryParentFolder || 0);
-        if (folderId && libraryFolderById(folderId)) return folderId;
+        return {
+          folderId,
+          kind: row.dataset.libraryType === "folder" ? "folder-row" : "item-row",
+          row,
+          column
+        };
       }
-      const column = element.closest?.("[data-library-column-folder]");
-      if (column) {
-        const folderId = Number(column.dataset.libraryColumnFolder || 0);
-        if (folderId && libraryFolderById(folderId)) return folderId;
-      }
-      const folderTarget = element.closest?.("[data-library-drop-folder]");
-      if (folderTarget) {
-        const folderId = Number(folderTarget.dataset.libraryDropFolder || 0);
-        if (folderId && libraryFolderById(folderId)) return folderId;
-      }
-      return fallback || libraryPasteTargetFolderId();
+      return {folderId: columnFolderId, kind: "column", column};
     }
 
     function updateLibraryFinderDropTargetFromEvent(event) {
       if (state.mode !== "library" || state.libraryTab !== "library") {
-        state.libraryFinderDropTargetFolderId = 0;
+        clearLibraryFinderDropTarget();
         return;
       }
-      const targetId = libraryImportTargetFolderIdFromElement(event.target, 0);
-      state.libraryFinderDropTargetFolderId = targetId || 0;
+      const hit = libraryImportTargetFromPoint(event.clientX, event.clientY);
+      state.libraryFinderDropTargetFolderId = hit.folderId || 0;
+      state.libraryFinderDropTargetKind = hit.kind || "";
+      renderLibraryFinderDropTarget(hit);
+    }
+
+    function clearLibraryFinderDropTargetVisuals() {
+      document.querySelectorAll(".finder-drop-column-target").forEach((node) => node.classList.remove("finder-drop-column-target"));
+      document.querySelectorAll(".finder-drop-row-target").forEach((node) => node.classList.remove("finder-drop-row-target"));
+    }
+
+    function clearLibraryFinderDropTarget() {
+      state.libraryFinderDropTargetFolderId = 0;
+      state.libraryFinderDropTargetKind = "";
+      clearLibraryFinderDropTargetVisuals();
+      $("libraryShell")?.classList.remove("finder-drag-over");
+    }
+
+    function renderLibraryFinderDropTarget(hit) {
+      clearLibraryFinderDropTargetVisuals();
+      if (!hit?.folderId) return;
+      if (hit.kind === "folder-row" && hit.row) {
+        hit.row.classList.add("finder-drop-row-target");
+        return;
+      }
+      if (hit.column) hit.column.classList.add("finder-drop-column-target");
     }
 
     async function runLibraryDroppedPathsImport(paths, targetFolderId, targetName = "Library") {
@@ -25326,15 +25425,14 @@ INDEX_HTML = """<!doctype html>
     });
     window.addEventListener("dragleave", (event) => {
       if (event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight) {
-        state.libraryFinderDropTargetFolderId = 0;
-        $("libraryShell")?.classList.remove("finder-drag-over");
+        clearLibraryFinderDropTarget();
       }
     });
     window.addEventListener("drop", (event) => {
       if (!event.dataTransfer?.types?.includes("Files")) return;
       event.preventDefault();
       window.setTimeout(() => {
-        state.libraryFinderDropTargetFolderId = 0;
+        clearLibraryFinderDropTarget();
       }, 1000);
       $("libraryShell")?.classList.remove("finder-drag-over");
     });
