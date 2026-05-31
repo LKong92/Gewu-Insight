@@ -199,6 +199,19 @@ CREATE TABLE IF NOT EXISTS resources (
 CREATE INDEX IF NOT EXISTS idx_resources_paper ON resources(paper_id);
 CREATE INDEX IF NOT EXISTS idx_resources_batch ON resources(import_batch_id);
 CREATE INDEX IF NOT EXISTS idx_resources_source ON resources(source_path, size_bytes);
+
+CREATE TABLE IF NOT EXISTS paper_metadata_refreshes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  mode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  source_summary TEXT,
+  error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_refreshes_paper_mode ON paper_metadata_refreshes(paper_id, mode, status, finished_at);
 """
 
 

@@ -594,6 +594,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/import-folder/start":
                 self.handle_start_library_import_folder(payload)
                 return
+            if parsed.path == "/api/library/metadata-refresh/start":
+                self.handle_start_library_metadata_refresh(payload)
+                return
             if parsed.path == "/api/library/import-folder/stop":
                 self.handle_stop_library_import_folder(payload)
                 return
@@ -1504,6 +1507,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_start_library_import_folder(self, payload: dict[str, Any]) -> None:
         raw_paths = payload.get("paths")
+        metadata_mode = normalize_import_metadata_mode(payload.get("metadata_mode"))
         preserve_top_level = False
         source_paths: list[Path] = []
         if isinstance(raw_paths, list) and raw_paths:
@@ -1576,6 +1580,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             local_copy_plan=copy_plan,
             target_folder_id=target_folder_id,
             preserve_top_level=preserve_top_level,
+            metadata_mode=metadata_mode,
         )
         thread = threading.Thread(
             target=run_library_import_job,
@@ -1590,6 +1595,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "copy_plan": copy_plan,
                 "target_folder_id": target_folder_id,
                 "preserve_top_level": preserve_top_level,
+                "metadata_mode": metadata_mode,
+            },
+            daemon=True,
+        )
+        thread.start()
+        self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
+
+    def handle_start_library_metadata_refresh(self, payload: dict[str, Any]) -> None:
+        metadata_mode = normalize_metadata_refresh_mode(payload.get("metadata_mode"))
+        skip_days = int(payload.get("skip_days") or 3)
+        skip_days = max(0, min(30, skip_days))
+        job_id = create_library_metadata_refresh_job(metadata_mode=metadata_mode, skip_days=skip_days)
+        thread = threading.Thread(
+            target=run_library_metadata_refresh_job,
+            kwargs={
+                "job_id": job_id,
+                "db_path": self.configured_db_path,
+                "metadata_mode": metadata_mode,
+                "skip_days": skip_days,
             },
             daemon=True,
         )
@@ -3967,6 +3991,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "target_folder_id",
         "target_folder_name",
         "target_library_path",
+        "metadata_mode",
         "import_batch_id",
     ]
     summary = {key: result.get(key) for key in keys if key in result}
@@ -4884,7 +4909,25 @@ def refresh_paper_metadata_from_arxiv_if_possible(
     return refreshed
 
 
-def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None) -> int:
+def normalize_import_metadata_mode(value: Any) -> str:
+    mode = str(value or "quick").strip().lower()
+    return mode if mode in {"skip", "quick", "full"} else "quick"
+
+
+def normalize_metadata_refresh_mode(value: Any) -> str:
+    mode = str(value or "full").strip().lower()
+    return mode if mode in {"quick", "full"} else "full"
+
+
+def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None, mode: str = "quick") -> int:
+    mode = normalize_import_metadata_mode(mode)
+    result["metadata_mode"] = mode
+    if mode == "skip":
+        if job_id:
+            log_library_import_job(job_id, "Metadata refresh skipped by user selection")
+        result["doi_metadata_refreshed"] = 0
+        result["identifier_metadata_refreshed"] = 0
+        return 0
     candidates = [item for item in (result.get("metadata_refresh_candidates") or []) if isinstance(item, dict)]
     papers = [
         {"paper_id": item.get("paper_id"), "doi": item.get("doi"), "arxiv_id": item.get("arxiv_id")}
@@ -4928,8 +4971,9 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
             refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
         else:
             refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, stored_paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
-        refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-        refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
+        if mode == "full":
+            refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
+            refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
         if refreshed and refreshed != before:
             refreshed_count += 1
             if job_id:
@@ -4938,6 +4982,177 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
     result["doi_metadata_refreshed"] = refreshed_count
     result["identifier_metadata_refreshed"] = refreshed_count
     return refreshed_count
+
+
+def library_metadata_refresh_candidates(storage: Storage) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        SELECT DISTINCT papers.*
+        FROM papers
+        JOIN library_items ON library_items.paper_id = papers.paper_id
+        LEFT JOIN library_folders ON library_folders.id = library_items.folder_id
+        WHERE (library_items.trashed_at IS NULL OR library_items.trashed_at = '')
+          AND (library_folders.trashed_at IS NULL OR library_folders.trashed_at = '')
+        ORDER BY COALESCE(papers.publication_date, '') DESC, papers.journal ASC, papers.title ASC
+        """
+    ).fetchall()
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        paper = dict(row)
+        paper_id = clean_text(paper.get("paper_id") or "")
+        if not paper_id or paper_id in seen:
+            continue
+        doi = normalize_publication_doi(str(paper.get("doi") or ""))
+        arxiv_id = arxiv_identifier_for_paper(paper)
+        if looks_like_doi(doi) or arxiv_id:
+            paper["doi"] = doi
+            paper["arxiv_id"] = arxiv_id
+            candidates.append(paper)
+            seen.add(paper_id)
+    return candidates
+
+
+def metadata_refresh_recently_completed(storage: Storage, paper_id: str, mode: str, *, skip_days: int) -> bool:
+    if skip_days <= 0:
+        return False
+    cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
+    modes = ("full",) if mode == "full" else ("quick", "full")
+    placeholders = ", ".join("?" for _ in modes)
+    row = storage.conn.execute(
+        f"""
+        SELECT 1
+        FROM paper_metadata_refreshes
+        WHERE paper_id = ?
+          AND status = 'completed'
+          AND mode IN ({placeholders})
+          AND COALESCE(finished_at, started_at) >= ?
+        ORDER BY COALESCE(finished_at, started_at) DESC
+        LIMIT 1
+        """,
+        (paper_id, *modes, cutoff),
+    ).fetchone()
+    return row is not None
+
+
+def record_metadata_refresh_start(storage: Storage, *, paper_id: str, mode: str, source_summary: str) -> int:
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    cursor = storage.conn.execute(
+        """
+        INSERT INTO paper_metadata_refreshes (paper_id, mode, status, started_at, source_summary)
+        VALUES (?, ?, 'running', ?, ?)
+        """,
+        (paper_id, mode, started_at, source_summary),
+    )
+    storage.conn.commit()
+    return int(cursor.lastrowid)
+
+
+def record_metadata_refresh_finish(storage: Storage, refresh_id: int, *, status: str, error: str = "") -> None:
+    storage.conn.execute(
+        """
+        UPDATE paper_metadata_refreshes
+        SET status = ?, finished_at = ?, error = ?
+        WHERE id = ?
+        """,
+        (status, datetime.now().astimezone().isoformat(timespec="seconds"), error, refresh_id),
+    )
+    storage.conn.commit()
+
+
+def refresh_single_paper_metadata_for_mode(storage: Storage, paper: dict[str, Any], *, mode: str) -> dict[str, Any] | None:
+    mode = normalize_metadata_refresh_mode(mode)
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
+    if looks_like_doi(doi):
+        refreshed = refresh_paper_metadata_from_doi_if_possible(storage, paper, doi=doi, timeout=12, max_retries=1)
+    elif arxiv_id:
+        refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
+    else:
+        refreshed = paper
+    if mode == "full":
+        refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
+        refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
+    return refreshed
+
+
+def run_library_metadata_refresh_job(*, job_id: str, db_path: Path, metadata_mode: str = "full", skip_days: int = 3) -> None:
+    metadata_mode = normalize_metadata_refresh_mode(metadata_mode)
+    storage = Storage(db_path)
+    refreshed_count = 0
+    skipped_recent = 0
+    failed_count = 0
+    try:
+        candidates = library_metadata_refresh_candidates(storage)
+        total = len(candidates)
+        log_library_import_job(job_id, f"Refreshing all Library metadata in {metadata_mode} mode")
+        log_library_import_job(job_id, f"Skipping papers refreshed in the last {skip_days} day{'s' if skip_days != 1 else ''}")
+        update_library_import_job(job_id, status="running", stage="metadata", total=total, current=0, percent=0)
+        for index, paper in enumerate(candidates, start=1):
+            if library_import_cancel_requested(job_id):
+                raise ImportCancelled("Metadata refresh stopped by user")
+            paper_id = clean_text(paper.get("paper_id") or "")
+            doi = normalize_publication_doi(str(paper.get("doi") or ""))
+            arxiv_id = arxiv_identifier_for_paper(paper)
+            identifier = doi if looks_like_doi(doi) else arxiv_id
+            percent = max(0, min(99, round((index / total) * 100))) if total else 100
+            update_library_import_job(job_id, current=index, total=total, percent=percent, stage="metadata")
+            if metadata_refresh_recently_completed(storage, paper_id, metadata_mode, skip_days=skip_days):
+                skipped_recent += 1
+                log_library_import_job(job_id, f"Skipped recent metadata {index} / {total}: {identifier or paper_id}")
+                continue
+            log_library_import_job(job_id, f"Refreshing metadata {index} / {total}: {identifier or paper_id}")
+            refresh_id = record_metadata_refresh_start(storage, paper_id=paper_id, mode=metadata_mode, source_summary=identifier or paper_id)
+            before = dict(storage.get_paper(paper_id) or paper)
+            try:
+                refreshed = refresh_single_paper_metadata_for_mode(storage, before, mode=metadata_mode)
+                record_metadata_refresh_finish(storage, refresh_id, status="completed")
+                if refreshed and refreshed != before:
+                    refreshed_count += 1
+                    log_library_import_job(job_id, f"Refreshed metadata: {clean_text(refreshed.get('title') or identifier or paper_id)}")
+            except Exception as exc:
+                failed_count += 1
+                record_metadata_refresh_finish(storage, refresh_id, status="failed", error=str(exc))
+                log_library_import_job(job_id, f"Metadata refresh failed for {identifier or paper_id}: {exc}", level="warn")
+        result = {
+            "job_type": "metadata_refresh",
+            "metadata_mode": metadata_mode,
+            "total_candidates": total,
+            "metadata_refreshed": refreshed_count,
+            "skipped_recent": skipped_recent,
+            "failed": failed_count,
+            "skip_days": skip_days,
+            "errors": [],
+        }
+        log_library_import_job(job_id, f"Done: {refreshed_count} refreshed, {skipped_recent} skipped recent, {failed_count} failed")
+        update_library_import_job(
+            job_id,
+            status="completed",
+            stage="complete",
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            percent=100,
+            result=result,
+        )
+    except ImportCancelled as exc:
+        log_library_import_job(job_id, str(exc) or "Metadata refresh stopped by user", level="warn")
+        update_library_import_job(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    except Exception as exc:
+        log_library_import_job(job_id, f"Metadata refresh failed: {exc}", level="error")
+        update_library_import_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    finally:
+        storage.close()
 
 
 def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
@@ -8742,6 +8957,7 @@ def create_library_import_job(
     local_copy_plan: dict[str, Any] | None = None,
     target_folder_id: int = 1,
     preserve_top_level: bool = False,
+    metadata_mode: str = "quick",
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -8755,6 +8971,7 @@ def create_library_import_job(
             "source_paths": [str(path) for path in import_paths],
             "target_folder_id": int(target_folder_id or 1),
             "preserve_top_level": bool(preserve_top_level),
+            "metadata_mode": normalize_import_metadata_mode(metadata_mode),
             "copy_mode": copy_mode,
             "dry_run": False,
             "started_at": now,
@@ -8771,6 +8988,31 @@ def create_library_import_job(
             "local_copy_plan": local_copy_plan or {},
             "scan_files": 0,
             "scan_dirs": 0,
+        }
+    return job_id
+
+
+def create_library_metadata_refresh_job(*, metadata_mode: str = "full", skip_days: int = 3) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        LIBRARY_IMPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "job_type": "metadata_refresh",
+            "status": "queued",
+            "stage": "queued",
+            "metadata_mode": normalize_metadata_refresh_mode(metadata_mode),
+            "skip_days": int(skip_days),
+            "started_at": now,
+            "finished_at": "",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            "logs": [{"time": now, "level": "info", "message": "Queued metadata refresh job"}],
+            "result": None,
+            "error": "",
+            "cancel_requested": False,
+            "library_ready": True,
         }
     return job_id
 
@@ -8811,7 +9053,8 @@ def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
             job["stage"] = "stopping"
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs") or [])[-300:]
-    log_library_import_job(job_id, "Stop requested. The loader will stop at the next safe checkpoint.", level="warn")
+    label = "metadata refresh" if job.get("job_type") == "metadata_refresh" else "loader"
+    log_library_import_job(job_id, f"Stop requested. The {label} will stop at the next safe checkpoint.", level="warn")
     return get_library_import_job(job_id)
 
 
@@ -8976,10 +9219,12 @@ def run_library_import_job(
     copy_plan: dict[str, Any] | None = None,
     target_folder_id: int = 1,
     preserve_top_level: bool = False,
+    metadata_mode: str = "quick",
 ) -> None:
     timestamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = slug or safe_slug(folder_path.name or "library-folder", 60)
     source_paths = source_paths or [folder_path]
+    metadata_mode = normalize_import_metadata_mode(metadata_mode)
     import_prefix = "finder-drop" if preserve_top_level else "folder"
     inventory_path = ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
     report_path = ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
@@ -8990,6 +9235,7 @@ def run_library_import_job(
     else:
         log_library_import_job(job_id, f"Source folder: {folder_path}")
     log_library_import_job(job_id, f"Mode: import / {copy_mode}")
+    log_library_import_job(job_id, f"Metadata mode: {metadata_mode}")
     try:
         if not copy_plan:
             storage = Storage(db_path)
@@ -9038,7 +9284,7 @@ def run_library_import_job(
                 library_root_folder_id=target_folder_id,
                 progress_callback=progress,
             )
-            refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id)
+            refreshed = refresh_imported_doi_metadata(storage, result, job_id=job_id, mode=metadata_mode)
             if refreshed:
                 log_library_import_job(job_id, f"Refreshed DOI/arXiv metadata for {refreshed} imported papers")
         finally:
@@ -9048,6 +9294,7 @@ def run_library_import_job(
             result.setdefault("target_folder_id", copy_plan.get("target_folder_id"))
             result.setdefault("target_folder_name", copy_plan.get("target_folder_name"))
             result.setdefault("target_library_path", copy_plan.get("target_library_path"))
+        result.setdefault("metadata_mode", metadata_mode)
         summary = summarize_import_result(result)
         level = "error" if summary.get("errors") else "info"
         log_library_import_job(job_id, f"Report written: {summary.get('report_path') or report_path}", level=level)
@@ -13073,7 +13320,7 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-columns: minmax(320px, 1fr) auto;
       gap: 10px;
-      align-items: center;
+      align-items: end;
     }
     .loader-form .loader-path-control {
       display: grid;
@@ -13082,6 +13329,8 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
     }
     .loader-form .loader-action-group {
+      grid-column: 2;
+      grid-row: 1;
       display: inline-flex;
       align-items: center;
       justify-content: flex-end;
@@ -13090,6 +13339,60 @@ INDEX_HTML = """<!doctype html>
     }
     .loader-form .loader-action-danger {
       margin-left: 6px;
+    }
+    .loader-field {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .loader-metadata-field {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    .loader-field label {
+      color: #667085;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .loader-target-summary {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      margin-top: -2px;
+    }
+    .loader-target-summary.hidden { display: none; }
+    .loader-target-pill {
+      min-width: 0;
+      border: 1px solid rgba(11, 103, 216, 0.22);
+      border-radius: 8px;
+      background: linear-gradient(90deg, rgba(234, 244, 255, 0.1), rgba(234, 244, 255, 0.76) 18%, rgba(255, 255, 255, 0.9));
+      padding: 8px 10px;
+      color: #344054;
+      font-size: 12px;
+    }
+    .loader-target-pill strong {
+      display: block;
+      margin-bottom: 3px;
+      color: #0b4ea2;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .loader-target-pill span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #18212f;
+      font-weight: 750;
+    }
+    .loader-metadata-hint {
+      color: #667085;
+      font-size: 11px;
+      line-height: 1.25;
     }
     .loader-form .smallbtn {
       min-height: 36px;
@@ -15314,6 +15617,7 @@ INDEX_HTML = """<!doctype html>
     const initialToday = localIsoDate(new Date());
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
+    const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
       ["cond-mat.dis-nn", "Disordered Systems"],
@@ -15391,7 +15695,13 @@ INDEX_HTML = """<!doctype html>
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
+      libraryTaskMode: "import",
       libraryImportPath: "",
+      libraryImportSourcePaths: [],
+      libraryImportTargetFolderId: 1,
+      libraryImportTargetPath: "Library",
+      libraryImportFinderTarget: "",
+      libraryImportMetadataMode: "quick",
       libraryImportStatus: "",
       libraryImportBusy: false,
       libraryImportLastResult: null,
@@ -16010,6 +16320,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function openLibraryLoader() {
+      if (!IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
+        window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "open"});
+        return;
+      }
+      loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
     }
@@ -17841,17 +18156,38 @@ INDEX_HTML = """<!doctype html>
       const consoleWasAtBottom = isLoaderConsoleAtBottom(previousConsole);
       const previousConsoleScrollTop = previousConsole?.scrollTop || 0;
       const previousSideScrollTop = previousSide?.scrollTop || 0;
+      const sourceLabel = libraryImportSourceLabel();
+      const targetLabel = state.libraryImportTargetPath || "Library";
+      const finderTarget = state.libraryImportFinderTarget || "";
+      const refreshMode = state.libraryTaskMode === "metadata-refresh";
+      const runLabel = refreshMode ? "Start Refresh" : "Import";
+      const stopLabel = refreshMode ? "Stop Refresh" : "Stop Import";
       root.innerHTML = `
         <div class="loader-panel">
           <div class="loader-form">
-            <div class="loader-path-control">
-              <input id="libraryImportPath" type="text" value="${escapeAttr(state.libraryImportPath || "")}" placeholder="/path/to/folder">
-              <button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>
+            <div class="loader-field${refreshMode ? " loader-source-disabled" : ""}">
+              <label for="libraryImportPath">Source</label>
+              <div class="loader-path-control">
+                <input id="libraryImportPath" type="text" value="${escapeAttr(refreshMode ? "All Library papers with DOI/arXiv" : sourceLabel)}" placeholder="/path/to/folder"${refreshMode ? " disabled" : ""}>
+                ${refreshMode ? "" : `<button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>`}
+              </div>
+            </div>
+            <div class="loader-field loader-metadata-field">
+              <label for="libraryImportMetadataMode">Metadata</label>
+              <select id="libraryImportMetadataMode"${state.libraryImportBusy ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
+                ${refreshMode ? "" : `<option value="skip"${state.libraryImportMetadataMode === "skip" ? " selected" : ""}>Skip metadata</option>`}
+                <option value="quick"${state.libraryImportMetadataMode === "quick" ? " selected" : ""}>Quick refresh</option>
+                <option value="full"${state.libraryImportMetadataMode === "full" ? " selected" : ""}>Full refresh</option>
+              </select>
+              <div class="loader-metadata-hint">${escapeHtml(refreshMode ? `Papers refreshed in the last 3 days will be skipped.` : loaderMetadataModeHint(state.libraryImportMetadataMode))}</div>
             </div>
             <div class="loader-action-group">
-              <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Import</button>
-              <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>Stop Import</button>
-              <button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>
+              <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>${runLabel}</button>
+              <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>${stopLabel}</button>
+              ${refreshMode ? "" : `<button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>`}
+            </div>
+            <div class="loader-target-summary${refreshMode ? " hidden" : ""}">
+              <div class="loader-target-pill"><strong>Finder Target</strong><span title="${escapeAttr(finderTarget || targetLabel)}">${escapeHtml(finderTarget || targetLabel || "data/Library")}</span></div>
             </div>
           </div>
           <div class="loader-progress">
@@ -17881,6 +18217,25 @@ INDEX_HTML = """<!doctype html>
       const sideEl = $("libraryLoaderSide");
       if (sideEl && previousSideScrollTop) sideEl.scrollTop = previousSideScrollTop;
       $("loaderJumpLatest")?.addEventListener("click", jumpLoaderConsoleToLatest);
+    }
+
+    function normalizeLibraryImportMetadataMode(value) {
+      const mode = String(value || "quick").toLowerCase();
+      return ["skip", "quick", "full"].includes(mode) ? mode : "quick";
+    }
+
+    function libraryImportSourceLabel() {
+      const paths = Array.isArray(state.libraryImportSourcePaths) ? state.libraryImportSourcePaths.filter(Boolean) : [];
+      if (paths.length === 1) return paths[0];
+      if (paths.length > 1) return `${paths.length} dropped items`;
+      return state.libraryImportPath || "";
+    }
+
+    function loaderMetadataModeHint(mode) {
+      mode = normalizeLibraryImportMetadataMode(mode);
+      if (mode === "skip") return "Fastest: import files and identifiers only.";
+      if (mode === "full") return "Slow: refreshes detailed metadata and citation sources.";
+      return "Recommended: refreshes core title, author, journal, and date metadata.";
     }
 
     function loaderStatusText(job) {
@@ -17937,6 +18292,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function loaderResultSummary(result) {
+      if (result.job_type === "metadata_refresh") {
+        return [
+          `${result.metadata_refreshed || 0} refreshed`,
+          `${result.skipped_recent || 0} skipped recent`,
+          `${result.failed || 0} failed`,
+          `${result.total_candidates || 0} candidates`,
+          `mode: ${result.metadata_mode || "full"}`
+        ].join(" · ");
+      }
       return [
         `${result.created_papers || 0} created`,
         `${result.existing_papers || 0} existing`,
@@ -17991,7 +18355,7 @@ INDEX_HTML = """<!doctype html>
       if (message.startsWith("Importing") || message.startsWith("Imported/checkpoint")) return "import";
       if (message.startsWith("Entering ")) return "enter";
       if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
-      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Target Library path") || message.startsWith("Mode:")) return "file";
+      if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Target Library path") || message.startsWith("Metadata mode") || message.startsWith("Mode:")) return "file";
       if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
       return "info";
     }
@@ -18020,8 +18384,6 @@ INDEX_HTML = """<!doctype html>
     function loaderLocalCopyPlanMarkup(plan = {}, result = {}) {
       const sourceRoot = plan.source_root || result.source_root || "";
       const copyTargetRoot = plan.copy_target_root || result.copy_target_root || "";
-      const targetLibraryPath = plan.target_library_path || result.target_library_path || "";
-      const targetFolderName = plan.target_folder_name || "";
       if (!sourceRoot && !copyTargetRoot) return "";
       const action = plan.action || "";
       const isReuse = action === "reuse";
@@ -18035,7 +18397,6 @@ INDEX_HTML = """<!doctype html>
       const copied = Number(plan.copied_files || 0);
       return `
         <h3>Local Copy Plan</h3>
-        ${targetLibraryPath || targetFolderName ? `<div class="loader-target-card"><strong>Target Library Path</strong><span>${escapeHtml(targetLibraryPath || targetFolderName)}</span></div>` : ""}
         <div class="loader-metric"><strong>${isReuse ? "Previously loaded" : "Library tree"}</strong><span>${escapeHtml(message)}</span></div>
         ${sourceRoot ? `<div class="loader-metric"><strong>Source</strong><span>${escapeHtml(sourceRoot)}</span></div>` : ""}
         ${copyTargetRoot ? `<div class="loader-metric"><strong>Finder target</strong><span>${escapeHtml(copyTargetRoot)}</span></div>` : ""}
@@ -18046,6 +18407,21 @@ INDEX_HTML = """<!doctype html>
 
     function loaderSideMarkup(result) {
       const plan = state.libraryImportJob?.local_copy_plan || {};
+      const refreshMode = state.libraryTaskMode === "metadata-refresh" || state.libraryImportJob?.job_type === "metadata_refresh" || result?.job_type === "metadata_refresh";
+      if (refreshMode) {
+        return `
+          <h3>Metadata Refresh</h3>
+          <p>Refreshes Library papers with DOI/arXiv identifiers. Papers successfully refreshed in the last 3 days are skipped.</p>
+          <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || result?.metadata_mode || "full")}</span></div>
+          <div class="loader-metric"><strong>Scope</strong><span>All Library papers with DOI/arXiv</span></div>
+          <div class="loader-metric"><strong>Skip rule</strong><span>Successful refreshes within 3 days are skipped.</span></div>
+          ${result ? `
+            <div class="loader-metric"><strong>${result.metadata_refreshed || 0} refreshed</strong><span>Papers whose metadata changed during this run.</span></div>
+            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Papers already refreshed recently.</span></div>
+            <div class="loader-metric"><strong>${result.failed || 0} failed</strong><span>Papers that could not be refreshed this time.</span></div>
+          ` : ""}
+        `;
+      }
       if (!result) {
         return `
           <h3>Result Guide</h3>
@@ -18409,9 +18785,17 @@ INDEX_HTML = """<!doctype html>
       });
       pathInput?.addEventListener("input", () => {
         state.libraryImportPath = pathInput.value;
+        state.libraryImportSourcePaths = [];
+      });
+      $("libraryImportMetadataMode")?.addEventListener("change", (event) => {
+        state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode(event.target.value);
+        renderLibraryLoader();
       });
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
-      $("libraryRunImport")?.addEventListener("click", runLibraryFolderImport);
+      $("libraryRunImport")?.addEventListener("click", () => {
+        if (state.libraryTaskMode === "metadata-refresh") runLibraryMetadataRefresh();
+        else runLibraryFolderImport();
+      });
       $("libraryStopImport")?.addEventListener("click", stopLibraryFolderImport);
       $("libraryDeleteImport")?.addEventListener("click", deleteLibraryFolderImport);
       const reportSelect = $("libraryImportReportSelect");
@@ -18432,6 +18816,10 @@ INDEX_HTML = """<!doctype html>
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not choose folder");
         state.libraryImportPath = data.path || "";
+        state.libraryImportSourcePaths = [];
+        state.libraryImportTargetFolderId = state.libraryRootId || 1;
+        state.libraryImportTargetPath = "Library";
+        state.libraryImportFinderTarget = "";
         state.libraryImportStatus = "Folder selected. Ready to import.";
         state.libraryImportLastResult = null;
         renderLibraryLoader();
@@ -18489,6 +18877,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryImportBusy = false;
       state.libraryImportJobId = "";
       state.libraryImportJob = {
+        job_type: result.job_type || "import",
         status: "loaded",
         stage: "report",
         percent: 100,
@@ -18504,16 +18893,18 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryFolderImport() {
-      const path = ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
-      if (!path) {
-        state.libraryImportStatus = "Folder path is required.";
-        state.libraryImportLastResult = {errors: ["Folder path is required"]};
+      const sourcePaths = Array.isArray(state.libraryImportSourcePaths) ? state.libraryImportSourcePaths.filter(Boolean) : [];
+      const path = sourcePaths.length ? "" : ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
+      if (!sourcePaths.length && !path) {
+        state.libraryImportStatus = "Source path is required.";
+        state.libraryImportLastResult = {errors: ["Source path is required"]};
         renderLibraryLoader();
         return;
       }
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
-      state.libraryImportPath = path;
+      if (path) state.libraryImportPath = path;
+      state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode($("libraryImportMetadataMode")?.value || state.libraryImportMetadataMode);
       state.libraryImportStatus = "Starting import loader...";
       state.libraryImportLastResult = null;
       state.libraryImportReportPath = "";
@@ -18524,7 +18915,17 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({folder_path: path})
+          body: JSON.stringify(sourcePaths.length
+            ? {
+                paths: sourcePaths,
+                target_folder_id: Number(state.libraryImportTargetFolderId || state.libraryRootId || 1),
+                metadata_mode: state.libraryImportMetadataMode
+              }
+            : {
+                folder_path: path,
+                target_folder_id: Number(state.libraryImportTargetFolderId || state.libraryRootId || 1),
+                metadata_mode: state.libraryImportMetadataMode
+              })
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start loader");
@@ -18541,9 +18942,44 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function runLibraryMetadataRefresh() {
+      stopLibraryImportPolling();
+      state.libraryImportBusy = true;
+      state.libraryTaskMode = "metadata-refresh";
+      state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode($("libraryImportMetadataMode")?.value || state.libraryImportMetadataMode);
+      if (state.libraryImportMetadataMode === "skip") state.libraryImportMetadataMode = "full";
+      state.libraryImportStatus = "Starting metadata refresh...";
+      state.libraryImportLastResult = null;
+      state.libraryImportReportPath = "";
+      state.libraryImportReadyRefreshDone = true;
+      state.libraryImportJob = {job_type: "metadata_refresh", status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
+      renderLibraryLoader();
+      try {
+        const res = await fetch("/api/library/metadata-refresh/start", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({metadata_mode: state.libraryImportMetadataMode, skip_days: 3})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not start metadata refresh");
+        state.libraryImportJobId = data.job_id || "";
+        state.libraryImportJob = data.job || null;
+        state.libraryImportStatus = "Metadata refresh running...";
+        renderLibraryLoader();
+        startLibraryImportPolling();
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Metadata refresh failed";
+        state.libraryImportLastResult = {job_type: "metadata_refresh", errors: [state.libraryImportStatus]};
+        state.libraryImportBusy = false;
+        renderLibraryLoader();
+      }
+    }
+
     async function stopLibraryFolderImport() {
       if (!state.libraryImportJobId || !state.libraryImportBusy) return;
-      state.libraryImportStatus = "Stopping import at the next safe checkpoint...";
+      state.libraryImportStatus = state.libraryTaskMode === "metadata-refresh"
+        ? "Stopping metadata refresh at the next safe checkpoint..."
+        : "Stopping import at the next safe checkpoint...";
       renderLibraryLoader();
       try {
         const res = await fetch("/api/library/import-folder/stop", {
@@ -18741,6 +19177,65 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function saveLibraryImportDraft(draft) {
+      try {
+        localStorage.setItem(LIBRARY_IMPORT_DRAFT_KEY, JSON.stringify({...draft, created_at: Date.now()}));
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Could not save import draft";
+      }
+    }
+
+    function applyLibraryImportDraft(draft = {}) {
+      const sourcePaths = Array.isArray(draft.source_paths) ? draft.source_paths.filter((path) => typeof path === "string" && path.trim()) : [];
+      state.libraryTaskMode = draft.job_type === "metadata_refresh" ? "metadata-refresh" : "import";
+      state.libraryImportSourcePaths = sourcePaths;
+      state.libraryImportPath = sourcePaths.length === 1 ? sourcePaths[0] : (sourcePaths.length ? `${sourcePaths.length} dropped items` : (draft.source_root || state.libraryImportPath || ""));
+      state.libraryImportTargetFolderId = Number(draft.target_folder_id || state.libraryRootId || 1);
+      state.libraryImportTargetPath = draft.target_library_path || (state.libraryImportTargetFolderId ? libraryFolderPath(state.libraryImportTargetFolderId) : "Library");
+      state.libraryImportFinderTarget = draft.finder_target || draft.copy_target_root || "";
+      state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode(draft.metadata_mode || state.libraryImportMetadataMode);
+      state.libraryImportStatus = draft.status || "Ready to import.";
+      state.libraryImportLastResult = null;
+      state.libraryImportJobId = "";
+      state.libraryImportJob = null;
+      state.libraryImportReadyRefreshDone = false;
+    }
+
+    function loadPendingLibraryImportDraft() {
+      try {
+        const raw = localStorage.getItem(LIBRARY_IMPORT_DRAFT_KEY);
+        if (!raw) return false;
+        const draft = JSON.parse(raw);
+        if (!draft || typeof draft !== "object") return false;
+        applyLibraryImportDraft(draft);
+        localStorage.removeItem(LIBRARY_IMPORT_DRAFT_KEY);
+        return true;
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Could not load import draft";
+        return false;
+      }
+    }
+
+    function openLibraryLoaderWindow() {
+      if (window.webkit?.messageHandlers?.libraryLoaderWindow) {
+        window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "open"});
+        return true;
+      }
+      openLibraryLoader();
+      return false;
+    }
+
+    function openMetadataRefreshWindow() {
+      const draft = {
+        job_type: "metadata_refresh",
+        metadata_mode: "full",
+        status: "Ready to refresh Library metadata. Papers refreshed in the last 3 days will be skipped."
+      };
+      saveLibraryImportDraft(draft);
+      applyLibraryImportDraft(draft);
+      openLibraryLoaderWindow();
+    }
+
     async function handleNativeFinderDrop(paths, dropPoint = null) {
       const droppedPaths = Array.isArray(paths)
         ? paths.filter((path) => typeof path === "string" && path.trim())
@@ -18756,7 +19251,20 @@ INDEX_HTML = """<!doctype html>
       const targetFolderId = libraryImportDropTargetFolderId(dropPoint);
       clearLibraryFinderDropTarget();
       const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
-      await runLibraryDroppedPathsImport(droppedPaths, targetFolderId, targetFolder?.name || "Library");
+      const targetPath = libraryFolderPath(targetFolderId);
+      const finderTarget = targetFolder?.native_folder_path || "";
+      const draft = {
+        source_paths: droppedPaths,
+        target_folder_id: targetFolderId,
+        target_folder_name: targetFolder?.name || "Library",
+        target_library_path: targetPath,
+        finder_target: finderTarget,
+        metadata_mode: state.libraryImportMetadataMode || "quick",
+        status: `Ready to import ${droppedPaths.length === 1 ? "dropped item" : `${droppedPaths.length} dropped items`} into ${targetPath}.`
+      };
+      saveLibraryImportDraft(draft);
+      applyLibraryImportDraft(draft);
+      openLibraryLoaderWindow();
     }
 
     function libraryImportDropTargetFolderId(dropPoint = null) {
@@ -25469,10 +25977,12 @@ INDEX_HTML = """<!doctype html>
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;
     window.openCitationSettings = openCitationSettings;
     window.openLibraryLoader = openLibraryLoader;
+    window.openMetadataRefreshWindow = openMetadataRefreshWindow;
 
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");
       document.querySelector(".app")?.classList.add("loader-window-mode");
+      loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
     } else {

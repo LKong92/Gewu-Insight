@@ -181,6 +181,7 @@
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
+    [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     configuration.userContentController = userContentController;
     self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -216,7 +217,16 @@
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
-        [self.loaderWindow orderOut:nil];
+        NSString *type = @"close";
+        if ([message.body isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *payload = (NSDictionary *)message.body;
+            type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : type;
+        }
+        if ([type isEqualToString:@"open"]) {
+            [self showLibraryLoaderWindow];
+        } else {
+            [self.loaderWindow orderOut:nil];
+        }
         return;
     }
     if ([message.name isEqualToString:@"nativeFileDrag"]) {
@@ -307,6 +317,8 @@
     NSMenu *loaderMenu = [[NSMenu alloc] initWithTitle:@"Loader"];
     NSMenuItem *openLoaderItem = [loaderMenu addItemWithTitle:@"Open Loader" action:@selector(openLibraryLoader:) keyEquivalent:@"l"];
     openLoaderItem.target = self;
+    NSMenuItem *refreshMetadataItem = [loaderMenu addItemWithTitle:@"Refresh All Metadata" action:@selector(openMetadataRefresh:) keyEquivalent:@""];
+    refreshMetadataItem.target = self;
     loaderMenuItem.submenu = loaderMenu;
 
     NSMenuItem *settingMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -435,6 +447,10 @@
 
 - (void)openLibraryLoader:(id)sender {
     [self showLibraryLoaderWindow];
+}
+
+- (void)openMetadataRefresh:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openMetadataRefreshWindow && window.openMetadataRefreshWindow()" completionHandler:nil];
 }
 
 - (NSURL *)loaderURL {
