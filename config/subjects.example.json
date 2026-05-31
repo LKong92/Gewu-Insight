@@ -1,0 +1,21 @@
+{
+  "subjects": [
+    {
+      "key": "ELECTRIDE",
+      "name": "Electride",
+      "keywords": [
+        "electride",
+        "interstitial electron"
+      ]
+    },
+    {
+      "key": "METHODS",
+      "name": "Methods",
+      "keywords": [
+        "high-throughput screening",
+        "materials informatics",
+        "optical conductivity"
+      ]
+    }
+  ]
+}

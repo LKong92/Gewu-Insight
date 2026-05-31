@@ -53,7 +53,7 @@ from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, strip_arxiv_version
 from .sources.crossref import normalize_crossref_item
-from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications
+from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, journal_name_for_doi, normalize_publication_title, safe_slug
@@ -78,6 +78,10 @@ LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_SHORTCUT_TAB_COUNT = 5
 LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
+THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
+THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
+THEME_GROUP_OVERRIDES_SETTING = "theme_group_overrides"
+THEME_GROUP_ORDER_SETTING = "theme_group_order"
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
@@ -153,6 +157,9 @@ DEEP_SURVEY_WORKSPACE_DIR = ROOT / "data" / "deep_survey_workspace"
 DEEP_SURVEY_LOCK = threading.Lock()
 DEEP_SURVEY_PROCESS: subprocess.Popen | None = None
 DEEP_SURVEY_PORT: int | None = None
+
+SUBJECTS_CONFIG_PATH = ROOT / "config" / "subjects.json"
+THEME_GROUPS: dict[str, dict[str, Any]] = {}
 
 
 def find_free_local_port() -> int:
@@ -315,6 +322,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/arxiv-daily-refresh":
                 self.handle_arxiv_daily_refresh()
                 return
+            if parsed.path == "/api/theme-groups":
+                self.handle_theme_groups()
+                return
+            if parsed.path == "/api/theme-month":
+                self.handle_theme_month(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/theme-report":
+                self.handle_theme_report(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/deep-survey/status":
                 self.handle_deep_survey_status()
                 return
@@ -424,6 +440,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/reveal-path":
                 self.handle_reveal_path(payload)
+                return
+            if parsed.path == "/api/theme-search":
+                self.handle_theme_search(payload)
+                return
+            if parsed.path == "/api/theme-groups":
+                self.handle_add_theme_group(payload)
+                return
+            if parsed.path == "/api/theme-groups/update":
+                self.handle_update_theme_group(payload)
+                return
+            if parsed.path == "/api/theme-groups/reorder":
+                self.handle_reorder_theme_groups(payload)
+                return
+            if parsed.path == "/api/theme-groups/delete":
+                self.handle_delete_theme_group(payload)
                 return
             if parsed.path == "/api/journals/add":
                 self.handle_add_journal(payload)
@@ -660,6 +691,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 end_date=selected,
                 journals=self.configured_journals,
             )
+            papers = annotate_papers_with_library_status(storage, papers)
             late_unread_ids = unread_late_arrival_paper_ids(storage, selected, self.configured_journals)
             late_arrivals = late_arrivals_for_seen_date(storage, selected, self.configured_journals)
         finally:
@@ -1766,11 +1798,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 sync_alias_for_library_item(storage, paper_id, folder_id)
             snapshot = library_snapshot(storage)
             target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
+            updated_paper = storage.get_paper(paper_id) or paper
+            updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
+            updated_paper = updated_papers[0] if updated_papers else updated_paper
         finally:
             storage.close()
         self.send_json({
             "item": library_item_to_api(item, paper) if item else {},
             "folder": target_folder_api,
+            "paper": paper_to_api(updated_paper),
             **snapshot,
         })
 
@@ -2465,6 +2501,209 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.end_headers()
         self.wfile.write(data)
 
+    def handle_theme_groups(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            self.send_json({"groups": theme_groups_api(load_theme_groups(storage))})
+        finally:
+            storage.close()
+
+    def handle_add_theme_group(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            custom_groups = load_custom_theme_groups(storage)
+            group = build_custom_theme_group(payload, existing_keys=set(theme_groups.keys()))
+            custom_groups.append(group)
+            save_custom_theme_groups(storage, custom_groups)
+            save_theme_group_order(storage, list(theme_groups.keys()) + [group["key"]])
+            self.send_json({"group": theme_group_to_api(group), "groups": theme_groups_api(load_theme_groups(storage))})
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        finally:
+            storage.close()
+
+    def handle_update_theme_group(self, payload: dict[str, Any]) -> None:
+        group_key = clean_theme_group_key(payload.get("key") or "")
+        if not group_key:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject key is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            if group_key not in theme_groups:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Subject not found")
+                return
+            updated = build_theme_group_update(payload, group_key=group_key, existing_group=theme_groups[group_key])
+            custom_groups = load_custom_theme_groups(storage)
+            custom_index = next((index for index, group in enumerate(custom_groups) if group.get("key") == group_key), -1)
+            if custom_index >= 0:
+                custom_groups[custom_index] = {**updated, "is_custom": True}
+                save_custom_theme_groups(storage, custom_groups)
+            else:
+                overrides = load_theme_group_overrides(storage)
+                overrides[group_key] = updated
+                save_theme_group_overrides(storage, overrides)
+            storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
+            storage.conn.commit()
+            reloaded = load_theme_groups(storage)
+            self.send_json({"group": theme_group_to_api(reloaded[group_key]), "groups": theme_groups_api(reloaded)})
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        finally:
+            storage.close()
+
+    def handle_reorder_theme_groups(self, payload: dict[str, Any]) -> None:
+        raw_order = payload.get("order") or payload.get("keys") or []
+        if not isinstance(raw_order, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject order must be a list")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            known_keys = set(theme_groups.keys())
+            order: list[str] = []
+            for value in raw_order:
+                key = clean_theme_group_key(str(value or ""))
+                if key in known_keys and key not in order:
+                    order.append(key)
+            if not order:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject order is empty")
+                return
+            save_theme_group_order(storage, order)
+            self.send_json({"groups": theme_groups_api(load_theme_groups(storage))})
+        finally:
+            storage.close()
+
+    def handle_delete_theme_group(self, payload: dict[str, Any]) -> None:
+        group_key = clean_theme_group_key(payload.get("key") or "")
+        if not group_key:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject key is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            if group_key not in theme_groups:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Subject not found")
+                return
+            custom_groups = load_custom_theme_groups(storage)
+            remaining = [group for group in custom_groups if group.get("key") != group_key]
+            if len(remaining) != len(custom_groups):
+                save_custom_theme_groups(storage, remaining)
+            else:
+                deleted = load_deleted_theme_group_keys(storage)
+                if group_key not in deleted:
+                    deleted.append(group_key)
+                save_deleted_theme_group_keys(storage, deleted)
+            save_theme_group_order(storage, [key for key in theme_groups.keys() if key != group_key])
+            storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
+            storage.conn.commit()
+            self.send_json({"deleted": group_key, "groups": theme_groups_api(load_theme_groups(storage))})
+        finally:
+            storage.close()
+
+    def handle_theme_month(self, query: dict[str, list[str]]) -> None:
+        year = int(first(query, "year") or today_jst().year)
+        month = int(first(query, "month") or today_jst().month)
+        prefix = f"{year:04d}-{month:02d}-"
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            group_keys = selected_theme_group_keys(first(query, "groups") or first(query, "group") or "ALL", theme_groups)
+            counts = theme_counts_for_month(storage, prefix=prefix, group_keys=group_keys)
+        finally:
+            storage.close()
+        self.send_json({"year": year, "month": month, "groups": group_keys, "counts": counts})
+
+    def handle_theme_report(self, query: dict[str, list[str]]) -> None:
+        selected = first(query, "date") or today_jst().isoformat()
+        auto_fetch = first(query, "auto_fetch") != "0"
+        try:
+            selected_date = date.fromisoformat(selected)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid date")
+            return
+        if selected_date > today_jst():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject search cannot run for future dates")
+            return
+        fetched = False
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            group_keys = selected_theme_group_keys(first(query, "groups") or first(query, "group") or "ALL", theme_groups)
+            existing = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
+            present_group_keys = theme_groups_present(existing)
+            completed_group_keys = present_group_keys | theme_fetch_completed_group_keys(storage, selected, group_keys)
+            missing_group_keys = [key for key in group_keys if key not in completed_group_keys]
+            if auto_fetch and missing_group_keys:
+                summary = run_theme_monitor(
+                    storage=storage,
+                    start_date=selected_date,
+                    end_date=selected_date,
+                    group_keys=missing_group_keys,
+                    theme_groups=theme_groups,
+                )
+                fetched = True
+            else:
+                summary = theme_existing_summary(existing, selected, group_keys, theme_groups)
+            papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
+            papers = annotate_papers_with_library_status(storage, papers)
+            all_group_keys = list(theme_groups.keys())
+            all_date_papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=all_group_keys)
+            selected_counts = theme_counts_for_month(storage, prefix=selected, group_keys=group_keys).get(selected, {})
+            all_counts = theme_counts_for_month(storage, prefix=selected, group_keys=all_group_keys).get(selected, {})
+            if fetched:
+                summary["selected_groups"] = group_keys
+                summary["displayed_saved"] = len(papers)
+        finally:
+            storage.close()
+        self.send_json(
+            {
+                "date": selected,
+                "groups": group_keys,
+                "summary": summary,
+                "papers": [theme_paper_to_api(paper) for paper in papers],
+                "fetched": fetched,
+                "themeCounts": selected_counts or count_by_theme_group(papers),
+                "allThemeCounts": all_counts or count_by_theme_group(all_date_papers),
+            }
+        )
+
+    def handle_theme_search(self, payload: dict[str, Any]) -> None:
+        try:
+            start_date, end_date = parse_theme_window(payload)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            group_keys = selected_theme_group_keys(str(payload.get("group") or "ALL"), theme_groups)
+            summary = run_theme_monitor(
+                storage=storage,
+                start_date=start_date,
+                end_date=end_date,
+                group_keys=group_keys,
+                theme_groups=theme_groups,
+            )
+            papers = storage.list_theme_papers(
+                window_start=start_date.isoformat(),
+                window_end=end_date.isoformat(),
+                group_keys=group_keys,
+            )
+            papers = annotate_papers_with_library_status(storage, papers)
+        finally:
+            storage.close()
+        self.send_json(
+            {
+                "windowStart": start_date.isoformat(),
+                "windowEnd": end_date.isoformat(),
+                "groups": group_keys,
+                "summary": summary,
+                "papers": [theme_paper_to_api(paper) for paper in papers],
+            }
+        )
+
     def handle_journals(self) -> None:
         raw = read_config_json()
         self.send_json({"journals": raw.get("journals", []), "history": journal_history(raw)})
@@ -2743,11 +2982,14 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
 
     def send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def send_path_download(self, path: Path) -> None:
         data = path.read_bytes()
@@ -2765,6 +3007,623 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
     def refresh_journals(self) -> None:
         config = load_config()
         self.configured_journals = configured_source_names(config)
+
+
+def default_theme_groups() -> dict[str, dict[str, Any]]:
+    groups = {
+        key: {
+            "key": key,
+            "name": str(group["name"]),
+            "queries": list(group["queries"]),
+            "patterns": list(group["patterns"]),
+            "is_custom": False,
+        }
+        for key, group in THEME_GROUPS.items()
+    }
+    groups.update(configured_subject_groups())
+    return groups
+
+
+def configured_subject_groups(path: Path = SUBJECTS_CONFIG_PATH) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    items = raw.get("subjects") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return {}
+    groups: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = clean_text(item.get("name") or "")
+        queries = normalize_theme_keywords(item.get("queries") or item.get("keywords") or [])
+        key = clean_theme_group_key(item.get("key") or name)
+        if not key or key in groups or not name or not queries:
+            continue
+        groups[key] = {
+            "key": key,
+            "name": name,
+            "queries": queries,
+            "patterns": [theme_keyword_pattern(keyword) for keyword in queries],
+            "is_custom": False,
+        }
+    return groups
+
+
+def load_custom_theme_groups(storage: Storage) -> list[dict[str, Any]]:
+    raw = storage.get_setting(THEME_CUSTOM_GROUPS_SETTING, "[]")
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    groups: list[dict[str, Any]] = []
+    seen = set(THEME_GROUPS.keys())
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        key = clean_theme_group_key(item.get("key") or "")
+        name = clean_text(item.get("name") or "")
+        queries = normalize_theme_keywords(item.get("queries") or item.get("keywords") or [])
+        if not key or key in seen or not name or not queries:
+            continue
+        seen.add(key)
+        groups.append({
+            "key": key,
+            "name": name,
+            "queries": queries,
+            "patterns": [theme_keyword_pattern(keyword) for keyword in queries],
+            "is_custom": True,
+        })
+    return groups
+
+
+def save_custom_theme_groups(storage: Storage, groups: list[dict[str, Any]]) -> None:
+    payload = [
+        {"key": group["key"], "name": group["name"], "queries": list(group["queries"])}
+        for group in groups
+        if group.get("is_custom")
+    ]
+    storage.set_setting(THEME_CUSTOM_GROUPS_SETTING, json.dumps(payload, ensure_ascii=False))
+
+
+def load_deleted_theme_group_keys(storage: Storage) -> list[str]:
+    raw = storage.get_setting(THEME_DELETED_GROUPS_SETTING, "[]")
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    keys: list[str] = []
+    for value in parsed:
+        key = clean_theme_group_key(value or "")
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def save_deleted_theme_group_keys(storage: Storage, keys: list[str]) -> None:
+    storage.set_setting(THEME_DELETED_GROUPS_SETTING, json.dumps(keys, ensure_ascii=False))
+
+
+def load_theme_group_overrides(storage: Storage) -> dict[str, dict[str, Any]]:
+    raw = storage.get_setting(THEME_GROUP_OVERRIDES_SETTING, "{}")
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    overrides: dict[str, dict[str, Any]] = {}
+    for raw_key, item in parsed.items():
+        if not isinstance(item, dict):
+            continue
+        key = clean_theme_group_key(raw_key or item.get("key") or "")
+        name = clean_text(item.get("name") or "")
+        queries = normalize_theme_keywords(item.get("queries") or item.get("keywords") or [])
+        if key and name and queries:
+            overrides[key] = {
+                "key": key,
+                "name": name,
+                "queries": queries,
+                "patterns": [theme_keyword_pattern(keyword) for keyword in queries],
+                "is_custom": False,
+                "is_overridden": True,
+            }
+    return overrides
+
+
+def save_theme_group_overrides(storage: Storage, overrides: dict[str, dict[str, Any]]) -> None:
+    payload = {
+        key: {"name": group["name"], "queries": list(group["queries"])}
+        for key, group in overrides.items()
+        if key
+    }
+    storage.set_setting(THEME_GROUP_OVERRIDES_SETTING, json.dumps(payload, ensure_ascii=False))
+
+
+def load_theme_group_order(storage: Storage) -> list[str]:
+    raw = storage.get_setting(THEME_GROUP_ORDER_SETTING, "[]")
+    try:
+        parsed = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    order: list[str] = []
+    for value in parsed:
+        key = clean_theme_group_key(str(value or ""))
+        if key and key not in order:
+            order.append(key)
+    return order
+
+
+def save_theme_group_order(storage: Storage, keys: list[str]) -> None:
+    order: list[str] = []
+    for value in keys:
+        key = clean_theme_group_key(str(value or ""))
+        if key and key not in order:
+            order.append(key)
+    storage.set_setting(THEME_GROUP_ORDER_SETTING, json.dumps(order, ensure_ascii=False))
+
+
+def apply_theme_group_order(groups: dict[str, dict[str, Any]], order: list[str]) -> dict[str, dict[str, Any]]:
+    if not order:
+        return groups
+    ordered: dict[str, dict[str, Any]] = {}
+    for key in order:
+        if key in groups:
+            ordered[key] = groups[key]
+    for key, group in groups.items():
+        if key not in ordered:
+            ordered[key] = group
+    return ordered
+
+
+def load_theme_groups(storage: Storage) -> dict[str, dict[str, Any]]:
+    deleted = set(load_deleted_theme_group_keys(storage))
+    groups = {key: group for key, group in default_theme_groups().items() if key not in deleted}
+    for key, group in load_theme_group_overrides(storage).items():
+        if key in groups and key not in deleted:
+            groups[key] = group
+    for group in load_custom_theme_groups(storage):
+        if group["key"] not in deleted:
+            groups[group["key"]] = group
+    return apply_theme_group_order(groups, load_theme_group_order(storage))
+
+
+def theme_group_to_api(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "key": str(group.get("key") or ""),
+        "name": str(group.get("name") or ""),
+        "queries": list(group.get("queries") or []),
+        "is_custom": bool(group.get("is_custom")),
+        "is_overridden": bool(group.get("is_overridden")),
+    }
+
+
+def theme_groups_api(theme_groups: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    groups = theme_groups or default_theme_groups()
+    return [theme_group_to_api(group) for group in groups.values()]
+
+
+def normalize_theme_keywords(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = re.split(r"[\n,]+", value)
+    elif isinstance(value, list):
+        raw_items = [str(item) for item in value]
+    else:
+        raw_items = []
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        keyword = clean_text(item)
+        key = keyword.lower()
+        if keyword and key not in seen:
+            keywords.append(keyword)
+            seen.add(key)
+    return keywords
+
+
+def theme_keyword_pattern(keyword: str) -> str:
+    escaped = re.escape(clean_text(keyword))
+    return escaped.replace(r"\ ", r"\s+")
+
+
+def clean_theme_group_key(value: str) -> str:
+    return re.sub(r"[^A-Z0-9_-]", "", clean_text(value).upper())[:32]
+
+
+def build_custom_theme_group(payload: dict[str, Any], *, existing_keys: set[str]) -> dict[str, Any]:
+    name = clean_text(payload.get("name") or "")
+    keywords = normalize_theme_keywords(payload.get("keywords") or payload.get("queries") or "")
+    if not name:
+        raise ValueError("Subject name is required")
+    if not keywords:
+        raise ValueError("Add at least one keyword")
+    if len(keywords) > 40:
+        raise ValueError("Use 40 keywords or fewer for one subject")
+    for keyword in keywords:
+        if len(keyword) > 120:
+            raise ValueError("Each keyword must be 120 characters or fewer")
+    key = "U" + uuid.uuid4().hex[:10].upper()
+    while key in existing_keys:
+        key = "U" + uuid.uuid4().hex[:10].upper()
+    return {
+        "key": key,
+        "name": name[:80],
+        "queries": keywords,
+        "patterns": [theme_keyword_pattern(keyword) for keyword in keywords],
+        "is_custom": True,
+    }
+
+
+def build_theme_group_update(
+    payload: dict[str, Any],
+    *,
+    group_key: str,
+    existing_group: dict[str, Any],
+) -> dict[str, Any]:
+    name = clean_text(payload.get("name") if "name" in payload else existing_group.get("name") or "")
+    keyword_source = payload.get("keywords") if "keywords" in payload else payload.get("queries") if "queries" in payload else existing_group.get("queries") or []
+    keywords = normalize_theme_keywords(keyword_source)
+    if not name:
+        raise ValueError("Subject name is required")
+    if not keywords:
+        raise ValueError("Add at least one keyword")
+    if len(keywords) > 40:
+        raise ValueError("Use 40 keywords or fewer for one subject")
+    for keyword in keywords:
+        if len(keyword) > 120:
+            raise ValueError("Each keyword must be 120 characters or fewer")
+    return {
+        "key": group_key,
+        "name": name[:80],
+        "queries": keywords,
+        "patterns": [theme_keyword_pattern(keyword) for keyword in keywords],
+        "is_custom": bool(existing_group.get("is_custom")),
+        "is_overridden": bool(not existing_group.get("is_custom")),
+    }
+
+
+def selected_theme_group_keys(value: Any, theme_groups: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    groups = theme_groups or default_theme_groups()
+    valid_keys = list(groups.keys())
+    if not valid_keys:
+        return []
+    valid_lookup = {key.upper(): key for key in valid_keys}
+    if isinstance(value, list):
+        raw_parts = [str(item) for item in value]
+    else:
+        raw = clean_text(value).upper()
+        if not raw or raw == "ALL":
+            return valid_keys
+        raw_parts = re.split(r"\s*,\s*", raw)
+    keys: list[str] = []
+    for part in raw_parts:
+        key = valid_lookup.get(clean_text(part).upper())
+        if key and key not in keys:
+            keys.append(key)
+    return keys or valid_keys
+
+def parse_theme_window(payload: dict[str, Any]) -> tuple[date, date]:
+    until_text = clean_text(payload.get("until_date") or payload.get("untilDate") or "")
+    from_text = clean_text(payload.get("from_date") or payload.get("fromDate") or "")
+    until = date.fromisoformat(until_text) if until_text else today_jst()
+    if until > today_jst():
+        raise ValueError("Subject search cannot run for future dates")
+    if from_text:
+        start = date.fromisoformat(from_text)
+    else:
+        lookback_days = int(payload.get("lookback_days") or payload.get("lookbackDays") or 14)
+        start = until - timedelta(days=max(lookback_days - 1, 0))
+    if start > until:
+        raise ValueError("From date must be on or before until date")
+    return start, until
+
+
+def run_theme_monitor(
+    *,
+    storage: Storage,
+    start_date: date,
+    end_date: date,
+    group_keys: list[str],
+    theme_groups: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    summary = {
+        "window_start": start_date.isoformat(),
+        "window_end": end_date.isoformat(),
+        "groups": {},
+        "queries": 0,
+        "raw_results": 0,
+        "saved": 0,
+        "errors": [],
+    }
+    groups = theme_groups or load_theme_groups(storage)
+    for group_key in group_keys:
+        group = groups[group_key]
+        group_name = str(group["name"])
+        fetch_run_id = storage.start_fetch_run(
+            monitor_type="theme",
+            source="openalex",
+            journal=f"theme:{group_key}",
+            window_start=start_date.isoformat(),
+            window_end=end_date.isoformat(),
+            started_at=now_iso(),
+        )
+        best: dict[str, dict[str, Any]] = {}
+        group_errors: list[str] = []
+        raw_count = 0
+        try:
+            search_queries = combined_theme_search_queries(list(group["queries"]))
+            for query in search_queries:
+                summary["queries"] += 1
+                try:
+                    papers = search_openalex_works(
+                        query=query,
+                        start_date=start_date,
+                        end_date=end_date,
+                        per_page=50,
+                        max_pages=1,
+                        timeout=8,
+                        max_retries=1,
+                    )
+                except Exception as exc:
+                    message = theme_fetch_error_message(group_name, exc)
+                    group_errors.append(message)
+                    summary["errors"].append(message)
+                    continue
+                raw_count += len(papers)
+                for paper in papers:
+                    score, hits = score_theme_relevance(paper.get("title") or "", paper.get("abstract") or "", list(group["patterns"]))
+                    if score <= 0:
+                        continue
+                    paper_id = clean_text(paper.get("paper_id") or "")
+                    if not paper_id:
+                        continue
+                    merge_key = theme_candidate_merge_key(paper)
+                    current = best.get(merge_key)
+                    if not current:
+                        best[merge_key] = {"paper": paper, "score": score, "hits": set(hits), "queries": list(group["queries"])}
+                    else:
+                        current["score"] = max(int(current["score"]), score)
+                        current["hits"].update(hits)
+            saved = 0
+            for item in best.values():
+                paper = dict(item["paper"])
+                raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+                raw["_paper_monitor_theme"] = {
+                    "group_key": group_key,
+                    "group_name": group_name,
+                    "queries": item["queries"],
+                    "hits": sorted(item["hits"]),
+                    "score": int(item["score"]),
+                    "window_start": start_date.isoformat(),
+                    "window_end": end_date.isoformat(),
+                }
+                paper["raw"] = raw
+                paper["source"] = "openalex+theme"
+                if paper.get("section_allowed") is None:
+                    paper["section_allowed"] = True
+                storage.upsert_paper(paper)
+                storage.record_theme_result(
+                    paper_id=paper["paper_id"],
+                    group_key=group_key,
+                    group_name=group_name,
+                    query=", ".join(item["queries"]),
+                    score=int(item["score"]),
+                    hits=sorted(item["hits"]),
+                    window_start=start_date.isoformat(),
+                    window_end=end_date.isoformat(),
+                )
+                saved += 1
+            summary["raw_results"] += raw_count
+            summary["saved"] += saved
+            status = "success" if saved else ("error" if group_errors and len(group_errors) == len(search_queries) else "empty")
+            storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message="; ".join(group_errors[:3]))
+            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": saved, "errors": group_errors}
+        except Exception as exc:
+            message = theme_fetch_error_message(group_name, exc)
+            group_errors.append(message)
+            summary["errors"].append(message)
+            storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
+            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": 0, "errors": group_errors}
+    return summary
+
+
+def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) -> list[str]:
+    cleaned = []
+    for query in queries:
+        value = clean_text(query)
+        if value and value not in cleaned:
+            cleaned.append(value)
+    if not cleaned:
+        return []
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for value in cleaned:
+        extra = len(value) + (1 if current else 0)
+        if current and current_len + extra > max_length:
+            chunks.append(" ".join(current))
+            current = [value]
+            current_len = len(value)
+        else:
+            current.append(value)
+            current_len += extra
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+def theme_fetch_error_message(group_name: str, exc: Exception) -> str:
+    text = str(exc)
+    if "429" in text or "Too Many Requests" in text:
+        return f"{group_name}: OpenAlex rate-limited this request. Try again later or select fewer subjects."
+    if "timed out" in text.lower() or "timeout" in text.lower():
+        return f"{group_name}: OpenAlex request timed out."
+    return f"{group_name}: {text}"
+
+
+def score_theme_relevance(title: str, abstract: str, patterns: list[str]) -> tuple[int, list[str]]:
+    hits: list[str] = []
+    score = 0
+    for pattern in patterns:
+        title_hit = re.search(pattern, title or "", flags=re.IGNORECASE)
+        abstract_hit = re.search(pattern, abstract or "", flags=re.IGNORECASE)
+        if title_hit or abstract_hit:
+            hits.append(pattern)
+            if title_hit:
+                score += 2
+            if abstract_hit:
+                score += 1
+    return score, hits
+
+
+def theme_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
+    item = paper_to_api(paper)
+    item["theme_score"] = int(paper.get("theme_score") or 0)
+    item["theme_hits"] = list(paper.get("theme_hits") or [])
+    item["theme_groups"] = list(paper.get("theme_groups") or [])
+    return item
+
+
+def theme_candidate_merge_key(paper: dict[str, Any]) -> str:
+    title = normalize_publication_title(paper.get("title") or "").lower()
+    if title:
+        return f"title:{title}"
+    doi = clean_text(paper.get("doi") or "").lower()
+    if doi:
+        return f"doi:{doi}"
+    return f"paper:{paper.get('paper_id') or ''}"
+
+
+def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[str]) -> dict[str, dict[str, int]]:
+    if not group_keys:
+        return {}
+    placeholders = ", ".join(["?"] * len(group_keys))
+    rows = storage.conn.execute(
+        f"""
+        SELECT theme_results.window_start AS day,
+               theme_results.group_key AS group_key,
+               papers.paper_id AS paper_id,
+               papers.doi AS doi,
+               papers.title AS title
+        FROM theme_results
+        JOIN papers ON papers.paper_id = theme_results.paper_id
+        WHERE theme_results.window_start = theme_results.window_end
+          AND theme_results.window_start LIKE ?
+          AND theme_results.group_key IN ({placeholders})
+          AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
+        ORDER BY theme_results.window_start ASC, theme_results.group_key ASC
+        """,
+        (prefix + "%", *group_keys),
+    ).fetchall()
+    seen: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        day = str(row["day"] or "")
+        group_key = str(row["group_key"] or "")
+        identity = theme_candidate_merge_key(dict(row))
+        seen.setdefault((day, group_key), set()).add(identity)
+    counts: dict[str, dict[str, int]] = {}
+    for (day, group_key), identities in seen.items():
+        counts.setdefault(day, {})[group_key] = len(identities)
+    run_rows = storage.conn.execute(
+        f"""
+        SELECT window_start AS day,
+               journal AS journal
+        FROM fetch_runs
+        WHERE monitor_type = 'theme'
+          AND source = 'openalex'
+          AND window_start = window_end
+          AND window_start LIKE ?
+          AND status IN ('success', 'empty')
+          AND journal IN ({", ".join(["?"] * len(group_keys))})
+        ORDER BY finished_at DESC, id DESC
+        """,
+        (prefix + "%", *[f"theme:{key}" for key in group_keys]),
+    ).fetchall()
+    for row in run_rows:
+        day = str(row["day"] or "")
+        journal = str(row["journal"] or "")
+        group_key = journal.removeprefix("theme:")
+        if day and group_key in group_keys:
+            counts.setdefault(day, {}).setdefault(group_key, 0)
+    return counts
+
+
+def theme_fetch_completed_group_keys(storage: Storage, selected: str, group_keys: list[str]) -> set[str]:
+    if not group_keys:
+        return set()
+    rows = storage.conn.execute(
+        f"""
+        SELECT DISTINCT journal
+        FROM fetch_runs
+        WHERE monitor_type = 'theme'
+          AND source = 'openalex'
+          AND window_start = ?
+          AND window_end = ?
+          AND status IN ('success', 'empty')
+          AND journal IN ({", ".join(["?"] * len(group_keys))})
+        """,
+        (selected, selected, *[f"theme:{key}" for key in group_keys]),
+    ).fetchall()
+    completed: set[str] = set()
+    for row in rows:
+        value = str(row["journal"] or "")
+        if value.startswith("theme:"):
+            completed.add(value.removeprefix("theme:"))
+    return completed
+
+
+def theme_existing_summary(
+    papers: list[dict[str, Any]],
+    selected: str,
+    group_keys: list[str],
+    theme_groups: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    groups = theme_groups or default_theme_groups()
+    return {
+        "window_start": selected,
+        "window_end": selected,
+        "groups": {
+            key: {"name": str(groups[key]["name"]), "saved": 0, "raw_results": 0, "errors": []}
+            for key in group_keys
+            if key in groups
+        },
+        "queries": 0,
+        "raw_results": 0,
+        "saved": len(papers),
+        "errors": [],
+        "from_cache": True,
+    }
+
+
+def theme_groups_present(papers: list[dict[str, Any]]) -> set[str]:
+    present: set[str] = set()
+    for paper in papers:
+        for group in paper.get("theme_groups") or []:
+            key = str(group.get("key") or "")
+            if key:
+                present.add(key)
+    return present
+
+
+def count_by_theme_group(papers: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for paper in papers:
+        seen: set[str] = set()
+        for group in paper.get("theme_groups") or []:
+            key = str(group.get("key") or "")
+            if key and key not in seen:
+                counts[key] = counts.get(key, 0) + 1
+                seen.add(key)
+    return counts
 
 
 def configured_source_names(config: AppConfig) -> list[str]:
@@ -2956,6 +3815,40 @@ def prepare_internal_page_html(html: str, base_url: str) -> str:
     return str(soup)
 
 
+def annotate_papers_with_library_status(storage: Storage, papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    paper_ids = [str(paper.get("paper_id") or "") for paper in papers if paper.get("paper_id")]
+    if not paper_ids:
+        return papers
+    recycle_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_RECYCLE_FOLDER_NAME)
+    recycle_id = int(recycle_folder.get("id") or 0)
+    placeholders = ", ".join(["?"] * len(paper_ids))
+    rows = storage.conn.execute(
+        f"""
+        WITH RECURSIVE recycle_tree(id) AS (
+          SELECT id FROM library_folders WHERE id = ?
+          UNION ALL
+          SELECT library_folders.id
+          FROM library_folders
+          JOIN recycle_tree ON library_folders.parent_id = recycle_tree.id
+        )
+        SELECT paper_id, COUNT(*) AS count
+        FROM library_items
+        WHERE paper_id IN ({placeholders})
+          AND trashed_at IS NULL
+          AND folder_id NOT IN (SELECT id FROM recycle_tree)
+        GROUP BY paper_id
+        """,
+        [recycle_id, *paper_ids],
+    ).fetchall()
+    counts = {str(row["paper_id"]): int(row["count"] or 0) for row in rows}
+    annotated: list[dict[str, Any]] = []
+    for paper in papers:
+        paper_id = str(paper.get("paper_id") or "")
+        count = counts.get(paper_id, 0)
+        annotated.append({**paper, "in_library": count > 0, "library_item_count": count})
+    return annotated
+
+
 def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) -> dict[str, Any]:
     section = paper.get("publisher_section") or "unknown"
     raw = parse_raw_json(paper)
@@ -3010,6 +3903,8 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "preprint_category": preprint_primary_category(paper),
         "preprint_categories": preprint_categories(paper),
         "citation_label": citation_label(paper),
+        "in_library": bool(paper.get("in_library")),
+        "library_item_count": int(paper.get("library_item_count") or 0),
         "citation_metrics": citation_metrics(paper),
         "semantic_scholar": semantic_scholar_summary(paper),
         "pubmed": pubmed_summary(paper),
@@ -10108,6 +11003,61 @@ INDEX_HTML = """<!doctype html>
       100% { transform: translateX(100%); opacity: 0; }
     }
     .filters { display: flex; flex-direction: column; gap: 8px; }
+    .theme-sidebar-filter { display: none; }
+    .app.theme-mode .theme-sidebar-filter { display: flex; }
+    .app.theme-mode .journal-sidebar-filter { display: none; }
+    .theme-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .theme-add-btn {
+      width: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .theme-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .journal-toggle.theme-toggle {
+      cursor: grab;
+      -webkit-user-select: none;
+      user-select: none;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease;
+    }
+    .journal-toggle.theme-toggle:active { cursor: grabbing; }
+    .journal-toggle.theme-toggle.dragging {
+      opacity: 0.48;
+      border-color: var(--accent);
+      background: #f3fbfb;
+    }
+    .journal-toggle.theme-toggle.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
+    .journal-toggle.theme-toggle.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
+    .theme-context-menu {
+      position: fixed;
+      z-index: 120;
+      min-width: 132px;
+      display: grid;
+      gap: 2px;
+      padding: 5px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      box-shadow: 0 14px 34px rgba(17, 24, 39, 0.14);
+    }
+    .theme-context-menu button {
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      min-height: 30px;
+      padding: 0 9px;
+      text-align: left;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .theme-context-menu button:hover { background: #f3f6fa; }
+    .theme-context-menu button.danger { color: var(--accent-2); }
     .filter-title { font-size: 13px; color: var(--muted); }
     .journal-toggle, .preprint-category-toggle {
       display: grid;
@@ -10703,6 +11653,28 @@ INDEX_HTML = """<!doctype html>
       z-index: 70;
     }
     .toolbar-actions.hidden { display: none; }
+    .theme-toolbar-actions select,
+    .theme-toolbar-actions input[type="date"] { width: auto; min-width: 130px; }
+    .theme-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .theme-chip {
+      border: 1px solid #d8dee8;
+      border-radius: 999px;
+      background: #f6f8fb;
+      color: #344054;
+      padding: 2px 8px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .theme-chip.score { color: #075985; background: #e0f2fe; border-color: #bae6fd; font-weight: 700; }
     .app.library-mode #reportToolbarActions { display: none; }
     .toolbar-import {
       display: none;
@@ -13549,14 +14521,6 @@ INDEX_HTML = """<!doctype html>
       background: #f7fcfb;
       box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.18), var(--shadow);
     }
-    .paper.report-selected::after {
-      content: "";
-      position: absolute;
-      inset: 7px;
-      border: 1px solid rgba(15, 107, 110, 0.22);
-      border-radius: 6px;
-      pointer-events: none;
-    }
     .paper.late-unread::before {
       content: "";
       position: absolute;
@@ -13866,6 +14830,19 @@ INDEX_HTML = """<!doctype html>
     .settings-modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .settings-modal-close { min-width: 30px; min-height: 30px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
     .settings-modal-body { padding: 16px 18px 18px; }
+    .theme-form { display: grid; gap: 12px; }
+    .theme-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .theme-keywords {
+      min-height: 150px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--ink);
+      line-height: 1.45;
+    }
+    .theme-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
     .settings-backdrop.loader-backdrop {
       z-index: 95;
       align-items: flex-start;
@@ -14059,8 +15036,16 @@ INDEX_HTML = """<!doctype html>
         <div class="sidebar-view-switcher" id="sidebarViewSwitcher">
           <button class="view-switch" id="sideLibraryMode" type="button">Library</button>
           <button class="view-switch" id="sideReportMode" type="button">Journal Monitor</button>
+          <button class="view-switch" id="sideThemeMode" type="button">Subject Monitor</button>
           <button class="view-switch" id="sideDeepSurveyMode" type="button">Deep Survey</button>
         </div>
+      </div>
+      <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
+        <div class="theme-filter-head">
+          <div class="filter-title">Subject Filter</div>
+          <button class="theme-add-btn" id="addThemeGroup" type="button" title="Add subject">+</button>
+        </div>
+        <div id="themeFilters"></div>
       </div>
       <div class="monthbar">
         <button class="iconbtn" id="prevMonth" title="Previous month">‹</button>
@@ -14069,20 +15054,20 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="calendar" id="calendar"></div>
       <button class="smallbtn" id="jumpToday">Today</button>
-      <div class="filters">
+      <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
         <div id="journalFilters"></div>
       </div>
-      <div class="filters">
+      <div class="filters journal-sidebar-filter">
         <div class="filter-title">Preprint Filter</div>
         <div id="preprintFilters"></div>
         <div class="preprint-category-list" id="preprintCategoryFilters"></div>
       </div>
-      <div class="filters">
+      <div class="filters journal-sidebar-filter">
         <div class="filter-title">Field Filter</div>
         <div class="subject-controls" id="subjectFilters"></div>
       </div>
-      <div class="filters">
+      <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Settings</div>
         <div id="journalSettings"></div>
         <input class="search" id="journalName" placeholder="Journal name">
@@ -14100,6 +15085,7 @@ INDEX_HTML = """<!doctype html>
               <button class="view-switch active" id="libraryMode" type="button">Library</button>
               <button class="view-switch" id="myPublicationsMode" type="button">My Publications</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
+              <button class="view-switch" id="themeMode" type="button">Subject Monitor</button>
               <button class="view-switch" id="deepSurveyMode" type="button">Deep Survey</button>
             </div>
             <h2 id="reportTitle"></h2>
@@ -14107,6 +15093,12 @@ INDEX_HTML = """<!doctype html>
               <button class="smallbtn" id="refreshReport" type="button" title="Refresh papers for this date">Refresh</button>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
+            </div>
+            <div class="toolbar-actions hidden theme-toolbar-actions" id="themeToolbarActions">
+              <select class="search" id="themeGroupSelect" title="Subject group"></select>
+              <input class="search" id="themeFromDate" type="date" title="From date">
+              <input class="search" id="themeUntilDate" type="date" title="Until date">
+              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex by subject">Search</button>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
@@ -14177,6 +15169,33 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-quicklook-resize" id="libraryQuickLookResize" title="Resize preview"></div>
       </div>
+      <div class="settings-backdrop" id="themeGroupBackdrop" aria-hidden="true">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="themeGroupTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="themeGroupTitle">Add Subject</h2>
+            </div>
+            <button class="settings-modal-close" id="closeThemeGroup" type="button" title="Close">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="theme-form">
+              <label>
+                <span>Name</span>
+                <input class="search" id="themeGroupName" type="text" autocomplete="off" placeholder="Topological superconductors">
+              </label>
+              <label>
+                <span>Keywords</span>
+                <textarea class="theme-keywords" id="themeGroupKeywords" placeholder="topological superconductor&#10;Majorana mode&#10;kagome superconductor"></textarea>
+              </label>
+              <div class="citation-settings-status" id="themeGroupStatus"></div>
+              <div class="theme-dialog-actions">
+                <button class="smallbtn" id="cancelThemeGroup" type="button">Cancel</button>
+                <button class="smallbtn" id="saveThemeGroup" type="button">Save</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop" id="citationSettingsBackdrop" aria-hidden="true">
         <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
           <div class="settings-modal-head">
@@ -14220,6 +15239,13 @@ INDEX_HTML = """<!doctype html>
     </main>
   </div>
   <script>
+    function showBootError(error) {
+      const message = error && (error.stack || error.message) ? (error.stack || error.message) : String(error || "Unknown startup error");
+      const root = document.getElementById("papers") || document.body;
+      root.innerHTML = `<div class="empty"><strong>Startup error</strong><pre style="white-space:pre-wrap;text-align:left;max-width:100%;overflow:auto;">${String(message).replace(/[&<>]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]))}</pre></div>`;
+    }
+    window.addEventListener("error", (event) => showBootError(event.error || event.message));
+    window.addEventListener("unhandledrejection", (event) => showBootError(event.reason));
     const initialToday = localIsoDate(new Date());
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
@@ -14244,6 +15270,7 @@ INDEX_HTML = """<!doctype html>
       "all": "All Fields",
       "other": "Other Fields"
     };
+    let themeDragGesture = null;
     const MY_PUBLICATION_COLUMNS = [
       {key: "number", label: "No", defaultWidth: 48, minWidth: 40, maxWidth: 90, sortable: false},
       {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
@@ -14267,6 +15294,22 @@ INDEX_HTML = """<!doctype html>
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
       papers: [],
+      themeGroups: [],
+      themeGroupsLoaded: false,
+      selectedThemeGroups: new Set(),
+      themeGroup: "ALL",
+      themeFromDate: initialToday,
+      themeUntilDate: initialToday,
+      themeCounts: {},
+      themeFilterCounts: {},
+      themePapers: [],
+      themeSummary: null,
+      themeSearched: false,
+      themeSearchRunning: false,
+      editingThemeGroupKey: "",
+      themeDragKey: "",
+      themeSuppressNextClick: false,
+      themeRequestSequence: 0,
       libraryFolders: [],
       libraryItems: [],
       libraryFoldersById: new Map(),
@@ -14523,6 +15566,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadMonth(options = {}) {
+      if (state.mode === "theme") return loadThemeMonth(options);
       const cacheKey = currentMonthCacheKey();
       if (!options.force && state.monthLoaded && state.monthCacheKey === cacheKey) {
         renderCalendar();
@@ -14592,7 +15636,7 @@ INDEX_HTML = """<!doctype html>
       state.lateArrivals = Array.isArray(data.lateArrivals) ? data.lateArrivals : [];
       renderSubjectFilters();
       renderFilters();
-      if (state.mode === "library") {
+      if (state.mode !== "report") {
         return;
       }
       renderReport();
@@ -14602,7 +15646,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function reportIsActiveForDate(selectedDate) {
-      return state.mode !== "library" && selectedDate === state.selectedDate;
+      return state.mode === "report" && selectedDate === state.selectedDate;
     }
 
     function renderReportIfActive(selectedDate) {
@@ -15590,6 +16634,7 @@ INDEX_HTML = """<!doctype html>
 
     async function addPaperToLibrary(article, paperId) {
       const button = article.querySelector('[data-action="add-library"]');
+      if (button?.disabled && button.textContent.trim() === "In Library") return;
       if (button) {
         button.disabled = true;
         button.textContent = "Adding...";
@@ -15603,7 +16648,13 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
         applyLibrarySnapshot(data);
-        if (button) button.textContent = "In Library";
+        if (data.paper) updatePaperState(paperId, data.paper);
+        if (button) {
+          button.textContent = "In Library";
+          button.title = "Already in Library";
+          button.disabled = true;
+        }
+        renderCurrentPaperSurface();
       } catch (error) {
         if (button) {
           button.disabled = false;
@@ -16034,7 +17085,9 @@ INDEX_HTML = """<!doctype html>
       }
       for (let day = 1; day <= days; day++) {
         const iso = `${fmtMonth(state.viewYear, state.viewMonth)}-${String(day).padStart(2, "0")}`;
-        const total = Object.values(state.counts[iso] || {}).reduce((sum, value) => sum + value, 0);
+        const dayCounts = state.counts[iso] || {};
+        const hasCount = Object.keys(dayCounts).length > 0;
+        const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
         const isFetching = state.fetchingDates.has(iso);
         const hasNoMatch = state.noMatchDates.has(iso);
         const isFuture = isFutureDateIso(iso);
@@ -16044,7 +17097,7 @@ INDEX_HTML = """<!doctype html>
         button.innerHTML = `<span class="daynum">${day}</span>${
           isFetching
             ? `<span class="fetching-dot" title="Fetching"></span>`
-            : `<span class="count">${total || ""}</span>`
+            : `<span class="count">${hasCount ? total : ""}</span>`
         }`;
         if (isFuture) {
           root.appendChild(button);
@@ -16055,7 +17108,8 @@ INDEX_HTML = """<!doctype html>
           state.activeReportJournal = "";
           updateReportRefreshButton();
           renderCalendar();
-          await loadReport();
+          if (state.mode === "theme") await loadThemeReportForDate(iso);
+          else await loadReport();
         });
         root.appendChild(button);
       }
@@ -22521,6 +23575,8 @@ INDEX_HTML = """<!doctype html>
       const cachedReport = state.reportCache[paper.publication_date];
       const cachedIndex = (cachedReport?.papers || []).findIndex((item) => item.paper_id === paperId);
       if (cachedIndex >= 0) cachedReport.papers[cachedIndex] = paper;
+      const themeIndex = state.themePapers.findIndex((item) => item.paper_id === paperId);
+      if (themeIndex >= 0) state.themePapers[themeIndex] = {...state.themePapers[themeIndex], ...paper};
       state.libraryItems.forEach((item) => {
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
       });
@@ -22544,6 +23600,8 @@ INDEX_HTML = """<!doctype html>
       const fieldBadges = paperFieldValues(paper)
         .map((field) => `<span class="field-badge">${escapeHtml(FIELD_LABELS[field] || field)}</span>`)
         .join("");
+      const themeMeta = state.mode === "theme" ? themePaperMetaMarkup(paper) : "";
+      const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       article.innerHTML = `
         <div class="paper-layout">
           ${reserveFigure ? reportFigureMarkup(paper) : ""}
@@ -22558,6 +23616,7 @@ INDEX_HTML = """<!doctype html>
                   ${preprintCategoryText ? `<span>${escapeHtml(preprintCategoryText)}</span>` : ""}
                   <span class="authors">${escapeHtml(authorText)}</span>
                 </div>
+                ${themeMeta}
               </div>
               <div class="paper-badges">
                 <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
@@ -22567,12 +23626,10 @@ INDEX_HTML = """<!doctype html>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
               ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open</button>` : ""}
-              <button class="action" data-action="add-library" title="Add a shortcut to Library">Add to Library</button>
+              <button class="action" data-action="add-library" title="${inLibrary ? "Already in Library" : "Add a shortcut to Library"}" ${inLibrary ? "disabled" : ""}>${inLibrary ? "In Library" : "Add to Library"}</button>
               <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
-              <button class="action secondary" data-action="analyze" title="Queue a Codex analysis job">Queue Codex Analysis</button>
               ${paper.merged_pdf_path ? `<button class="action" data-action="open-pdf" title="Open merged PDF in Preview">PDF</button>` : ""}
               ${paper.merged_pdf_path ? `<button class="action danger" data-action="delete-pdf" title="Delete local PDF and reset download status">Delete PDF</button>` : ""}
-              ${!paper.merged_pdf_path ? `<label class="manual-drop" data-role="manual-drop" title="Attach a local PDF"><input type="file" accept="application/pdf,.pdf">Drop PDF</label>` : ""}
               ${paper.analysis_path ? `<button class="action" data-action="view-analysis" title="Show analysis">Note</button>` : ""}
               ${paper.analysis_path ? `<button class="action danger" data-action="delete-analysis" title="Delete analysis note and reset analysis status">Delete Note</button>` : ""}
               <span class="status ${statusClass(paper.download_status)}" data-role="status">
@@ -22587,7 +23644,6 @@ INDEX_HTML = """<!doctype html>
       article.addEventListener("click", () => selectReportPaper(paper.paper_id));
       article.querySelector('[data-action="add-library"]').addEventListener("click", () => addPaperToLibrary(article, paper.paper_id));
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
-      article.querySelector('[data-action="analyze"]').addEventListener("click", () => runAction(article, paper.paper_id, "analyze"));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
       if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, paper));
       const analysisButton = article.querySelector('[data-action="view-analysis"]');
@@ -22596,8 +23652,6 @@ INDEX_HTML = """<!doctype html>
       if (deletePdfButton) deletePdfButton.addEventListener("click", () => deletePaperAsset(article, paper.paper_id, "delete-pdf"));
       const deleteAnalysisButton = article.querySelector('[data-action="delete-analysis"]');
       if (deleteAnalysisButton) deleteAnalysisButton.addEventListener("click", () => deletePaperAsset(article, paper.paper_id, "delete-analysis"));
-      const dropZone = article.querySelector('[data-role="manual-drop"]');
-      if (dropZone) wireManualPdfDrop(article, dropZone, paper.paper_id);
       const figureImage = article.querySelector(".paper-figure img");
       if (figureImage) {
         figureImage.addEventListener("error", () => {
@@ -22609,6 +23663,18 @@ INDEX_HTML = """<!doctype html>
         queuePaperFigureHydration(paper.paper_id);
       }
       return article;
+    }
+
+    function themePaperMetaMarkup(paper) {
+      const groups = Array.isArray(paper.theme_groups) ? paper.theme_groups : [];
+      const groupLabels = groups.map((group) => group.name || group.key || "").filter(Boolean);
+      const hits = Array.isArray(paper.theme_hits) ? paper.theme_hits : [];
+      const score = Number(paper.theme_score || 0);
+      const chips = [];
+      chips.push(`<span class="theme-chip score">Subject score ${score}</span>`);
+      groupLabels.slice(0, 3).forEach((label) => chips.push(`<span class="theme-chip">${escapeHtml(label)}</span>`));
+      hits.slice(0, 6).forEach((hit) => chips.push(`<span class="theme-chip">${escapeHtml(hit)}</span>`));
+      return `<div class="theme-meta">${chips.join("")}</div>`;
     }
 
     function markVisibleLateArrivalsSeen(papers) {
@@ -23002,6 +24068,12 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function renderCurrentPaperSurface() {
+      if (state.mode === "library") renderActiveLibraryTab();
+      else if (state.mode === "theme") renderThemeMonitor();
+      else renderReport();
+    }
+
     async function uploadManualPdf(article, paperId, file) {
       const buttons = article.querySelectorAll("button, .manual-drop");
       const status = article.querySelector('[data-role="status"]');
@@ -23021,8 +24093,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "upload failed");
         updatePaperState(paperId, data.paper);
-        if (state.mode === "library") renderActiveLibraryTab();
-        else renderReport();
+        renderCurrentPaperSurface();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status err";
@@ -23045,8 +24116,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "request failed");
         updatePaperState(paperId, data.paper);
-        if (state.mode === "library") renderActiveLibraryTab();
-        else renderReport();
+        renderCurrentPaperSurface();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status err";
@@ -23072,8 +24142,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "delete failed");
         updatePaperState(paperId, data.paper);
         if (action === "delete-analysis") closeAnalysis();
-        if (state.mode === "library") renderActiveLibraryTab();
-        else renderReport();
+        renderCurrentPaperSurface();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status err";
@@ -23414,8 +24483,506 @@ INDEX_HTML = """<!doctype html>
       state.viewYear = Number(state.selectedDate.slice(0, 4));
       state.viewMonth = Number(state.selectedDate.slice(5, 7));
       await loadMonth();
-      await loadReport();
+      if (state.mode === "theme") await loadThemeReportForDate(state.selectedDate);
+      else await loadReport();
     });
+    function openThemeGroupDialog(group = null) {
+      const backdrop = $("themeGroupBackdrop");
+      if (!backdrop) return;
+      hideThemeContextMenu();
+      state.editingThemeGroupKey = group?.key || "";
+      $("themeGroupTitle").textContent = group ? "Edit Subject" : "Add Subject";
+      $("saveThemeGroup").textContent = group ? "Save" : "Add";
+      $("themeGroupName").value = group?.name || "";
+      $("themeGroupKeywords").value = (group?.queries || []).join("\\n");
+      $("themeGroupStatus").textContent = "";
+      $("themeGroupStatus").className = "citation-settings-status";
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      window.setTimeout(() => $("themeGroupName")?.focus(), 0);
+    }
+
+    function closeThemeGroupDialog() {
+      const backdrop = $("themeGroupBackdrop");
+      if (!backdrop) return;
+      state.editingThemeGroupKey = "";
+      backdrop.classList.remove("open");
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+
+    async function saveThemeGroup() {
+      const name = $("themeGroupName")?.value.trim() || "";
+      const keywords = $("themeGroupKeywords")?.value || "";
+      const status = $("themeGroupStatus");
+      const button = $("saveThemeGroup");
+      const editingKey = state.editingThemeGroupKey || "";
+      status.textContent = "Saving...";
+      status.className = "citation-settings-status";
+      button.disabled = true;
+      try {
+        const res = await fetch(editingKey ? "/api/theme-groups/update" : "/api/theme-groups", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({key: editingKey, name, keywords})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save subject");
+        state.themeGroups = data.groups || [];
+        state.themeGroupsLoaded = true;
+        if (data.group?.key) state.selectedThemeGroups.add(data.group.key);
+        closeThemeGroupDialog();
+        renderThemeFilters();
+        await loadThemeMonth({force: true});
+        await loadThemeReportForDate(state.selectedDate);
+      } catch (error) {
+        status.textContent = error.message || "Could not save subject";
+        status.className = "citation-settings-status err";
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function hideThemeContextMenu() {
+      document.querySelector(".theme-context-menu")?.remove();
+    }
+
+    function showThemeContextMenu(event, group) {
+      hideThemeContextMenu();
+      if (!group?.key) return;
+      const menu = document.createElement("div");
+      menu.className = "theme-context-menu";
+      menu.innerHTML = `
+        <button type="button" data-action="edit">Edit</button>
+        <button type="button" class="danger" data-action="delete">Delete</button>
+      `;
+      document.body.appendChild(menu);
+      const width = menu.offsetWidth || 132;
+      const height = menu.offsetHeight || 68;
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
+      menu.querySelector('[data-action="edit"]').addEventListener("click", () => openThemeGroupDialog(group));
+      menu.querySelector('[data-action="delete"]').addEventListener("click", () => deleteThemeGroup(group));
+    }
+
+    async function deleteThemeGroup(group) {
+      hideThemeContextMenu();
+      if (!group?.key) return;
+      const name = group.name || "this subject";
+      if (!window.confirm(`Delete subject "${name}"?`)) return;
+      const res = await fetch("/api/theme-groups/delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({key: group.key})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        window.alert(data.error || "Could not delete subject");
+        return;
+      }
+      state.themeGroups = data.groups || [];
+      state.themeGroupsLoaded = true;
+      state.selectedThemeGroups.delete(group.key);
+      const known = new Set(knownThemeGroupKeys());
+      state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
+      if (!state.selectedThemeGroups.size) {
+        const firstKey = knownThemeGroupKeys()[0];
+        if (firstKey) state.selectedThemeGroups.add(firstKey);
+      }
+      renderThemeFilters();
+      await loadThemeMonth({force: true});
+      await loadThemeReportForDate(state.selectedDate);
+    }
+
+    function clearThemeDragMarkers() {
+      document.querySelectorAll(".theme-toggle.dragging, .theme-toggle.drag-over-before, .theme-toggle.drag-over-after").forEach((element) => {
+        element.classList.remove("dragging", "drag-over-before", "drag-over-after");
+      });
+    }
+
+    function clearThemeDropMarkers() {
+      document.querySelectorAll(".theme-toggle.drag-over-before, .theme-toggle.drag-over-after").forEach((element) => {
+        element.classList.remove("drag-over-before", "drag-over-after");
+      });
+    }
+
+    function orderedThemeGroups(keys) {
+      const byKey = new Map(state.themeGroups.map((group) => [group.key, group]));
+      return keys.map((key) => byKey.get(key)).filter(Boolean);
+    }
+
+    async function saveThemeGroupOrder(order) {
+      const res = await fetch("/api/theme-groups/reorder", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({order})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not reorder subjects");
+      state.themeGroups = data.groups || [];
+      state.themeGroupsLoaded = true;
+      renderThemeFilters();
+      renderThemeGroupSelect();
+    }
+
+    async function moveThemeGroup(dragKey, targetKey, placeAfter) {
+      if (!dragKey || !targetKey || dragKey === targetKey) return;
+      const current = knownThemeGroupKeys();
+      if (!current.includes(dragKey) || !current.includes(targetKey)) return;
+      const withoutDragged = current.filter((key) => key !== dragKey);
+      const targetIndex = withoutDragged.indexOf(targetKey);
+      if (targetIndex < 0) return;
+      const next = [...withoutDragged];
+      next.splice(targetIndex + (placeAfter ? 1 : 0), 0, dragKey);
+      if (next.join("\\n") === current.join("\\n")) return;
+      const previousGroups = state.themeGroups;
+      state.themeGroups = orderedThemeGroups(next);
+      renderThemeFilters();
+      try {
+        await saveThemeGroupOrder(next);
+      } catch (error) {
+        state.themeGroups = previousGroups;
+        renderThemeFilters();
+        window.alert(error.message || "Could not reorder subjects");
+      }
+    }
+
+    function startThemeDragGesture(event, key, label) {
+      if (event.button !== 0 || event.target.closest?.("input, button")) return;
+      themeDragGesture = {
+        key,
+        label,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+        targetKey: "",
+        placeAfter: false,
+        suppressClick: false
+      };
+      const move = (moveEvent) => updateThemeDragGesture(moveEvent);
+      const up = (upEvent) => finishThemeDragGesture(upEvent, move, up);
+      document.addEventListener("mousemove", move, true);
+      document.addEventListener("mouseup", up, true);
+    }
+
+    function updateThemeDragGesture(event) {
+      if (!themeDragGesture) return;
+      const dx = event.clientX - themeDragGesture.startX;
+      const dy = event.clientY - themeDragGesture.startY;
+      if (!themeDragGesture.active && Math.hypot(dx, dy) < 6) return;
+      event.preventDefault();
+      themeDragGesture.active = true;
+      themeDragGesture.suppressClick = true;
+      state.themeDragKey = themeDragGesture.key;
+      themeDragGesture.label?.classList.add("dragging");
+      clearThemeDropMarkers();
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.(".theme-toggle");
+      if (!target || target.dataset.themeKey === themeDragGesture.key) {
+        themeDragGesture.targetKey = "";
+        return;
+      }
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      target.classList.toggle("drag-over-before", !after);
+      target.classList.toggle("drag-over-after", after);
+      themeDragGesture.targetKey = target.dataset.themeKey || "";
+      themeDragGesture.placeAfter = after;
+    }
+
+    function finishThemeDragGesture(event, move, up) {
+      document.removeEventListener("mousemove", move, true);
+      document.removeEventListener("mouseup", up, true);
+      const gesture = themeDragGesture;
+      themeDragGesture = null;
+      state.themeDragKey = "";
+      clearThemeDragMarkers();
+      if (!gesture?.active) return;
+      event.preventDefault();
+      state.themeSuppressNextClick = true;
+      window.setTimeout(() => { state.themeSuppressNextClick = false; }, 0);
+      if (!gesture.targetKey) return;
+      moveThemeGroup(gesture.key, gesture.targetKey, gesture.placeAfter);
+    }
+
+    function knownThemeGroupKeys() {
+      return state.themeGroups.map((group) => group.key).filter(Boolean);
+    }
+
+    function selectedThemeGroupKeys() {
+      const known = knownThemeGroupKeys();
+      const knownSet = new Set(known);
+      const keys = [...state.selectedThemeGroups].filter((key) => knownSet.has(key));
+      return keys.length ? keys : known.slice(0, 1);
+    }
+
+    function selectedThemeGroupParam() {
+      const keys = selectedThemeGroupKeys();
+      const known = knownThemeGroupKeys();
+      if (!known.length) return "";
+      return keys.length === known.length ? "ALL" : keys.join(",");
+    }
+
+    function themeGroupLabelForKey(key) {
+      const group = state.themeGroups.find((item) => item.key === key);
+      if (!group) return key;
+      return group.name || key;
+    }
+
+    function selectedThemeGroupLabel() {
+      const keys = selectedThemeGroupKeys();
+      return keys.length === knownThemeGroupKeys().length ? "All Subjects" : (keys.map(themeGroupLabelForKey).join(", ") || "No Subjects");
+    }
+
+    async function loadThemeMonth(options = {}) {
+      await ensureThemeGroupsLoaded();
+      const selectedGroups = encodeURIComponent(selectedThemeGroupParam());
+      const selectedUrl = `/api/theme-month?year=${state.viewYear}&month=${state.viewMonth}&groups=${selectedGroups}`;
+      const allUrl = `/api/theme-month?year=${state.viewYear}&month=${state.viewMonth}&groups=ALL`;
+      const [selectedData, allData] = selectedGroups === "ALL"
+        ? await fetchJson(selectedUrl).then((data) => [data, data])
+        : await Promise.all([fetchJson(selectedUrl), fetchJson(allUrl)]);
+      state.themeCounts = selectedData.counts || {};
+      state.themeFilterCounts = allData.counts || {};
+      state.counts = state.themeCounts;
+      renderCalendar();
+      renderThemeFilters();
+    }
+
+    async function loadThemeReportForDate(selectedDate = state.selectedDate, options = {}) {
+      const requestSequence = ++state.themeRequestSequence;
+      await ensureThemeGroupsLoaded();
+      const requestedGroupParam = selectedThemeGroupParam();
+      if (requestSequence !== state.themeRequestSequence) return;
+      state.themeFromDate = selectedDate;
+      state.themeUntilDate = selectedDate;
+      state.themeSearched = true;
+      state.themeSearchRunning = true;
+      state.themePapers = [];
+      state.papers = [];
+      renderThemeMonitor();
+      try {
+        const groups = encodeURIComponent(requestedGroupParam);
+        const autoFetch = options.autoFetch === false ? "0" : "1";
+        const data = await fetchJson(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=${autoFetch}`, 20 * 60 * 1000);
+        if (requestSequence !== state.themeRequestSequence) return;
+        state.themeSummary = data.summary || null;
+        state.themePapers = data.papers || [];
+        state.papers = state.themePapers;
+        updateThemeCalendarCount(selectedDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
+        updateThemeFilterCount(selectedDate, data.allThemeCounts || data.themeCounts || countPapersByThemeGroup(state.themePapers));
+        renderThemeFilters();
+      } catch (error) {
+        if (requestSequence !== state.themeRequestSequence) return;
+        state.themeSummary = {errors: [error.message || "Subject search failed"]};
+      } finally {
+        if (requestSequence === state.themeRequestSequence) {
+          state.themeSearchRunning = false;
+          renderThemeMonitor();
+        }
+      }
+    }
+
+    function updateThemeCalendarCount(selectedDate, counts) {
+      state.themeCounts[selectedDate] = counts || {};
+      state.counts = state.themeCounts;
+      if (selectedDate.startsWith(fmtMonth(state.viewYear, state.viewMonth))) renderCalendar();
+    }
+
+    function updateThemeFilterCount(selectedDate, counts) {
+      state.themeFilterCounts[selectedDate] = counts || {};
+    }
+
+    function countPapersByThemeGroup(papers) {
+      return (papers || []).reduce((counts, paper) => {
+        const seen = new Set();
+        (paper.theme_groups || []).forEach((group) => {
+          const key = group.key || "";
+          if (key && !seen.has(key)) {
+            counts[key] = (counts[key] || 0) + 1;
+            seen.add(key);
+          }
+        });
+        return counts;
+      }, {});
+    }
+
+    function renderThemeFilters() {
+      const root = $("themeFilters");
+      if (!root) return;
+      const paperCounts = countPapersByThemeGroup(state.themePapers);
+      const dateCounts = state.themeFilterCounts[state.selectedDate] || state.themeCounts[state.selectedDate] || {};
+      const counts = {...dateCounts, ...paperCounts};
+      root.innerHTML = "";
+      const themeFilterGroups = state.themeGroupsLoaded ? state.themeGroups : [];
+      if (!themeFilterGroups.length) {
+        root.innerHTML = `<div class="empty">No subjects configured.</div>`;
+        return;
+      }
+      themeFilterGroups.forEach((group) => {
+        const key = group.key;
+        const labelText = group.name || key;
+        const label = document.createElement("label");
+        label.className = "journal-toggle theme-toggle";
+        label.draggable = false;
+        label.dataset.themeKey = key;
+        label.title = (group.queries || []).join(", ");
+        label.innerHTML = `<input type="checkbox" ${state.selectedThemeGroups.has(key) ? "checked" : ""}>
+          <span>${escapeHtml(labelText)}</span><b>${counts[key] || 0}</b>`;
+        label.querySelector("input").addEventListener("change", async (event) => {
+          if (event.target.checked) state.selectedThemeGroups.add(key);
+          else state.selectedThemeGroups.delete(key);
+          if (!state.selectedThemeGroups.size) state.selectedThemeGroups.add(key);
+          state.themeGroup = selectedThemeGroupParam();
+          await loadThemeMonth({force: true});
+          await loadThemeReportForDate(state.selectedDate);
+        });
+        label.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showThemeContextMenu(event, group);
+        });
+        label.addEventListener("mousedown", (event) => startThemeDragGesture(event, key, label));
+        label.addEventListener("click", (event) => {
+          if (!state.themeSuppressNextClick) return;
+          event.preventDefault();
+          event.stopPropagation();
+          state.themeSuppressNextClick = false;
+        }, true);
+        label.addEventListener("dragstart", (event) => {
+          if (event.target.closest?.("input")) {
+            event.preventDefault();
+            return;
+          }
+          hideThemeContextMenu();
+          state.themeDragKey = key;
+          label.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", key);
+        });
+        label.addEventListener("dragover", (event) => {
+          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
+          if (!dragKey || dragKey === key) return;
+          event.preventDefault();
+          const rect = label.getBoundingClientRect();
+          const after = event.clientY > rect.top + rect.height / 2;
+          label.classList.toggle("drag-over-before", !after);
+          label.classList.toggle("drag-over-after", after);
+        });
+        label.addEventListener("dragleave", () => {
+          label.classList.remove("drag-over-before", "drag-over-after");
+        });
+        label.addEventListener("drop", (event) => {
+          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
+          if (!dragKey || dragKey === key) return;
+          event.preventDefault();
+          const rect = label.getBoundingClientRect();
+          const after = event.clientY > rect.top + rect.height / 2;
+          clearThemeDragMarkers();
+          moveThemeGroup(dragKey, key, after);
+        });
+        label.addEventListener("dragend", () => {
+          state.themeDragKey = "";
+          clearThemeDragMarkers();
+        });
+        root.appendChild(label);
+      });
+    }
+
+    function defaultThemeFromDate() {
+      const value = new Date(`${state.themeUntilDate || todayIsoDate()}T12:00:00`);
+      value.setDate(value.getDate() - 13);
+      return localIsoDate(value);
+    }
+
+    async function ensureThemeGroupsLoaded() {
+      if (state.themeGroups.length) return;
+      const data = await fetchJson("/api/theme-groups");
+      state.themeGroups = data.groups || [];
+      state.themeGroupsLoaded = true;
+      const known = new Set(knownThemeGroupKeys());
+      state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
+      if (!state.selectedThemeGroups.size) {
+        const firstKey = knownThemeGroupKeys()[0];
+        if (firstKey) state.selectedThemeGroups.add(firstKey);
+      }
+      renderThemeGroupSelect();
+    }
+
+    function renderThemeGroupSelect() {
+      const select = $("themeGroupSelect");
+      if (!select) return;
+      select.innerHTML = `<option value="ALL">All Subjects</option>` + state.themeGroups
+        .map((group) => `<option value="${escapeAttr(group.key)}">${escapeHtml(group.name || group.key)}</option>`)
+        .join("");
+      select.value = state.themeGroup || "ALL";
+    }
+
+    async function openThemeMonitor() {
+      state.mode = "theme";
+      closeLibraryQuickLook();
+      closeAnalysis();
+      stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
+      setSidebarCollapsed(false);
+      await ensureThemeGroupsLoaded();
+      state.themeFromDate = state.selectedDate;
+      state.themeUntilDate = state.selectedDate;
+      renderThemeFilters();
+      await loadThemeMonth({force: true});
+      await loadThemeReportForDate(state.selectedDate);
+    }
+
+    async function runThemeSearch() {
+      await loadThemeReportForDate(state.selectedDate);
+    }
+
+    function renderThemeMonitor() {
+      state.mode = "theme";
+      setPrimaryView("theme");
+      closeLibraryQuickLook();
+      stopArxivUpdateCountdown();
+      clearFetchProgressDisplay();
+      $("libraryControls").classList.remove("open");
+      $("reportTitle").textContent = "Subject Monitor";
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      const root = $("papers");
+      root.classList.remove("library-view", "deep-survey-view");
+      root.style.height = "";
+      root.style.minHeight = "";
+      root.innerHTML = "";
+      const button = $("runThemeSearch");
+      if (button) {
+        button.disabled = state.themeSearchRunning;
+        button.textContent = state.themeSearchRunning ? "Searching..." : "Search";
+      }
+      const groupLabel = selectedThemeGroupLabel();
+      const summary = state.themeSummary || {};
+      const saved = Number(summary.saved || 0);
+      const raw = Number(summary.raw_results || 0);
+      const errors = Array.isArray(summary.errors) ? summary.errors : [];
+      $("summary").textContent = state.themeSearched
+        ? `${state.selectedDate} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits${errors.length ? ` · ${errors.length} errors` : ""}`
+        : "Choose a date on the calendar to fetch subject-matched papers from OpenAlex.";
+      if (state.themeSearchRunning) {
+        root.innerHTML = `<div class="empty fetch-progress"><div class="fetch-progress-head"><strong>Fetching subject papers for ${escapeHtml(state.selectedDate)}...</strong></div></div>`;
+        return;
+      }
+      if (errors.length && !state.themePapers.length) {
+        root.innerHTML = `<div class="empty">${escapeHtml(errors[0])}</div>`;
+        return;
+      }
+      if (!state.themeSearched) {
+        root.innerHTML = `<div class="empty">Choose a date on the calendar.</div>`;
+        return;
+      }
+      if (!state.themePapers.length) {
+        root.innerHTML = `<div class="empty">No subject-matched papers for this window.</div>`;
+        return;
+      }
+      ensureReportPaperSelection(state.themePapers);
+      state.themePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
+    }
+
     async function openJournalMonitor() {
       state.mode = "report";
       setSidebarCollapsed(false);
@@ -23470,17 +25037,21 @@ INDEX_HTML = """<!doctype html>
       const isLibrarySurface = view === "library" || view === "my-publications" || view === "deep-survey";
       document.querySelector(".app")?.classList.toggle("library-mode", isLibrarySurface);
       document.querySelector(".app")?.classList.toggle("deep-survey-mode", view === "deep-survey");
+      document.querySelector(".app")?.classList.toggle("theme-mode", view === "theme");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
+      $("themeMode")?.classList.toggle("active", view === "theme");
       $("deepSurveyMode")?.classList.toggle("active", view === "deep-survey");
       $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
+      $("sideThemeMode")?.classList.toggle("active", view === "theme");
       $("sideDeepSurveyMode")?.classList.toggle("active", view === "deep-survey");
       $("deepSurveyHost")?.setAttribute("aria-hidden", view === "deep-survey" ? "false" : "true");
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
+      $("themeToolbarActions")?.classList.add("hidden");
       updateLibrarySearchTools();
       updateReportRefreshButton();
     }
@@ -23518,6 +25089,9 @@ INDEX_HTML = """<!doctype html>
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
+    $("themeMode").addEventListener("click", () => openThemeMonitor().catch((error) => {
+      $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }));
     $("libraryMode").addEventListener("click", loadLibrary);
     $("myPublicationsMode").addEventListener("click", () => {
       loadMyPublications().catch((error) => {
@@ -23526,6 +25100,9 @@ INDEX_HTML = """<!doctype html>
     });
     $("deepSurveyMode").addEventListener("click", () => openDeepSurvey());
     $("sideReportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
+      $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }));
+    $("sideThemeMode").addEventListener("click", () => openThemeMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
@@ -23580,15 +25157,21 @@ INDEX_HTML = """<!doctype html>
         state.figureQueue = [];
         state.queuedFigureIds.clear();
       }
-      if (state.mode === "library") renderActiveLibraryTab();
-      else renderReport();
+      renderCurrentPaperSurface();
     });
     $("refreshReport").addEventListener("click", refreshCurrentReportDate);
+    $("runThemeSearch")?.addEventListener("click", () => runThemeSearch().catch((error) => {
+      state.themeSummary = {errors: [error.message || "Subject search failed"]};
+      state.themeSearchRunning = false;
+      renderThemeMonitor();
+    }));
+    $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
+    $("themeFromDate")?.addEventListener("change", (event) => { state.themeFromDate = event.target.value || state.themeFromDate; });
+    $("themeUntilDate")?.addEventListener("change", (event) => { state.themeUntilDate = event.target.value || state.themeUntilDate; });
     $("searchBox").addEventListener("input", (event) => {
       state.query = event.target.value;
       state.noMatchDates = new Set();
-      if (state.mode === "library") renderActiveLibraryTab();
-      else renderReport();
+      renderCurrentPaperSurface();
     });
     $("librarySearchBox").addEventListener("input", (event) => {
       scheduleLibrarySearch(event.target.value);
@@ -23671,6 +25254,11 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
     }, true);
     window.addEventListener("click", (event) => {
+      if (!event.target.closest?.(".theme-context-menu")) hideThemeContextMenu();
+      if (event.target === $("themeGroupBackdrop")) {
+        closeThemeGroupDialog();
+        return;
+      }
       if (event.target.closest?.('[data-action="open-scholar-profile"]')) {
         event.preventDefault();
         event.stopPropagation();
@@ -23751,6 +25339,13 @@ INDEX_HTML = """<!doctype html>
       $("libraryShell")?.classList.remove("finder-drag-over");
     });
     wireWindowDragRegion();
+    $("addThemeGroup")?.addEventListener("click", openThemeGroupDialog);
+    $("closeThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
+    $("cancelThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
+    $("saveThemeGroup")?.addEventListener("click", saveThemeGroup);
+    $("themeGroupKeywords")?.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") saveThemeGroup();
+    });
     document.addEventListener("daiqo-open-library-loader", openLibraryLoader);
     window.addEventListener("storage", handleLibraryRefreshSignal);
     window.handleNativeFinderDrop = handleNativeFinderDrop;

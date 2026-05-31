@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 data/
+config/subjects.json
 logs/
 reports/analysis_jobs/
 reports/imports/
