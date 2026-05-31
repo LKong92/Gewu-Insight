@@ -471,6 +471,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/folders/color":
                 self.handle_color_library_folder(payload)
                 return
+            if parsed.path == "/api/library/folders/copy-desktop":
+                self.handle_copy_library_folder_to_desktop(payload)
+                return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
                 return
@@ -1795,6 +1798,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"folder": folder_api, **snapshot})
 
+    def handle_copy_library_folder_to_desktop(self, payload: dict[str, Any]) -> None:
+        folder_id = int(payload.get("folder_id") or 0)
+        if not folder_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "folder_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            try:
+                result = copy_library_folder_real_files_to_desktop(storage, folder_id)
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+        finally:
+            storage.close()
+        self.send_json({"result": result})
+
     def handle_add_library_item(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
         folder_id = int(payload.get("folder_id") or 1)
@@ -2905,7 +2924,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not raw_path:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
-        requested = Path(unquote(raw_path)).expanduser().resolve()
+        requested = Path(raw_path).expanduser().resolve()
         if not is_allowed_file(requested, [*allowed_pdf_roots(), DEFAULT_ANALYSIS_DIR.resolve()]):
             self.send_error_json(HTTPStatus.FORBIDDEN, "File is outside allowed report/PDF folders")
             return
@@ -2925,7 +2944,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not raw_path:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
-        requested = Path(unquote(raw_path)).expanduser().resolve()
+        requested = Path(raw_path).expanduser().resolve()
         if not requested.exists() or not requested.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
@@ -2942,7 +2961,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not raw_path:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return
-        requested = Path(unquote(raw_path)).expanduser().resolve()
+        requested = Path(raw_path).expanduser().resolve()
         if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return
@@ -3003,7 +3022,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not raw_path:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
             return None
-        requested = Path(unquote(raw_path)).expanduser().resolve()
+        requested = Path(raw_path).expanduser().resolve()
         if not is_allowed_file(requested, allowed_pdf_roots()):
             self.send_error_json(HTTPStatus.FORBIDDEN, "PDF is outside allowed folder")
             return None
@@ -10284,6 +10303,106 @@ def unique_path_in_dir(path: Path) -> Path:
     raise FileExistsError(str(path))
 
 
+def copy_library_folder_real_files_to_desktop(storage: Storage, folder_id: int) -> dict[str, Any]:
+    folder = storage.get_library_folder(folder_id)
+    if not folder:
+        raise ValueError("Library folder not found")
+    desktop = Path.home() / "Desktop"
+    desktop.mkdir(parents=True, exist_ok=True)
+    target_root = unique_path_in_dir(desktop / finder_safe_name(folder.get("name") or "Library Folder", "Library Folder"))
+    folders = library_folder_tree_rows(storage, folder_id)
+    relative_by_id = library_folder_export_relative_paths(folders, folder_id)
+    for export_folder_id, relative_path in relative_by_id.items():
+        (target_root / relative_path).mkdir(parents=True, exist_ok=True)
+    copied = 0
+    missing = 0
+    for item in library_items_in_folder_tree(storage, folder_id):
+        item_folder_id = int(item.get("folder_id") or folder_id)
+        export_dir = target_root / relative_by_id.get(item_folder_id, Path())
+        export_dir.mkdir(parents=True, exist_ok=True)
+        paper = storage.get_paper(str(item.get("paper_id") or ""))
+        source = library_item_real_file_for_export(paper)
+        if not source:
+            missing += 1
+            continue
+        target = unique_path_in_dir(export_dir / finder_safe_name(source.name, "file"))
+        shutil.copy2(source, target)
+        copied += 1
+    return {
+        "desktop_path": str(target_root),
+        "folder_name": target_root.name,
+        "files_copied": copied,
+        "missing_files": missing,
+        "folders_created": len(relative_by_id),
+    }
+
+
+def library_folder_tree_rows(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        WITH RECURSIVE folder_tree(id) AS (
+          SELECT id FROM library_folders WHERE id = ?
+          UNION ALL
+          SELECT library_folders.id
+          FROM library_folders
+          JOIN folder_tree ON library_folders.parent_id = folder_tree.id
+        )
+        SELECT *
+        FROM library_folders
+        WHERE id IN (SELECT id FROM folder_tree)
+        ORDER BY COALESCE(parent_id, 0), sort_order, name
+        """,
+        (int(folder_id),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def library_folder_export_relative_paths(folders: list[dict[str, Any]], root_folder_id: int) -> dict[int, Path]:
+    by_id = {int(folder.get("id") or 0): folder for folder in folders}
+    result: dict[int, Path] = {}
+    root_folder_id = int(root_folder_id)
+
+    def relative_for(folder_id: int) -> Path:
+        if folder_id in result:
+            return result[folder_id]
+        if folder_id == root_folder_id:
+            result[folder_id] = Path()
+            return result[folder_id]
+        folder = by_id.get(folder_id)
+        if not folder:
+            result[folder_id] = Path()
+            return result[folder_id]
+        parent_id = int(folder.get("parent_id") or root_folder_id)
+        parent_relative = relative_for(parent_id)
+        result[folder_id] = parent_relative / finder_safe_name(folder.get("name") or "Folder", "Folder")
+        return result[folder_id]
+
+    for folder_id in by_id:
+        relative_for(folder_id)
+    return result
+
+
+def library_item_real_file_for_export(paper: dict[str, Any] | None) -> Path | None:
+    if not paper:
+        return None
+    canonical = canonical_pdf_path_for_paper(paper)
+    if canonical:
+        return canonical
+    raw = parse_raw_json(paper)
+    imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
+    for key in ("stored_path",):
+        value = clean_text(imported.get(key) or "")
+        path = Path(value).expanduser() if value else None
+        if path and path.exists() and path.is_file():
+            return path.resolve()
+    for key in ("source_path",):
+        value = clean_text(paper.get(key) or "")
+        path = Path(value).expanduser() if value else None
+        if path and path.exists() and path.is_file():
+            return path.resolve()
+    return None
+
+
 def paper_pdf_basename(paper: dict[str, Any], canonical_path: Path | None = None) -> str:
     if canonical_path:
         return finder_safe_name(canonical_path.name, "paper.pdf")
@@ -14374,8 +14493,10 @@ INDEX_HTML = """<!doctype html>
       justify-self: center;
       flex: 0 0 auto;
     }
-    .library-entry-icon.native-file-drag-handle { cursor: grab; }
-    .library-entry-icon.native-file-drag-handle:active { cursor: grabbing; }
+    .library-entry-icon.native-file-drag-handle,
+    .library-name.native-file-drag-handle { cursor: grab; }
+    .library-entry-icon.native-file-drag-handle:active,
+    .library-name.native-file-drag-handle:active { cursor: grabbing; }
     .library-entry-icon.folder::before {
       content: "";
       position: absolute;
@@ -17392,6 +17513,24 @@ INDEX_HTML = """<!doctype html>
       renderLibrary();
     }
 
+    async function copyLibraryFolderToDesktop(folderId) {
+      if (!folderId) return;
+      return withLibraryActivityStatus("Copying folder to Desktop...", "Folder copied to Desktop.", async () => {
+        const res = await fetch("/api/library/folders/copy-desktop", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({folder_id: folderId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not copy folder to Desktop");
+        const result = data.result || {};
+        const copied = Number(result.files_copied || 0);
+        const missing = Number(result.missing_files || 0);
+        const suffix = missing ? ` · ${missing} missing local files` : "";
+        updateLibraryActivityStatus(`Copied ${copied} files to Desktop${suffix}.`, {delay: 4200});
+      });
+    }
+
     async function deleteLibraryEntry(type, id) {
       if (!type || !id) return;
       if (type === "folder" && libraryFolderById(id)?.protected) return;
@@ -18898,6 +19037,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
+          <button type="button" data-action="copy-folder-desktop">Make Copy Desktop</button>
           <button type="button" data-action="color-folder">Color</button>
           <button type="button" data-action="paste-entry">Paste</button>
           <button type="button" data-action="recover-entry">Recover</button>
@@ -20888,7 +21028,7 @@ INDEX_HTML = """<!doctype html>
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected ? "true" : "false"}">
           <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
-          <span class="library-name">
+          <span class="library-name${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs}>
             ${escapeHtml(name)}
             <span class="library-search-path">${escapeHtml(path || "")}</span>
           </span>
@@ -20930,7 +21070,7 @@ INDEX_HTML = """<!doctype html>
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected || rangeSelected ? "true" : "false"}">
           <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
-          <span class="library-name" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
+          <span class="library-name${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs} ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
@@ -24288,6 +24428,7 @@ INDEX_HTML = """<!doctype html>
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
+      const copyFolderDesktopButton = menu.querySelector('[data-action="copy-folder-desktop"]');
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -24374,6 +24515,14 @@ INDEX_HTML = """<!doctype html>
           const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
           await revealNativeLibraryEntry(type, id);
+        };
+      }
+      if (copyFolderDesktopButton) {
+        copyFolderDesktopButton.style.display = entryType === "folder" && hasEntry && !isRoot ? "" : "none";
+        copyFolderDesktopButton.onclick = async () => {
+          const id = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => copyLibraryFolderToDesktop(id));
         };
       }
       if (pasteButton) {
