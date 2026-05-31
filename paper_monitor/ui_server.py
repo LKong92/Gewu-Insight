@@ -519,6 +519,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/refresh-metadata":
                 self.handle_refresh_library_metadata(payload)
                 return
+            if parsed.path == "/api/library/extract-identifier":
+                self.handle_extract_library_identifier(payload)
+                return
             if parsed.path == "/api/library/paste":
                 self.handle_paste_library_entry(payload)
                 return
@@ -2311,6 +2314,50 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"paper": paper_to_api(paper), "publications": publications, **snapshot})
 
+    def handle_extract_library_identifier(self, payload: dict[str, Any]) -> None:
+        paper_id = str(payload.get("paper_id") or "")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+            if not paper:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            pdf_path = local_pdf_path_for_identifier_extraction(paper)
+            if not pdf_path:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "No local PDF file is available for this item")
+                return
+            if not pdf_path.exists():
+                self.send_error_json(HTTPStatus.NOT_FOUND, f"Local PDF file was not found: {pdf_path}")
+                return
+            found = extract_identifier_from_pdf_or_title(pdf_path, paper)
+            identifier = clean_text(found.get("identifier") or "")
+            kind = clean_text(found.get("kind") or "")
+            if not identifier or kind not in {"doi", "arxiv"}:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI or arXiv ID was found in this local PDF or by title lookup")
+                return
+            try:
+                refreshed = refresh_library_paper_metadata_for_identifier(storage, paper_id, identifier)
+            except Exception as exc:
+                self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Identifier metadata lookup failed: {exc}")
+                return
+            if not refreshed:
+                refreshed = storage.get_paper(paper_id)
+            snapshot = library_snapshot(storage)
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        finally:
+            storage.close()
+        self.send_json({
+            "identifier": identifier,
+            "identifier_kind": kind,
+            "identifier_source": found.get("source") or "",
+            "paper": paper_to_api(refreshed or {}),
+            "publications": publications,
+            **snapshot,
+        })
+
     def handle_paste_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
@@ -4004,6 +4051,233 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     summary["duplicate_dois"] = result.get("duplicate_dois") or []
     summary["duplicate_arxiv_ids"] = result.get("duplicate_arxiv_ids") or []
     return summary
+
+
+def refresh_library_paper_metadata_for_identifier(
+    storage: Storage,
+    paper_id: str,
+    identifier: str,
+    *,
+    timeout: int = 12,
+    max_retries: int = 1,
+) -> dict[str, Any] | None:
+    cleaned = clean_text(identifier)
+    doi = normalize_publication_doi(cleaned)
+    arxiv_id = normalize_arxiv_identifier(cleaned)
+    if arxiv_id and not looks_like_doi(cleaned):
+        normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=timeout, max_retries=max_retries)
+    elif doi and looks_like_doi(doi):
+        normalized = publication_metrics_metadata_from_doi(
+            doi,
+            timeout=timeout,
+            max_retries=max_retries,
+            allow_data_repository=doi_is_likely_data_repository(doi),
+        )
+    else:
+        return None
+    existing = storage.get_paper(paper_id)
+    paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(existing, normalized)) if normalized else existing
+    if not paper:
+        return None
+    pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
+    if pubmed_doi and looks_like_doi(pubmed_doi):
+        paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=timeout, max_retries=max_retries) or paper
+    semantic_lookup_paper = dict(paper)
+    if doi and looks_like_doi(doi):
+        semantic_lookup_paper["doi"] = doi
+    if arxiv_id:
+        raw = parse_raw_json(semantic_lookup_paper)
+        raw["arxiv_id"] = arxiv_id
+        semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
+    paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=timeout, max_retries=max_retries) or paper
+    paper = refresh_ads_if_possible(storage, paper, timeout=timeout, max_retries=max_retries) or paper
+    return paper
+
+
+def local_pdf_path_for_identifier_extraction(paper: dict[str, Any]) -> Path | None:
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        value = clean_text(paper.get(key) or "")
+        if value and value.lower().endswith(".pdf"):
+            return Path(value).expanduser()
+    return None
+
+
+def extract_identifier_from_pdf_or_title(pdf_path: Path, paper: dict[str, Any]) -> dict[str, str]:
+    pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
+    title_candidates = article_title_candidates_for_identifier(paper, pdf_metadata_title, pdf_path)
+    title_page_text = title_page_text_for_identifier(page_texts, title_candidates)
+    if title_page_text:
+        doi = preferred_published_doi_from_text(title_page_text)
+        if doi:
+            return {"kind": "doi", "identifier": doi, "source": "pdf_title_page"}
+        arxiv_id = explicit_arxiv_id_from_text(title_page_text) or arxiv_id_from_arxiv_doi(title_page_text)
+        if arxiv_id:
+            return {"kind": "arxiv", "identifier": arxiv_id, "source": "pdf_title_page"}
+    titles = [
+        clean_text(paper.get("title") or ""),
+        clean_text(pdf_metadata_title),
+        Path(pdf_path).stem,
+    ]
+    for title in dedup_clean_texts(titles):
+        found = identifier_from_title_lookup(title)
+        if found.get("identifier"):
+            return found
+    return {"kind": "", "identifier": "", "source": ""}
+
+
+def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5) -> tuple[str, list[str]]:
+    metadata_title = ""
+    page_texts: list[str] = []
+    try:
+        reader = PdfReader(str(pdf_path))
+        info = reader.metadata or {}
+        metadata_title = clean_text(getattr(info, "title", "") or info.get("/Title", ""))
+        for page in reader.pages[:max(1, int(page_limit or 3))]:
+            try:
+                page_texts.append(page.extract_text() or "")
+            except Exception:
+                page_texts.append("")
+                continue
+    except Exception:
+        return metadata_title, page_texts
+    return metadata_title, page_texts
+
+
+def article_title_candidates_for_identifier(paper: dict[str, Any], pdf_metadata_title: str, pdf_path: Path) -> list[str]:
+    candidates = [
+        clean_text(paper.get("title") or ""),
+        clean_text(pdf_metadata_title),
+    ]
+    filename_stem_key = normalized_title_key(Path(pdf_path).stem)
+    filtered: list[str] = []
+    for candidate in dedup_clean_texts(candidates):
+        key = normalized_title_key(candidate)
+        if not key or key == filename_stem_key:
+            continue
+        if key in {"untitled paper", "imported library", "unknown imported file", "pdf preview"}:
+            continue
+        if ".pdf" in candidate.lower() or len(title_tokens(candidate)) < 3:
+            continue
+        filtered.append(candidate)
+    return filtered
+
+
+def title_page_text_for_identifier(page_texts: list[str], title_candidates: list[str]) -> str:
+    if not title_candidates:
+        return ""
+    for page_text in page_texts:
+        cleaned = clean_text(page_text)
+        if not cleaned:
+            continue
+        page_key = normalized_title_key(cleaned)
+        page_tokens = title_tokens(cleaned)
+        for title in title_candidates:
+            title_key = normalized_title_key(title)
+            title_words = title_tokens(title)
+            if not title_key or not title_words:
+                continue
+            if title_key in page_key:
+                return cleaned
+            overlap = len(title_words & page_tokens) / max(1, len(title_words))
+            if overlap >= 0.82:
+                return cleaned
+    return ""
+
+
+def dedup_clean_texts(values: list[str]) -> list[str]:
+    results: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = clean_text(value)
+        key = normalized_title_key(text)
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        results.append(text)
+    return results
+
+
+def doi_candidates_from_text(value: str) -> list[str]:
+    text = re.sub(r"(10\.\d{4,9}/)\s+", r"\1", value or "", flags=re.I)
+    candidates: list[str] = []
+    for match in re.finditer(r"10\.\d{4,9}/[^\s\"<>]+", text, flags=re.I):
+        doi = normalize_publication_doi(match.group(0).strip().rstrip(".,;:)]}"))
+        if doi and looks_like_doi(doi) and doi not in candidates:
+            candidates.append(doi)
+    return candidates
+
+
+def preferred_published_doi_from_text(value: str) -> str:
+    for doi in doi_candidates_from_text(value):
+        if doi_is_likely_published_version(doi):
+            return doi
+    return ""
+
+
+def arxiv_id_from_arxiv_doi(value: str) -> str:
+    for doi in doi_candidates_from_text(value):
+        match = re.search(r"10\.48550/arxiv[.:/](\d{4}\.\d{4,5})(?:v\d+)?", doi, flags=re.I)
+        if match:
+            return normalize_arxiv_identifier(match.group(1))
+    return ""
+
+
+def explicit_arxiv_id_from_text(value: str) -> str:
+    patterns = [
+        r"\barxiv\s*[:：]\s*([a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?\b",
+        r"\barxiv\s*[:：]\s*(\d{4}\.\d{4,5})(?:v\d+)?\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value or "", flags=re.I)
+        if match:
+            return normalize_arxiv_identifier(match.group(1))
+    return ""
+
+
+def identifier_from_title_lookup(title: str) -> dict[str, str]:
+    query = clean_text(title)
+    if len(query) < 8:
+        return {"kind": "", "identifier": "", "source": ""}
+    try:
+        for candidate in search_crossref_publications(query, kind="title", rows=6, timeout=10, max_retries=1):
+            candidate_title = clean_text(candidate.get("title") or "")
+            if not title_match_is_confident(query, candidate_title):
+                continue
+            doi = normalize_publication_doi(str(candidate.get("doi") or ""))
+            if doi_is_likely_published_version(doi):
+                return {"kind": "doi", "identifier": doi, "source": "title_crossref"}
+    except Exception:
+        pass
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params={"search": query, "per-page": 5, "mailto": "your_email@example.com"},
+            timeout=10,
+            max_retries=1,
+        )
+        for item in response.json().get("results") or []:
+            if not isinstance(item, dict) or openalex_item_is_likely_data_repository(item):
+                continue
+            candidate_title = clean_text(item.get("title") or item.get("display_name") or "")
+            if not title_match_is_confident(query, candidate_title):
+                continue
+            doi = normalize_publication_doi(clean_text(item.get("doi") or ""))
+            if doi_is_likely_published_version(doi):
+                return {"kind": "doi", "identifier": doi, "source": "title_openalex"}
+    except Exception:
+        pass
+    return {"kind": "", "identifier": "", "source": ""}
+
+
+def title_match_is_confident(left: str, right: str) -> bool:
+    left_key = normalized_title_key(left)
+    right_key = normalized_title_key(right)
+    if not left_key or not right_key:
+        return False
+    if left_key == right_key:
+        return True
+    return title_similarity(left, right) >= 0.88
 
 
 def publication_metadata_from_doi(
@@ -11478,7 +11752,7 @@ INDEX_HTML = """<!doctype html>
     .library-quicklook.compact.open { grid-template-rows: auto minmax(0, 1fr); }
     .library-quicklook-title {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: 28px minmax(0, 1fr) 28px;
       gap: 8px;
       align-items: center;
       min-height: 34px;
@@ -11490,11 +11764,12 @@ INDEX_HTML = """<!doctype html>
       user-select: none;
       background: rgba(255, 255, 255, 0.92);
     }
-    .library-quicklook-title span {
+    #libraryQuickLookTitle {
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      text-align: center;
     }
     .library-quicklook-title button {
       width: 24px;
@@ -11506,6 +11781,7 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-quicklook-title button:hover { background: #eef2f7; color: var(--ink); }
+    .library-quicklook-title-spacer { width: 24px; height: 24px; }
     .library-quicklook-body {
       display: grid;
       grid-template-columns: 112px minmax(0, 1fr);
@@ -15528,8 +15804,9 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="library-quicklook" id="libraryQuickLook" aria-hidden="true">
         <div class="library-quicklook-title" id="libraryQuickLookDragHandle">
-          <span id="libraryQuickLookTitle"></span>
           <button id="closeLibraryQuickLook" type="button" title="Close preview">×</button>
+          <span id="libraryQuickLookTitle"></span>
+          <span class="library-quicklook-title-spacer" aria-hidden="true"></span>
         </div>
         <div class="library-quicklook-body">
           <div class="library-quicklook-thumbs" id="libraryQuickLookThumbs"></div>
@@ -17419,6 +17696,51 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         const message = error.message || "Could not refresh metadata";
         updateLibraryActivityStatus(`Metadata refresh failed: ${message}`, {delay: 4200});
+        if (status) {
+          status.textContent = message;
+          status.className = "library-detail-status err";
+        }
+        buttons.forEach((button) => button.disabled = false);
+      } finally {
+        clearMyPublicationActivity(activityId);
+      }
+    }
+
+    async function extractLibraryIdentifierFromFiles(paper) {
+      if (!paper?.paper_id) return;
+      const status = $("libraryDetailStatus");
+      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      const activityId = `identifier:${paper.paper_id}`;
+      buttons.forEach((button) => button.disabled = true);
+      if (status) {
+        status.textContent = "Looking for identifier on the PDF title page...";
+        status.className = "library-detail-status";
+      }
+      if (state.libraryTab === "my-publications") {
+        setMyPublicationActivity(activityId, "Finding identifier...");
+      }
+      updateLibraryActivityStatus("Finding identifier from local file...", {live: true, clear: false});
+      try {
+        const res = await fetch("/api/library/extract-identifier", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not extract identifier");
+        applyLibrarySnapshot(data);
+        if (Array.isArray(data.publications)) applyMyPublications(data);
+        updatePaperState(paper.paper_id, data.paper);
+        const input = $("libraryDetailDoiInput");
+        if (input && data.identifier) input.value = data.identifier;
+        state.figureFailures.delete(paper.paper_id);
+        if (state.libraryTab === "my-publications") renderMyPublications();
+        else renderLibrary();
+        const label = data.identifier_kind === "arxiv" ? "arXiv ID" : "DOI";
+        updateLibraryActivityStatus(`${label} found from files.`, {delay: 2600});
+      } catch (error) {
+        const message = error.message || "Could not extract identifier";
+        updateLibraryActivityStatus(`Identifier lookup failed: ${message}`, {delay: 4200});
         if (status) {
           status.textContent = message;
           status.className = "library-detail-status err";
@@ -20767,6 +21089,12 @@ INDEX_HTML = """<!doctype html>
       return lines.join("");
     }
 
+    function libraryIdentifierFromFilesButtonMarkup(paper) {
+      return (paper?.merged_pdf_path || paper?.main_pdf_path)
+        ? `<button class="action" data-action="extract-library-identifier">Get Identifier from Files</button>`
+        : "";
+    }
+
     function libraryDetailMetadataMarkup(paper, authors, publication = null, options = {}) {
       const preprintId = paper.preprint_id || "";
       const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
@@ -21055,6 +21383,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
+          ${libraryIdentifierFromFilesButtonMarkup(paper)}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors)}
@@ -21079,6 +21408,7 @@ INDEX_HTML = """<!doctype html>
       }));
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
+      root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
@@ -21155,6 +21485,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
+          ${libraryIdentifierFromFilesButtonMarkup(paper)}
           <span class="publication-role-flags">
             <label class="publication-role-flag" title="Only check for co-first authors. Leave unchecked for solo first author."><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
             <label class="publication-role-flag" title="Corresponding or co-corresponding author"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Co-corr.</label>
@@ -21183,6 +21514,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
+      root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
@@ -23160,6 +23492,10 @@ INDEX_HTML = """<!doctype html>
       return paper?.citation_label || paper?.title || paper?.original_filename || "File Preview";
     }
 
+    function libraryPreviewPathTitle(path, fallback = "Preview") {
+      return fileNameFromPath(path) || fallback;
+    }
+
     function renderLibraryQuickLookFileThumb(paper) {
       const root = $("libraryQuickLookThumbs");
       if (!root) return;
@@ -23275,7 +23611,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 1;
       state.libraryQuickLookPdfHasFocus = false;
-      if (title) title.textContent = libraryFilePreviewTitle(paper);
+      if (title) title.textContent = libraryPreviewPathTitle(path, libraryFilePreviewTitle(paper));
       renderLibraryQuickLookFileThumb(paper);
       overlay.classList.remove("compact");
       overlay.classList.add("open");
@@ -23688,7 +24024,10 @@ INDEX_HTML = """<!doctype html>
         renderLibraryQuickLookPages(0);
         loadLibraryQuickLookInfo(paper.merged_pdf_path);
       }
-      if (title) title.innerHTML = publicationTitleMarkup(paper.citation_label || paper.title || "PDF Preview");
+      if (title) title.textContent = libraryPreviewPathTitle(
+        paper.merged_pdf_path,
+        paper.original_filename || paper.citation_label || paper.title || "PDF Preview"
+      );
       overlay.classList.remove("compact");
       overlay.classList.add("open");
       overlay.setAttribute("aria-hidden", "false");
