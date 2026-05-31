@@ -119,6 +119,23 @@ CREATE TABLE IF NOT EXISTS paper_reads (
   late_arrival_seen_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS theme_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  group_key TEXT NOT NULL,
+  group_name TEXT NOT NULL,
+  query TEXT NOT NULL,
+  score INTEGER NOT NULL DEFAULT 0,
+  hits_json TEXT,
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  searched_at TEXT NOT NULL,
+  UNIQUE(paper_id, group_key, window_start, window_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_theme_results_window ON theme_results(window_start, window_end, group_key);
+CREATE INDEX IF NOT EXISTS idx_theme_results_paper ON theme_results(paper_id);
+
 CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
@@ -631,6 +648,124 @@ class Storage:
             ),
         )
         self.conn.commit()
+
+    def record_theme_result(
+        self,
+        *,
+        paper_id: str,
+        group_key: str,
+        group_name: str,
+        query: str,
+        score: int,
+        hits: list[str],
+        window_start: str,
+        window_end: str,
+    ) -> None:
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO theme_results (
+              paper_id, group_key, group_name, query, score, hits_json,
+              window_start, window_end, searched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(paper_id, group_key, window_start, window_end) DO UPDATE SET
+              group_name = excluded.group_name,
+              query = excluded.query,
+              score = MAX(theme_results.score, excluded.score),
+              hits_json = excluded.hits_json,
+              searched_at = excluded.searched_at
+            """,
+            (
+                paper_id,
+                group_key,
+                group_name,
+                query,
+                int(score),
+                json.dumps(hits, ensure_ascii=False),
+                window_start,
+                window_end,
+                timestamp,
+            ),
+        )
+        self.conn.commit()
+
+    def list_theme_papers(
+        self,
+        *,
+        window_start: str,
+        window_end: str,
+        group_keys: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["theme_results.window_start = ?", "theme_results.window_end = ?"]
+        params: list[Any] = [window_start, window_end]
+        keys = [str(key) for key in (group_keys or []) if str(key)]
+        if group_keys is not None and not keys:
+            return []
+        if keys:
+            placeholders = ", ".join(["?"] * len(keys))
+            clauses.append(f"theme_results.group_key IN ({placeholders})")
+            params.extend(keys)
+        rows = self.conn.execute(
+            f"""
+            SELECT papers.*,
+                   theme_results.group_key AS theme_group_key,
+                   theme_results.group_name AS theme_group_name,
+                   theme_results.query AS theme_query,
+                   theme_results.score AS theme_score,
+                   theme_results.hits_json AS theme_hits_json,
+                   theme_results.searched_at AS theme_searched_at
+            FROM theme_results
+            JOIN papers ON papers.paper_id = theme_results.paper_id
+            WHERE {" AND ".join(clauses)}
+              AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
+            ORDER BY theme_results.score DESC, papers.publication_date DESC, papers.journal ASC, papers.title ASC
+            """,
+            params,
+        ).fetchall()
+        merged: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for row in rows:
+            item = dict(row)
+            paper_id = str(item.get("paper_id") or "")
+            if not paper_id:
+                continue
+            hits = _json_list(item.pop("theme_hits_json", ""))
+            group = {
+                "key": item.pop("theme_group_key", ""),
+                "name": item.pop("theme_group_name", ""),
+                "query": item.pop("theme_query", ""),
+                "score": int(item.pop("theme_score", 0) or 0),
+                "hits": hits,
+                "searched_at": item.pop("theme_searched_at", ""),
+            }
+            merge_key = _theme_result_merge_key(item)
+            if merge_key not in merged:
+                item["theme_groups"] = [group]
+                item["theme_hits"] = hits
+                item["theme_score"] = group["score"]
+                item["theme_duplicate_paper_ids"] = [paper_id]
+                merged[merge_key] = item
+                order.append(merge_key)
+                continue
+            current = merged[merge_key]
+            current_ids = current.setdefault("theme_duplicate_paper_ids", [])
+            if paper_id not in current_ids:
+                current_ids.append(paper_id)
+            if _theme_item_is_better(item, current):
+                preserved = {
+                    "theme_groups": current.get("theme_groups") or [],
+                    "theme_hits": current.get("theme_hits") or [],
+                    "theme_score": current.get("theme_score") or 0,
+                    "theme_duplicate_paper_ids": current_ids,
+                }
+                current.clear()
+                current.update(item)
+                current.update(preserved)
+            _merge_theme_group(current, group)
+            current["theme_score"] = max(int(current.get("theme_score") or 0), group["score"])
+            current["theme_hits"] = sorted(set((current.get("theme_hits") or []) + hits))
+        return [merged[merge_key] for merge_key in order]
+
 
     def update_analysis_status(self, paper_id: str, *, status: str, path: str | None, message: str = "") -> None:
         self.conn.execute(
@@ -1506,6 +1641,50 @@ class Storage:
             if current == int(ancestor_id):
                 return True
         return False
+
+
+def _theme_result_merge_key(paper: dict[str, Any]) -> str:
+    title = normalize_publication_title(paper.get("title") or "").lower()
+    if title:
+        return f"title:{title}"
+    doi = str(paper.get("doi") or "").strip().lower()
+    if doi:
+        return f"doi:{doi}"
+    return f"paper:{paper.get('paper_id') or ''}"
+
+
+def _theme_item_is_better(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    candidate_doi = str(candidate.get("doi") or "").strip()
+    current_doi = str(current.get("doi") or "").strip()
+    if candidate_doi and not current_doi:
+        return True
+    candidate_abstract = str(candidate.get("abstract") or "").strip()
+    current_abstract = str(current.get("abstract") or "").strip()
+    return bool(candidate_abstract and len(candidate_abstract) > len(current_abstract) and not current_doi)
+
+
+def _merge_theme_group(current: dict[str, Any], group: dict[str, Any]) -> None:
+    groups = current.setdefault("theme_groups", [])
+    key = str(group.get("key") or "")
+    for existing in groups:
+        if str(existing.get("key") or "") != key:
+            continue
+        existing["score"] = max(int(existing.get("score") or 0), int(group.get("score") or 0))
+        existing["hits"] = sorted(set((existing.get("hits") or []) + (group.get("hits") or [])))
+        queries = [item for item in [existing.get("query"), group.get("query")] if item]
+        existing["query"] = ", ".join(dict.fromkeys(", ".join(queries).split(", ")))
+        return
+    groups.append(group)
+
+
+def _json_list(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item)]
 
 
 def _bool_to_int(value: Any) -> int | None:

@@ -9,6 +9,13 @@ from ..http import request_with_retries
 from ..text import clean_markup_text, clean_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
 
 
+def openalex_mailto_param() -> str | None:
+    mailto = clean_text(os.getenv("OPENALEX_MAILTO", ""))
+    if not mailto or mailto.lower() == "your_email@example.com" or "@" not in mailto:
+        return None
+    return mailto
+
+
 def fetch_openalex_journal(
     *,
     journal_name: str,
@@ -17,6 +24,8 @@ def fetch_openalex_journal(
     end_date: date,
     per_page: int = 100,
     max_pages: int = 10,
+    timeout: int = 30,
+    max_retries: int = 3,
 ) -> list[dict[str, Any]]:
     papers: list[dict[str, Any]] = []
     cursor = "*"
@@ -31,9 +40,17 @@ def fetch_openalex_journal(
             "per-page": per_page,
             "cursor": cursor,
             "sort": "publication_date:desc",
-            "mailto": os.getenv("OPENALEX_MAILTO", "your_email@example.com"),
         }
-        response = request_with_retries("GET", "https://api.openalex.org/works", params=params)
+        mailto = openalex_mailto_param()
+        if mailto:
+            params["mailto"] = mailto
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         data = response.json()
         results = data.get("results", [])
         papers.extend(normalize_openalex_item(item, journal_name) for item in results)
@@ -42,6 +59,57 @@ def fetch_openalex_journal(
             break
         cursor = next_cursor
 
+    return papers
+
+
+def search_openalex_works(
+    *,
+    query: str,
+    start_date: date,
+    end_date: date,
+    per_page: int = 50,
+    max_pages: int = 2,
+    timeout: int = 10,
+    max_retries: int = 1,
+) -> list[dict[str, Any]]:
+    cleaned_query = clean_text(query)
+    if not cleaned_query:
+        return []
+
+    papers: list[dict[str, Any]] = []
+    cursor = "*"
+    for _ in range(max_pages):
+        params = {
+            "search": cleaned_query,
+            "filter": f"from_publication_date:{start_date.isoformat()},to_publication_date:{end_date.isoformat()}",
+            "per-page": max(1, min(200, int(per_page or 50))),
+            "cursor": cursor,
+            "sort": "publication_date:desc",
+        }
+        mailto = openalex_mailto_param()
+        if mailto:
+            params["mailto"] = mailto
+        response = request_with_retries(
+            "GET",
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        data = response.json()
+        results = data.get("results", [])
+        papers.extend(
+            normalize_openalex_item(
+                item,
+                normalize_openalex_journal_name(((item.get("primary_location") or {}).get("source") or {}).get("display_name"))
+                or "Unknown Journal",
+            )
+            for item in results
+        )
+        next_cursor = data.get("meta", {}).get("next_cursor")
+        if not next_cursor or next_cursor == cursor or len(results) < per_page:
+            break
+        cursor = next_cursor
     return papers
 
 
@@ -58,14 +126,17 @@ def search_openalex_author_publications(
     if not query:
         return []
     affiliation_terms = [clean_text(value) for value in (affiliations or []) if clean_text(value)]
+    author_params = {
+        "search": query,
+        "per-page": max(1, min(25, int(max_authors or 6))),
+    }
+    mailto = openalex_mailto_param()
+    if mailto:
+        author_params["mailto"] = mailto
     author_response = request_with_retries(
         "GET",
         "https://api.openalex.org/authors",
-        params={
-            "search": query,
-            "per-page": max(1, min(25, int(max_authors or 6))),
-            "mailto": os.getenv("OPENALEX_MAILTO", "your_email@example.com"),
-        },
+        params=author_params,
         timeout=timeout,
         max_retries=max_retries,
     )
@@ -82,15 +153,17 @@ def search_openalex_author_publications(
     papers: list[dict[str, Any]] = []
     seen: set[str] = set()
     for author_id in author_ids:
+        params = {
+            "filter": f"authorships.author.id:{author_id}",
+            "per-page": max(1, min(50, int(per_author or 20))),
+            "sort": "publication_date:desc",
+        }
+        if mailto:
+            params["mailto"] = mailto
         response = request_with_retries(
             "GET",
             "https://api.openalex.org/works",
-            params={
-                "filter": f"authorships.author.id:{author_id}",
-                "per-page": max(1, min(50, int(per_author or 20))),
-                "sort": "publication_date:desc",
-                "mailto": os.getenv("OPENALEX_MAILTO", "your_email@example.com"),
-            },
+            params=params,
             timeout=timeout,
             max_retries=max_retries,
         )
