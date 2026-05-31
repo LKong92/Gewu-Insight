@@ -1842,15 +1842,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if item:
                 move_monitor_pdf_into_context_if_needed(storage, paper_id, local_copy_dir_for_library_folder(storage, folder_id))
                 sync_alias_for_library_item(storage, paper_id, folder_id)
-            snapshot = library_snapshot(storage)
             target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
             updated_paper = storage.get_paper(paper_id) or paper
             updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
             updated_paper = updated_papers[0] if updated_papers else updated_paper
+            item_api = library_item_to_api(item, updated_paper) if item else {}
+            snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
         finally:
             storage.close()
         self.send_json({
-            "item": library_item_to_api(item, paper) if item else {},
+            "item": item_api,
             "folder": target_folder_api,
             "paper": paper_to_api(updated_paper),
             **snapshot,
@@ -3989,9 +3990,9 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
-        "preprint_id": preprint_identifier(paper),
-        "preprint_category": preprint_primary_category(paper),
-        "preprint_categories": preprint_categories(paper),
+        "preprint_id": preprint_identifier(paper, raw=raw),
+        "preprint_category": preprint_primary_category(paper, raw=raw),
+        "preprint_categories": preprint_categories(paper, raw=raw),
         "citation_label": citation_label(paper),
         "in_library": bool(paper.get("in_library")),
         "library_item_count": int(paper.get("library_item_count") or 0),
@@ -5590,10 +5591,10 @@ def paper_to_library_summary_api(paper: dict[str, Any]) -> dict[str, Any]:
         summary["analysis_status"] = analysis_status
     if merged_pdf:
         summary["merged_pdf_path"] = merged_pdf
-    preprint_id = preprint_identifier(paper)
+    preprint_id = preprint_identifier(paper, raw=raw)
     if preprint_id:
         summary["preprint_id"] = preprint_id
-    preprint_category = preprint_primary_category(paper)
+    preprint_category = preprint_primary_category(paper, raw=raw)
     if preprint_category:
         summary["preprint_category"] = preprint_category
     if main_pdf and main_pdf != merged_pdf:
@@ -8964,36 +8965,40 @@ def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
     return dedup_names([clean_author_name(str(name)) for name in authors if name])
 
 
-def preprint_identifier(paper: dict[str, Any]) -> str:
+def preprint_identifier(paper: dict[str, Any], *, raw: dict[str, Any] | None = None) -> str:
+    raw = raw if isinstance(raw, dict) else None
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        raw = parse_raw_json(paper)
+        raw = raw if raw is not None else parse_raw_json(paper)
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
         preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
         return clean_text(preprint.get("arxiv_id") or preprint_version.get("arxiv_id") or raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
-    raw = parse_raw_json(paper)
+    raw = raw if raw is not None else parse_raw_json(paper)
     return clean_text(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
 
 
-def preprint_categories(paper: dict[str, Any]) -> list[str]:
+def preprint_categories(paper: dict[str, Any], *, raw: dict[str, Any] | None = None) -> list[str]:
+    raw = raw if isinstance(raw, dict) else None
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        raw = parse_raw_json(paper)
+        raw = raw if raw is not None else parse_raw_json(paper)
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         preprint_raw = preprint.get("raw") if isinstance(preprint.get("raw"), dict) else {}
         return [clean_text(category) for category in preprint_raw.get("categories") or [] if clean_text(category)]
-    raw = parse_raw_json(paper)
+    raw = raw if raw is not None else parse_raw_json(paper)
     return [clean_text(category) for category in raw.get("categories") or [] if clean_text(category)]
 
 
-def preprint_primary_category(paper: dict[str, Any]) -> str:
+def preprint_primary_category(paper: dict[str, Any], *, raw: dict[str, Any] | None = None) -> str:
+    raw = raw if isinstance(raw, dict) else None
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        raw = parse_raw_json(paper)
+        raw = raw if raw is not None else parse_raw_json(paper)
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         preprint_raw = preprint.get("raw") if isinstance(preprint.get("raw"), dict) else {}
         return clean_text(preprint_raw.get("primary_category") or "")
-    raw = parse_raw_json(paper)
+    raw = raw if raw is not None else parse_raw_json(paper)
     primary = clean_text(raw.get("primary_category") or "")
-    return primary or (preprint_categories(paper)[0] if preprint_categories(paper) else "")
+    categories = preprint_categories(paper, raw=raw)
+    return primary or (categories[0] if categories else "")
 
 
 def parse_raw_json(paper: dict[str, Any]) -> dict[str, Any]:
@@ -11475,6 +11480,48 @@ INDEX_HTML = """<!doctype html>
       height: 100vh;
       overflow: hidden;
       position: relative;
+    }
+    .app-startup-cover {
+      position: fixed;
+      inset: 0;
+      z-index: 100000;
+      display: grid;
+      place-items: center;
+      background: #f6f3ee;
+      color: #231f1a;
+      opacity: 1;
+      transition: opacity 120ms ease;
+    }
+    .app-startup-cover.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .app-startup-card {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 28px 32px;
+      border: 1px solid rgba(35,31,26,.12);
+      border-radius: 18px;
+      background: rgba(255,255,255,.72);
+      box-shadow: 0 18px 50px rgba(35,31,26,.08);
+    }
+    .app-startup-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg,#0f6b6e,#d7b46a);
+      color: #fff;
+      font-size: 22px;
+      font-weight: 800;
+      box-shadow: 0 10px 22px rgba(15,107,110,.22);
+    }
+    .app-startup-title {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
     }
     .app::before {
       content: "";
@@ -14493,10 +14540,8 @@ INDEX_HTML = """<!doctype html>
       justify-self: center;
       flex: 0 0 auto;
     }
-    .library-entry-icon.native-file-drag-handle,
-    .library-name.native-file-drag-handle { cursor: grab; }
-    .library-entry-icon.native-file-drag-handle:active,
-    .library-name.native-file-drag-handle:active { cursor: grabbing; }
+    .library-entry-icon.native-file-drag-handle { cursor: grab; }
+    .library-entry-icon.native-file-drag-handle:active { cursor: grabbing; }
     .library-entry-icon.folder::before {
       content: "";
       position: absolute;
@@ -15794,6 +15839,15 @@ INDEX_HTML = """<!doctype html>
   </style>
 </head>
 <body>
+  <div class="app-startup-cover" id="appStartupCover" role="status" aria-live="polite">
+    <div class="app-startup-card">
+      <div class="app-startup-icon">D</div>
+      <div>
+        <strong class="app-startup-title" id="appStartupTitle">Starting Daiqo...</strong>
+        <div id="appStartupMessage">Loading Library.</div>
+      </div>
+    </div>
+  </div>
   <div class="window-drag-region" id="windowDragRegion" aria-hidden="true"></div>
   <div class="app library-mode sidebar-collapsed">
     <aside class="sidebar">
@@ -16007,8 +16061,20 @@ INDEX_HTML = """<!doctype html>
   <script>
     function showBootError(error) {
       const message = error && (error.stack || error.message) ? (error.stack || error.message) : String(error || "Unknown startup error");
+      const startupTitle = document.getElementById("appStartupTitle");
+      const startupMessage = document.getElementById("appStartupMessage");
+      const startupCover = document.getElementById("appStartupCover");
+      if (startupTitle) startupTitle.textContent = "Daiqo could not start";
+      if (startupMessage) startupMessage.textContent = message;
+      if (startupCover) startupCover.classList.remove("hidden");
       const root = document.getElementById("papers") || document.body;
       root.innerHTML = `<div class="empty"><strong>Startup error</strong><pre style="white-space:pre-wrap;text-align:left;max-width:100%;overflow:auto;">${String(message).replace(/[&<>]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]))}</pre></div>`;
+    }
+    function hideAppStartupCover() {
+      const cover = document.getElementById("appStartupCover");
+      if (!cover) return;
+      cover.classList.add("hidden");
+      window.setTimeout(() => cover.remove(), 160);
     }
     window.addEventListener("error", (event) => showBootError(event.error || event.message));
     window.addEventListener("unhandledrejection", (event) => showBootError(event.reason));
@@ -16702,6 +16768,7 @@ INDEX_HTML = """<!doctype html>
       await state.libraryLoadingPromise;
       resetLibraryRootSelection();
       renderLibrary();
+      requestAnimationFrame(() => requestAnimationFrame(hideAppStartupCover));
     }
 
     async function loadMyPublications() {
@@ -16814,25 +16881,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = data.folders || [];
       state.libraryItems = data.items || [];
-      state.libraryFoldersById = new Map(state.libraryFolders.map((folder) => [Number(folder.id), folder]));
-      state.libraryItemsById = new Map(state.libraryItems.map((item) => [Number(item.id), item]));
-      state.libraryChildFoldersByParent = new Map();
-      state.libraryFolders.forEach((folder) => {
-        const parentId = Number(folder.parent_id || 0);
-        if (!state.libraryChildFoldersByParent.has(parentId)) state.libraryChildFoldersByParent.set(parentId, []);
-        state.libraryChildFoldersByParent.get(parentId).push(folder);
-      });
-      state.libraryChildFoldersByParent.forEach((folders) => folders.sort((a, b) => compareLibraryOrder(a, b, "name")));
-      state.libraryItemsByFolder = new Map();
-      state.libraryItems.forEach((item) => {
-        const folderId = Number(item.folder_id || 0);
-        if (!state.libraryItemsByFolder.has(folderId)) state.libraryItemsByFolder.set(folderId, []);
-        state.libraryItemsByFolder.get(folderId).push(item);
-      });
-      state.libraryItemsByFolder.forEach((items) => items.sort((a, b) => compareLibraryOrder(a, b, "display_name")));
+      rebuildLibraryIndexes();
       state.libraryLoaded = true;
-      clearLibrarySearchCache();
-      state.librarySearchVersion += 1;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
       const displayRootId = libraryDisplayRootId();
@@ -16849,6 +16899,45 @@ INDEX_HTML = """<!doctype html>
       pruneLibraryClipboard();
       pruneLibraryRangeSelection();
       ensureLibraryColumnSelection(displayRootId);
+    }
+
+    function rebuildLibraryIndexes() {
+      state.libraryFoldersById = new Map(state.libraryFolders.map((folder) => [Number(folder.id), folder]));
+      state.libraryItemsById = new Map(state.libraryItems.map((item) => [Number(item.id), item]));
+      state.libraryChildFoldersByParent = new Map();
+      state.libraryFolders.forEach((folder) => {
+        const parentId = Number(folder.parent_id || 0);
+        if (!state.libraryChildFoldersByParent.has(parentId)) state.libraryChildFoldersByParent.set(parentId, []);
+        state.libraryChildFoldersByParent.get(parentId).push(folder);
+      });
+      state.libraryChildFoldersByParent.forEach((folders) => folders.sort((a, b) => compareLibraryOrder(a, b, "name")));
+      state.libraryItemsByFolder = new Map();
+      state.libraryItems.forEach((item) => {
+        const folderId = Number(item.folder_id || 0);
+        if (!state.libraryItemsByFolder.has(folderId)) state.libraryItemsByFolder.set(folderId, []);
+        state.libraryItemsByFolder.get(folderId).push(item);
+      });
+      state.libraryItemsByFolder.forEach((items) => items.sort((a, b) => compareLibraryOrder(a, b, "display_name")));
+      clearLibrarySearchCache();
+      state.librarySearchVersion += 1;
+    }
+
+    function upsertLibraryFolderLocal(folder) {
+      if (!folder?.id) return;
+      const id = Number(folder.id);
+      const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
+      if (index >= 0) state.libraryFolders[index] = folder;
+      else state.libraryFolders.push(folder);
+      rebuildLibraryIndexes();
+    }
+
+    function upsertLibraryItemLocal(item) {
+      if (!item?.id) return;
+      const id = Number(item.id);
+      const index = state.libraryItems.findIndex((entry) => Number(entry.id) === id);
+      if (index >= 0) state.libraryItems[index] = item;
+      else state.libraryItems.push(item);
+      rebuildLibraryIndexes();
     }
 
     function libraryFolderById(id) {
@@ -17422,11 +17511,16 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/items", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paperId, unsorted: true})
+          body: JSON.stringify({paper_id: paperId, unsorted: true, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
-        applyLibrarySnapshot(data);
+        if (Array.isArray(data.items) && Array.isArray(data.folders)) {
+          applyLibrarySnapshot(data);
+        } else if (state.libraryLoaded) {
+          upsertLibraryFolderLocal(data.folder);
+          upsertLibraryItemLocal(data.item);
+        }
         if (data.paper) updatePaperState(paperId, data.paper);
         if (button) {
           button.textContent = "In Library";
@@ -21028,7 +21122,7 @@ INDEX_HTML = """<!doctype html>
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected ? "true" : "false"}">
           <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
-          <span class="library-name${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs}>
+          <span class="library-name">
             ${escapeHtml(name)}
             <span class="library-search-path">${escapeHtml(path || "")}</span>
           </span>
@@ -21070,7 +21164,7 @@ INDEX_HTML = """<!doctype html>
           ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
           aria-selected="${selected || rangeSelected ? "true" : "false"}">
           <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
-          <span class="library-name${nativeDragAttrs ? " native-file-drag-handle" : ""}" ${nativeDragAttrs} ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
+          <span class="library-name" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>${nameMarkup}</span>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
@@ -26470,6 +26564,7 @@ INDEX_HTML = """<!doctype html>
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");
       document.querySelector(".app")?.classList.add("loader-window-mode");
+      hideAppStartupCover();
       loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
