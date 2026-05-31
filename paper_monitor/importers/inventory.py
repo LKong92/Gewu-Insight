@@ -248,7 +248,7 @@ def import_library_inventory(
         return finalize_result(result, report_path)
 
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
-    result["source_root"] = clean_text(summary.get("root"))
+    result["source_root"] = path_text(summary.get("root"))
     result["inventory_summary"] = summary
     result["total_files"] = len(files)
     result["pdf_doi_extracted_count"] = int_or_zero(summary.get("pdf_doi_extracted_count"))
@@ -258,6 +258,8 @@ def import_library_inventory(
     library_target_root = Path(target_root)
     result["copy_target_root"] = str(library_target_root)
     result["library_item_name"] = library_item_name
+    if report_path:
+        result["report_path"] = str(Path(report_path))
 
     owns_storage = storage is None
     active_storage = storage or Storage(Path(db_path))
@@ -554,7 +556,6 @@ def execute_import(
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
-                    queue_metadata_refresh_candidate(result, record, paper_id)
                     stored_path = ""
                     if reusable_path:
                         stored_path = reusable_path
@@ -622,7 +623,6 @@ def execute_import(
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
-                    queue_metadata_refresh_candidate(result, record, paper_id)
                     stored_path = ""
                     if reusable_path:
                         stored_path = reusable_path
@@ -748,10 +748,10 @@ def remember_record_identity(
 
 def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
     return {
-        "source_path": clean_text(raw.get("path")),
-        "relative_path": clean_text(raw.get("relative_path")),
-        "parent_relative_path": clean_text(raw.get("parent_relative_path")),
-        "filename": clean_text(raw.get("filename")),
+        "source_path": path_text(raw.get("path")),
+        "relative_path": path_text(raw.get("relative_path")),
+        "parent_relative_path": path_text(raw.get("parent_relative_path")),
+        "filename": path_text(raw.get("filename")),
         "extension": clean_text(raw.get("extension")).lower(),
         "kind": clean_text(raw.get("kind")).lower(),
         "mime_type": clean_text(raw.get("mime_type")),
@@ -767,6 +767,10 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
     }
+
+
+def path_text(value: Any) -> str:
+    return "" if value is None else str(value)
 
 
 def os_walk_sorted(root: Path, *, scan_errors: list[dict[str, str]] | None = None):
@@ -1038,9 +1042,9 @@ def inventory_summary(
 
 def compact_inventory_record(record: dict[str, Any]) -> dict[str, Any]:
     return {
-        "source_path": clean_text(record.get("source_path") or record.get("path")),
-        "relative_path": clean_text(record.get("relative_path")),
-        "filename": clean_text(record.get("filename")),
+        "source_path": path_text(record.get("source_path") or record.get("path")),
+        "relative_path": path_text(record.get("relative_path")),
+        "filename": path_text(record.get("filename")),
         "kind": clean_text(record.get("kind")),
         "import_as": clean_text(record.get("import_as")),
         "parse_status": clean_text(record.get("parse_status")),
@@ -1399,7 +1403,7 @@ def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode:
         """,
         (source_path, size_bytes, kind),
     ).fetchone()
-    stored_path = clean_text(row["stored_path"] if row else "")
+    stored_path = path_text(row["stored_path"] if row else "")
     if stored_path and Path(stored_path).exists():
         return stored_path
     return ""
@@ -1612,7 +1616,7 @@ def build_existing_index(storage: Storage) -> dict[str, dict[str, str]]:
             if paper_id and arxiv_id:
                 index["arxiv_id"].setdefault(arxiv_id, paper_id)
         imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
-        source_path = clean_text(imported.get("source_path") or raw.get("source_path"))
+        source_path = path_text(imported.get("source_path") or raw.get("source_path"))
         size = int_or_none(imported.get("size_bytes", raw.get("size_bytes")))
         if paper_id and source_path:
             fingerprint = f"{source_path}|{size}" if size is not None else source_path

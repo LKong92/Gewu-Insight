@@ -235,10 +235,76 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertFalse(second["errors"])
         self.assertEqual(second["updated_papers"], 0)
         self.assertEqual(second["existing_papers"], 1)
-        self.assertEqual(second["reused_existing_files"], 0)
+        self.assertEqual(len(first["metadata_refresh_candidates"]), 1)
+        self.assertEqual(first["metadata_refresh_candidates"][0]["doi"], "10.4242/reuse")
+        self.assertEqual(second["metadata_refresh_candidates"], [])
+        self.assertEqual(second["reused_existing_files"], 1)
         self.assertEqual(len(list(copied_root.rglob("reuse-me.pdf"))), 1)
         label = self.storage.conn.execute("SELECT display_name FROM library_items WHERE id = ?", (int(row["id"]),)).fetchone()
         self.assertEqual(label["display_name"], "Custom reuse label")
+
+    def test_real_import_preserves_path_whitespace(self) -> None:
+        pdf = self.touch("topic  with  spaces/paper  double  space.pdf", b"%PDF fixture")
+        result = import_library_inventory(
+            self.write_inventory([self.pdf_record(pdf, doi="10.4242/path-space", title="Path Space")]),
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "space-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+        )
+
+        self.assertFalse(result["errors"])
+        self.assertEqual(result["missing_source_files"], 0)
+        self.assertTrue((self.root / "copied/topic  with  spaces/paper  double  space.pdf").exists())
+        paper = self.storage.conn.execute("SELECT * FROM papers WHERE doi = ?", ("10.4242/path-space",)).fetchone()
+        self.assertIsNotNone(paper)
+        self.assertEqual(paper["source_path"], str(pdf))
+        self.assertEqual(paper["original_relative_path"], "topic  with  spaces/paper  double  space.pdf")
+
+    def test_real_import_preserves_source_root_and_report_path_for_reuse(self) -> None:
+        source_root = self.root / "source  folder"
+        source_root.mkdir()
+        pdf = source_root / "paper.pdf"
+        pdf.write_bytes(b"%PDF fixture")
+        inventory_path = self.root / "inventory-source-root.json"
+        report_path = self.root / "report-source-root.json"
+        inventory_path.write_text(
+            json.dumps(
+                {
+                    "summary": {"root": str(source_root), "file_count": 1},
+                    "directories": [],
+                    "files": [self.pdf_record(pdf, doi="10.4242/source-root", title="Source Root")],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=report_path,
+            target_root=self.root / "copied  root",
+            library_item_name="filename",
+        )
+
+        self.assertFalse(result["errors"])
+        batch = self.storage.conn.execute(
+            "SELECT source_root, report_path FROM inventory_import_batches WHERE id = ?",
+            (result["import_batch_id"],),
+        ).fetchone()
+        self.assertIsNotNone(batch)
+        self.assertEqual(batch["source_root"], str(source_root))
+        self.assertEqual(batch["report_path"], str(report_path))
 
     def test_repeated_import_adds_newly_seen_non_pdf_without_touching_existing_pdf(self) -> None:
         pdf = self.touch("topic/paper.pdf", b"%PDF fixture")
