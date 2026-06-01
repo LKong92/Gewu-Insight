@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
+from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, doi_from_text, import_library_inventory
 from paper_monitor.storage import Storage
 
 
@@ -532,6 +532,12 @@ class InventoryImporterDryRunTests(unittest.TestCase):
             any("DOI extracted: 10.1234/frontmatter.test" in str(event.get("message") or "") for event in events)
         )
 
+    def test_doi_extraction_removes_space_after_slash(self) -> None:
+        self.assertEqual(
+            doi_from_text("https://doi.org/10.1038/\ns42254-019-0038-2"),
+            "10.1038/s42254-019-0038-2",
+        )
+
     def test_build_inventory_reports_pdfs_without_doi(self) -> None:
         scan_root = self.root / "missing-doi-scan"
         pdf = self.write_text_pdf("missing-doi-scan/topic/no-doi.pdf", "Title page without identifier")
@@ -592,7 +598,7 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         target = self.storage.create_library_folder(parent_id=1, name="Target")
         pdf = self.touch("dropped-topic/inside.pdf", b"%PDF fixture")
         inventory_path = self.root / "dropped-inventory.json"
-        build_inventory_from_paths([self.root / "dropped-topic"], output_path=inventory_path, parse_pdfs=False)
+        build_inventory_from_paths([self.root / "dropped-topic"], output_path=inventory_path, parse_pdfs=False, preserve_top_level=True)
 
         result = import_library_inventory(
             inventory_path,
@@ -621,6 +627,39 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(row["parent_name"], "dropped-topic")
         self.assertEqual(row["parent_parent_id"], int(target["id"]))
         self.assertEqual(row["display_name"], "inside.pdf")
+        resource = self.storage.conn.execute(
+            "SELECT stored_path FROM resources WHERE source_path = ?",
+            (str(pdf.resolve()),),
+        ).fetchone()
+        self.assertEqual(Path(resource["stored_path"]), self.root / "copied" / "dropped-topic" / "inside.pdf")
+
+    def test_dropped_file_import_uses_file_basename_under_target_root(self) -> None:
+        pdf = self.touch("external-folder/solo.pdf", b"%PDF fixture")
+        inventory_path = self.root / "dropped-file-inventory.json"
+        build_inventory_from_paths([pdf], output_path=inventory_path, parse_pdfs=False, preserve_top_level=True)
+        data = json.loads(inventory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["files"][0]["relative_path"], "solo.pdf")
+
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "dropped-file-report.json",
+            target_root=self.root / "copied-target",
+            library_item_name="filename",
+            library_root_folder_id=1,
+        )
+
+        self.assertFalse(result["errors"])
+        resource = self.storage.conn.execute(
+            "SELECT stored_path FROM resources WHERE source_path = ?",
+            (str(pdf.resolve()),),
+        ).fetchone()
+        self.assertEqual(Path(resource["stored_path"]), self.root / "copied-target" / "solo.pdf")
 
 
 if __name__ == "__main__":

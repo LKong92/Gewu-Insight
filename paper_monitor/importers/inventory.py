@@ -131,6 +131,7 @@ def build_inventory_from_paths(
     *,
     output_path: str | Path | None = None,
     parse_pdfs: bool = True,
+    preserve_top_level: bool = False,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     source_paths = [Path(path).expanduser().resolve() for path in paths]
@@ -149,25 +150,25 @@ def build_inventory_from_paths(
     seen_files: set[str] = set()
     scanned = 0
 
-    def add_directory(path: Path) -> None:
+    def add_directory(path: Path, base_root: Path = root) -> None:
         key = str(path)
         if key in seen_dirs:
             return
         seen_dirs.add(key)
-        relative_dir = "" if path == root else path.relative_to(root).as_posix()
+        relative_dir = "" if path == base_root else path.relative_to(base_root).as_posix()
         directories.append({"path": str(path), "relative_path": relative_dir})
 
-    def add_file(path: Path) -> None:
+    def add_file(path: Path, base_root: Path = root) -> None:
         nonlocal scanned
         key = str(path)
         if key in seen_files:
             return
         seen_files.add(key)
         try:
-            record = scan_inventory_file(path, root, parse_pdfs=parse_pdfs)
+            record = scan_inventory_file(path, base_root, parse_pdfs=parse_pdfs)
             files.append(record)
         except Exception as exc:
-            files.append(scan_error_record(path, root, exc))
+            files.append(scan_error_record(path, base_root, exc))
             scan_errors.append({"path": str(path), "error": str(exc)})
         scanned += 1
         emit_progress(
@@ -182,15 +183,16 @@ def build_inventory_from_paths(
 
     emit_progress(progress_callback, stage="scan", message=f"Scanning dropped paths under: {root}", current=0, total=None)
     for source_path in source_paths:
+        scan_root = source_path.parent if preserve_top_level else root
         if source_path.is_file():
-            add_directory(source_path.parent)
-            add_file(source_path)
+            add_directory(source_path.parent, scan_root)
+            add_file(source_path, scan_root)
             continue
         for current, dirnames, filenames in os_walk_sorted(source_path, scan_errors=scan_errors):
             current_path = Path(current)
-            add_directory(current_path)
+            add_directory(current_path, scan_root)
             for filename in filenames:
-                add_file(current_path / filename)
+                add_file(current_path / filename, scan_root)
 
     summary = inventory_summary(root, directories, files, scan_errors)
     inventory = {"summary": summary, "directories": directories, "files": files}
@@ -747,7 +749,7 @@ def remember_record_identity(
 
 
 def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
-    return {
+    record = {
         "source_path": path_text(raw.get("path")),
         "relative_path": path_text(raw.get("relative_path")),
         "parent_relative_path": path_text(raw.get("parent_relative_path")),
@@ -767,6 +769,11 @@ def normalize_record(raw: dict[str, Any]) -> dict[str, Any]:
         "parse_status": clean_text(raw.get("parse_status")),
         "parse_error": clean_text(raw.get("parse_error")),
     }
+    filename = record["filename"] or Path(record["source_path"]).name
+    if is_system_metadata_filename(filename):
+        record["kind"] = "system_metadata"
+        record["import_as"] = "ignore_candidate"
+    return record
 
 
 def path_text(value: Any) -> str:
@@ -836,7 +843,7 @@ def scan_error_record(path: Path, root: Path, exc: Exception) -> dict[str, Any]:
 def file_kind(path: Path) -> str:
     name = path.name.lower()
     suffix = path.suffix.lower()
-    if name in SYSTEM_METADATA_FILENAMES or name.startswith("._"):
+    if is_system_metadata_filename(name):
         return "system_metadata"
     if suffix == ".pdf":
         return "pdf"
@@ -855,6 +862,14 @@ def file_kind(path: Path) -> str:
     if suffix in ARCHIVE_EXTENSIONS:
         return "archive"
     return "unknown"
+
+
+def is_system_metadata_filename(name: str) -> bool:
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return False
+    base = lowered.split("__from_", 1)[0]
+    return lowered.startswith("._") or base in SYSTEM_METADATA_FILENAMES
 
 
 def import_as_for_kind(kind: str) -> str:
@@ -984,7 +999,8 @@ def split_pdf_authors(value: str) -> list[str]:
 
 
 def doi_from_text(value: str) -> str:
-    match = DOI_PATTERN.search(value or "")
+    text = re.sub(r"(10\.\d{4,9}/)\s+", r"\1", value or "", flags=re.I)
+    match = DOI_PATTERN.search(text)
     if not match:
         return ""
     return normalize_doi(match.group(0).rstrip(".,;)"))

@@ -241,13 +241,14 @@ def normalize_variable_chemical_formulas(title: str) -> str:
 
 def normalize_parenthesized_chemical_formula_counts(title: str) -> str:
     title = TITLE_FORMULA_SIGN_SPACE_RE.sub(r"\1", title)
+    formula_chars = rf"A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ"
     pattern = re.compile(
-        rf"(?<![A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}])"
-        rf"([A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]*"
-        rf"(?:\([A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]+\)"
-        rf"[0-9{TITLE_SUBSCRIPT_CHARS}+\-−–—xXyYδΔ]*)+"
-        rf"[A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}δΔ+\-−–—]*)"
-        rf"(?![A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}])"
+        rf"(?<![{formula_chars}])"
+        rf"([{formula_chars}]*"
+        rf"(?:\([{formula_chars}+\-−–—]+\)"
+        rf"[0-9{TITLE_SUBSCRIPT_CHARS}+\-−–—xXyYδΔ]*"
+        rf"[{formula_chars}]*)+)"
+        rf"(?![{formula_chars}])"
     )
 
     def replace(match: re.Match[str]) -> str:
@@ -270,7 +271,7 @@ def _normalize_parenthesized_chemical_formula_token(token: str) -> str:
             if close < 0:
                 return ""
             inner = token[index + 1 : close]
-            inner_normalized, inner_count = _normalize_formula_fragment(inner)
+            inner_normalized, inner_count = _normalize_parenthesized_formula_inner(inner)
             if not inner_normalized or inner_count < 1:
                 return ""
             element_count += inner_count
@@ -324,6 +325,15 @@ def _normalize_parenthesized_chemical_formula_token(token: str) -> str:
     if element_count < 1 or not counted_group_seen:
         return ""
     return "".join(pieces)
+
+
+def _normalize_parenthesized_formula_inner(inner: str) -> tuple[str, int]:
+    normalized, counted = _normalize_formula_fragment(inner)
+    if normalized:
+        return normalized, 1
+    if re.fullmatch(r"[A-Z0-9]+(?:-[A-Z0-9]+)+", inner):
+        return inner, 1
+    return "", 0
 
 
 def _normalize_variable_chemical_formula_token(token: str, *, min_elements: int) -> str:

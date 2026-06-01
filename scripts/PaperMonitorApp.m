@@ -18,6 +18,7 @@
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        [self updateFinderDropTargetForDraggingInfo:sender];
         return NSDragOperationCopy;
     }
     return [super draggingEntered:sender];
@@ -25,9 +26,15 @@
 
 - (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
     if ([self finderDropPathsFromDraggingInfo:sender].count > 0) {
+        [self updateFinderDropTargetForDraggingInfo:sender];
         return NSDragOperationCopy;
     }
     return [super draggingUpdated:sender];
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self clearFinderDropTarget];
+    [super draggingExited:sender];
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
@@ -41,9 +48,27 @@
         return NO;
     }
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@)", json ?: @"[]"];
+    NSPoint point = [self browserClientPointForDraggingInfo:sender];
+    NSString *script = [NSString stringWithFormat:@"window.handleNativeFinderDrop && window.handleNativeFinderDrop(%@, {x:%0.2f,y:%0.2f})", json ?: @"[]", point.x, point.y];
     [self evaluateJavaScript:script completionHandler:nil];
     return YES;
+}
+
+- (NSPoint)browserClientPointForDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSPoint point = [self convertPoint:sender.draggingLocation fromView:nil];
+    CGFloat clientX = point.x;
+    CGFloat clientY = self.isFlipped ? point.y : self.bounds.size.height - point.y;
+    return NSMakePoint(clientX, clientY);
+}
+
+- (void)updateFinderDropTargetForDraggingInfo:(id<NSDraggingInfo>)sender {
+    NSPoint point = [self browserClientPointForDraggingInfo:sender];
+    NSString *script = [NSString stringWithFormat:@"window.updateNativeFinderDropTarget && window.updateNativeFinderDropTarget({x:%0.2f,y:%0.2f})", point.x, point.y];
+    [self evaluateJavaScript:script completionHandler:nil];
+}
+
+- (void)clearFinderDropTarget {
+    [self evaluateJavaScript:@"window.clearNativeFinderDropTarget && window.clearNativeFinderDropTarget()" completionHandler:nil];
 }
 
 - (void)mouseDragged:(NSEvent *)event {
@@ -103,6 +128,8 @@
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
+@property(nonatomic, strong) NSWindow *userGuideWindow;
+@property(nonatomic, strong) WKWebView *userGuideWebView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -156,6 +183,7 @@
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
+    [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     configuration.userContentController = userContentController;
     self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -191,7 +219,16 @@
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
-        [self.loaderWindow orderOut:nil];
+        NSString *type = @"close";
+        if ([message.body isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *payload = (NSDictionary *)message.body;
+            type = [payload[@"type"] isKindOfClass:[NSString class]] ? payload[@"type"] : type;
+        }
+        if ([type isEqualToString:@"open"]) {
+            [self showLibraryLoaderWindow];
+        } else {
+            [self.loaderWindow orderOut:nil];
+        }
         return;
     }
     if ([message.name isEqualToString:@"nativeFileDrag"]) {
@@ -282,6 +319,8 @@
     NSMenu *loaderMenu = [[NSMenu alloc] initWithTitle:@"Loader"];
     NSMenuItem *openLoaderItem = [loaderMenu addItemWithTitle:@"Open Loader" action:@selector(openLibraryLoader:) keyEquivalent:@"l"];
     openLoaderItem.target = self;
+    NSMenuItem *refreshMetadataItem = [loaderMenu addItemWithTitle:@"Refresh All Metadata" action:@selector(openMetadataRefresh:) keyEquivalent:@""];
+    refreshMetadataItem.target = self;
     loaderMenuItem.submenu = loaderMenu;
 
     NSMenuItem *settingMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -303,6 +342,13 @@
     clearCacheItem.target = self;
     settingMenuItem.submenu = settingMenu;
 
+    NSMenuItem *helpMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:helpMenuItem];
+    NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
+    NSMenuItem *userGuideItem = [helpMenu addItemWithTitle:@"User Guide" action:@selector(openUserGuide:) keyEquivalent:@"?"];
+    userGuideItem.target = self;
+    helpMenuItem.submenu = helpMenu;
+
     NSApp.mainMenu = mainMenu;
 }
 
@@ -310,10 +356,11 @@
     NSString *html = @"<!doctype html>"
         "<html><head><meta charset='utf-8'><style>"
         "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
-        ".card{display:flex;align-items:center;gap:16px;padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
+        ".card{display:flex;align-items:center;gap:16px;width:430px;box-sizing:border-box;padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
         ".icon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#0f6b6e,#d7b46a);color:white;font-size:22px;font-weight:800;box-shadow:0 10px 22px rgba(15,107,110,.22);}"
+        ".copy{min-width:0;flex:1;}.message{min-height:22px;}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><div class='icon'>D</div><div><strong>Starting Daiqo...</strong>Preparing the local reading workspace.</div></div></body></html>";
+        "</style></head><body><div class='card'><div class='icon'>D</div><div class='copy'><strong>Starting Daiqo</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -410,6 +457,43 @@
 
 - (void)openLibraryLoader:(id)sender {
     [self showLibraryLoaderWindow];
+}
+
+- (void)openMetadataRefresh:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openMetadataRefreshWindow && window.openMetadataRefreshWindow()" completionHandler:nil];
+}
+
+- (NSURL *)userGuideURL {
+    return [self.url URLByAppendingPathComponent:@"user-guide"];
+}
+
+- (void)openUserGuide:(id)sender {
+    [self showUserGuideWindow];
+}
+
+- (void)showUserGuideWindow {
+    if (!self.userGuideWindow) {
+        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        self.userGuideWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+        self.userGuideWebView.UIDelegate = self;
+
+        self.userGuideWindow = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 980, 760)
+                      styleMask:(NSWindowStyleMaskTitled |
+                                 NSWindowStyleMaskClosable |
+                                 NSWindowStyleMaskMiniaturizable |
+                                 NSWindowStyleMaskResizable)
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        self.userGuideWindow.title = @"User Guide";
+        self.userGuideWindow.delegate = self;
+        self.userGuideWindow.minSize = NSMakeSize(760, 560);
+        self.userGuideWindow.contentView = self.userGuideWebView;
+        [self.userGuideWindow center];
+    }
+    [self.userGuideWebView loadRequest:[NSURLRequest requestWithURL:[self userGuideURL]]];
+    [self.userGuideWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (NSURL *)loaderURL {

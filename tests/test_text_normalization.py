@@ -58,6 +58,14 @@ class TitleNormalizationTest(unittest.TestCase):
             "Superconductivity in Ba(Fe₁₋ₓCoₓ)₂As₂",
         )
         self.assertEqual(
+            normalize_publication_title("Evidence of Andreev bound states as a hallmark of the FFLO phase in κ-(BEDT-TTF)2Cu(NCS)2"),
+            "Evidence of andreev bound states as a hallmark of the FFLO phase in κ-(BEDT-TTF)₂Cu(NCS)₂",
+        )
+        self.assertEqual(
+            normalize_publication_title("Cu(NCS)2"),
+            "Cu(NCS)₂",
+        )
+        self.assertEqual(
             normalize_publication_title("Transport in (NH4)2SO4 and La(O1-xFx)1+δBiS2"),
             "Transport in (NH₄)₂SO₄ and La(O₁₋ₓFₓ)₁₊δBiS₂",
         )

@@ -199,6 +199,19 @@ CREATE TABLE IF NOT EXISTS resources (
 CREATE INDEX IF NOT EXISTS idx_resources_paper ON resources(paper_id);
 CREATE INDEX IF NOT EXISTS idx_resources_batch ON resources(import_batch_id);
 CREATE INDEX IF NOT EXISTS idx_resources_source ON resources(source_path, size_bytes);
+
+CREATE TABLE IF NOT EXISTS paper_metadata_refreshes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  mode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  source_summary TEXT,
+  error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_refreshes_paper_mode ON paper_metadata_refreshes(paper_id, mode, status, finished_at);
 """
 
 
@@ -1591,7 +1604,33 @@ class Storage:
     def list_library_items(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
-            SELECT library_items.*, papers.*, inventory_import_batches.copy_mode AS import_copy_mode
+            SELECT
+              library_items.id,
+              library_items.folder_id,
+              library_items.paper_id,
+              library_items.display_name,
+              library_items.original_folder_id,
+              library_items.trashed_at,
+              library_items.created_at,
+              library_items.sort_order,
+              papers.title,
+              papers.journal,
+              papers.publication_date,
+              papers.doi,
+              papers.url,
+              papers.landing_url,
+              papers.source,
+              papers.download_status,
+              papers.main_pdf_path,
+              papers.merged_pdf_path,
+              papers.source_path,
+              papers.original_filename,
+              papers.import_batch_id,
+              papers.import_kind,
+              papers.import_as,
+              papers.size_bytes,
+              papers.analysis_status,
+              inventory_import_batches.copy_mode AS import_copy_mode
             FROM library_items
             JOIN papers ON papers.paper_id = library_items.paper_id
             LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id

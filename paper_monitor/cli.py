@@ -14,7 +14,7 @@ from .monitor import apply_fast_section_hints, default_windows, run_journal_moni
 from .reporting import export_json, write_journal_markdown_report
 from .storage import Storage
 from .time_utils import parse_date, today_jst
-from .ui_server import run_ui_server
+from .ui_server import cleanup_monitor_pdf_cache, run_ui_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +211,9 @@ def handle_journal(args: argparse.Namespace, config, storage: Storage) -> int:
             f"blocked={item['blocked_by_section']}"
         )
     print(f"Report: {report_path}")
+    cleanup = cleanup_monitor_pdf_cache(storage)
+    if cleanup.get("deleted"):
+        print(f"Cleaned monitor PDF cache: {len(cleanup['deleted'])} old file(s)")
     if summary["source_attempts"] and summary["source_errors"] == summary["source_attempts"]:
         print("All source fetches failed. The report was generated from existing database records only.", file=sys.stderr)
         return 1
