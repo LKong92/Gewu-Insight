@@ -15,13 +15,12 @@ REQ_STAMP="$VENV_DIR/.paper_monitor_requirements_installed"
 mkdir -p "$LOG_DIR" "$PROJECT_DIR/data" "$PROJECT_DIR/reports"
 cd "$PROJECT_DIR"
 
-case "$PROJECT_DIR" in
-  "$HOME/Desktop"|"$HOME/Desktop"/*|"$HOME/Documents"|"$HOME/Documents"/*|"$HOME/Downloads"|"$HOME/Downloads"/*)
-    echo "This project is inside Desktop, Documents, or Downloads. macOS may block Finder-launched Python from reading these protected folders." >&2
-    echo "Move the whole PaperMonitor folder to a regular folder such as $HOME/Applications or $HOME/PaperMonitor, then try again." >&2
-    exit 1
-    ;;
-esac
+ACCESS_PROBE="$PROJECT_DIR/data/.paper_monitor_access_probe"
+if ! touch "$ACCESS_PROBE" || ! rm -f "$ACCESS_PROBE"; then
+  echo "This app cannot write to the project data folder. macOS may be blocking access to this location." >&2
+  echo "Grant Files and Folders permission for Daiqo/Python in System Settings, or move PaperMonitor to a regular folder such as $HOME/Applications or $HOME/PaperMonitor." >&2
+  exit 1
+fi
 
 if [ ! -x "$PYTHON_BIN" ]; then
   SYSTEM_PYTHON="$(/usr/bin/env which python3 || true)"

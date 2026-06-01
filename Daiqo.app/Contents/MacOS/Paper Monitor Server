@@ -56,14 +56,13 @@ if [ ! -f "$REQ_FILE" ] || [ ! -d "$PROJECT_DIR/paper_monitor" ]; then
   exit 1
 fi
 
-case "$PROJECT_DIR" in
-  "$HOME/Desktop"|"$HOME/Desktop"/*|"$HOME/Documents"|"$HOME/Documents"/*|"$HOME/Downloads"|"$HOME/Downloads"/*)
-    echo "This project is inside Desktop, Documents, or Downloads. macOS may block Finder-launched Python from reading these protected folders." >>"$LOG_FILE"
-    echo "Move the whole PaperMonitor folder to a regular folder such as $HOME/Applications or $HOME/PaperMonitor, then open Journal Monitor again." >>"$LOG_FILE"
-    show_failure
-    exit 1
-    ;;
-esac
+ACCESS_PROBE="$PROJECT_DIR/data/.paper_monitor_access_probe"
+if ! /usr/bin/touch "$ACCESS_PROBE" >>"$LOG_FILE" 2>&1 || ! /bin/rm -f "$ACCESS_PROBE" >>"$LOG_FILE" 2>&1; then
+  echo "This app cannot write to the project data folder. macOS may be blocking access to this location." >>"$LOG_FILE"
+  echo "Grant Files and Folders permission for Daiqo/Python in System Settings, or move PaperMonitor to a regular folder such as $HOME/Applications or $HOME/PaperMonitor." >>"$LOG_FILE"
+  show_failure
+  exit 1
+fi
 
 if [ ! -x "$PYTHON_BIN" ]; then
   SYSTEM_PYTHON="$(/usr/bin/env which python3 2>/dev/null || true)"
