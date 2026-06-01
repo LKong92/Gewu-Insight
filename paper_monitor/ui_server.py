@@ -5643,6 +5643,8 @@ def library_folder_to_api(
         "name": name,
         "parent_id": parent_id,
         "color": folder.get("color") or "",
+        "created_at": folder.get("created_at") or "",
+        "updated_at": folder.get("updated_at") or "",
         "sort_order": int(folder.get("sort_order") or 0),
         "original_parent_id": int(folder["original_parent_id"]) if folder.get("original_parent_id") is not None else None,
         "trashed_at": folder.get("trashed_at") or "",
@@ -5663,6 +5665,7 @@ def library_item_to_api(item: dict[str, Any], paper: dict[str, Any]) -> dict[str
         "id": int(item.get("id") or 0),
         "folder_id": int(item.get("folder_id") or 1),
         "paper_id": paper.get("paper_id") or item.get("paper_id") or "",
+        "created_at": item.get("created_at") or "",
         "paper": paper_to_library_summary_api(paper),
     }
     if display_name:
@@ -5701,7 +5704,7 @@ def paper_to_library_summary_api(paper: dict[str, Any], *, verify_paths: bool = 
         "file_extension": file_meta.get("extension") or Path(str(paper.get("original_filename") or "")).suffix.lower(),
         "file_size_bytes": int(paper.get("size_bytes") or 0),
     }
-    for key in ["journal", "publication_date", "doi"]:
+    for key in ["journal", "publication_date", "doi", "modified_at", "downloaded_at", "first_seen_at", "last_seen_at"]:
         value = paper.get(key) or ""
         if value:
             summary[key] = value
@@ -13118,7 +13121,7 @@ INDEX_HTML = """<!doctype html>
       top: 3px;
       right: 30px;
       z-index: 76;
-      width: 292px;
+      width: 386px;
       justify-content: flex-end;
       pointer-events: none;
     }
@@ -13127,6 +13130,7 @@ INDEX_HTML = """<!doctype html>
       position: relative;
       width: 34px;
       min-width: 34px;
+      flex: 0 0 34px;
       transition: width 160ms ease;
       pointer-events: auto;
     }
@@ -13164,10 +13168,22 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
       transition: opacity 120ms ease;
     }
+    .library-search-wrap input[type="search"] {
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .library-search-wrap input[type="search"]::-webkit-search-cancel-button,
+    .library-search-wrap input[type="search"]::-webkit-search-decoration,
+    .library-search-wrap input[type="search"]::-webkit-search-results-button,
+    .library-search-wrap input[type="search"]::-webkit-search-results-decoration {
+      display: none;
+      -webkit-appearance: none;
+    }
     .library-search-tools:hover .library-search-wrap,
     .library-search-tools:focus-within .library-search-wrap,
     .library-search-tools.has-query .library-search-wrap {
       width: 292px;
+      flex-basis: 292px;
     }
     .library-search-tools:hover .library-search-wrap input,
     .library-search-tools:focus-within .library-search-wrap input,
@@ -13198,9 +13214,10 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       white-space: nowrap;
       display: none;
+      flex: 0 0 82px;
+      min-width: 82px;
     }
-    .library-search-tools.has-query:hover .library-search-count,
-    .library-search-tools.has-query:focus-within .library-search-count { display: inline; }
+    .library-search-tools.has-query .library-search-count { display: inline-block; }
     .library-tab {
       min-height: 34px;
       border: 1px solid var(--line);
@@ -15386,6 +15403,102 @@ INDEX_HTML = """<!doctype html>
       display: block;
       margin-bottom: 4px;
     }
+    .library-folder-tree {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .library-detail dt.library-folders-heading,
+    .library-detail dd.library-folders-detail {
+      grid-column: 1 / -1;
+    }
+    .library-detail dt.library-folders-heading {
+      margin-bottom: -5px;
+    }
+    .library-detail dd.library-folders-detail {
+      margin-top: 0;
+    }
+    .library-folder-tree-node {
+      min-width: 0;
+    }
+    .library-folder-tree-row {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr) 14px;
+      align-items: center;
+      gap: 5px;
+      min-height: 20px;
+      min-width: 0;
+      padding-left: calc(var(--library-folder-depth, 0) * 18px);
+    }
+    .library-folder-tree-icon {
+      width: 11px;
+      height: 9px;
+      position: relative;
+      display: inline-block;
+      justify-self: center;
+      flex: 0 0 auto;
+    }
+    .library-folder-tree-icon::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 4px;
+      width: 11px;
+      height: 5px;
+      border: 1px solid #aeb8c6;
+      border-radius: 1.5px;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-folder-tree-icon::after {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: 1px;
+      width: 5px;
+      height: 4px;
+      border: 1px solid #aeb8c6;
+      border-bottom: 0;
+      border-radius: 1.5px 1.5px 0 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-folder-tree-label {
+      min-width: 0;
+      color: #98a2b3;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .library-folder-tree-row.has-paper .library-folder-tree-label {
+      color: var(--ink);
+      font-weight: 650;
+    }
+    .library-folder-tree-row.current .library-folder-tree-label {
+      color: #111827;
+    }
+    .library-folder-remove {
+      width: 12px !important;
+      height: 12px !important;
+      min-width: 12px !important;
+      min-height: 12px !important;
+      border: 1px solid #cfd6e2 !important;
+      border-radius: 999px;
+      background: transparent;
+      color: #667085;
+      font-size: 9px;
+      line-height: 9px;
+      padding: 0 !important;
+      cursor: pointer;
+    }
+    .library-folder-tree-row:not(.has-paper) .library-folder-remove {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .library-folder-remove:hover {
+      border-color: #c8d0dc;
+      background: #f3f6fa;
+      color: var(--accent-2);
+    }
     .library-detail-figure {
       margin: 10px 0 12px;
       border: 1px solid var(--line);
@@ -16635,6 +16748,7 @@ INDEX_HTML = """<!doctype html>
     const initialToday = localIsoDate(new Date());
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
+    const LIBRARY_SORT_STORAGE_KEY = "daiqo-library-sort-mode";
     const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
@@ -16757,6 +16871,7 @@ INDEX_HTML = """<!doctype html>
       libraryColumnWidths: {},
       libraryDetailWidth: 340,
       libraryClipboard: null,
+      librarySortMode: initialLibrarySortMode(),
       libraryActivityText: "",
       libraryActivityLive: false,
       libraryActivityTimer: 0,
@@ -17741,6 +17856,69 @@ INDEX_HTML = """<!doctype html>
       return String(left).localeCompare(String(right)) || (Number(a.id || 0) - Number(b.id || 0));
     }
 
+    function initialLibrarySortMode() {
+      try {
+        return normalizeLibrarySortMode(window.localStorage?.getItem(LIBRARY_SORT_STORAGE_KEY));
+      } catch (_) {
+        return "name";
+      }
+    }
+
+    function normalizeLibrarySortMode(value) {
+      return value === "modified" ? "modified" : "name";
+    }
+
+    function librarySortLabel(mode = state.librarySortMode) {
+      return normalizeLibrarySortMode(mode) === "modified" ? "Modified Time" : "Name";
+    }
+
+    function setLibrarySortMode(mode) {
+      const nextMode = normalizeLibrarySortMode(mode);
+      state.librarySortMode = nextMode;
+      try {
+        window.localStorage?.setItem(LIBRARY_SORT_STORAGE_KEY, nextMode);
+      } catch (_) {
+      }
+      updateLibraryActivityStatus(`Sorted by ${librarySortLabel(nextMode)}.`, {live: false});
+      renderLibrary();
+    }
+
+    function sortLibraryEntries(entries) {
+      return [...entries].sort(compareLibraryEntries);
+    }
+
+    function compareLibraryEntries(a, b) {
+      const typeDelta = (a.type === "folder" ? 0 : 1) - (b.type === "folder" ? 0 : 1);
+      if (typeDelta) return typeDelta;
+      if (a.type === "folder" && b.type === "folder") {
+        const specialDelta = libraryFolderSpecialRank(libraryFolderById(a.id)) - libraryFolderSpecialRank(libraryFolderById(b.id));
+        if (specialDelta) return specialDelta;
+      }
+      if (normalizeLibrarySortMode(state.librarySortMode) === "modified") {
+        const modifiedDelta = libraryEntryModifiedMs(b) - libraryEntryModifiedMs(a);
+        if (modifiedDelta) return modifiedDelta;
+      }
+      const nameDelta = libraryEntrySortName(a).localeCompare(libraryEntrySortName(b), undefined, {numeric: true, sensitivity: "base"});
+      if (nameDelta) return nameDelta;
+      return Number(a.id || 0) - Number(b.id || 0);
+    }
+
+    function libraryEntrySortName(entry) {
+      if (entry.type === "folder") return libraryFolderById(entry.id)?.name || "";
+      const item = libraryItemById(entry.id);
+      return item?.display_name || libraryPaperDisplayName(item?.paper || {}) || "";
+    }
+
+    function libraryEntryModifiedMs(entry) {
+      const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+      const paper = data?.paper || {};
+      const value = entry.type === "folder"
+        ? (data?.updated_at || data?.created_at || "")
+        : (paper.modified_at || paper.downloaded_at || paper.last_seen_at || data?.created_at || "");
+      const ms = Date.parse(value || "");
+      return Number.isFinite(ms) ? ms : 0;
+    }
+
     function libraryFolderSpecialRank(entry) {
       if (!entry || Number(entry.parent_id || 0) !== Number(state.libraryRootId || 1)) return 0;
       if (entry.is_unsorted || entry.name === "unsorted") return 10;
@@ -17755,7 +17933,7 @@ INDEX_HTML = """<!doctype html>
         .map((folder) => ({type: "folder", id: Number(folder.id)}));
       const items = libraryFolderItems(folderId)
         .map((item) => ({type: "item", id: Number(item.id)}));
-      return folders.concat(items);
+      return sortLibraryEntries(folders.concat(items));
     }
 
     function librarySearchIsActive() {
@@ -19886,6 +20064,8 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
+          <button type="button" data-action="sort-by-name">Sort by Name</button>
+          <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
           <button type="button" data-action="rename-entry">Rename</button>
           <button type="button" data-action="copy-entry">Copy</button>
           <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
@@ -22122,9 +22302,109 @@ INDEX_HTML = """<!doctype html>
           ${preprintId && paper.doi ? `<dt>Preprint</dt><dd><span>arXiv:${escapeHtml(preprintId)}</span> <button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button></dd>` : ""}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
+          ${options.showLibraryFolders ? libraryDetailFolderOccurrencesMarkup(paper, options.selectedLibraryItemId) : ""}
           ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>`}
         </dl>
       `;
+    }
+
+    function libraryDetailFolderOccurrencesMarkup(paper, selectedItemId = 0) {
+      const roots = libraryOccurrenceTreeForPaper(paper?.paper_id || "", selectedItemId);
+      if (!roots.length) return "";
+      return `<dt class="library-folders-heading">Folders</dt><dd class="library-folders-detail"><div class="library-folder-tree">${libraryFolderOccurrenceNodesMarkup(roots)}</div></dd>`;
+    }
+
+    function libraryOccurrenceTreeForPaper(paperId, selectedItemId = 0) {
+      const roots = [];
+      const rootMap = new Map();
+      libraryOccurrencesForPaper(paperId).forEach((item) => {
+        const folderId = Number(item.folder_id || state.libraryRootId);
+        const chain = libraryFolderDisplayChain(folderId);
+        let siblings = roots;
+        let siblingMap = rootMap;
+        let node = null;
+        chain.forEach((folder, index) => {
+          const key = Number(folder.id || 0);
+          node = siblingMap.get(key);
+          if (!node) {
+            node = {
+              id: key,
+              name: folder.name || "Library",
+              itemId: 0,
+              current: false,
+              children: [],
+              childMap: new Map()
+            };
+            siblingMap.set(key, node);
+            siblings.push(node);
+          }
+          if (index === chain.length - 1) {
+            node.itemId = Number(item.id || 0);
+            node.current = node.current || Number(item.id || 0) === Number(selectedItemId || 0);
+          }
+          siblings = node.children;
+          siblingMap = node.childMap;
+        });
+      });
+      sortLibraryOccurrenceNodes(roots);
+      return roots;
+    }
+
+    function libraryFolderDisplayChain(folderId) {
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const chain = [];
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        const currentId = Number(current.id || 0);
+        if (currentId === displayRootId) {
+          if (Number(folderId || 0) === displayRootId) {
+            chain.push({id: currentId, name: current.name || "Library"});
+          }
+          break;
+        }
+        chain.push({id: currentId, name: current.name || "Folder"});
+        if (current.parent_id === null) break;
+        current = libraryFolderById(current.parent_id);
+      }
+      return chain.reverse();
+    }
+
+    function sortLibraryOccurrenceNodes(nodes) {
+      nodes.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), undefined, {numeric: true, sensitivity: "base"}) || Number(a.id || 0) - Number(b.id || 0));
+      nodes.forEach((node) => sortLibraryOccurrenceNodes(node.children));
+    }
+
+    function libraryFolderOccurrenceNodesMarkup(nodes, depth = 0) {
+      return nodes.map((node) => {
+        const hasPaper = Number(node.itemId || 0) > 0;
+        const childMarkup = node.children.length ? libraryFolderOccurrenceNodesMarkup(node.children, depth + 1) : "";
+        return `
+          <div class="library-folder-tree-node">
+            <div class="library-folder-tree-row${hasPaper ? " has-paper" : ""}${node.current ? " current" : ""}" style="--library-folder-depth:${depth}">
+              <span class="library-folder-tree-icon" aria-hidden="true"></span>
+              <span class="library-folder-tree-label">${escapeHtml(node.name || "Folder")}</span>
+              <button class="library-folder-remove" type="button" data-action="remove-library-occurrence" data-library-item-id="${Number(node.itemId || 0)}" title="Remove from this folder" aria-label="Remove from ${escapeAttr(node.name || "Folder")}">-</button>
+            </div>
+            ${childMarkup}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function libraryOccurrencesForPaper(paperId) {
+      const target = String(paperId || "");
+      if (!target) return [];
+      return state.libraryItems
+        .filter((item) => String(item.paper_id || item.paper?.paper_id || "") === target)
+        .sort((a, b) => {
+          const selectedDelta = (Number(b.id || 0) === Number(state.librarySelection?.id || 0) ? 1 : 0)
+            - (Number(a.id || 0) === Number(state.librarySelection?.id || 0) ? 1 : 0);
+          if (selectedDelta) return selectedDelta;
+          return libraryFolderPath(a.folder_id).localeCompare(libraryFolderPath(b.folder_id), undefined, {numeric: true, sensitivity: "base"})
+            || Number(a.id || 0) - Number(b.id || 0);
+        });
     }
 
     function libraryNonPdfDetailMarkup(paper) {
@@ -22370,8 +22650,9 @@ INDEX_HTML = """<!doctype html>
         root.innerHTML = `
           <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
           <div class="library-detail-status">Loading details...</div>
-          ${libraryDetailMetadataMarkup(paper, [])}
+          ${libraryDetailMetadataMarkup(paper, [], null, {showLibraryFolders: true, selectedLibraryItemId: item?.id})}
         `;
+        wireLibraryFolderOccurrenceControls(root);
         loadLibraryItemPaperDetail(item);
         return;
       }
@@ -22399,7 +22680,7 @@ INDEX_HTML = """<!doctype html>
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
-        ${libraryDetailMetadataMarkup(paper, authors)}
+        ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id})}
         ${citationMetricsMarkup(paper)}
         ${libraryDetailAbstractMarkup(paper)}
         ${pubmedMarkup(paper.pubmed || {})}
@@ -22431,11 +22712,53 @@ INDEX_HTML = """<!doctype html>
         openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      wireLibraryFolderOccurrenceControls(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="copy-nature-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       hydrateLibraryDetailFigureIfNeeded(paper);
+    }
+
+    function wireLibraryFolderOccurrenceControls(root) {
+      root?.querySelectorAll('[data-action="remove-library-occurrence"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.stopPropagation();
+          const itemId = Number(button.dataset.libraryItemId || 0);
+          if (itemId) await runLibraryMenuAction(() => removeLibraryOccurrenceFromDetail(itemId));
+        });
+      });
+    }
+
+    async function removeLibraryOccurrenceFromDetail(itemId) {
+      const item = libraryItemById(itemId);
+      if (!item) return;
+      const paperId = String(item.paper_id || item.paper?.paper_id || "");
+      const parentId = Number(item.folder_id || state.libraryActiveFolderId || state.libraryRootId);
+      const previousSelection = state.librarySelection ? {...state.librarySelection} : null;
+      const entriesBeforeDelete = libraryEntriesForFolder(parentId);
+      return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
+        const res = await fetch("/api/library/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({type: "item", id: itemId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        applyLibrarySnapshot(data);
+        const previousItem = previousSelection?.type === "item" ? libraryItemById(previousSelection.id) : null;
+        if (previousItem) {
+          setLibraryColumnSelection(Number(previousItem.folder_id || state.libraryRootId), previousSelection);
+        } else {
+          const nextOccurrence = libraryOccurrencesForPaper(paperId)[0];
+          if (nextOccurrence) {
+            setLibraryColumnSelection(Number(nextOccurrence.folder_id || state.libraryRootId), {type: "item", id: Number(nextOccurrence.id)});
+          } else {
+            selectLibraryDeletionFallback(parentId, {type: "item", id: itemId}, entriesBeforeDelete);
+          }
+        }
+        renderLibrary();
+      });
     }
 
     async function loadLibraryItemPaperDetail(item) {
@@ -25392,6 +25715,8 @@ INDEX_HTML = """<!doctype html>
       const copyButton = menu.querySelector('[data-action="copy-entry"]');
       const addToMyPublicationsButton = menu.querySelector('[data-action="add-to-my-publications"]');
       const pasteButton = menu.querySelector('[data-action="paste-entry"]');
+      const sortByNameButton = menu.querySelector('[data-action="sort-by-name"]');
+      const sortByModifiedButton = menu.querySelector('[data-action="sort-by-modified"]');
       const recoverButton = menu.querySelector('[data-action="recover-entry"]');
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
@@ -25501,6 +25826,18 @@ INDEX_HTML = """<!doctype html>
           await runLibraryMenuAction(() => pasteLibraryEntry(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
         };
       }
+      [
+        [sortByNameButton, "name", "Sort by Name"],
+        [sortByModifiedButton, "modified", "Sort by Modified Time"]
+      ].forEach(([button, mode, label]) => {
+        if (!button) return;
+        const active = normalizeLibrarySortMode(state.librarySortMode) === mode;
+        button.textContent = `${active ? "✓ " : ""}${label}`;
+        button.onclick = () => {
+          hideLibraryContextMenu();
+          setLibrarySortMode(mode);
+        };
+      });
       menu.querySelector('[data-action="new-folder"]').onclick = async () => {
         hideLibraryContextMenu();
         await runLibraryMenuAction(() => createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
