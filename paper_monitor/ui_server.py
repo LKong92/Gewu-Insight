@@ -13219,11 +13219,17 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-tools.has-query .library-search-count { display: inline-block; }
     .library-tab {
+      --library-tab-bg: #f3f5f8;
+      --library-tab-border: #d8dee8;
+      --library-tab-color: #1f2937;
+      --library-tab-active-bg: #e2e9f3;
+      --library-tab-active-border: #b8c5d8;
+      --library-tab-active-color: #111827;
       min-height: 34px;
-      border: 1px solid var(--line);
+      border: 1px solid var(--library-tab-border);
       border-radius: 7px;
-      background: #fff;
-      color: var(--ink);
+      background: var(--library-tab-bg);
+      color: var(--library-tab-color);
       padding: 0 13px;
       cursor: pointer;
       font-weight: 650;
@@ -13278,7 +13284,8 @@ INDEX_HTML = """<!doctype html>
       transform: rotate(-90deg);
       transform-origin: left top;
       border-radius: 13px 13px 0 0;
-      border: 0;
+      border: 1px solid var(--library-tab-border);
+      border-bottom: 0;
     }
     .library-tab-label {
       min-width: 0;
@@ -13288,14 +13295,15 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .library-tab.active {
-      border-color: var(--accent);
-      color: var(--accent-strong);
-      box-shadow: inset 0 0 0 1px var(--accent);
+      border-color: var(--library-tab-active-border);
+      color: var(--library-tab-active-color);
+      background: var(--library-tab-active-bg);
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
     }
     .library-tab-rail .library-tab.active {
-      color: var(--ink);
-      background: #fff;
-      box-shadow: none;
+      color: var(--library-tab-active-color);
+      background: var(--library-tab-active-bg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
       z-index: 2;
     }
     .library-tab-rail .library-tab.active::before,
@@ -13309,35 +13317,39 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-rail .library-tab.active::before {
       left: -18px;
-      background: radial-gradient(circle at 0 0, transparent 18px, #fff 19px);
+      background: radial-gradient(circle at 0 0, transparent 18px, var(--library-tab-active-bg) 19px);
     }
     .library-tab-rail .library-tab.active::after {
       right: -18px;
-      background: radial-gradient(circle at 100% 0, transparent 18px, #fff 19px);
+      background: radial-gradient(circle at 100% 0, transparent 18px, var(--library-tab-active-bg) 19px);
     }
     .library-tab.shortcut-tab {
-      background: #fff8d7;
-      border-color: #eadc99;
+      --library-tab-bg: #f3f5f8;
+      --library-tab-border: #d8dee8;
+      --library-tab-active-bg: #e2e9f3;
+      --library-tab-active-border: #b8c5d8;
     }
     .library-tab.root-tab {
-      background: #fff;
-      color: var(--ink);
+      --library-tab-bg: #f3f5f8;
+      --library-tab-border: #d8dee8;
+      --library-tab-active-bg: #e2e9f3;
+      --library-tab-active-border: #b8c5d8;
     }
     .library-tab.shortcut-tab.active {
-      background: #fff2b8;
-      border-color: #d7bd55;
+      background: var(--library-tab-active-bg);
+      border-color: var(--library-tab-active-border);
     }
     .library-tab.workspace-tab {
-      background: #eaf8df;
-      border-color: #c4e3b1;
+      --library-tab-bg: #edf7e9;
+      --library-tab-border: #c9ddc0;
+      --library-tab-color: #1f3320;
+      --library-tab-active-bg: #d9edcf;
+      --library-tab-active-border: #a9c99a;
+      --library-tab-active-color: #142516;
     }
     .library-tab.workspace-tab.active {
-      background: #dcf1cf;
-      border-color: #9dca82;
-    }
-    .library-tab-rail .library-tab.shortcut-tab.active,
-    .library-tab-rail .library-tab.workspace-tab.active {
-      background: #fff;
+      background: var(--library-tab-active-bg);
+      border-color: var(--library-tab-active-border);
     }
     .loader-tool-tab {
       display: inline-flex;
@@ -13381,19 +13393,63 @@ INDEX_HTML = """<!doctype html>
     .workspace-tools {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 0;
+      gap: 8px 10px;
+      padding: 8px 16px 9px;
       border-bottom: 1px solid var(--line);
-      margin-bottom: 10px;
+      margin: 0;
       flex-wrap: wrap;
       grid-column: 1 / -1;
+      background: #f7f8fa;
+      min-width: 0;
     }
-    .workspace-tools input {
-      min-height: 32px;
-      border: 1px solid var(--line);
+    .workspace-tool-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    .workspace-tools input.search {
+      min-height: 28px;
+      border: 0;
       border-radius: 7px;
-      padding: 0 10px;
+      padding: 0 8px;
+      background: #f2f2f2;
+      box-shadow: inset 0 0 0 1px rgba(216, 216, 220, 0.78);
+      color: var(--ink);
+      font-size: 12px;
+      transition: background 0.16s ease, box-shadow 0.16s ease;
+    }
+    .workspace-tools input.search:focus {
+      outline: 0;
       background: #fff;
+      box-shadow: inset 0 0 0 1px rgba(15, 107, 110, 0.64), 0 0 0 3px rgba(15, 107, 110, 0.08);
+    }
+    #workspaceNameInput {
+      width: 230px;
+      max-width: min(230px, 30vw);
+    }
+    #workspaceDoiInput {
+      width: 300px;
+      max-width: min(300px, 34vw);
+    }
+    .workspace-tools .smallbtn {
+      min-height: 28px;
+      border: 0;
+      border-radius: 7px;
+      background: #d9d9d9;
+      color: #2f3948;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1;
+      white-space: nowrap;
+      box-shadow: none;
+    }
+    .workspace-tools .smallbtn:hover {
+      background: #d9d9d9;
+      color: var(--accent);
+      box-shadow: none;
     }
     .library-tab.drag-over {
       border-color: var(--accent);
@@ -14250,12 +14306,16 @@ INDEX_HTML = """<!doctype html>
     }
     .star-button.active { color: #d97706; }
     .workspace-status {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--line);
-      background: #fbfcfe;
+      flex: 1 1 180px;
+      min-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       color: var(--muted);
       font-size: 12px;
+      line-height: 1.25;
     }
+    .workspace-status:empty { display: none; }
     .loader-panel {
       height: 100%;
       min-height: 0;
@@ -20226,13 +20286,18 @@ INDEX_HTML = """<!doctype html>
     function workspaceToolsMarkup() {
       const index = activeWorkspaceIndex();
       if (index < 0) return "";
+      const status = String(state.workspaceStatus || "").trim();
       return `
         <div class="workspace-tools">
-          <input class="search" id="workspaceNameInput" value="${escapeAttr(libraryWorkspaceLabel(index))}" placeholder="Space name">
-          <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
-          <input class="search" id="workspaceDoiInput" placeholder="DOI or arXiv ID">
-          <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
-          <span class="workspace-status" id="workspaceStatus">${escapeHtml(state.workspaceStatus || "This space works like Library. Add papers by DOI or arXiv ID into its root.")}</span>
+          <div class="workspace-tool-group">
+            <input class="search" id="workspaceNameInput" value="${escapeAttr(libraryWorkspaceLabel(index))}" placeholder="Space name">
+            <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
+          </div>
+          <div class="workspace-tool-group">
+            <input class="search" id="workspaceDoiInput" placeholder="DOI or arXiv ID">
+            <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
+          </div>
+          ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
         </div>
       `;
     }
