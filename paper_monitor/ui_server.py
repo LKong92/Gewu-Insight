@@ -15026,7 +15026,6 @@ INDEX_HTML = """<!doctype html>
       user-select: none;
     }
     .library-row + .library-row { margin-top: 1px; }
-    .library-row:hover { background: #f2f2f3; }
     .library-row.range-selected { background: #d9ebff; border-color: #b9d7fb; }
     .library-row.range-selected .library-meta { color: #45637f; }
     .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
