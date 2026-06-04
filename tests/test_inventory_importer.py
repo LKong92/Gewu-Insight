@@ -5,8 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pypdf import PdfWriter
+
 from paper_monitor.importers.inventory import build_inventory_from_folder, build_inventory_from_paths, doi_from_text, import_library_inventory
 from paper_monitor.storage import Storage
+from paper_monitor.ui_server import default_library_item_display_name
 
 
 class InventoryImporterDryRunTests(unittest.TestCase):
@@ -192,6 +195,88 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         ).fetchone()
         self.assertIsNotNone(row)
         self.assertEqual(row["display_name"], "plain-name.pdf")
+
+    def test_placeholder_pdf_metadata_title_falls_back_to_filename(self) -> None:
+        scan_root = self.root / "placeholder-metadata"
+        pdf = scan_root / "topic" / "actual-paper-name.pdf"
+        pdf.parent.mkdir(parents=True)
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.add_metadata({"/Title": "Unknown Imported Library"})
+        with pdf.open("wb") as handle:
+            writer.write(handle)
+
+        inventory = build_inventory_from_folder(scan_root)
+        record = inventory["files"][0]
+
+        self.assertEqual(record["title"], "actual-paper-name.pdf")
+        result = import_library_inventory(
+            self.write_inventory([record]),
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "placeholder-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+        )
+        self.assertFalse(result["errors"])
+        row = self.storage.conn.execute(
+            """
+            SELECT papers.title, library_items.display_name
+            FROM papers
+            JOIN library_items ON library_items.paper_id = papers.paper_id
+            WHERE papers.source_path = ?
+            """,
+            (str(pdf.resolve()),),
+        ).fetchone()
+        self.assertEqual(row["title"], "Actual-paper-name.pdf")
+        self.assertEqual(row["display_name"], "actual-paper-name.pdf")
+
+    def test_metadata_refresh_does_not_replace_title_with_placeholder(self) -> None:
+        self.storage.upsert_paper(
+            {
+                "paper_id": "local-file",
+                "doi": "",
+                "title": "meaningful-file-name.pdf",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "abstract_source": "inventory",
+                "url": "",
+                "landing_url": "",
+                "pdf_url": "",
+                "source": "inventory",
+                "type": "imported_pdf",
+                "type_crossref": "",
+                "publisher_section": "imported",
+                "section_allowed": True,
+                "raw": {},
+            }
+        )
+
+        refreshed = self.storage.refresh_paper_metadata(
+            "local-file",
+            {
+                "title": "Unknown Imported Library",
+                "journal": "Imported Library",
+                "raw": {},
+            },
+        )
+
+        self.assertEqual(refreshed["title"], "Meaningful-file-name.pdf")
+
+    def test_default_library_item_name_skips_generic_imported_citation(self) -> None:
+        name = default_library_item_display_name(
+            {
+                "title": "Unknown Imported Library",
+                "journal": "Imported Library",
+                "original_filename": "real-file-name.pdf",
+            }
+        )
+
+        self.assertEqual(name, "real-file-name.pdf")
 
     def test_repeated_real_import_leaves_existing_records_and_labels_unchanged(self) -> None:
         pdf = self.touch("repeat/reuse-me.pdf", b"%PDF fixture")

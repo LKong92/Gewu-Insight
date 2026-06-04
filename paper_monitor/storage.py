@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .config import DEFAULT_DB_PATH
-from .text import normalize_publication_title
+from .text import is_placeholder_publication_title, normalize_publication_title
 from .time_utils import now_iso
 
 
@@ -449,6 +449,8 @@ class Storage:
         timestamp = now_iso()
         raw_json = json.dumps(paper.get("raw") or {}, ensure_ascii=False)
         normalized_title = normalize_publication_title(paper.get("title")) if paper.get("title") else ""
+        if is_placeholder_publication_title(normalized_title):
+            normalized_title = ""
         updates = {
             "doi": paper.get("doi") or existing.get("doi"),
             "title": normalized_title or existing.get("title"),

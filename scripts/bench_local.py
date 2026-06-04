@@ -227,11 +227,33 @@ def choose_samples(conn: sqlite3.Connection) -> dict[str, Any]:
         limit 1
         """,
     )
+    my_publication_paper_id = scalar(
+        conn,
+        """
+        select paper_id
+        from my_publications
+        order by sort_order asc, id asc
+        limit 1
+        """,
+    ) or ""
+    workspace_root_id = int(root_id)
+    try:
+        workspace_setting = scalar(conn, "select value from app_settings where key = 'library_workspace_tabs'") or "[]"
+        workspace_tabs = json.loads(workspace_setting)
+        if isinstance(workspace_tabs, list):
+            for tab in workspace_tabs:
+                if isinstance(tab, dict) and int(tab.get("root_folder_id") or 0):
+                    workspace_root_id = int(tab.get("root_folder_id") or workspace_root_id)
+                    break
+    except Exception:
+        workspace_root_id = int(root_id)
     sample_pdf_path = str(pdf_row[0]) if pdf_row else ""
     return {
         "root_folder_id": int(root_id),
         "busy_folder_id": int(busy_folder[0]) if busy_folder else int(root_id),
         "busy_folder_items": int(busy_folder[1]) if busy_folder else 0,
+        "workspace_root_id": workspace_root_id,
+        "my_publication_paper_id": my_publication_paper_id,
         "latest_report_date": latest_date or "",
         "sample_pdf_available": bool(sample_pdf_path),
         "sample_pdf_size_bytes": Path(sample_pdf_path).stat().st_size if sample_pdf_path and Path(sample_pdf_path).exists() else 0,
@@ -246,7 +268,14 @@ def make_http_scenarios(samples: dict[str, Any]) -> list[dict[str, Any]]:
         {"name": "Full library snapshot", "path": "/api/library"},
         {"name": "Library root folder", "path": f"/api/library/folder?folder_id={samples['root_folder_id']}"},
         {"name": "Library busiest folder", "path": f"/api/library/folder?folder_id={samples['busy_folder_id']}"},
+        {"name": "Space root folder", "path": f"/api/library/folder?folder_id={samples['workspace_root_id']}"},
+        {"name": "My Publications list", "path": "/api/my-publications"},
     ]
+    if samples.get("my_publication_paper_id"):
+        scenarios.append({
+            "name": "My Publications first detail",
+            "path": f"/api/paper?paper_id={urllib.parse.quote(str(samples['my_publication_paper_id']))}",
+        })
     if samples.get("latest_report_date"):
         scenarios.append({"name": "Latest report no-fetch", "path": f"/api/report?date={samples['latest_report_date']}&auto_fetch=0"})
     if samples.get("sample_pdf_path"):
@@ -340,6 +369,8 @@ def markdown_report(result: dict[str, Any]) -> str:
 - Library file tree size: {human_bytes(dataset['library_size_bytes'])}
 - Spaces file tree size: {human_bytes(dataset['spaces_size_bytes'])}
 - Busiest sampled folder items: {samples['busy_folder_items']}
+- Sampled Space root folder ID: {samples.get('workspace_root_id') or 'none'}
+- Sampled My Publications paper: `{samples.get('my_publication_paper_id') or 'none'}`
 - Latest sampled report date: `{samples.get('latest_report_date') or 'none'}`
 - Sample PDF size: {human_bytes(samples.get('sample_pdf_size_bytes') or 0)}
 
@@ -375,6 +406,8 @@ The measured local-only proxy for the core UI flow is:
 
 - Open app shell: `UI HTML shell`
 - Open Library: `Library bootstrap`, `Library root folder`, `Library busiest folder`
+- Open Space: `Space root folder`
+- Open My Publications: `My Publications list`, `My Publications first detail`
 - Search-like workload: `SQLite title search quantum`
 - Click/select paper detail data source: `Full library snapshot` and folder endpoints
 - PDF preview path: `PDF info`, `PDF thumbnail p1`, `PDF file first 64KB`
@@ -420,6 +453,8 @@ def scorecard(by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
     bootstrap = by_name.get("Library bootstrap", {})
     full_library = by_name.get("Full library snapshot", {})
     busy_folder = by_name.get("Library busiest folder", {})
+    my_publications = by_name.get("My Publications list", {})
+    my_publication_detail = by_name.get("My Publications first detail", {})
     pdf_info = by_name.get("PDF info", {})
     pdf_thumb = by_name.get("PDF thumbnail p1", {})
     pdf_file = by_name.get("PDF file first 64KB", {})
@@ -434,6 +469,11 @@ def scorecard(by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
         + 0.30 * bounded_score(float(busy_folder.get("p95_ms", 9999)), 50, 300)
         + 0.15 * bounded_score(float(full_library.get("bytes_mean", 0)), 2_000_000, 12_000_000)
     )
+    my_publications_score = round(
+        0.60 * bounded_score(float(my_publications.get("p95_ms", 9999)), 80, 350)
+        + 0.25 * bounded_score(float(my_publication_detail.get("p95_ms", 9999)), 120, 500)
+        + 0.15 * bounded_score(float(my_publications.get("bytes_mean", 0)), 80_000, 500_000)
+    )
     pdf_score = round(
         0.35 * bounded_score(float(pdf_info.get("p95_ms", 9999)), 80, 400)
         + 0.45 * bounded_score(float(pdf_thumb.get("p95_ms", 9999)), 100, 650)
@@ -446,15 +486,21 @@ def scorecard(by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
     areas = [
         {
             "area": "Service health and app shell",
-            "weight": 15,
+            "weight": 12,
             "score": service_score,
             "why": f"Root shell p95 {shell.get('p95_ms', 0):.3f} ms; Library bootstrap p95 {bootstrap.get('p95_ms', 0):.3f} ms.",
         },
         {
             "area": "Library scale handling",
-            "weight": 30,
+            "weight": 28,
             "score": library_score,
             "why": f"Full snapshot p95 {full_library.get('p95_ms', 0):.3f} ms with about {human_bytes(full_library.get('bytes_mean', 0))} payload; busiest folder p95 {busy_folder.get('p95_ms', 0):.3f} ms.",
+        },
+        {
+            "area": "My Publications workflow",
+            "weight": 10,
+            "score": my_publications_score,
+            "why": f"List p95 {my_publications.get('p95_ms', 0):.3f} ms with about {human_bytes(my_publications.get('bytes_mean', 0))} payload; first detail p95 {my_publication_detail.get('p95_ms', 0):.3f} ms.",
         },
         {
             "area": "PDF preview pipeline",
@@ -464,13 +510,13 @@ def scorecard(by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
         },
         {
             "area": "SQLite/query layer",
-            "weight": 15,
+            "weight": 12,
             "score": sqlite_score,
             "why": f"Title search p95 {sqlite_search.get('p95_ms', 0):.3f} ms on the local database.",
         },
         {
             "area": "UI workflow evidence",
-            "weight": 10,
+            "weight": 8,
             "score": ui_evidence_score,
             "why": "Covered by local API/HTML/PDF endpoint proxies; no browser automation trace was installed or run.",
         },

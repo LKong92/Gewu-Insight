@@ -51,12 +51,12 @@ from .importers.inventory import ImportCancelled, build_inventory_from_folder, b
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, strip_arxiv_version
-from .sources.crossref import normalize_crossref_item
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, strip_arxiv_version
+from .sources.crossref import fetch_crossref_topic, normalize_crossref_item
 from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
-from .text import clean_text, journal_name_for_doi, normalize_publication_title, safe_slug
+from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
 from .time_utils import now_iso, today_jst
 
 
@@ -134,6 +134,11 @@ FILE_ICON_STYLES = {
 }
 ADS_API_TOKEN_SETTING = "ads_api_token"
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
+AUTO_JOURNAL_MONITOR_LAST_RUN_SETTING = "auto_journal_monitor_last_run_date"
+AUTO_JOURNAL_MONITOR_STATUS_SETTING = "auto_journal_monitor_status"
+AUTO_JOURNAL_MONITOR_HOUR = 9
+AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS = 10
+AUTO_JOURNAL_MONITOR_POLL_SECONDS = 60
 NCBI_EUTILS_TOOL = "PaperMonitor"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -287,6 +292,7 @@ def run_ui_server(
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
+    threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -325,7 +331,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_fetch_progress(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/arxiv-daily-refresh":
-                self.handle_arxiv_daily_refresh()
+                self.handle_arxiv_daily_refresh(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/theme-groups":
                 self.handle_theme_groups()
@@ -741,15 +747,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         selected = first(query, "date") or today_jst().isoformat()
         self.send_json({"date": selected, "progress": get_fetch_progress(selected)})
 
-    def handle_arxiv_daily_refresh(self) -> None:
-        selected_date = datetime.now().astimezone().date()
+    def handle_arxiv_daily_refresh(self, query: dict[str, list[str]]) -> None:
+        selected = first(query, "date") or datetime.now().astimezone().date().isoformat()
+        try:
+            selected_date = date.fromisoformat(selected)
+        except ValueError:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid date")
+            return
+        if selected_date > today_jst():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Future dates cannot be refreshed")
+            return
         selected = selected_date.isoformat()
+        force_fetch = first(query, "force") == "1" or first(query, "force_fetch") == "1"
         storage = Storage(self.configured_db_path)
         try:
             missing = missing_fetch_journals_for_date(storage, selected, [ARXIV_JOURNAL_NAME])
         finally:
             storage.close()
-        if ARXIV_JOURNAL_NAME not in missing:
+        if not force_fetch and ARXIV_JOURNAL_NAME not in missing:
             self.send_json({"date": selected, "status": "skipped"})
             return
         if not try_start_fetch(selected):
@@ -3501,12 +3516,13 @@ def run_theme_monitor(
         "errors": [],
     }
     groups = theme_groups or load_theme_groups(storage)
+    arxiv_window_cache: dict[tuple[str, str], tuple[str, list[dict[str, Any]], str]] = {}
     for group_key in group_keys:
         group = groups[group_key]
         group_name = str(group["name"])
         fetch_run_id = storage.start_fetch_run(
             monitor_type="theme",
-            source="openalex",
+            source="multi-source",
             journal=f"theme:{group_key}",
             window_start=start_date.isoformat(),
             window_end=end_date.isoformat(),
@@ -3514,13 +3530,15 @@ def run_theme_monitor(
         )
         best: dict[str, dict[str, Any]] = {}
         group_errors: list[str] = []
+        source_counts: dict[str, int] = {}
+        source_statuses: dict[str, str] = {}
         raw_count = 0
         try:
-            search_queries = combined_theme_search_queries(list(group["queries"]))
+            search_queries = theme_discovery_queries(list(group["queries"]))
             for query in search_queries:
                 summary["queries"] += 1
                 try:
-                    papers = search_openalex_works(
+                    openalex_papers = search_openalex_works(
                         query=query,
                         start_date=start_date,
                         end_date=end_date,
@@ -3529,26 +3547,65 @@ def run_theme_monitor(
                         timeout=8,
                         max_retries=1,
                     )
+                    source_statuses["openalex"] = "success"
+                    source_counts["openalex"] = source_counts.get("openalex", 0) + len(openalex_papers)
+                    raw_count += len(openalex_papers)
+                    collect_theme_candidates(
+                        best,
+                        papers=openalex_papers,
+                        group=group,
+                        source_name="openalex",
+                    )
                 except Exception as exc:
                     message = theme_fetch_error_message(group_name, exc)
                     group_errors.append(message)
                     summary["errors"].append(message)
+                    if source_statuses.get("openalex") != "success":
+                        source_statuses["openalex"] = "error"
                     continue
-                raw_count += len(papers)
-                for paper in papers:
-                    score, hits = score_theme_relevance(paper.get("title") or "", paper.get("abstract") or "", list(group["patterns"]))
-                    if score <= 0:
-                        continue
-                    paper_id = clean_text(paper.get("paper_id") or "")
-                    if not paper_id:
-                        continue
-                    merge_key = theme_candidate_merge_key(paper)
-                    current = best.get(merge_key)
-                    if not current:
-                        best[merge_key] = {"paper": paper, "score": score, "hits": set(hits), "queries": list(group["queries"])}
-                    else:
-                        current["score"] = max(int(current["score"]), score)
-                        current["hits"].update(hits)
+                try:
+                    crossref_papers = fetch_crossref_topic(
+                        query=query,
+                        start_date=start_date,
+                        end_date=end_date,
+                        rows=50,
+                        max_pages=1,
+                        timeout=12,
+                        max_retries=1,
+                    )
+                    source_statuses["crossref"] = "success"
+                    source_counts["crossref"] = source_counts.get("crossref", 0) + len(crossref_papers)
+                    raw_count += len(crossref_papers)
+                    collect_theme_candidates(
+                        best,
+                        papers=crossref_papers,
+                        group=group,
+                        source_name="crossref",
+                    )
+                except Exception as exc:
+                    message = theme_fetch_error_message(f"{group_name} Crossref", exc)
+                    group_errors.append(message)
+                    summary["errors"].append(message)
+                    if source_statuses.get("crossref") != "success":
+                        source_statuses["crossref"] = "error"
+            arxiv_status, arxiv_papers, arxiv_message = theme_arxiv_window_papers(
+                start_date=start_date,
+                end_date=end_date,
+                cache=arxiv_window_cache,
+            )
+            source_statuses["arxiv"] = arxiv_status
+            source_counts["arxiv"] = len(arxiv_papers)
+            if arxiv_status == "error" and arxiv_message:
+                message = theme_fetch_error_message(f"{group_name} arXiv", RuntimeError(arxiv_message))
+                group_errors.append(message)
+                summary["errors"].append(message)
+            raw_count += len(arxiv_papers)
+            collect_theme_candidates(
+                best,
+                papers=arxiv_papers,
+                group=group,
+                source_name="arxiv",
+            )
             saved = 0
             for item in best.values():
                 paper = dict(item["paper"])
@@ -3559,11 +3616,13 @@ def run_theme_monitor(
                     "queries": item["queries"],
                     "hits": sorted(item["hits"]),
                     "score": int(item["score"]),
+                    "sources": sorted(item["sources"]),
                     "window_start": start_date.isoformat(),
                     "window_end": end_date.isoformat(),
                 }
                 paper["raw"] = raw
-                paper["source"] = "openalex+theme"
+                source_names = sorted(item["sources"])
+                paper["source"] = "+".join(source_names + ["theme"])
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
                 storage.upsert_paper(paper)
@@ -3580,9 +3639,16 @@ def run_theme_monitor(
                 saved += 1
             summary["raw_results"] += raw_count
             summary["saved"] += saved
-            status = "success" if saved else ("error" if group_errors and len(group_errors) == len(search_queries) else "empty")
+            status = "success" if saved else ("error" if group_errors and not any(status == "success" for status in source_statuses.values()) else "empty")
             storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message="; ".join(group_errors[:3]))
-            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": saved, "errors": group_errors}
+            summary["groups"][group_key] = {
+                "name": group_name,
+                "raw_results": raw_count,
+                "saved": saved,
+                "errors": group_errors,
+                "source_counts": source_counts,
+                "source_statuses": source_statuses,
+            }
         except Exception as exc:
             message = theme_fetch_error_message(group_name, exc)
             group_errors.append(message)
@@ -3590,6 +3656,80 @@ def run_theme_monitor(
             storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
             summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": 0, "errors": group_errors}
     return summary
+
+
+def theme_discovery_queries(queries: list[str], *, max_queries: int = 12) -> list[str]:
+    cleaned: list[str] = []
+    for query in queries:
+        value = clean_text(query)
+        if value and value not in cleaned:
+            cleaned.append(value)
+    if not cleaned:
+        return []
+    result: list[str] = []
+    for value in cleaned:
+        if value not in result:
+            result.append(value)
+        if len(result) >= max_queries:
+            return result
+    for value in combined_theme_search_queries(cleaned):
+        if value not in result:
+            result.append(value)
+        if len(result) >= max_queries:
+            break
+    return result
+
+
+def theme_arxiv_window_papers(
+    *,
+    start_date: date,
+    end_date: date,
+    cache: dict[tuple[str, str], tuple[str, list[dict[str, Any]], str]],
+) -> tuple[str, list[dict[str, Any]], str]:
+    key = (start_date.isoformat(), end_date.isoformat())
+    if key not in cache:
+        try:
+            papers = fetch_arxiv_condensed_matter(
+                start_date=start_date,
+                end_date=end_date,
+                categories=ARXIV_DEFAULT_CATEGORIES,
+            )
+            cache[key] = ("success", papers, "")
+        except Exception as exc:
+            cache[key] = ("error", [], str(exc))
+    return cache[key]
+
+
+def collect_theme_candidates(
+    best: dict[str, dict[str, Any]],
+    *,
+    papers: list[dict[str, Any]],
+    group: dict[str, Any],
+    source_name: str,
+) -> None:
+    patterns = list(group["patterns"])
+    queries = list(group["queries"])
+    for paper in papers:
+        score, hits = score_theme_relevance(paper.get("title") or "", paper.get("abstract") or "", patterns)
+        if score <= 0:
+            continue
+        paper_id = clean_text(paper.get("paper_id") or "")
+        if not paper_id:
+            continue
+        merge_key = theme_candidate_merge_key(paper)
+        current = best.get(merge_key)
+        if not current:
+            best[merge_key] = {
+                "paper": paper,
+                "score": score,
+                "hits": set(hits),
+                "queries": queries,
+                "sources": {source_name},
+            }
+        else:
+            current["score"] = max(int(current["score"]), score)
+            current["hits"].update(hits)
+            current["sources"].add(source_name)
 
 
 def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) -> list[str]:
@@ -3620,9 +3760,9 @@ def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) 
 def theme_fetch_error_message(group_name: str, exc: Exception) -> str:
     text = str(exc)
     if "429" in text or "Too Many Requests" in text:
-        return f"{group_name}: OpenAlex rate-limited this request. Try again later or select fewer subjects."
+        return f"{group_name}: source rate-limited this request. Try again later or select fewer subjects."
     if "timed out" in text.lower() or "timeout" in text.lower():
-        return f"{group_name}: OpenAlex request timed out."
+        return f"{group_name}: source request timed out."
     return f"{group_name}: {text}"
 
 
@@ -3695,7 +3835,7 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
                journal AS journal
         FROM fetch_runs
         WHERE monitor_type = 'theme'
-          AND source = 'openalex'
+          AND source IN ('openalex', 'multi-source')
           AND window_start = window_end
           AND window_start LIKE ?
           AND status IN ('success', 'empty')
@@ -3721,7 +3861,7 @@ def theme_fetch_completed_group_keys(storage: Storage, selected: str, group_keys
         SELECT DISTINCT journal
         FROM fetch_runs
         WHERE monitor_type = 'theme'
-          AND source = 'openalex'
+          AND source IN ('openalex', 'multi-source')
           AND window_start = ?
           AND window_end = ?
           AND status IN ('success', 'empty')
@@ -3925,6 +4065,104 @@ def fetch_missing_sources_for_date(
         update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
 
 
+def auto_journal_monitor_due(now: datetime) -> bool:
+    return now.hour >= AUTO_JOURNAL_MONITOR_HOUR
+
+
+def claim_auto_journal_monitor_day(storage: Storage, run_date: date) -> bool:
+    run_date_value = run_date.isoformat()
+    cursor = storage.conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        WHERE app_settings.value != excluded.value
+        """,
+        (AUTO_JOURNAL_MONITOR_LAST_RUN_SETTING, run_date_value, now_iso()),
+    )
+    storage.conn.commit()
+    return cursor.rowcount > 0
+
+
+def write_auto_journal_monitor_status(db_path: Path, status: dict[str, Any]) -> None:
+    storage = Storage(db_path)
+    try:
+        storage.set_setting(
+            AUTO_JOURNAL_MONITOR_STATUS_SETTING,
+            json.dumps(status, ensure_ascii=False, sort_keys=True),
+        )
+    finally:
+        storage.close()
+
+
+def run_auto_journal_monitor_once(db_path: Path, run_date: date) -> None:
+    config = load_config()
+    journals = configured_source_names(config)
+    targets = [run_date - timedelta(days=1), run_date]
+    results: list[dict[str, Any]] = []
+
+    for target_date in targets:
+        selected = target_date.isoformat()
+        sources = manual_refresh_journals_for_date(selected, journals)
+        if not sources:
+            results.append({"date": selected, "status": "skipped", "reason": "no sources"})
+            continue
+        if not try_start_fetch(selected):
+            results.append({"date": selected, "status": "skipped", "reason": "fetch already active"})
+            continue
+
+        storage = Storage(db_path)
+        try:
+            start_fetch_progress(selected, sources)
+            fetch_missing_sources_for_date(
+                config=config,
+                storage=storage,
+                selected=selected,
+                selected_date=target_date,
+                missing_sources=sources,
+            )
+            results.append({"date": selected, "status": "fetched", "sources": len(sources)})
+        except Exception as exc:
+            print(f"Auto Journal Monitor failed for {selected}: {exc}")
+            results.append({"date": selected, "status": "error", "error": str(exc)})
+        finally:
+            finish_fetch_progress(selected)
+            finish_active_fetch(selected)
+            storage.close()
+
+    write_auto_journal_monitor_status(
+        db_path,
+        {
+            "run_date": run_date.isoformat(),
+            "finished_at": now_iso(),
+            "targets": results,
+        },
+    )
+
+
+def run_auto_journal_monitor_scheduler(db_path: Path) -> None:
+    time.sleep(AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            now = datetime.now().astimezone()
+            if auto_journal_monitor_due(now):
+                run_date = now.date()
+                storage = Storage(db_path)
+                try:
+                    claimed = claim_auto_journal_monitor_day(storage, run_date)
+                finally:
+                    storage.close()
+                if claimed:
+                    print(f"Auto Journal Monitor starting for {run_date.isoformat()}")
+                    run_auto_journal_monitor_once(db_path, run_date)
+            time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
+        except Exception as exc:
+            print(f"Auto Journal Monitor scheduler error: {exc}")
+            time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
+
+
 def prepare_internal_page_html(html: str, base_url: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for meta in soup.select("meta[http-equiv]"):
@@ -4047,6 +4285,10 @@ def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) ->
         "original_relative_path": paper.get("original_relative_path") or "",
         "original_parent_relative_path": paper.get("original_parent_relative_path") or "",
         "original_filename": paper.get("original_filename") or "",
+        "modified_at": paper.get("modified_at") or "",
+        "downloaded_at": paper.get("downloaded_at") or "",
+        "first_seen_at": paper.get("first_seen_at") or "",
+        "last_seen_at": paper.get("last_seen_at") or "",
         "analysis_status": paper.get("analysis_status") or "not_started",
         "analysis_path": analysis_path,
         "analysis_url": file_url(analysis_path),
@@ -4084,7 +4326,10 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
     workspace_tabs = library_workspace_tabs(storage)
     return {
         "root_id": 1,
-        "folders": [library_folder_to_api(folder, storage) for folder in storage.list_library_folders()],
+        "folders": [
+            library_folder_to_api(folder, storage, include_native_path=False)
+            for folder in storage.list_library_folders()
+        ],
         "items": [library_item_to_api(item, item) for item in storage.list_library_items()],
         "shortcut_tabs": library_shortcut_tabs(storage),
         "workspace_tabs": workspace_tabs,
@@ -4290,7 +4535,7 @@ def article_title_candidates_for_identifier(paper: dict[str, Any], pdf_metadata_
         key = normalized_title_key(candidate)
         if not key or key == filename_stem_key:
             continue
-        if key in {"untitled paper", "imported library", "unknown imported file", "pdf preview"}:
+        if is_placeholder_publication_title(candidate):
             continue
         if ".pdf" in candidate.lower() or len(title_tokens(candidate)) < 3:
             continue
@@ -5703,6 +5948,7 @@ def paper_to_library_summary_api(paper: dict[str, Any], *, verify_paths: bool = 
         "file_mime_type": file_meta.get("mime_type") or "",
         "file_extension": file_meta.get("extension") or Path(str(paper.get("original_filename") or "")).suffix.lower(),
         "file_size_bytes": int(paper.get("size_bytes") or 0),
+        "original_filename": paper.get("original_filename") or "",
     }
     for key in ["journal", "publication_date", "doi", "modified_at", "downloaded_at", "first_seen_at", "last_seen_at"]:
         value = paper.get(key) or ""
@@ -5725,7 +5971,7 @@ def paper_to_library_summary_api(paper: dict[str, Any], *, verify_paths: bool = 
             summary["preprint_category"] = preprint_category
     if main_pdf and main_pdf != merged_pdf:
         summary["main_pdf_path"] = main_pdf
-    if native_file_path:
+    if native_file_path and native_file_path not in {merged_pdf, main_pdf, source_path}:
         summary["native_file_path"] = native_file_path
     if source_path and not merged_pdf and not main_pdf:
         summary["source_path"] = source_path
@@ -5790,10 +6036,14 @@ def save_my_publications_scholar_profile_for_db(db_path: Path, profile: Any) -> 
 
 
 def default_library_item_display_name(paper: dict[str, Any], *, rule: str = DEFAULT_LIBRARY_NAMING_RULE) -> str:
+    title = "" if is_placeholder_publication_title(paper.get("title")) else paper.get("title")
+    citation = citation_label(paper)
+    if is_placeholder_publication_title(citation):
+        citation = ""
     if rule == "title":
-        label = paper.get("title") or citation_label(paper) or "Untitled paper"
+        label = title or citation or paper.get("original_filename") or "Untitled paper"
     else:
-        label = citation_label(paper) or paper.get("title") or "Untitled paper"
+        label = citation or title or paper.get("original_filename") or "Untitled paper"
     label = re.sub(r"^(.+?) et al\.(\s+)", r"\1\2", clean_text(label))
     return re.sub(r"\s+", "_", label).strip("_") or "Untitled_paper"
 
@@ -5828,9 +6078,9 @@ def paper_to_my_publication_summary_api(paper: dict[str, Any]) -> dict[str, Any]
             "full_authors": full_author_names(paper),
             "fields": classify_fields(paper),
             "citation_label": citation_label(paper),
-            "citation_metrics": citation_metrics(paper),
-            "nature_reference": nature_reference(paper),
-            "google_scholar_url": google_scholar_url(paper),
+            "citation_metrics": compact_citation_metrics(paper),
+            "nature_reference": compact_nature_reference(paper),
+            "google_scholar_url": "",
             "image_url": paper.get("image_url") or "",
             "bibtex": "",
             "abstract": "",
@@ -5842,6 +6092,54 @@ def paper_to_my_publication_summary_api(paper: dict[str, Any]) -> dict[str, Any]
         }
     )
     return summary
+
+
+def compact_citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    semantic = parse_semantic_scholar_json(paper)
+    sources: dict[str, Any] = {}
+    for key, value in [
+        ("openalex", int_or_none(raw.get("cited_by_count"))),
+        ("semantic_scholar", int_or_none(semantic.get("citationCount"))),
+        ("crossref", int_or_none(raw.get("is-referenced-by-count"))),
+    ]:
+        if value is not None:
+            sources[key] = {"count": value}
+    ads_raw = raw.get("ads") if isinstance(raw.get("ads"), dict) else {}
+    ads_count = int_or_none(ads_raw.get("citation_count"))
+    if ads_count is not None:
+        sources["ads"] = {"count": ads_count}
+    counts = [int(source.get("count")) for source in sources.values() if int_or_none(source.get("count")) is not None]
+    return {
+        "count": max(counts) if counts else None,
+        "source": "Citation data",
+        "sources": sources,
+        "by_year": [],
+    }
+
+
+def compact_nature_reference(paper: dict[str, Any]) -> dict[str, str]:
+    raw = parse_raw_json(paper)
+    volume = _paper_volume_from_raw(raw)
+    page = _paper_page_from_raw(raw)
+    if not volume and isinstance(raw.get("crossref"), dict):
+        volume = _paper_volume_from_raw(raw.get("crossref") or {})
+    if not page and isinstance(raw.get("crossref"), dict):
+        page = _paper_page_from_raw(raw.get("crossref") or {})
+    if not volume or not page:
+        doi_volume, doi_page = aps_volume_page_from_doi(clean_text(str(paper.get("doi") or raw.get("doi") or raw.get("DOI") or "")))
+        volume = volume or doi_volume
+        page = page or doi_page
+    return {
+        "authors": "",
+        "title": clean_text(paper.get("title") or ""),
+        "journal": display_journal_name(paper),
+        "volume": volume,
+        "pages": page,
+        "year": publication_year_from_raw(paper, raw),
+        "doi": clean_text(paper.get("doi") or ""),
+        "preprint_id": preprint_identifier(paper, raw=raw),
+    }
 
 
 def parse_my_publication_author_marks(row: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -7315,6 +7613,8 @@ def refresh_ads_if_possible(
 def merge_refreshed_metadata(existing: dict[str, Any] | None, refreshed: dict[str, Any] | None) -> dict[str, Any]:
     existing = existing or {}
     merged = dict(refreshed or {})
+    if is_placeholder_publication_title(merged.get("title")):
+        merged["title"] = ""
     if clean_text(merged.get("title") or "") and merged.get("source") != "arxiv" and clean_text(merged.get("doi") or ""):
         merged["title"] = normalize_publication_title(merged.get("title") or "")
     if not clean_text(merged.get("abstract") or "") and clean_text(existing.get("abstract") or ""):
@@ -8104,6 +8404,13 @@ def publication_year(paper: dict[str, Any]) -> str:
     if len(date_text) >= 4 and date_text[:4].isdigit():
         return date_text[:4]
     raw = parse_raw_json(paper)
+    return publication_year_from_raw(paper, raw)
+
+
+def publication_year_from_raw(paper: dict[str, Any], raw: dict[str, Any]) -> str:
+    date_text = paper.get("publication_date") or ""
+    if len(date_text) >= 4 and date_text[:4].isdigit():
+        return date_text[:4]
     for key in ["published-print", "published-online", "issued", "created"]:
         parts = (raw.get(key) or {}).get("date-parts") or []
         if parts and parts[0]:
@@ -11423,12 +11730,17 @@ def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
 
 
 def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tuple[bytes, str]:
-    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}:{uuid.uuid4().hex}".encode("utf-8")).hexdigest()
+    cache_key = hashlib.sha256(f"{path}:{path.stat().st_mtime_ns}:{page_number}:{size}".encode("utf-8")).hexdigest()
+    output_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
+    if output_path.exists():
+        try:
+            return output_path.read_bytes(), "image/png"
+        except OSError:
+            pass
     data = single_page_pdf_bytes(path, page_number)
     if data:
         PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         page_pdf = PDF_THUMB_CACHE_DIR / f"{cache_key}.pdf"
-        output_path = PDF_THUMB_CACHE_DIR / f"{cache_key}.png"
         page_pdf.write_bytes(data)
         try:
             subprocess.run(
@@ -11446,10 +11758,6 @@ def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tupl
         finally:
             try:
                 page_pdf.unlink()
-            except OSError:
-                pass
-            try:
-                output_path.unlink()
             except OSError:
                 pass
     svg = (
@@ -16637,6 +16945,7 @@ INDEX_HTML = """<!doctype html>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
               <button class="smallbtn" id="refreshReport" type="button" title="Refresh papers for this date">Refresh</button>
+              <button class="smallbtn" id="refreshArxiv" type="button" title="Refresh arXiv for this date">arXiv</button>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
             </div>
@@ -16644,7 +16953,7 @@ INDEX_HTML = """<!doctype html>
               <select class="search" id="themeGroupSelect" title="Subject group"></select>
               <input class="search" id="themeFromDate" type="date" title="From date">
               <input class="search" id="themeUntilDate" type="date" title="Until date">
-              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex by subject">Search</button>
+              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex, Crossref, and arXiv by subject">Search</button>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
@@ -17030,12 +17339,20 @@ INDEX_HTML = """<!doctype html>
 
     function updateReportRefreshButton() {
       const button = $("refreshReport");
-      if (!button) return;
+      const arxivButton = $("refreshArxiv");
       const disabled = isFutureDateIso(state.selectedDate) || state.fetchingDates.has(state.selectedDate);
-      button.disabled = disabled;
-      button.title = isFutureDateIso(state.selectedDate)
-        ? "Future dates cannot be refreshed"
-        : "Refresh papers for this date";
+      if (button) {
+        button.disabled = disabled;
+        button.title = isFutureDateIso(state.selectedDate)
+          ? "Future dates cannot be refreshed"
+          : "Refresh papers for this date";
+      }
+      if (arxivButton) {
+        arxivButton.disabled = disabled;
+        arxivButton.title = isFutureDateIso(state.selectedDate)
+          ? "Future dates cannot be refreshed"
+          : "Refresh arXiv for this date";
+      }
     }
 
     function timeZoneParts(value, timeZone) {
@@ -17293,6 +17610,40 @@ INDEX_HTML = """<!doctype html>
       state.noMatchDates.delete(selectedDate);
       state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""};
       refreshMissingDateInBackground(selectedDate, {forceFetch: true});
+    }
+
+    async function refreshCurrentArxivDate() {
+      const selectedDate = state.selectedDate;
+      if (isFutureDateIso(selectedDate) || state.fetchingDates.has(selectedDate)) return;
+      delete state.reportCache[selectedDate];
+      state.noMatchDates.delete(selectedDate);
+      setPendingFetchDate(selectedDate, true);
+      state.fetchingDates.add(selectedDate);
+      state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 1, active: true, currentJournal: "arXiv"};
+      updateReportRefreshButton();
+      await startProgressPolling(selectedDate);
+      renderCalendar();
+      renderReportIfActive(selectedDate);
+      try {
+        const data = await fetchJson(`/api/arxiv-daily-refresh?date=${encodeURIComponent(selectedDate)}&force=1`, 12000);
+        if (data.status === "active" || data.status === "started") {
+          await waitForDateFetchToFinish(selectedDate);
+        }
+        const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
+        updateCalendarCountFromReport(selectedDate, finalData);
+        state.reportCache[selectedDate] = finalData;
+        await loadMonth({force: true});
+        if (selectedDate === state.selectedDate) {
+          const sequence = ++state.reportSequence;
+          applyReportData(selectedDate, finalData, sequence);
+        }
+      } catch (error) {
+        if (reportIsActiveForDate(selectedDate)) {
+          $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        }
+      } finally {
+        finishFetchUi(selectedDate);
+      }
     }
 
     function setPendingFetchDate(selectedDate, value) {
@@ -22259,13 +22610,27 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryPaperDisplayName(paper) {
+      const title = isPlaceholderPaperTitle(paper?.title) ? "" : paper?.title;
+      const citation = isPlaceholderPaperTitle(paper?.citation_label) ? "" : paper?.citation_label;
       if (!libraryPaperIsPdfLike(paper)) {
         const fileName = paper?.original_filename
           || fileNameFromPath(paper?.native_file_path || paper?.source_path || paper?.merged_pdf_path || paper?.main_pdf_path || "");
-        return String(fileName || paper?.title || "Imported file");
+        return String(fileName || title || citation || "Imported file");
       }
-      const label = paper?.citation_label || paper?.title || "Untitled paper";
+      const label = title || paper?.original_filename || citation || "Untitled paper";
       return String(label).replace(/^(.+?) et al\.(\s+)/, "$1$2");
+    }
+
+    function isPlaceholderPaperTitle(value) {
+      const key = String(value || "").trim().toLowerCase();
+      return new Set([
+        "imported library",
+        "unknown imported library",
+        "unknown imported file",
+        "pdf preview",
+        "untitled",
+        "untitled paper"
+      ]).has(key);
     }
 
     function libraryPaperIsPdfLike(paper) {
@@ -22875,9 +23240,7 @@ INDEX_HTML = """<!doctype html>
           if (!res.ok) throw new Error(data.error || "Could not load paper details");
           const paper = data.paper || null;
           if (!paper) return;
-          state.myPublications.forEach((entry) => {
-            if (entry.paper_id === paperId || entry.paper?.paper_id === paperId) entry.paper = paper;
-          });
+          updatePaperState(paperId, paper);
           if (String(selectedMyPublicationPaper()?.paper_id || "") === paperId) {
             renderPublicationDetail();
             refreshLibraryQuickLookForSelection();
@@ -25069,6 +25432,10 @@ INDEX_HTML = """<!doctype html>
       const path = paperNativePath(paper || {});
       const status = $("libraryDetailStatus");
       if (!path) {
+        if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "placeholder") {
+          closeLibraryQuickLook();
+          return;
+        }
         if (status && !options.silent) {
           status.textContent = options.missingMessage || "No local file path is available for this item.";
           status.className = "library-detail-status err";
@@ -26069,10 +26436,10 @@ INDEX_HTML = """<!doctype html>
       const themeIndex = state.themePapers.findIndex((item) => item.paper_id === paperId);
       if (themeIndex >= 0) state.themePapers[themeIndex] = {...state.themePapers[themeIndex], ...paper};
       state.libraryItems.forEach((item) => {
-        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
+        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = {...(item.paper || {}), ...paper};
       });
       state.myPublications.forEach((item) => {
-        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = paper;
+        if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = {...(item.paper || {}), ...paper};
       });
     }
 
@@ -27423,7 +27790,48 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runThemeSearch() {
-      await loadThemeReportForDate(state.selectedDate);
+      const requestSequence = ++state.themeRequestSequence;
+      await ensureThemeGroupsLoaded();
+      const fromDate = $("themeFromDate")?.value || state.themeFromDate || state.selectedDate;
+      const untilDate = $("themeUntilDate")?.value || state.themeUntilDate || state.selectedDate;
+      const requestedGroupParam = selectedThemeGroupParam();
+      state.themeFromDate = fromDate;
+      state.themeUntilDate = untilDate;
+      state.themeSearched = true;
+      state.themeSearchRunning = true;
+      state.themePapers = [];
+      state.papers = [];
+      renderThemeMonitor();
+      try {
+        const res = await fetch("/api/theme-search", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            from_date: fromDate,
+            until_date: untilDate,
+            group: requestedGroupParam
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Subject search failed");
+        if (requestSequence !== state.themeRequestSequence) return;
+        state.themeSummary = data.summary || null;
+        state.themePapers = data.papers || [];
+        state.papers = state.themePapers;
+        if (fromDate === untilDate) {
+          updateThemeCalendarCount(untilDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
+          updateThemeFilterCount(untilDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
+        }
+        renderThemeFilters();
+      } catch (error) {
+        if (requestSequence !== state.themeRequestSequence) return;
+        state.themeSummary = {errors: [error.message || "Subject search failed"]};
+      } finally {
+        if (requestSequence === state.themeRequestSequence) {
+          state.themeSearchRunning = false;
+          renderThemeMonitor();
+        }
+      }
     }
 
     function renderThemeMonitor() {
@@ -27446,14 +27854,20 @@ INDEX_HTML = """<!doctype html>
         button.disabled = state.themeSearchRunning;
         button.textContent = state.themeSearchRunning ? "Searching..." : "Search";
       }
+      if ($("themeGroupSelect")) $("themeGroupSelect").value = state.themeGroup || "ALL";
+      if ($("themeFromDate")) $("themeFromDate").value = state.themeFromDate || state.selectedDate;
+      if ($("themeUntilDate")) $("themeUntilDate").value = state.themeUntilDate || state.selectedDate;
       const groupLabel = selectedThemeGroupLabel();
+      const dateLabel = state.themeFromDate && state.themeUntilDate && state.themeFromDate !== state.themeUntilDate
+        ? `${state.themeFromDate} to ${state.themeUntilDate}`
+        : state.selectedDate;
       const summary = state.themeSummary || {};
       const saved = Number(summary.saved || 0);
       const raw = Number(summary.raw_results || 0);
       const errors = Array.isArray(summary.errors) ? summary.errors : [];
       $("summary").textContent = state.themeSearched
-        ? `${state.selectedDate} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits${errors.length ? ` · ${errors.length} errors` : ""}`
-        : "Choose a date on the calendar to fetch subject-matched papers from OpenAlex.";
+        ? `${dateLabel} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits${errors.length ? ` · ${errors.length} errors` : ""}`
+        : "Choose a date on the calendar to fetch subject-matched papers from OpenAlex, Crossref, and arXiv.";
       if (state.themeSearchRunning) {
         root.innerHTML = `<div class="empty fetch-progress"><div class="fetch-progress-head"><strong>Fetching subject papers for ${escapeHtml(state.selectedDate)}...</strong></div></div>`;
         return;
@@ -27542,7 +27956,7 @@ INDEX_HTML = """<!doctype html>
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-      $("themeToolbarActions")?.classList.add("hidden");
+      $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
       updateLibrarySearchTools();
       updateReportRefreshButton();
     }
@@ -27651,6 +28065,7 @@ INDEX_HTML = """<!doctype html>
       renderCurrentPaperSurface();
     });
     $("refreshReport").addEventListener("click", refreshCurrentReportDate);
+    $("refreshArxiv").addEventListener("click", () => refreshCurrentArxivDate());
     $("runThemeSearch")?.addEventListener("click", () => runThemeSearch().catch((error) => {
       state.themeSummary = {errors: [error.message || "Subject search failed"]};
       state.themeSearchRunning = false;

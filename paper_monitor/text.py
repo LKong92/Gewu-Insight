@@ -180,6 +180,19 @@ TITLE_COMMON_LOWER_FORMULA_SEGMENTS = {
     "no": "NO",
     "so": "SO",
 }
+PLACEHOLDER_PUBLICATION_TITLE_KEYS = {
+    "imported library",
+    "unknown imported library",
+    "unknown imported file",
+    "pdf preview",
+    "untitled",
+    "untitled paper",
+}
+
+
+def is_placeholder_publication_title(value: Any) -> bool:
+    key = clean_text(value).casefold()
+    return key in PLACEHOLDER_PUBLICATION_TITLE_KEYS
 
 
 def normalize_publication_title(value: Any) -> str:

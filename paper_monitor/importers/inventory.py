@@ -12,7 +12,7 @@ from pypdf import PdfReader
 
 from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT
 from ..storage import Storage
-from ..text import clean_text, make_paper_id, normalize_doi, safe_slug, sha1_short
+from ..text import clean_text, is_placeholder_publication_title, make_paper_id, normalize_doi, safe_slug, sha1_short
 
 
 SUPPORTED_COPY_MODES = {"copy"}
@@ -952,6 +952,8 @@ def pdf_metadata(path: Path) -> dict[str, Any]:
         metadata["page_count"] = len(reader.pages)
         info = reader.metadata or {}
         title = clean_text(getattr(info, "title", "") or info.get("/Title", ""))
+        if is_placeholder_publication_title(title):
+            title = ""
         author = clean_text(getattr(info, "author", "") or info.get("/Author", ""))
         metadata["title"] = title
         metadata["authors"] = split_pdf_authors(author)
@@ -1076,7 +1078,8 @@ def upsert_imported_paper(
     batch_id: str,
     stored_path: str,
 ) -> None:
-    title = record["title"] or record["filename"] or "(Untitled imported PDF)"
+    title = "" if is_placeholder_publication_title(record["title"]) else record["title"]
+    title = title or record["filename"] or "(Untitled imported PDF)"
     journal = "arXiv" if record["arxiv_id"] and not record["doi"] else "Imported Library"
     raw = {
         "import": import_metadata(record, batch_id=batch_id, stored_path=stored_path),
@@ -1642,7 +1645,8 @@ def build_existing_index(storage: Storage) -> dict[str, dict[str, str]]:
 
 def new_paper_id(record: dict[str, Any]) -> str:
     if record["doi"]:
-        return make_paper_id(record["doi"], record["title"], "Imported Library", "")
+        title = "" if is_placeholder_publication_title(record["title"]) else record["title"]
+        return make_paper_id(record["doi"], title or record["filename"], "Imported Library", "")
     if record["arxiv_id"]:
         return "arxiv_" + safe_slug(record["arxiv_id"], 90)
     fingerprint = source_fingerprint(record) or record["relative_path"] or record["filename"] or "imported-paper"
@@ -1650,11 +1654,12 @@ def new_paper_id(record: dict[str, Any]) -> str:
 
 
 def paper_plan(record: dict[str, Any], *, paper_id: str) -> dict[str, Any]:
+    title = "" if is_placeholder_publication_title(record["title"]) else record["title"]
     return {
         "paper_id": paper_id,
         "doi": record["doi"],
         "arxiv_id": record["arxiv_id"],
-        "title": record["title"] or record["filename"] or "(Untitled imported PDF)",
+        "title": title or record["filename"] or "(Untitled imported PDF)",
         "source_path": record["source_path"],
         "relative_path": record["relative_path"],
         "parent_relative_path": record["parent_relative_path"],

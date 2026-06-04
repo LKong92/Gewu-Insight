@@ -79,6 +79,84 @@ def fetch_crossref_journal(
     return papers
 
 
+def fetch_crossref_topic(
+    *,
+    query: str,
+    start_date: date,
+    end_date: date,
+    rows: int = 50,
+    max_pages: int = 2,
+    timeout: int = 12,
+    max_retries: int = 1,
+) -> list[dict[str, Any]]:
+    cleaned_query = normalize_publication_title(clean_markup_text(query))
+    if not cleaned_query:
+        return []
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    cursor = "*"
+    for _ in range(max_pages):
+        params = {
+            "query.bibliographic": cleaned_query,
+            "filter": ",".join(
+                [
+                    f"from-pub-date:{start_date.isoformat()}",
+                    f"until-pub-date:{end_date.isoformat()}",
+                    "type:journal-article",
+                ]
+            ),
+            "rows": max(1, min(100, int(rows or 50))),
+            "cursor": cursor,
+            "sort": "published",
+            "order": "desc",
+            "select": ",".join(
+                [
+                    "DOI",
+                    "URL",
+                    "title",
+                    "container-title",
+                    "author",
+                    "published-print",
+                    "published-online",
+                    "published",
+                    "issued",
+                    "volume",
+                    "issue",
+                    "page",
+                    "article-number",
+                    "type",
+                    "abstract",
+                ]
+            ),
+        }
+        mailto = os.getenv("CROSSREF_MAILTO")
+        if mailto:
+            params["mailto"] = mailto
+        response = request_with_retries(
+            "GET",
+            "https://api.crossref.org/works",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        message = response.json().get("message", {})
+        items = message.get("items", [])
+        for item in items:
+            doi = normalize_doi(item.get("DOI"))
+            journal_name = first_text(item.get("container-title")) or journal_name_for_doi("Unknown Journal", doi) or "Unknown Journal"
+            paper = normalize_crossref_item(item, journal_name)
+            key = paper["doi"] or paper["url"] or paper["paper_id"]
+            if key in seen:
+                continue
+            seen.add(key)
+            papers.append(paper)
+        next_cursor = message.get("next-cursor")
+        if not next_cursor or next_cursor == cursor or len(items) < rows:
+            break
+        cursor = next_cursor
+    return papers
+
+
 def normalize_crossref_item(item: dict[str, Any], journal_name: str) -> dict[str, Any]:
     title = normalize_publication_title(clean_markup_text(first_text(item.get("title"))))
     doi = normalize_doi(item.get("DOI"))
