@@ -2884,6 +2884,19 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             }
         )
 
+    def handle_theme_keyword_recommendations(self, payload: dict[str, Any]) -> None:
+        subject = clean_text(payload.get("subject") or payload.get("name") or "")
+        if not subject:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject name is required")
+            return
+        existing_keywords = normalize_theme_keywords(payload.get("keywords") or [])
+        try:
+            result = recommend_theme_keywords(subject, existing_keywords=existing_keywords)
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Keyword recommendation failed: {exc}")
+            return
+        self.send_json(result)
+
     def handle_journals(self) -> None:
         raw = read_config_json()
         self.send_json({"journals": raw.get("journals", []), "history": journal_history(raw)})
@@ -29552,7 +29565,7 @@ INDEX_HTML = """<!doctype html>
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-      $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
+      $("themeToolbarActions")?.classList.add("hidden");
       updateLibrarySearchTools();
       updateReportRefreshButton();
     }
