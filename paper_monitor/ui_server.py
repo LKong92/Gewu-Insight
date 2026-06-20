@@ -3700,7 +3700,7 @@ def theme_keyword_recommendation_response(
         keyword = clean_theme_keyword_recommendation(item["keyword"])
         if not keyword:
             continue
-        if theme_keyword_is_covered_by_keywords(keyword, existing_keywords):
+        if not curated_only and theme_keyword_is_covered_by_keywords(keyword, existing_keywords):
             continue
         if electride_mode and not theme_keyword_is_curated_electride_keyword(keyword):
             continue
@@ -3713,7 +3713,8 @@ def theme_keyword_recommendation_response(
                 "sources": sorted(item["sources"]),
             }
         )
-    recommendations = remove_redundant_theme_keyword_recommendations(recommendations, existing_keywords)
+    if not curated_only:
+        recommendations = remove_redundant_theme_keyword_recommendations(recommendations, existing_keywords)
     recommendations.sort(key=lambda item: (-float(item["score"]), len(item["keyword"]), item["keyword"].lower()))
     return {
         "subject": subject,

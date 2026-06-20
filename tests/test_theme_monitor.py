@@ -5,6 +5,8 @@ from pathlib import Path
 
 from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
+    ELECTRIDE_RECOMMENDED_KEYWORDS,
+    recommend_theme_keywords,
     theme_candidate_in_window,
     theme_candidate_is_literature_like,
     theme_counts_for_month,
@@ -106,6 +108,21 @@ class ThemeMonitorTest(unittest.TestCase):
         }
         item = theme_paper_to_api(paper)
         self.assertEqual(item["theme_hits"], ["quantum dot intermediate band"])
+
+    def test_curated_electride_recommendations_show_existing_keywords_too(self):
+        result = recommend_theme_keywords(
+            "Electride",
+            existing_keywords=[
+                "electride",
+                "interstitial electron",
+                "C12A7:e",
+                "anionic electrons",
+                "cage electron",
+                "electrene",
+            ],
+        )
+        keywords = [item["keyword"] for item in result["recommendations"]]
+        self.assertEqual(keywords, ELECTRIDE_RECOMMENDED_KEYWORDS)
 
 
 if __name__ == "__main__":
