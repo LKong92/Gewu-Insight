@@ -28727,29 +28727,62 @@ INDEX_HTML = """<!doctype html>
       menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
       menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
       const handleMenuAction = (event) => {
+        const button = event.target?.closest?.("[data-action]");
+        if (!button || !menu.contains(button)) return;
         event.preventDefault();
         event.stopPropagation();
-        const action = event.currentTarget?.dataset?.action || "";
+        const action = button.dataset.action || "";
         if (action === "edit") {
           openThemeGroupDialog(group);
         } else if (action === "delete") {
           deleteThemeGroup(group).catch((error) => window.alert(error?.message || "Could not delete subject"));
         }
       };
-      menu.querySelectorAll("[data-action]").forEach((button) => {
-        button.addEventListener("pointerdown", handleMenuAction);
-        button.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
+      ["pointerdown", "mousedown", "click"].forEach((eventName) => {
+        menu.addEventListener(eventName, handleMenuAction, true);
+      });
+    }
+
+    function confirmThemeGroupDelete(group) {
+      const name = group?.name || "this subject";
+      return new Promise((resolve) => {
+        document.querySelector(".theme-delete-confirm-backdrop")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.className = "finder-drop-modal-backdrop theme-delete-confirm-backdrop";
+        backdrop.innerHTML = `
+          <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="themeDeleteTitle">
+            <h2 id="themeDeleteTitle">Delete subject "${escapeHtml(name)}"?</h2>
+            <p>This will remove the subject and clear its cached Subject Monitor matches.</p>
+            <div class="finder-drop-actions">
+              <button type="button" data-confirm="cancel">Cancel</button>
+              <button type="button" class="primary danger" data-confirm="delete">Delete</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(backdrop);
+        const finish = (confirmed) => {
+          backdrop.remove();
+          window.removeEventListener("keydown", onKeyDown);
+          resolve(Boolean(confirmed));
+        };
+        const onKeyDown = (event) => {
+          if (event.key === "Escape") finish(false);
+          if (event.key === "Enter") finish(true);
+        };
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) finish(false);
         });
+        backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
+        backdrop.querySelector('[data-confirm="delete"]')?.addEventListener("click", () => finish(true));
+        window.addEventListener("keydown", onKeyDown);
+        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
       });
     }
 
     async function deleteThemeGroup(group) {
       hideThemeContextMenu();
       if (!group?.key) return;
-      const name = group.name || "this subject";
-      if (!window.confirm(`Delete subject "${name}"?\n\nThis will remove the subject and clear its cached subject-monitor matches.`)) return;
+      if (!(await confirmThemeGroupDelete(group))) return;
       const res = await fetch("/api/theme-groups/delete", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
