@@ -157,6 +157,27 @@ def fetch_crossref_topic(
     return papers
 
 
+def search_crossref_works(
+    *,
+    query: str,
+    start_date: date,
+    end_date: date,
+    rows: int = 50,
+    max_pages: int = 1,
+    timeout: int = 10,
+    max_retries: int = 1,
+) -> list[dict[str, Any]]:
+    return fetch_crossref_topic(
+        query=query,
+        start_date=start_date,
+        end_date=end_date,
+        rows=rows,
+        max_pages=max_pages,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+
+
 def normalize_crossref_item(item: dict[str, Any], journal_name: str) -> dict[str, Any]:
     title = normalize_publication_title(clean_markup_text(first_text(item.get("title"))))
     doi = normalize_doi(item.get("DOI"))

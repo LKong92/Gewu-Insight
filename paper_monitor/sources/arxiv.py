@@ -100,6 +100,47 @@ def fetch_arxiv_by_id(
     return normalize_arxiv_entry(entries[0])
 
 
+def search_arxiv_works(
+    *,
+    query: str,
+    start_date: date,
+    end_date: date,
+    page_size: int = 50,
+    max_pages: int = 1,
+) -> list[dict[str, Any]]:
+    query = clean_text(query)
+    if not query:
+        return []
+    papers: list[dict[str, Any]] = []
+    start_utc, end_utc = announcement_date_range_as_submitted_utc(start_date, end_date)
+    submitted_range = f"submittedDate:[{start_utc:%Y%m%d%H%M} TO {end_utc:%Y%m%d%H%M}]"
+    search_query = f"({arxiv_text_query(query)}) AND {submitted_range}"
+
+    for page in range(max_pages):
+        wait_for_arxiv_rate_limit()
+        response = request_with_retries(
+            "GET",
+            "https://export.arxiv.org/api/query",
+            params={
+                "search_query": search_query,
+                "start": page * page_size,
+                "max_results": page_size,
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+            },
+            timeout=ARXIV_API_TIMEOUT,
+            max_retries=ARXIV_API_MAX_RETRIES,
+        )
+        root = ET.fromstring(response.content)
+        entries = root.findall("atom:entry", ATOM_NS)
+        papers.extend(normalize_arxiv_entry(entry) for entry in entries)
+        if len(entries) < page_size:
+            break
+        time.sleep(3)
+
+    return papers
+
+
 def wait_for_arxiv_rate_limit() -> None:
     global ARXIV_LAST_REQUEST_AT
     with ARXIV_REQUEST_LOCK:
@@ -115,6 +156,13 @@ def arxiv_query(categories: list[str], start_date: date, end_date: date) -> str:
     start_utc, end_utc = announcement_date_range_as_submitted_utc(start_date, end_date)
     submitted_range = f"submittedDate:[{start_utc:%Y%m%d%H%M} TO {end_utc:%Y%m%d%H%M}]"
     return f"({category_query}) AND {submitted_range}"
+
+
+def arxiv_text_query(query: str) -> str:
+    terms = [term for term in re.findall(r"[A-Za-z0-9_+.-]+", clean_text(query)) if term]
+    if not terms:
+        return "all:*"
+    return " AND ".join(f"all:{term}" for term in terms[:8])
 
 
 def announcement_date_range_as_submitted_utc(start_date: date, end_date: date) -> tuple[datetime, datetime]:

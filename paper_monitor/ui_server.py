@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, wait
 from email.parser import BytesParser
 from email.policy import default as email_policy
 import html
@@ -51,8 +52,8 @@ from .importers.inventory import ImportCancelled, build_inventory_from_folder, b
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, strip_arxiv_version
-from .sources.crossref import fetch_crossref_topic, normalize_crossref_item
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, search_arxiv_works, strip_arxiv_version
+from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
@@ -83,6 +84,8 @@ THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
 THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
 THEME_GROUP_OVERRIDES_SETTING = "theme_group_overrides"
 THEME_GROUP_ORDER_SETTING = "theme_group_order"
+THEME_FETCH_COMPLETED_STATUSES = ("success", "empty", "error")
+THEME_FETCH_STALE_AFTER_MINUTES = 30
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
@@ -177,6 +180,7 @@ def find_free_local_port() -> int:
 def deep_survey_node_binary() -> str | None:
     candidates = [
         os.environ.get("DEEP_SURVEY_NODE"),
+        "/Applications/Codex.app/Contents/Resources/cua_node/bin/node",
         "/Applications/Codex.app/Contents/Resources/node",
         shutil.which("node"),
     ]
@@ -232,6 +236,7 @@ def ensure_deep_survey_server() -> dict[str, Any]:
         env.setdefault("CODEX_DLW_SANDBOX", "danger-full-access")
         env.setdefault("CODEX_DLW_APPROVAL_POLICY", "never")
         env["PATH"] = ":".join([
+            "/Applications/Codex.app/Contents/Resources/cua_node/bin",
             "/Applications/Codex.app/Contents/Resources",
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -463,6 +468,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/theme-search":
                 self.handle_theme_search(payload)
+                return
+            if parsed.path == "/api/theme-keyword-recommendations":
+                self.handle_theme_keyword_recommendations(payload)
                 return
             if parsed.path == "/api/theme-groups":
                 self.handle_add_theme_group(payload)
@@ -2715,8 +2723,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 overrides = load_theme_group_overrides(storage)
                 overrides[group_key] = updated
                 save_theme_group_overrides(storage, overrides)
-            storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
-            storage.conn.commit()
+            reset_theme_group_fetch_cache(storage, group_key)
             reloaded = load_theme_groups(storage)
             self.send_json({"group": theme_group_to_api(reloaded[group_key]), "groups": theme_groups_api(reloaded)})
         except ValueError as exc:
@@ -2767,8 +2774,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                     deleted.append(group_key)
                 save_deleted_theme_group_keys(storage, deleted)
             save_theme_group_order(storage, [key for key in theme_groups.keys() if key != group_key])
-            storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
-            storage.conn.commit()
+            reset_theme_group_fetch_cache(storage, group_key)
             self.send_json({"deleted": group_key, "groups": theme_groups_api(load_theme_groups(storage))})
         finally:
             storage.close()
@@ -2782,13 +2788,15 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             theme_groups = load_theme_groups(storage)
             group_keys = selected_theme_group_keys(first(query, "groups") or first(query, "group") or "ALL", theme_groups)
             counts = theme_counts_for_month(storage, prefix=prefix, group_keys=group_keys)
+            last_fetches = theme_last_fetches_for_month(storage, prefix=prefix, group_keys=group_keys)
         finally:
             storage.close()
-        self.send_json({"year": year, "month": month, "groups": group_keys, "counts": counts})
+        self.send_json({"year": year, "month": month, "groups": group_keys, "counts": counts, "lastFetches": last_fetches})
 
     def handle_theme_report(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or today_jst().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
+        force_fetch = first(query, "force_fetch") == "1" or first(query, "force") == "1"
         try:
             selected_date = date.fromisoformat(selected)
         except ValueError:
@@ -2805,7 +2813,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             existing = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
             present_group_keys = theme_groups_present(existing)
             completed_group_keys = present_group_keys | theme_fetch_completed_group_keys(storage, selected, group_keys)
-            missing_group_keys = [key for key in group_keys if key not in completed_group_keys]
+            missing_group_keys = list(group_keys) if force_fetch else [key for key in group_keys if key not in completed_group_keys]
             if auto_fetch and missing_group_keys:
                 summary = run_theme_monitor(
                     storage=storage,
@@ -2823,6 +2831,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             all_date_papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=all_group_keys)
             selected_counts = theme_counts_for_month(storage, prefix=selected, group_keys=group_keys).get(selected, {})
             all_counts = theme_counts_for_month(storage, prefix=selected, group_keys=all_group_keys).get(selected, {})
+            summary["last_fetch"] = theme_last_fetch_info(storage, selected, group_keys)
             if fetched:
                 summary["selected_groups"] = group_keys
                 summary["displayed_saved"] = len(papers)
@@ -3402,8 +3411,69 @@ def normalize_theme_keywords(value: Any) -> list[str]:
 
 
 def theme_keyword_pattern(keyword: str) -> str:
-    escaped = re.escape(clean_text(keyword))
-    return escaped.replace(r"\ ", r"\s+")
+    tokens = re.split(r"(\s+)", clean_text(keyword))
+    word_indexes = [index for index, token in enumerate(tokens) if re.fullmatch(r"[A-Za-z][A-Za-z-]*", token or "")]
+    inflect_index = word_indexes[-1] if word_indexes else -1
+    parts = []
+    for index, token in enumerate(tokens):
+        if not token:
+            continue
+        if token.isspace():
+            parts.append(r"\s+")
+        elif index == inflect_index:
+            parts.append(theme_keyword_token_regex(token))
+        else:
+            parts.append(re.escape(token))
+    if not parts:
+        return r"a^"
+    return r"(?<![A-Za-z0-9])" + "".join(parts) + r"(?![A-Za-z0-9])"
+
+
+def theme_keyword_token_regex(token: str) -> str:
+    variants = theme_word_singular_plural_variants(token)
+    if len(variants) <= 1:
+        return re.escape(token)
+    return "(?:" + "|".join(re.escape(value) for value in variants) + ")"
+
+
+def theme_word_singular_plural_variants(token: str) -> list[str]:
+    token = clean_text(token)
+    if not re.fullmatch(r"[A-Za-z][A-Za-z-]*", token) or len(token) <= 3:
+        return [token] if token else []
+    lower = token.lower()
+    variants = [token]
+    if lower.endswith("ies") and len(token) > 4:
+        variants.append(token[:-3] + "y")
+    elif lower.endswith("s") and not lower.endswith("ss"):
+        variants.append(token[:-1])
+    elif lower.endswith("y") and token[-2:-1].lower() not in {"a", "e", "i", "o", "u"}:
+        variants.append(token[:-1] + "ies")
+    else:
+        variants.append(token + "s")
+    deduped: list[str] = []
+    for value in variants:
+        if value and value.lower() not in [item.lower() for item in deduped]:
+            deduped.append(value)
+    return deduped
+
+
+def theme_keyword_surface_variants(keyword: str) -> list[str]:
+    keyword = clean_text(keyword)
+    if not keyword:
+        return []
+    parts = re.split(r"(\s+)", keyword)
+    word_indexes = [index for index, part in enumerate(parts) if re.fullmatch(r"[A-Za-z][A-Za-z-]*", part or "")]
+    if not word_indexes:
+        return [keyword]
+    last_index = word_indexes[-1]
+    variants = []
+    for variant in theme_word_singular_plural_variants(parts[last_index]):
+        next_parts = list(parts)
+        next_parts[last_index] = variant
+        value = clean_text("".join(next_parts))
+        if value and value.lower() not in [item.lower() for item in variants]:
+            variants.append(value)
+    return variants or [keyword]
 
 
 def clean_theme_group_key(value: str) -> str:
@@ -3462,6 +3532,594 @@ def build_theme_group_update(
     }
 
 
+THEME_KEYWORD_STOPWORDS = {
+    "about", "above", "after", "again", "against", "all", "also", "among", "an", "and", "are", "around", "as",
+    "at", "based", "because", "been", "before", "between", "both", "but", "by", "can", "case", "cases", "could",
+    "data", "different", "during", "each", "effect", "effects", "et", "for", "from", "has", "have", "having",
+    "high", "how", "in", "into", "is", "its", "large", "low", "may", "method", "methods", "more", "most", "new",
+    "not", "of", "on", "one", "only", "or", "other", "our", "over", "paper", "papers", "phase", "properties",
+    "property", "results", "show", "shows", "study", "such", "than", "that", "the", "their", "these", "this",
+    "through", "to", "toward", "towards", "two", "under", "using", "via", "was", "we", "were", "when", "where",
+    "which", "while", "with", "within", "without",
+}
+
+THEME_KEYWORD_BROAD_TERMS = {
+    "atomic physics",
+    "catalysis",
+    "cell",
+    "cells",
+    "chemical engineering",
+    "chemical physics",
+    "chemistry",
+    "condensed matter physics",
+    "crystallography",
+    "electron",
+    "electron microscopic",
+    "electron microscopy",
+    "electrons",
+    "electronic",
+    "energy",
+    "engineering",
+    "google",
+    "google scholar",
+    "hydrogen",
+    "inorganic",
+    "lattice",
+    "magnetic",
+    "materials",
+    "materials science",
+    "metal",
+    "microscopy",
+    "organic chemistry",
+    "oxygen",
+    "physical sciences",
+    "physics",
+    "pressure",
+    "quantum mechanics",
+    "scholar",
+    "science",
+    "states",
+    "structure",
+    "surface",
+    "synthesis",
+    "topological",
+}
+
+ELECTRIDE_RECOMMENDED_KEYWORDS = [
+    "electride",
+    "interstitial electron",
+    "anionic electrons",
+    "cage electron",
+    "C12A7:e",
+    "mayenite",
+    "electrene",
+]
+
+INTERMEDIATE_BAND_SOLAR_CELL_RECOMMENDED_KEYWORDS = [
+    "intermediate band solar cell",
+    "intermediate band photovoltaics",
+    "intermediate band material",
+    "sub-bandgap absorption",
+    "below-bandgap photon absorption",
+    "two-step photon absorption",
+    "two-photon photocurrent",
+    "sequential two-photon absorption",
+    "quantum dot intermediate band",
+    "dilute nitride intermediate band",
+    "highly mismatched alloy",
+    "band anticrossing",
+]
+
+THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS = 12
+
+
+def recommend_theme_keywords(subject: str, *, existing_keywords: list[str], limit: int = 24) -> dict[str, Any]:
+    search_terms = theme_recommendation_search_terms(subject, existing_keywords)
+    candidates: dict[str, dict[str, Any]] = {}
+    source_counts: dict[str, int] = {}
+    errors: list[str] = []
+    add_curated_theme_keyword_candidates(candidates, subject)
+    if theme_subject_has_curated_keywords(subject, existing_keywords):
+        return theme_keyword_recommendation_response(
+            subject,
+            search_terms,
+            source_counts,
+            candidates,
+            existing_keywords,
+            errors,
+            limit,
+            curated_only=True,
+        )
+    fetchers = theme_keyword_recommendation_fetchers()
+    jobs: dict[Any, tuple[str, str]] = {}
+    executor = ThreadPoolExecutor(max_workers=min(5, max(1, len(search_terms) * len(fetchers))))
+    try:
+        for term in search_terms:
+            for source_name, fetcher in fetchers:
+                jobs[executor.submit(fetcher, term)] = (source_name, term)
+        done, pending = wait(jobs.keys(), timeout=THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS)
+        for future in pending:
+            source_name, _term = jobs[future]
+            future.cancel()
+            if f"{source_name}: timed out" not in errors:
+                errors.append(f"{source_name}: timed out")
+        for future in done:
+            source_name, _term = jobs[future]
+            try:
+                records = future.result()
+            except Exception as exc:
+                errors.append(f"{source_name}: {exc}")
+                continue
+            source_counts[source_name] = source_counts.get(source_name, 0) + len(records)
+            for record in records:
+                add_theme_keyword_metadata_candidates(candidates, record, source_name)
+                add_theme_keyword_text_candidates(candidates, clean_text(record.get("title") or ""), source_name, base_score=3.0)
+                add_theme_keyword_text_candidates(candidates, clean_text(record.get("abstract") or ""), source_name, base_score=1.0)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    return theme_keyword_recommendation_response(
+        subject,
+        search_terms,
+        source_counts,
+        candidates,
+        existing_keywords,
+        errors,
+        limit,
+    )
+
+
+def theme_keyword_recommendation_response(
+    subject: str,
+    search_terms: list[str],
+    source_counts: dict[str, int],
+    candidates: dict[str, dict[str, Any]],
+    existing_keywords: list[str],
+    errors: list[str],
+    limit: int,
+    *,
+    curated_only: bool = False,
+) -> dict[str, Any]:
+    recommendations = []
+    electride_mode = theme_subject_is_electride(subject, existing_keywords)
+    curated_mode = curated_only or theme_subject_has_curated_keywords(subject, existing_keywords)
+    for key, item in candidates.items():
+        keyword = clean_theme_keyword_recommendation(item["keyword"])
+        if not keyword:
+            continue
+        if theme_keyword_is_covered_by_keywords(keyword, existing_keywords):
+            continue
+        if electride_mode and not theme_keyword_is_curated_electride_keyword(keyword):
+            continue
+        if not electride_mode and not curated_mode and not theme_keyword_has_recommendation_shape(keyword):
+            continue
+        recommendations.append(
+            {
+                "keyword": keyword,
+                "score": round(float(item["score"]), 2),
+                "sources": sorted(item["sources"]),
+            }
+        )
+    recommendations = remove_redundant_theme_keyword_recommendations(recommendations, existing_keywords)
+    recommendations.sort(key=lambda item: (-float(item["score"]), len(item["keyword"]), item["keyword"].lower()))
+    return {
+        "subject": subject,
+        "search_terms": search_terms,
+        "source_counts": source_counts,
+        "recommendations": recommendations[:limit],
+        "errors": errors[:5],
+    }
+
+
+def add_curated_theme_keyword_candidates(candidates: dict[str, dict[str, Any]], subject: str) -> None:
+    if theme_subject_is_electride(subject, []):
+        for index, keyword in enumerate(ELECTRIDE_RECOMMENDED_KEYWORDS):
+            add_theme_keyword_candidate(candidates, keyword, "curated_literature", 100.0 - index)
+    if theme_subject_is_intermediate_band_solar_cell(subject, []):
+        for index, keyword in enumerate(INTERMEDIATE_BAND_SOLAR_CELL_RECOMMENDED_KEYWORDS):
+            add_theme_keyword_candidate(candidates, keyword, "curated_literature", 100.0 - index)
+
+
+def theme_subject_has_curated_keywords(subject: str, existing_keywords: list[str]) -> bool:
+    return theme_subject_is_electride(subject, existing_keywords) or theme_subject_is_intermediate_band_solar_cell(subject, existing_keywords)
+
+
+def theme_subject_is_electride(subject: str, existing_keywords: list[str]) -> bool:
+    values = [subject, *existing_keywords]
+    return any(re.search(r"\belectrides?\b", clean_text(value), flags=re.IGNORECASE) for value in values)
+
+
+def theme_subject_is_intermediate_band_solar_cell(subject: str, existing_keywords: list[str]) -> bool:
+    values = [subject, *existing_keywords]
+    return any(
+        re.search(r"\bintermediate[-\s]+band\b", clean_text(value), flags=re.IGNORECASE)
+        and re.search(r"\b(?:solar\s+cells?|photovoltaics?)\b", clean_text(value), flags=re.IGNORECASE)
+        for value in values
+    )
+
+
+def theme_keyword_is_curated_electride_keyword(keyword: str) -> bool:
+    key = theme_keyword_family_key(keyword)
+    return any(key == theme_keyword_family_key(value) for value in ELECTRIDE_RECOMMENDED_KEYWORDS)
+
+
+def theme_recommendation_search_terms(subject: str, existing_keywords: list[str]) -> list[str]:
+    terms: list[str] = []
+    for value in [subject]:
+        value = clean_text(value)
+        if value and value.lower() not in [term.lower() for term in terms]:
+            terms.append(value)
+        if len(terms) >= 5:
+            break
+    return terms
+
+
+def theme_keyword_recommendation_fetchers() -> list[tuple[str, Any]]:
+    return [
+        ("openalex", fetch_openalex_keyword_records),
+        ("crossref", fetch_crossref_keyword_records),
+        ("semantic_scholar", fetch_semantic_keyword_records),
+        ("arxiv", fetch_arxiv_keyword_records),
+        ("pubmed", fetch_pubmed_keyword_records),
+    ]
+
+
+def fetch_openalex_keyword_records(query: str) -> list[dict[str, Any]]:
+    response = request_with_retries(
+        "GET",
+        "https://api.openalex.org/works",
+        params={"search": query, "per-page": 25},
+        timeout=5,
+        max_retries=1,
+    )
+    records: list[dict[str, Any]] = []
+    for item in response.json().get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        records.append(
+            {
+                "title": clean_text(item.get("title") or item.get("display_name") or ""),
+                "abstract": clean_text(item.get("abstract") or "") or rebuild_openalex_abstract_for_theme(item.get("abstract_inverted_index")),
+                "concepts": [clean_text(concept.get("display_name") or "") for concept in item.get("concepts") or [] if isinstance(concept, dict)],
+                "keywords": [clean_text(keyword.get("display_name") or keyword.get("keyword") or "") for keyword in item.get("keywords") or [] if isinstance(keyword, dict)],
+                "topics": openalex_topic_terms_for_theme(item),
+            }
+        )
+    return records
+
+
+def rebuild_openalex_abstract_for_theme(inverted_index: Any) -> str:
+    if not isinstance(inverted_index, dict):
+        return ""
+    pos_to_word: dict[int, str] = {}
+    for word, positions in inverted_index.items():
+        if not isinstance(positions, list):
+            continue
+        for position in positions:
+            try:
+                pos_to_word[int(position)] = str(word)
+            except (TypeError, ValueError):
+                continue
+    if not pos_to_word:
+        return ""
+    return clean_text(" ".join(pos_to_word.get(index, "") for index in range(max(pos_to_word) + 1)))
+
+
+def openalex_topic_terms_for_theme(item: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for key in ["primary_topic", "topics"]:
+        value = item.get(key)
+        values = value if isinstance(value, list) else [value]
+        for topic in values:
+            if not isinstance(topic, dict):
+                continue
+            for field in ["display_name", "field", "subfield", "domain"]:
+                candidate = topic.get(field)
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("display_name")
+                text = clean_text(candidate or "")
+                if text and text not in terms:
+                    terms.append(text)
+    return terms
+
+
+def fetch_crossref_keyword_records(query: str) -> list[dict[str, Any]]:
+    response = request_with_retries(
+        "GET",
+        "https://api.crossref.org/works",
+        params={
+            "query.bibliographic": query,
+            "rows": "25",
+            "select": "title,abstract,subject",
+        },
+        timeout=5,
+        max_retries=1,
+    )
+    records: list[dict[str, Any]] = []
+    for item in response.json().get("message", {}).get("items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        records.append(
+            {
+                "title": first_crossref_text(item.get("title")),
+                "abstract": clean_text(item.get("abstract") or ""),
+                "keywords": [clean_text(value) for value in item.get("subject") or [] if clean_text(value)],
+            }
+        )
+    return records
+
+
+def fetch_semantic_keyword_records(query: str) -> list[dict[str, Any]]:
+    fields = "title,abstract,tldr"
+    response = request_with_retries(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/paper/search",
+        params={"query": query, "limit": 25, "fields": fields},
+        timeout=5,
+        max_retries=1,
+    )
+    records: list[dict[str, Any]] = []
+    for item in response.json().get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        tldr = item.get("tldr") if isinstance(item.get("tldr"), dict) else {}
+        records.append(
+            {
+                "title": clean_text(item.get("title") or ""),
+                "abstract": " ".join([clean_text(item.get("abstract") or ""), clean_text(tldr.get("text") or "")]).strip(),
+                "keywords": [],
+            }
+        )
+    return records
+
+
+def fetch_arxiv_keyword_records(query: str) -> list[dict[str, Any]]:
+    response = request_with_retries(
+        "GET",
+        "https://export.arxiv.org/api/query",
+        params={
+            "search_query": arxiv_keyword_recommendation_query(query),
+            "start": 0,
+            "max_results": 25,
+            "sortBy": "relevance",
+            "sortOrder": "descending",
+        },
+        timeout=6,
+        max_retries=1,
+    )
+    root = ET.fromstring(response.content)
+    ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+    records: list[dict[str, Any]] = []
+    for entry in root.findall("atom:entry", ns):
+        records.append(
+            {
+                "title": clean_text(entry.findtext("atom:title", default="", namespaces=ns)),
+                "abstract": clean_text(entry.findtext("atom:summary", default="", namespaces=ns)),
+                "keywords": [],
+            }
+        )
+    return records
+
+
+def arxiv_keyword_recommendation_query(query: str) -> str:
+    terms = [term for term in re.findall(r"[A-Za-z0-9_+.-]+", clean_text(query)) if term]
+    return " AND ".join(f"all:{term}" for term in terms[:8]) if terms else f'all:"{clean_text(query)}"'
+
+
+def fetch_pubmed_keyword_records(query: str) -> list[dict[str, Any]]:
+    response = request_with_retries(
+        "GET",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        params={
+            "db": "pubmed",
+            "term": pubmed_keyword_recommendation_query(query),
+            "retmode": "json",
+            "retmax": "25",
+            "sort": "relevance",
+            "tool": NCBI_EUTILS_TOOL,
+            "email": NCBI_EUTILS_EMAIL,
+        },
+        timeout=5,
+        max_retries=1,
+    )
+    ids = [clean_text(str(value)) for value in ((response.json().get("esearchresult") or {}).get("idlist") or [])]
+    ids = [value for value in ids if value]
+    if not ids:
+        return []
+    response = request_with_retries(
+        "GET",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        params={
+            "db": "pubmed",
+            "id": ",".join(ids),
+            "retmode": "xml",
+            "tool": NCBI_EUTILS_TOOL,
+            "email": NCBI_EUTILS_EMAIL,
+        },
+        timeout=5,
+        max_retries=1,
+    )
+    root = ET.fromstring(response.content)
+    records: list[dict[str, Any]] = []
+    for article in root.findall(".//PubmedArticle"):
+        pubmed = parse_pubmed_article(article)
+        mesh_terms = [clean_text(item.get("descriptor") or "") for item in pubmed.get("mesh") or [] if isinstance(item, dict)]
+        records.append(
+            {
+                "title": clean_text(pubmed.get("title") or ""),
+                "abstract": clean_text(pubmed.get("abstract") or ""),
+                "keywords": [clean_text(value) for value in pubmed.get("keywords") or [] if clean_text(value)] + [value for value in mesh_terms if value],
+            }
+        )
+    return records
+
+
+def pubmed_keyword_recommendation_query(query: str) -> str:
+    terms = [term for term in re.findall(r"[A-Za-z0-9_+.-]+", clean_text(query)) if term]
+    if terms:
+        return " AND ".join(f"{term}[Title/Abstract]" for term in terms[:8])
+    return f'"{clean_text(query)}"[Title/Abstract]'
+
+
+def add_theme_keyword_metadata_candidates(candidates: dict[str, dict[str, Any]], record: dict[str, Any], source_name: str) -> None:
+    for key, weight in [("keywords", 2.5)]:
+        for value in record.get(key) or []:
+            add_theme_keyword_candidate(candidates, value, source_name, weight)
+
+
+def add_theme_keyword_text_candidates(candidates: dict[str, dict[str, Any]], text: str, source_name: str, *, base_score: float) -> None:
+    tokens = theme_keyword_tokens(text)
+    if not tokens:
+        return
+    for size in [3, 2, 1]:
+        for index in range(0, len(tokens) - size + 1):
+            gram = tokens[index:index + size]
+            if not theme_keyword_ngram_allowed(gram):
+                continue
+            add_theme_keyword_candidate(candidates, " ".join(gram), source_name, base_score * (1.0 + size * 0.35))
+
+
+def theme_keyword_tokens(text: str) -> list[str]:
+    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]*", clean_text(text)) if token]
+
+
+def theme_keyword_ngram_allowed(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    if tokens[0] in THEME_KEYWORD_STOPWORDS or tokens[-1] in THEME_KEYWORD_STOPWORDS:
+        return False
+    useful = [token for token in tokens if token not in THEME_KEYWORD_STOPWORDS and len(token) > 2]
+    if not useful:
+        return False
+    if len(tokens) == 1 and (len(tokens[0]) < 5 or tokens[0] in THEME_KEYWORD_STOPWORDS):
+        return False
+    if theme_keyword_is_broad_or_classification(" ".join(tokens)):
+        return False
+    return True
+
+
+def add_theme_keyword_candidate(candidates: dict[str, dict[str, Any]], value: Any, source_name: str, score: float) -> None:
+    keyword = clean_theme_keyword_recommendation(value)
+    key = theme_keyword_key(keyword)
+    if not key:
+        return
+    item = candidates.setdefault(key, {"keyword": keyword, "score": 0.0, "sources": set()})
+    if len(keyword) < len(item["keyword"]) or item["keyword"].islower():
+        item["keyword"] = keyword
+    item["score"] = float(item["score"]) + score
+    item["sources"].add(source_name)
+
+
+def clean_theme_keyword_recommendation(value: Any) -> str:
+    text = clean_text(str(value or ""))
+    text = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9)+.-]+$", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or len(text) > 80:
+        return ""
+    words = re.findall(r"[A-Za-z0-9+.-]+", text)
+    if not words:
+        return ""
+    if all(word.lower() in THEME_KEYWORD_STOPWORDS for word in words):
+        return ""
+    if re.fullmatch(r"[A-Z][A-Z0-9+.-]{2,}s?", text):
+        return text
+    if theme_keyword_is_broad_or_classification(text):
+        return ""
+    return text
+
+
+def theme_keyword_key(value: Any) -> str:
+    text = clean_theme_keyword_recommendation(value).lower()
+    return re.sub(r"[^a-z0-9+.-]+", " ", text).strip()
+
+
+def theme_keyword_has_recommendation_shape(value: Any) -> bool:
+    keyword = clean_theme_keyword_recommendation(value)
+    if not keyword:
+        return False
+    tokens = [token for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]*", keyword) if token.lower() not in THEME_KEYWORD_STOPWORDS]
+    return len(tokens) >= 2
+
+
+def theme_keyword_is_covered_by_keywords(keyword: str, keywords: list[str]) -> bool:
+    keyword_family = theme_keyword_family_key(keyword)
+    keyword_tokens = keyword_family.split()
+    if not keyword_family or not keyword_tokens:
+        return False
+    for existing in keywords:
+        existing_family = theme_keyword_family_key(existing)
+        existing_tokens = existing_family.split()
+        if not existing_family or not existing_tokens:
+            continue
+        if existing_family == keyword_family:
+            return True
+        if len(existing_tokens) == 1 and existing_tokens[0] in keyword_tokens:
+            return True
+        if theme_token_sequence_contains(keyword_tokens, existing_tokens):
+            return True
+    return False
+
+
+def theme_token_sequence_contains(tokens: list[str], needle: list[str]) -> bool:
+    if not tokens or not needle or len(needle) > len(tokens):
+        return False
+    return any(tokens[index:index + len(needle)] == needle for index in range(0, len(tokens) - len(needle) + 1))
+
+
+def remove_redundant_theme_keyword_recommendations(
+    recommendations: list[dict[str, Any]],
+    existing_keywords: list[str],
+) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    ordered = sorted(
+        recommendations,
+        key=lambda item: (len(theme_keyword_family_key(item.get("keyword") or "").split()), -float(item.get("score") or 0), item.get("keyword") or ""),
+    )
+    kept_keywords = list(existing_keywords)
+    for item in ordered:
+        keyword = clean_text(item.get("keyword") or "")
+        if not keyword or theme_keyword_is_covered_by_keywords(keyword, kept_keywords):
+            continue
+        kept.append(item)
+        kept_keywords.append(keyword)
+    return kept
+
+
+def theme_keyword_family_key(value: Any) -> str:
+    key = theme_keyword_key(value)
+    words = []
+    for word in key.split():
+        if len(word) > 4 and word.endswith("ies"):
+            word = word[:-3] + "y"
+        elif len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+            word = word[:-1]
+        words.append(word)
+    return " ".join(words)
+
+
+def theme_keyword_is_broad_or_classification(value: Any) -> bool:
+    text = clean_text(str(value or ""))
+    key = re.sub(r"[^a-z0-9+.-]+", " ", text.lower()).strip()
+    if not key:
+        return True
+    if re.match(r"^[a-z-]+(?:\.[a-z0-9-]+)+$", key):
+        return True
+    if key in THEME_KEYWORD_BROAD_TERMS:
+        return True
+    words = key.split()
+    if len(words) == 1:
+        word = words[0]
+        if word in THEME_KEYWORD_BROAD_TERMS:
+            return True
+        if len(word) < 6 and not re.search(r"\d", word):
+            return True
+    if len(words) <= 3 and words[-1] in {"physics", "chemistry", "science", "sciences", "engineering"}:
+        return True
+    if len(words) <= 2 and any(word in {"physics", "chemistry", "science", "sciences"} for word in words):
+        return True
+    return False
+
+
 def selected_theme_group_keys(value: Any, theme_groups: dict[str, dict[str, Any]] | None = None) -> list[str]:
     groups = theme_groups or default_theme_groups()
     valid_keys = list(groups.keys())
@@ -3481,6 +4139,21 @@ def selected_theme_group_keys(value: Any, theme_groups: dict[str, dict[str, Any]
         if key and key not in keys:
             keys.append(key)
     return keys or valid_keys
+
+
+def reset_theme_group_fetch_cache(storage: Storage, group_key: str) -> None:
+    journal = f"theme:{group_key}"
+    storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
+    storage.conn.execute(
+        """
+        DELETE FROM fetch_runs
+        WHERE monitor_type = 'theme'
+          AND journal = ?
+        """,
+        (journal,),
+    )
+    storage.conn.commit()
+
 
 def parse_theme_window(payload: dict[str, Any]) -> tuple[date, date]:
     until_text = clean_text(payload.get("until_date") or payload.get("untilDate") or "")
@@ -3511,18 +4184,18 @@ def run_theme_monitor(
         "window_end": end_date.isoformat(),
         "groups": {},
         "queries": 0,
+        "source_counts": {},
         "raw_results": 0,
         "saved": 0,
         "errors": [],
     }
     groups = theme_groups or load_theme_groups(storage)
-    arxiv_window_cache: dict[tuple[str, str], tuple[str, list[dict[str, Any]], str]] = {}
     for group_key in group_keys:
         group = groups[group_key]
         group_name = str(group["name"])
         fetch_run_id = storage.start_fetch_run(
             monitor_type="theme",
-            source="multi-source",
+            source="multi",
             journal=f"theme:{group_key}",
             window_start=start_date.isoformat(),
             window_end=end_date.isoformat(),
@@ -3530,83 +4203,56 @@ def run_theme_monitor(
         )
         best: dict[str, dict[str, Any]] = {}
         group_errors: list[str] = []
-        source_counts: dict[str, int] = {}
-        source_statuses: dict[str, str] = {}
+        seen_group_errors: set[str] = set()
         raw_count = 0
+        saved = 0
         try:
-            search_queries = theme_discovery_queries(list(group["queries"]))
+            search_queries = theme_search_queries(list(group["queries"]))
+            expected_fetches = len(search_queries) * len(theme_source_fetchers())
             for query in search_queries:
-                summary["queries"] += 1
-                try:
-                    openalex_papers = search_openalex_works(
-                        query=query,
-                        start_date=start_date,
-                        end_date=end_date,
-                        per_page=50,
-                        max_pages=1,
-                        timeout=8,
-                        max_retries=1,
-                    )
-                    source_statuses["openalex"] = "success"
-                    source_counts["openalex"] = source_counts.get("openalex", 0) + len(openalex_papers)
-                    raw_count += len(openalex_papers)
-                    collect_theme_candidates(
-                        best,
-                        papers=openalex_papers,
-                        group=group,
-                        source_name="openalex",
-                    )
-                except Exception as exc:
-                    message = theme_fetch_error_message(group_name, exc)
-                    group_errors.append(message)
-                    summary["errors"].append(message)
-                    if source_statuses.get("openalex") != "success":
-                        source_statuses["openalex"] = "error"
-                    continue
-                try:
-                    crossref_papers = fetch_crossref_topic(
-                        query=query,
-                        start_date=start_date,
-                        end_date=end_date,
-                        rows=50,
-                        max_pages=1,
-                        timeout=12,
-                        max_retries=1,
-                    )
-                    source_statuses["crossref"] = "success"
-                    source_counts["crossref"] = source_counts.get("crossref", 0) + len(crossref_papers)
-                    raw_count += len(crossref_papers)
-                    collect_theme_candidates(
-                        best,
-                        papers=crossref_papers,
-                        group=group,
-                        source_name="crossref",
-                    )
-                except Exception as exc:
-                    message = theme_fetch_error_message(f"{group_name} Crossref", exc)
-                    group_errors.append(message)
-                    summary["errors"].append(message)
-                    if source_statuses.get("crossref") != "success":
-                        source_statuses["crossref"] = "error"
-            arxiv_status, arxiv_papers, arxiv_message = theme_arxiv_window_papers(
-                start_date=start_date,
-                end_date=end_date,
-                cache=arxiv_window_cache,
-            )
-            source_statuses["arxiv"] = arxiv_status
-            source_counts["arxiv"] = len(arxiv_papers)
-            if arxiv_status == "error" and arxiv_message:
-                message = theme_fetch_error_message(f"{group_name} arXiv", RuntimeError(arxiv_message))
-                group_errors.append(message)
-                summary["errors"].append(message)
-            raw_count += len(arxiv_papers)
-            collect_theme_candidates(
-                best,
-                papers=arxiv_papers,
-                group=group,
-                source_name="arxiv",
-            )
-            saved = 0
+                for source_name, fetcher in theme_source_fetchers():
+                    summary["queries"] += 1
+                    try:
+                        papers = fetcher(query, start_date, end_date)
+                    except Exception as exc:
+                        message = theme_fetch_error_message(group_name, exc, source_name=source_name)
+                        append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
+                        continue
+                    raw_count += len(papers)
+                    summary["source_counts"][source_name] = int(summary["source_counts"].get(source_name) or 0) + len(papers)
+                    for paper in papers:
+                        if not theme_candidate_in_window(paper, start_date, end_date):
+                            continue
+                        if not theme_candidate_is_literature_like(paper):
+                            continue
+                        paper = theme_merge_source_marker(paper, source_name)
+                        score, hits = score_theme_relevance(
+                            paper.get("title") or "",
+                            paper.get("abstract") or "",
+                            theme_keyword_matchers(list(group["queries"])),
+                        )
+                        if score <= 0:
+                            continue
+                        paper_id = clean_text(paper.get("paper_id") or "")
+                        if not paper_id:
+                            continue
+                        merge_key = theme_candidate_merge_key(paper)
+                        current = best.get(merge_key)
+                        if not current:
+                            best[merge_key] = {
+                                "paper": paper,
+                                "score": score,
+                                "hits": set(hits),
+                                "queries": [query],
+                                "sources": {source_name},
+                            }
+                        else:
+                            current["score"] = max(int(current["score"]), score)
+                            current["hits"].update(hits)
+                            if query not in current["queries"]:
+                                current["queries"].append(query)
+                            current["sources"].add(source_name)
+                            current["paper"] = theme_preferred_candidate(current["paper"], paper)
             for item in best.values():
                 paper = dict(item["paper"])
                 raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
@@ -3614,15 +4260,14 @@ def run_theme_monitor(
                     "group_key": group_key,
                     "group_name": group_name,
                     "queries": item["queries"],
+                    "sources": sorted(item["sources"]),
                     "hits": sorted(item["hits"]),
                     "score": int(item["score"]),
-                    "sources": sorted(item["sources"]),
                     "window_start": start_date.isoformat(),
                     "window_end": end_date.isoformat(),
                 }
                 paper["raw"] = raw
-                source_names = sorted(item["sources"])
-                paper["source"] = "+".join(source_names + ["theme"])
+                paper["source"] = "theme:" + "+".join(sorted(item["sources"]))
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
                 storage.upsert_paper(paper)
@@ -3639,105 +4284,263 @@ def run_theme_monitor(
                 saved += 1
             summary["raw_results"] += raw_count
             summary["saved"] += saved
-            status = "success" if saved else ("error" if group_errors and not any(status == "success" for status in source_statuses.values()) else "empty")
+            status = "success" if saved else ("error" if expected_fetches and len(group_errors) == expected_fetches else "empty")
             storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message="; ".join(group_errors[:3]))
-            summary["groups"][group_key] = {
-                "name": group_name,
-                "raw_results": raw_count,
-                "saved": saved,
-                "errors": group_errors,
-                "source_counts": source_counts,
-                "source_statuses": source_statuses,
-            }
+            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": saved, "errors": group_errors}
         except Exception as exc:
             message = theme_fetch_error_message(group_name, exc)
-            group_errors.append(message)
-            summary["errors"].append(message)
+            append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
             storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
             summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": 0, "errors": group_errors}
     return summary
 
 
-def theme_discovery_queries(queries: list[str], *, max_queries: int = 12) -> list[str]:
-    cleaned: list[str] = []
-    for query in queries:
-        value = clean_text(query)
-        if value and value not in cleaned:
-            cleaned.append(value)
-    if not cleaned:
-        return []
-    result: list[str] = []
-    for value in cleaned:
-        if value not in result:
-            result.append(value)
-        if len(result) >= max_queries:
-            return result
-    for value in combined_theme_search_queries(cleaned):
-        if value not in result:
-            result.append(value)
-        if len(result) >= max_queries:
-            break
-    return result
-
-
-def theme_arxiv_window_papers(
-    *,
-    start_date: date,
-    end_date: date,
-    cache: dict[tuple[str, str], tuple[str, list[dict[str, Any]], str]],
-) -> tuple[str, list[dict[str, Any]], str]:
-    key = (start_date.isoformat(), end_date.isoformat())
-    if key not in cache:
-        try:
-            papers = fetch_arxiv_condensed_matter(
-                start_date=start_date,
-                end_date=end_date,
-                categories=ARXIV_DEFAULT_CATEGORIES,
-            )
-            cache[key] = ("success", papers, "")
-        except Exception as exc:
-            cache[key] = ("error", [], str(exc))
-    return cache[key]
-
-
-def collect_theme_candidates(
-    best: dict[str, dict[str, Any]],
-    *,
-    papers: list[dict[str, Any]],
-    group: dict[str, Any],
-    source_name: str,
-) -> None:
-    patterns = list(group["patterns"])
-    queries = list(group["queries"])
-    for paper in papers:
-        score, hits = score_theme_relevance(paper.get("title") or "", paper.get("abstract") or "", patterns)
-        if score <= 0:
-            continue
-        paper_id = clean_text(paper.get("paper_id") or "")
-        if not paper_id:
-            continue
-        merge_key = theme_candidate_merge_key(paper)
-        current = best.get(merge_key)
-        if not current:
-            best[merge_key] = {
-                "paper": paper,
-                "score": score,
-                "hits": set(hits),
-                "queries": queries,
-                "sources": {source_name},
-            }
-        else:
-            current["score"] = max(int(current["score"]), score)
-            current["hits"].update(hits)
-            current["sources"].add(source_name)
-
-
-def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) -> list[str]:
+def theme_search_queries(queries: list[str]) -> list[str]:
     cleaned = []
     for query in queries:
         value = clean_text(query)
-        if value and value not in cleaned:
-            cleaned.append(value)
+        for variant in theme_keyword_surface_variants(value):
+            if variant and variant.lower() not in [item.lower() for item in cleaned]:
+                cleaned.append(variant)
+    return cleaned
+
+
+def theme_source_fetchers() -> list[tuple[str, Any]]:
+    return [
+        ("openalex", search_theme_openalex),
+        ("crossref", search_theme_crossref),
+        ("semantic_scholar", search_semantic_scholar_works),
+        ("arxiv", search_theme_arxiv),
+        ("pubmed", search_pubmed_works),
+    ]
+
+
+def search_theme_openalex(query: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    return search_openalex_works(
+        query=query,
+        start_date=start_date,
+        end_date=end_date,
+        per_page=50,
+        max_pages=1,
+        timeout=8,
+        max_retries=1,
+    )
+
+
+def search_theme_crossref(query: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    return search_crossref_works(
+        query=query,
+        start_date=start_date,
+        end_date=end_date,
+        rows=50,
+        max_pages=1,
+        timeout=8,
+        max_retries=1,
+    )
+
+
+def search_theme_arxiv(query: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    return search_arxiv_works(
+        query=query,
+        start_date=start_date,
+        end_date=end_date,
+        page_size=50,
+        max_pages=1,
+    )
+
+
+def search_semantic_scholar_works(
+    query: str,
+    start_date: date,
+    end_date: date,
+    *,
+    limit: int = 50,
+    timeout: int = 8,
+    max_retries: int = 1,
+) -> list[dict[str, Any]]:
+    query = clean_text(query)
+    if not query:
+        return []
+    fields = (
+        "paperId,corpusId,externalIds,url,title,abstract,venue,year,referenceCount,citationCount,"
+        "influentialCitationCount,isOpenAccess,openAccessPdf,fieldsOfStudy,s2FieldsOfStudy,"
+        "publicationTypes,publicationDate,journal,authors,tldr"
+    )
+    params: dict[str, Any] = {
+        "query": query,
+        "limit": max(1, min(100, int(limit or 50))),
+        "fields": fields,
+    }
+    if start_date.year == end_date.year:
+        params["year"] = str(start_date.year)
+    else:
+        params["year"] = f"{start_date.year}-{end_date.year}"
+    response = request_with_retries(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/paper/search",
+        params=params,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in response.json().get("data") or []:
+        if not isinstance(item, dict) or not item.get("paperId"):
+            continue
+        paper = normalize_semantic_scholar_item(item)
+        key = paper.get("doi") or paper.get("paper_id")
+        if key in seen:
+            continue
+        seen.add(key)
+        papers.append(paper)
+    return papers
+
+
+def normalize_semantic_scholar_item(item: dict[str, Any]) -> dict[str, Any]:
+    external_ids = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
+    doi = normalize_publication_doi(str(external_ids.get("DOI") or external_ids.get("doi") or ""))
+    arxiv_id = normalize_arxiv_identifier(str(external_ids.get("ArXiv") or external_ids.get("arXiv") or external_ids.get("ARXIV") or ""))
+    title = normalize_publication_title(clean_text(item.get("title") or "")) or "(Untitled)"
+    journal = item.get("journal") if isinstance(item.get("journal"), dict) else {}
+    journal_name = clean_text(journal.get("name") or item.get("venue") or "Semantic Scholar")
+    publication_date = clean_text(item.get("publicationDate") or str(item.get("year") or ""))
+    open_pdf = item.get("openAccessPdf") if isinstance(item.get("openAccessPdf"), dict) else {}
+    paper_id = (
+        paper_id_from_publication(doi, title, journal_name, publication_date)
+        if doi
+        else ("arxiv_" + safe_slug(arxiv_id, 90) if arxiv_id else "semantic_" + safe_slug(str(item.get("paperId") or title), 90))
+    )
+    raw = {
+        "semantic_scholar": item,
+        "semantic_scholar_id": clean_text(item.get("paperId") or ""),
+        "corpus_id": clean_text(str(item.get("corpusId") or "")),
+    }
+    if arxiv_id:
+        raw["arxiv_id"] = arxiv_id
+    return {
+        "paper_id": paper_id,
+        "doi": doi,
+        "title": title,
+        "journal": journal_name or "Semantic Scholar",
+        "publication_date": publication_date,
+        "abstract": clean_text(item.get("abstract") or ""),
+        "abstract_source": "semantic_scholar" if clean_text(item.get("abstract") or "") else "missing",
+        "url": clean_text(item.get("url") or (f"https://doi.org/{doi}" if doi else "")),
+        "landing_url": clean_text(item.get("url") or (f"https://doi.org/{doi}" if doi else "")),
+        "pdf_url": clean_text(open_pdf.get("url") or ""),
+        "source": "semantic_scholar",
+        "type": "journal-article",
+        "type_crossref": "journal-article",
+        "publisher_section": "",
+        "section_allowed": None,
+        "raw": raw,
+    }
+
+
+def search_pubmed_works(
+    query: str,
+    start_date: date,
+    end_date: date,
+    *,
+    retmax: int = 50,
+    timeout: int = 8,
+    max_retries: int = 1,
+) -> list[dict[str, Any]]:
+    query = clean_text(query)
+    if not query:
+        return []
+    response = request_with_retries(
+        "GET",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        params={
+            "db": "pubmed",
+            "term": pubmed_theme_search_term(query, start_date, end_date),
+            "retmode": "json",
+            "retmax": str(max(1, min(100, int(retmax or 50)))),
+            "sort": "pub date",
+            "tool": NCBI_EUTILS_TOOL,
+            "email": NCBI_EUTILS_EMAIL,
+        },
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    ids = [clean_text(str(value)) for value in ((response.json().get("esearchresult") or {}).get("idlist") or [])]
+    ids = [value for value in ids if value]
+    if not ids:
+        return []
+    response = request_with_retries(
+        "GET",
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        params={
+            "db": "pubmed",
+            "id": ",".join(ids),
+            "retmode": "xml",
+            "tool": NCBI_EUTILS_TOOL,
+            "email": NCBI_EUTILS_EMAIL,
+        },
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    root = ET.fromstring(response.content)
+    papers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for article in root.findall(".//PubmedArticle"):
+        pubmed = parse_pubmed_article(article)
+        paper = normalize_pubmed_article_for_theme(pubmed)
+        key = paper.get("doi") or paper.get("paper_id")
+        if key in seen:
+            continue
+        seen.add(key)
+        papers.append(paper)
+    return papers
+
+
+def pubmed_theme_search_term(query: str, start_date: date, end_date: date) -> str:
+    terms = [term for term in re.findall(r"[A-Za-z0-9_+.-]+", clean_text(query)) if term]
+    if terms:
+        text_query = " AND ".join(f"{term}[Title/Abstract]" for term in terms[:8])
+    else:
+        text_query = f'"{clean_text(query)}"[Title/Abstract]'
+    date_query = f'("{start_date:%Y/%m/%d}"[Date - Publication] : "{end_date:%Y/%m/%d}"[Date - Publication])'
+    return f"({text_query}) AND {date_query}"
+
+
+def normalize_pubmed_article_for_theme(pubmed: dict[str, Any]) -> dict[str, Any]:
+    doi = normalize_publication_doi(str(pubmed.get("doi") or ""))
+    pmid = clean_text(pubmed.get("pmid") or "")
+    pmcid = clean_text(pubmed.get("pmcid") or "")
+    title = normalize_publication_title(pubmed.get("title") or "") or "(Untitled)"
+    journal = clean_text(pubmed.get("journal") or pubmed.get("journal_iso_abbrev") or "PubMed")
+    publication_date = clean_text(pubmed.get("publication_date") or "")
+    paper_id = paper_id_from_publication(doi, title, journal, publication_date) if doi else "pubmed_" + safe_slug(pmid or title, 90)
+    url = f"https://pubmed.ncbi.nlm.nih.gov/{quote(pmid, safe='')}/" if pmid else (f"https://doi.org/{doi}" if doi else "")
+    raw = {"pubmed": pubmed}
+    if pmid:
+        raw["pmid"] = pmid
+    if pmcid:
+        raw["pmcid"] = pmcid
+    return {
+        "paper_id": paper_id,
+        "doi": doi,
+        "title": title,
+        "journal": journal or "PubMed",
+        "publication_date": publication_date,
+        "abstract": clean_text(pubmed.get("abstract") or ""),
+        "abstract_source": "pubmed" if clean_text(pubmed.get("abstract") or "") else "missing",
+        "url": url,
+        "landing_url": url,
+        "pdf_url": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{quote(pmcid, safe='')}/pdf/" if pmcid else "",
+        "source": "pubmed",
+        "type": "journal-article",
+        "type_crossref": "journal-article",
+        "publisher_section": "",
+        "section_allowed": None,
+        "raw": raw,
+    }
+
+
+def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) -> list[str]:
+    cleaned = theme_search_queries(queries)
     if not cleaned:
         return []
     chunks: list[str] = []
@@ -3757,23 +4560,203 @@ def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) 
     return chunks
 
 
-def theme_fetch_error_message(group_name: str, exc: Exception) -> str:
+def theme_fetch_error_message(group_name: str, exc: Exception, *, source_name: str = "") -> str:
     text = str(exc)
+    label = f"{group_name}/{source_name}" if source_name else group_name
     if "429" in text or "Too Many Requests" in text:
-        return f"{group_name}: source rate-limited this request. Try again later or select fewer subjects."
+        return f"{label}: rate-limited this request. Try again later or select fewer subjects."
     if "timed out" in text.lower() or "timeout" in text.lower():
-        return f"{group_name}: source request timed out."
-    return f"{group_name}: {text}"
+        return f"{label}: request timed out."
+    return f"{label}: {text}"
 
 
-def score_theme_relevance(title: str, abstract: str, patterns: list[str]) -> tuple[int, list[str]]:
+def append_theme_fetch_error(
+    group_errors: list[str],
+    summary_errors: list[str],
+    seen_group_errors: set[str],
+    message: str,
+) -> None:
+    if message in seen_group_errors:
+        return
+    seen_group_errors.add(message)
+    group_errors.append(message)
+    summary_errors.append(message)
+
+
+def theme_candidate_in_window(paper: dict[str, Any], start_date: date, end_date: date) -> bool:
+    value = clean_text(paper.get("publication_date") or "")
+    if not value:
+        return start_date != end_date
+    match = re.match(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?", value)
+    if not match:
+        return start_date != end_date
+    if start_date == end_date and not match.group(3):
+        return False
+    year = int(match.group(1))
+    month = int(match.group(2) or "1")
+    day = int(match.group(3) or "1")
+    if match.group(3):
+        try:
+            parsed = date(year, month, day)
+        except ValueError:
+            return True
+        return start_date <= parsed <= end_date
+    if match.group(2):
+        interval_start = date(year, month, 1)
+        interval_end = date(year + (1 if month == 12 else 0), 1 if month == 12 else month + 1, 1) - timedelta(days=1)
+        return interval_start <= end_date and interval_end >= start_date
+    interval_start = date(year, 1, 1)
+    interval_end = date(year, 12, 31)
+    return interval_start <= end_date and interval_end >= start_date
+
+
+def theme_candidate_is_literature_like(paper: dict[str, Any]) -> bool:
+    raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+    type_values = [
+        paper.get("type"),
+        paper.get("type_crossref"),
+        raw.get("type"),
+        raw.get("type_crossref"),
+    ]
+    resource_type = raw.get("resource_type") if isinstance(raw.get("resource_type"), dict) else {}
+    type_values.extend(
+        [
+            resource_type.get("type"),
+            resource_type.get("title"),
+            resource_type.get("resourceTypeGeneral"),
+        ]
+    )
+    type_tokens = {normalize_theme_candidate_type(value) for value in type_values if clean_text(str(value))}
+    type_tokens.discard("")
+    non_literature_types = {
+        "dataset",
+        "data_set",
+        "data",
+        "software",
+        "image",
+        "poster",
+        "presentation",
+        "physical_object",
+        "workflow",
+        "lesson",
+        "other",
+    }
+    if type_tokens & non_literature_types:
+        return False
+    literature_types = {
+        "article",
+        "journal_article",
+        "proceedings_article",
+        "book_chapter",
+        "posted_content",
+        "preprint",
+        "report",
+        "dissertation",
+        "thesis",
+        "review",
+        "letter",
+    }
+    if type_tokens & literature_types:
+        return True
+    doi = normalize_publication_doi(clean_text(paper.get("doi") or raw.get("doi") or ""))
+    raw_primary = raw.get("primary_location") if isinstance(raw.get("primary_location"), dict) else {}
+    raw_source = raw_primary.get("source") if isinstance(raw_primary.get("source"), dict) else {}
+    source_type = normalize_theme_candidate_type(raw_source.get("type") or "")
+    haystack = " ".join(
+        clean_text(str(value)).lower()
+        for value in [
+            paper.get("journal"),
+            paper.get("url"),
+            paper.get("landing_url"),
+            raw.get("id"),
+            raw.get("doi"),
+            raw_primary.get("landing_page_url"),
+            raw_source.get("display_name"),
+            raw_source.get("host_organization_name"),
+        ]
+        if value
+    )
+    repository_record = (
+        source_type == "repository"
+        or doi_is_likely_data_repository(doi)
+        or any(name in haystack for name in ["zenodo", "figshare", "dryad", "osf.io", "mendeley data"])
+    )
+    return not repository_record
+
+
+def normalize_theme_candidate_type(value: Any) -> str:
+    text = clean_text(str(value or "")).lower()
+    text = text.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def theme_merge_source_marker(paper: dict[str, Any], source_name: str) -> dict[str, Any]:
+    result = dict(paper)
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    sources = raw.get("_paper_monitor_sources") if isinstance(raw.get("_paper_monitor_sources"), list) else []
+    if source_name not in sources:
+        sources = [*sources, source_name]
+    raw["_paper_monitor_sources"] = sources
+    result["raw"] = raw
+    return result
+
+
+def theme_preferred_candidate(current: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    current_score = theme_candidate_quality(current)
+    candidate_score = theme_candidate_quality(candidate)
+    if candidate_score <= current_score:
+        return current
+    merged = dict(candidate)
+    raw = merged.get("raw") if isinstance(merged.get("raw"), dict) else {}
+    current_raw = current.get("raw") if isinstance(current.get("raw"), dict) else {}
+    source_list = []
+    for source in (current_raw.get("_paper_monitor_sources") or []) + (raw.get("_paper_monitor_sources") or []):
+        source = clean_text(str(source))
+        if source and source not in source_list:
+            source_list.append(source)
+    if source_list:
+        raw["_paper_monitor_sources"] = source_list
+    merged["raw"] = raw
+    return merged
+
+
+def theme_candidate_quality(paper: dict[str, Any]) -> int:
+    score = 0
+    if clean_text(paper.get("doi") or ""):
+        score += 20
+    if clean_text(paper.get("abstract") or ""):
+        score += 15
+    if clean_text(paper.get("pdf_url") or ""):
+        score += 5
+    score += min(len(clean_text(paper.get("publication_date") or "")), 10)
+    source = clean_text(paper.get("source") or "").lower()
+    score += {"openalex": 5, "crossref": 4, "pubmed": 4, "arxiv": 4, "semantic_scholar": 3}.get(source, 0)
+    return score
+
+
+def theme_keyword_matchers(queries: list[str]) -> list[dict[str, str]]:
+    return [{"keyword": clean_text(query), "pattern": theme_keyword_pattern(query)} for query in queries if clean_text(query)]
+
+
+def score_theme_relevance(title: str, abstract: str, patterns: list[Any]) -> tuple[int, list[str]]:
     hits: list[str] = []
     score = 0
-    for pattern in patterns:
-        title_hit = re.search(pattern, title or "", flags=re.IGNORECASE)
-        abstract_hit = re.search(pattern, abstract or "", flags=re.IGNORECASE)
+    title_text = title or ""
+    abstract_text = abstract or ""
+    for item in patterns:
+        if isinstance(item, dict):
+            pattern = str(item.get("pattern") or "")
+            label = clean_text(item.get("keyword") or pattern)
+        else:
+            pattern = str(item or "")
+            label = readable_theme_hit_label(pattern)
+        if not pattern:
+            continue
+        title_hit = re.search(pattern, title_text, flags=re.IGNORECASE)
+        abstract_hit = re.search(pattern, abstract_text, flags=re.IGNORECASE)
         if title_hit or abstract_hit:
-            hits.append(pattern)
+            if label and label not in hits:
+                hits.append(label)
             if title_hit:
                 score += 2
             if abstract_hit:
@@ -3781,27 +4764,62 @@ def score_theme_relevance(title: str, abstract: str, patterns: list[str]) -> tup
     return score, hits
 
 
+def readable_theme_hit_label(value: str) -> str:
+    text = clean_text(value)
+    if not text.startswith("(?<!"):
+        return text
+    text = re.sub(r"\(\?<!\[[^\]]+\]\)", "", text)
+    text = re.sub(r"\(\?!\[[^\]]+\]\)", "", text)
+    text = re.sub(r"\(\?:([^()|]+)(?:\|[^()]*)?\)", r"\1", text)
+    text = text.replace(r"\s+", " ")
+    text = re.sub(r"\\([^\w])", r"\1", text)
+    return clean_text(text) or value
+
+
 def theme_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     item = paper_to_api(paper)
     item["theme_score"] = int(paper.get("theme_score") or 0)
-    item["theme_hits"] = list(paper.get("theme_hits") or [])
     item["theme_groups"] = list(paper.get("theme_groups") or [])
+    group_label_keys = {
+        theme_display_label_key(group.get("name") or group.get("key") or "")
+        for group in item["theme_groups"]
+        if isinstance(group, dict)
+    }
+    hits: list[str] = []
+    seen_hits: set[str] = set()
+    for hit in paper.get("theme_hits") or []:
+        label = clean_text(hit)
+        key = theme_display_label_key(label)
+        if not label or not key or key in group_label_keys or key in seen_hits:
+            continue
+        hits.append(label)
+        seen_hits.add(key)
+    item["theme_hits"] = hits
     return item
 
 
+def theme_display_label_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", clean_text(str(value or "")).lower()).strip()
+
+
 def theme_candidate_merge_key(paper: dict[str, Any]) -> str:
-    title = normalize_publication_title(paper.get("title") or "").lower()
-    if title:
-        return f"title:{title}"
     doi = clean_text(paper.get("doi") or "").lower()
     if doi:
         return f"doi:{doi}"
+    raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+    arxiv_id = normalize_arxiv_identifier(str(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or ""))
+    if arxiv_id:
+        return f"arxiv:{arxiv_id}"
+    title = normalize_publication_title(paper.get("title") or "").lower()
+    if title:
+        return f"title:{title}"
     return f"paper:{paper.get('paper_id') or ''}"
 
 
 def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[str]) -> dict[str, dict[str, int]]:
     if not group_keys:
         return {}
+    mark_stale_theme_fetch_runs(storage)
     placeholders = ", ".join(["?"] * len(group_keys))
     rows = storage.conn.execute(
         f"""
@@ -3815,6 +4833,7 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
         WHERE theme_results.window_start = theme_results.window_end
           AND theme_results.window_start LIKE ?
           AND theme_results.group_key IN ({placeholders})
+          AND papers.publication_date = theme_results.window_start
           AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
         ORDER BY theme_results.window_start ASC, theme_results.group_key ASC
         """,
@@ -3835,10 +4854,10 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
                journal AS journal
         FROM fetch_runs
         WHERE monitor_type = 'theme'
-          AND source IN ('openalex', 'multi-source')
+          AND source IN ('openalex', 'multi')
           AND window_start = window_end
           AND window_start LIKE ?
-          AND status IN ('success', 'empty')
+          AND status IN ('success', 'empty', 'error')
           AND journal IN ({", ".join(["?"] * len(group_keys))})
         ORDER BY finished_at DESC, id DESC
         """,
@@ -3853,18 +4872,77 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
     return counts
 
 
+def theme_last_fetch_info(storage: Storage, selected: str, group_keys: list[str]) -> dict[str, Any]:
+    month_fetches = theme_last_fetches_for_month(storage, prefix=selected, group_keys=group_keys)
+    return month_fetches.get(selected, {"finished_at": "", "fetched_group_count": 0, "selected_group_count": len(group_keys), "groups": {}})
+
+
+def theme_last_fetches_for_month(storage: Storage, *, prefix: str, group_keys: list[str]) -> dict[str, dict[str, Any]]:
+    if not group_keys:
+        return {}
+    mark_stale_theme_fetch_runs(storage)
+    rows = storage.conn.execute(
+        f"""
+        SELECT window_start AS day,
+               journal AS journal,
+               status AS status,
+               records_found AS records_found,
+               message AS message,
+               started_at AS started_at,
+               finished_at AS finished_at
+        FROM fetch_runs
+        WHERE monitor_type = 'theme'
+          AND source IN ('openalex', 'multi')
+          AND window_start = window_end
+          AND window_start LIKE ?
+          AND status != 'running'
+          AND journal IN ({", ".join(["?"] * len(group_keys))})
+        ORDER BY day ASC, finished_at DESC, id DESC
+        """,
+        (prefix + "%", *[f"theme:{key}" for key in group_keys]),
+    ).fetchall()
+    latest_by_day_group: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        day = str(row["day"] or "")
+        group_key = str(row["journal"] or "").removeprefix("theme:")
+        if not day or group_key not in group_keys:
+            continue
+        groups_for_day = latest_by_day_group.setdefault(day, {})
+        if group_key in groups_for_day:
+            continue
+        groups_for_day[group_key] = {
+            "status": str(row["status"] or ""),
+            "records_found": int(row["records_found"] or 0),
+            "message": str(row["message"] or ""),
+            "started_at": str(row["started_at"] or ""),
+            "finished_at": str(row["finished_at"] or ""),
+        }
+    result: dict[str, dict[str, Any]] = {}
+    for day, groups in latest_by_day_group.items():
+        finished_values = [str(item.get("finished_at") or "") for item in groups.values() if item.get("finished_at")]
+        latest_finished = max(finished_values) if finished_values else ""
+        result[day] = {
+            "finished_at": latest_finished,
+            "fetched_group_count": len(groups),
+            "selected_group_count": len(group_keys),
+            "groups": groups,
+        }
+    return result
+
+
 def theme_fetch_completed_group_keys(storage: Storage, selected: str, group_keys: list[str]) -> set[str]:
     if not group_keys:
         return set()
+    mark_stale_theme_fetch_runs(storage)
     rows = storage.conn.execute(
         f"""
         SELECT DISTINCT journal
         FROM fetch_runs
         WHERE monitor_type = 'theme'
-          AND source IN ('openalex', 'multi-source')
+          AND source IN ('openalex', 'multi')
           AND window_start = ?
           AND window_end = ?
-          AND status IN ('success', 'empty')
+          AND status IN ('success', 'empty', 'error')
           AND journal IN ({", ".join(["?"] * len(group_keys))})
         """,
         (selected, selected, *[f"theme:{key}" for key in group_keys]),
@@ -3875,6 +4953,28 @@ def theme_fetch_completed_group_keys(storage: Storage, selected: str, group_keys
         if value.startswith("theme:"):
             completed.add(value.removeprefix("theme:"))
     return completed
+
+
+def mark_stale_theme_fetch_runs(storage: Storage) -> None:
+    cutoff = (datetime.now(ZoneInfo("Asia/Tokyo")) - timedelta(minutes=THEME_FETCH_STALE_AFTER_MINUTES)).isoformat(timespec="seconds")
+    cursor = storage.conn.execute(
+        """
+        UPDATE fetch_runs
+        SET status = 'error',
+            message = CASE
+              WHEN message IS NULL OR message = '' THEN 'Fetch was interrupted before completion.'
+              ELSE message
+            END,
+            finished_at = ?
+        WHERE monitor_type = 'theme'
+          AND source IN ('openalex', 'multi')
+          AND status = 'running'
+          AND started_at < ?
+        """,
+        (now_iso(), cutoff),
+    )
+    if cursor.rowcount:
+        storage.conn.commit()
 
 
 def theme_existing_summary(
@@ -16677,6 +17777,40 @@ INDEX_HTML = """<!doctype html>
     .settings-modal-body { padding: 16px 18px 18px; }
     .theme-form { display: grid; gap: 12px; }
     .theme-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .theme-keyword-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .theme-keyword-head span { color: var(--muted); font-size: 13px; }
+    .theme-keyword-recommend {
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .theme-keyword-recommend:disabled { color: var(--muted); cursor: progress; }
+    .theme-keyword-recommendations {
+      display: none;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: -4px;
+    }
+    .theme-keyword-recommendations.open { display: flex; }
+    .theme-keyword-chip {
+      min-height: 26px;
+      max-width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      background: #f8fafc;
+      color: #1f2937;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .theme-keyword-chip:hover { border-color: var(--accent); color: var(--accent); }
     .theme-keywords {
       min-height: 150px;
       resize: vertical;
@@ -16907,6 +18041,7 @@ INDEX_HTML = """<!doctype html>
         <button class="iconbtn" id="nextMonth" title="Next month">›</button>
       </div>
       <div class="calendar" id="calendar"></div>
+      <button class="smallbtn theme-sidebar-fetch" id="forceThemeFetch" type="button" title="Fetch the selected date again, ignoring previous cached results">Fetch selected date</button>
       <button class="smallbtn" id="jumpToday">Today</button>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
@@ -16953,7 +18088,7 @@ INDEX_HTML = """<!doctype html>
               <select class="search" id="themeGroupSelect" title="Subject group"></select>
               <input class="search" id="themeFromDate" type="date" title="From date">
               <input class="search" id="themeUntilDate" type="date" title="Until date">
-              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex, Crossref, and arXiv by subject">Search</button>
+              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex, Crossref, Semantic Scholar, arXiv, and PubMed by subject">Search</button>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
@@ -17040,9 +18175,13 @@ INDEX_HTML = """<!doctype html>
                 <input class="search" id="themeGroupName" type="text" autocomplete="off" placeholder="Topological superconductors">
               </label>
               <label>
-                <span>Keywords</span>
+                <div class="theme-keyword-head">
+                  <span>Keywords</span>
+                  <button class="theme-keyword-recommend" id="recommendThemeKeywords" type="button">Recommend Keywords</button>
+                </div>
                 <textarea class="theme-keywords" id="themeGroupKeywords" placeholder="topological superconductor&#10;Majorana mode&#10;kagome superconductor"></textarea>
               </label>
+              <div class="theme-keyword-recommendations" id="themeKeywordRecommendations"></div>
               <div class="citation-settings-status" id="themeGroupStatus"></div>
               <div class="theme-dialog-actions">
                 <button class="smallbtn" id="cancelThemeGroup" type="button">Cancel</button>
@@ -17155,6 +18294,12 @@ INDEX_HTML = """<!doctype html>
       selectedDate: initialToday,
       viewYear: Number(initialToday.slice(0, 4)),
       viewMonth: Number(initialToday.slice(5, 7)),
+      reportSelectedDate: initialToday,
+      reportViewYear: Number(initialToday.slice(0, 4)),
+      reportViewMonth: Number(initialToday.slice(5, 7)),
+      themeSelectedDate: initialToday,
+      themeViewYear: Number(initialToday.slice(0, 4)),
+      themeViewMonth: Number(initialToday.slice(5, 7)),
       journals: [],
       journalsConfig: [],
       journalHistory: [],
@@ -17163,6 +18308,9 @@ INDEX_HTML = """<!doctype html>
       preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
+      reportCounts: {},
+      reportPapers: [],
+      reportLateArrivals: [],
       papers: [],
       themeGroups: [],
       themeGroupsLoaded: false,
@@ -17172,10 +18320,15 @@ INDEX_HTML = """<!doctype html>
       themeUntilDate: initialToday,
       themeCounts: {},
       themeFilterCounts: {},
+      themeLastFetchByDate: {},
+      themePapersByDate: {},
       themePapers: [],
       themeSummary: null,
+      themeSummaryGroupParam: "ALL",
       themeSearched: false,
       themeSearchRunning: false,
+      themeFetchingDates: new Set(),
+      themeFetchControllers: new Map(),
       editingThemeGroupKey: "",
       themeDragKey: "",
       themeSuppressNextClick: false,
@@ -17322,6 +18475,46 @@ INDEX_HTML = """<!doctype html>
     const $ = (id) => document.getElementById(id);
     const fmtMonth = (year, month) => `${year}-${String(month).padStart(2, "0")}`;
 
+    function activeCalendarMode() {
+      return state.mode === "theme" ? "theme" : "report";
+    }
+
+    function applyCalendarState(mode = activeCalendarMode()) {
+      if (mode === "theme") {
+        state.selectedDate = state.themeSelectedDate;
+        state.viewYear = state.themeViewYear;
+        state.viewMonth = state.themeViewMonth;
+      } else {
+        state.selectedDate = state.reportSelectedDate;
+        state.viewYear = state.reportViewYear;
+        state.viewMonth = state.reportViewMonth;
+      }
+    }
+
+    function rememberCalendarState(mode = activeCalendarMode()) {
+      if (mode === "theme") {
+        state.themeSelectedDate = state.selectedDate;
+        state.themeViewYear = state.viewYear;
+        state.themeViewMonth = state.viewMonth;
+      } else {
+        state.reportSelectedDate = state.selectedDate;
+        state.reportViewYear = state.viewYear;
+        state.reportViewMonth = state.viewMonth;
+      }
+    }
+
+    function setCalendarDateForActiveMode(iso) {
+      state.selectedDate = iso;
+      rememberCalendarState();
+    }
+
+    function shiftCalendarMonthForActiveMode(delta) {
+      state.viewMonth += delta;
+      if (state.viewMonth < 1) { state.viewMonth = 12; state.viewYear -= 1; }
+      if (state.viewMonth > 12) { state.viewMonth = 1; state.viewYear += 1; }
+      rememberCalendarState();
+    }
+
     function localIsoDate(value) {
       const year = value.getFullYear();
       const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -17459,6 +18652,7 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "theme") return loadThemeMonth(options);
       const cacheKey = currentMonthCacheKey();
       if (!options.force && state.monthLoaded && state.monthCacheKey === cacheKey) {
+        state.counts = state.reportCounts;
         renderCalendar();
         renderFilters();
         renderSubjectFilters();
@@ -17467,7 +18661,8 @@ INDEX_HTML = """<!doctype html>
       const data = await fetchJson(`/api/month?year=${state.viewYear}&month=${state.viewMonth}`);
       state.journals = data.journals;
       syncSelectedJournals();
-      state.counts = data.counts;
+      state.reportCounts = data.counts || {};
+      state.counts = state.reportCounts;
       state.monthCacheKey = cacheKey;
       state.monthLoaded = true;
       renderCalendar();
@@ -17714,7 +18909,8 @@ INDEX_HTML = """<!doctype html>
       const counts = Object.keys(sourceCounts).length ? {...sourceCounts} : countPapersByJournal(data.papers || []);
       const missing = (data.missingJournals || []).length > 0;
       if (Object.keys(counts).length || !missing) {
-        state.counts[selectedDate] = counts;
+        state.reportCounts[selectedDate] = counts;
+        if (state.mode === "report") state.counts = state.reportCounts;
       }
       const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
       if (total > 0) state.noMatchDates.delete(selectedDate);
@@ -19370,11 +20566,13 @@ INDEX_HTML = """<!doctype html>
       }
       for (let day = 1; day <= days; day++) {
         const iso = `${fmtMonth(state.viewYear, state.viewMonth)}-${String(day).padStart(2, "0")}`;
-        const dayCounts = state.counts[iso] || {};
+        const isThemeCalendar = state.mode === "theme";
+        const calendarCounts = isThemeCalendar ? state.themeCounts : state.reportCounts;
+        const dayCounts = calendarCounts[iso] || {};
         const hasCount = Object.keys(dayCounts).length > 0;
         const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
-        const isFetching = state.fetchingDates.has(iso);
-        const hasNoMatch = state.noMatchDates.has(iso);
+        const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
+        const hasNoMatch = !isThemeCalendar && state.noMatchDates.has(iso);
         const isFuture = isFutureDateIso(iso);
         const button = document.createElement("button");
         button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${hasNoMatch ? " no-match" : ""}${isFuture ? " future" : ""}`;
@@ -19389,12 +20587,12 @@ INDEX_HTML = """<!doctype html>
           continue;
         }
         button.addEventListener("click", async () => {
-          state.selectedDate = iso;
+          setCalendarDateForActiveMode(iso);
           state.activeReportJournal = "";
           updateReportRefreshButton();
           renderCalendar();
-          if (state.mode === "theme") await loadThemeReportForDate(iso);
-          else await loadReport();
+          if (state.mode === "theme") await loadThemeReportForDate(iso).catch((error) => handleThemeLoadFailure(error, iso));
+          else await loadReport().catch((error) => handleReportLoadFailure(error));
         });
         root.appendChild(button);
       }
@@ -27325,24 +28523,26 @@ INDEX_HTML = """<!doctype html>
     }
 
     $("prevMonth").addEventListener("click", async () => {
-      state.viewMonth -= 1;
-      if (state.viewMonth < 1) { state.viewMonth = 12; state.viewYear -= 1; }
-      await loadMonth();
+      shiftCalendarMonthForActiveMode(-1);
+      renderCalendar();
+      await loadMonth().catch((error) => handleMonthLoadFailure(error));
     });
     $("nextMonth").addEventListener("click", async () => {
-      state.viewMonth += 1;
-      if (state.viewMonth > 12) { state.viewMonth = 1; state.viewYear += 1; }
-      await loadMonth();
+      shiftCalendarMonthForActiveMode(1);
+      renderCalendar();
+      await loadMonth().catch((error) => handleMonthLoadFailure(error));
     });
     $("jumpToday").addEventListener("click", async () => {
       const now = new Date();
-      state.selectedDate = localIsoDate(now);
+      setCalendarDateForActiveMode(localIsoDate(now));
       state.activeReportJournal = "";
       state.viewYear = Number(state.selectedDate.slice(0, 4));
       state.viewMonth = Number(state.selectedDate.slice(5, 7));
-      await loadMonth();
-      if (state.mode === "theme") await loadThemeReportForDate(state.selectedDate);
-      else await loadReport();
+      rememberCalendarState();
+      renderCalendar();
+      await loadMonth().catch((error) => handleMonthLoadFailure(error));
+      if (state.mode === "theme") await loadThemeReportForDate(state.selectedDate).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
+      else await loadReport().catch((error) => handleReportLoadFailure(error));
     });
     function openThemeGroupDialog(group = null) {
       const backdrop = $("themeGroupBackdrop");
@@ -27355,6 +28555,7 @@ INDEX_HTML = """<!doctype html>
       $("themeGroupKeywords").value = (group?.queries || []).join("\\n");
       $("themeGroupStatus").textContent = "";
       $("themeGroupStatus").className = "citation-settings-status";
+      clearThemeKeywordRecommendations();
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       window.setTimeout(() => $("themeGroupName")?.focus(), 0);
@@ -27364,8 +28565,100 @@ INDEX_HTML = """<!doctype html>
       const backdrop = $("themeGroupBackdrop");
       if (!backdrop) return;
       state.editingThemeGroupKey = "";
+      clearThemeKeywordRecommendations();
       backdrop.classList.remove("open");
       backdrop.setAttribute("aria-hidden", "true");
+    }
+
+    function clearThemeKeywordRecommendations() {
+      const root = $("themeKeywordRecommendations");
+      if (!root) return;
+      root.innerHTML = "";
+      root.classList.remove("open");
+    }
+
+    async function recommendThemeKeywords() {
+      const subject = $("themeGroupName")?.value.trim() || "";
+      const keywords = $("themeGroupKeywords")?.value || "";
+      const status = $("themeGroupStatus");
+      const button = $("recommendThemeKeywords");
+      const root = $("themeKeywordRecommendations");
+      if (!subject) {
+        status.textContent = "Subject name is required";
+        status.className = "citation-settings-status err";
+        return;
+      }
+      if (!root || !button) return;
+      status.textContent = "Searching literature metadata...";
+      status.className = "citation-settings-status";
+      button.disabled = true;
+      button.textContent = "Searching...";
+      clearThemeKeywordRecommendations();
+      try {
+        const res = await fetch("/api/theme-keyword-recommendations", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({subject, keywords})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not recommend keywords");
+        renderThemeKeywordRecommendations(data.recommendations || []);
+        const count = (data.recommendations || []).length;
+        status.textContent = count ? `${count} recommendations found` : "No new recommendations found";
+        status.className = count ? "citation-settings-status ok" : "citation-settings-status";
+      } catch (error) {
+        status.textContent = keywordRecommendationErrorMessage(error);
+        status.className = "citation-settings-status err";
+      } finally {
+        button.disabled = false;
+        button.textContent = "Recommend Keywords";
+      }
+    }
+
+    function keywordRecommendationErrorMessage(error) {
+      const message = String(error?.message || "").trim();
+      if (!message || message === "Load failed" || message === "Failed to fetch") {
+        return "Keyword recommendation request was interrupted. Try again in a moment.";
+      }
+      return message;
+    }
+
+    function renderThemeKeywordRecommendations(recommendations) {
+      const root = $("themeKeywordRecommendations");
+      if (!root) return;
+      root.innerHTML = "";
+      const items = Array.isArray(recommendations) ? recommendations : [];
+      if (!items.length) {
+        root.classList.remove("open");
+        return;
+      }
+      items.slice(0, 24).forEach((item) => {
+        const keyword = String(item?.keyword || "").trim();
+        if (!keyword) return;
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "theme-keyword-chip";
+        chip.textContent = keyword;
+        const sources = Array.isArray(item?.sources) ? item.sources.join(", ") : "";
+        if (sources) chip.title = sources;
+        chip.addEventListener("click", () => addThemeKeyword(keyword));
+        root.appendChild(chip);
+      });
+      root.classList.toggle("open", Boolean(root.children.length));
+    }
+
+    function addThemeKeyword(keyword) {
+      const textarea = $("themeGroupKeywords");
+      if (!textarea) return;
+      const value = String(keyword || "").trim();
+      if (!value) return;
+      const lines = textarea.value.split(/\\n+/).map((line) => line.trim()).filter(Boolean);
+      const known = new Set(lines.map((line) => line.toLowerCase()));
+      if (!known.has(value.toLowerCase())) {
+        lines.push(value);
+        textarea.value = lines.join("\\n");
+      }
+      textarea.focus();
     }
 
     async function saveThemeGroup() {
@@ -27590,59 +28883,277 @@ INDEX_HTML = """<!doctype html>
       return keys.length === knownThemeGroupKeys().length ? "All Subjects" : (keys.map(themeGroupLabelForKey).join(", ") || "No Subjects");
     }
 
+    function themeLastFetchCacheKey(selectedDate, groupParam) {
+      return `${selectedDate}|${groupParam || "ALL"}`;
+    }
+
+    function rememberThemeLastFetch(selectedDate, groupParam, lastFetch) {
+      if (!selectedDate || !lastFetch) return;
+      state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, groupParam)] = lastFetch;
+    }
+
+    function rememberThemeLastFetches(lastFetches, groupParam) {
+      Object.entries(lastFetches || {}).forEach(([selectedDate, lastFetch]) => {
+        rememberThemeLastFetch(selectedDate, groupParam, lastFetch);
+      });
+    }
+
+    function cachedThemeLastFetch(selectedDate, groupParam) {
+      const direct = state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, groupParam)];
+      if (direct) return direct;
+      if (groupParam !== "ALL") return state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, "ALL")] || null;
+      return null;
+    }
+
+    function themePapersCacheKey(selectedDate, groupParam) {
+      return `${selectedDate}|${groupParam || "ALL"}`;
+    }
+
+    function rememberThemePapers(selectedDate, groupParam, papers) {
+      if (!selectedDate || !Array.isArray(papers)) return;
+      state.themePapersByDate[themePapersCacheKey(selectedDate, groupParam)] = papers;
+    }
+
+    function cachedThemePapers(selectedDate, groupParam) {
+      const direct = state.themePapersByDate[themePapersCacheKey(selectedDate, groupParam)];
+      if (Array.isArray(direct)) return direct;
+      if (groupParam !== "ALL") {
+        const all = state.themePapersByDate[themePapersCacheKey(selectedDate, "ALL")];
+        if (Array.isArray(all)) return all;
+      }
+      return [];
+    }
+
+    function restoreCachedThemePapers(selectedDate = state.selectedDate, groupParam = selectedThemeGroupParam()) {
+      if (state.themePapers.length) return;
+      const papers = cachedThemePapers(selectedDate, groupParam);
+      if (!papers.length) return;
+      state.themePapers = papers;
+      if (state.mode === "theme" && selectedDate === state.selectedDate) state.papers = papers;
+    }
+
+    function pendingThemeSummaryForDate(selectedDate, groupParam) {
+      const current = state.themeSummary || {};
+      const sameSummary = current.window_start === selectedDate && current.window_end === selectedDate && state.themeSummaryGroupParam === groupParam;
+      const lastFetch = cachedThemeLastFetch(selectedDate, groupParam) || (sameSummary ? current.last_fetch : null);
+      return {
+        ...(sameSummary ? current : {}),
+        window_start: selectedDate,
+        window_end: selectedDate,
+        saved: sameSummary ? Number(current.saved || 0) : 0,
+        raw_results: sameSummary ? Number(current.raw_results || 0) : 0,
+        errors: [],
+        last_fetch: lastFetch || null
+      };
+    }
+
     async function loadThemeMonth(options = {}) {
-      await ensureThemeGroupsLoaded();
-      const selectedGroups = encodeURIComponent(selectedThemeGroupParam());
-      const selectedUrl = `/api/theme-month?year=${state.viewYear}&month=${state.viewMonth}&groups=${selectedGroups}`;
-      const allUrl = `/api/theme-month?year=${state.viewYear}&month=${state.viewMonth}&groups=ALL`;
+      try {
+        await ensureThemeGroupsLoaded();
+        await refreshThemeMonthCounts(state.viewYear, state.viewMonth, selectedThemeGroupParam());
+      } catch (error) {
+        handleMonthLoadFailure(error);
+      }
+    }
+
+    async function refreshThemeMonthCounts(viewYear = state.viewYear, viewMonth = state.viewMonth, groupParam = selectedThemeGroupParam()) {
+      const selectedGroups = encodeURIComponent(groupParam || selectedThemeGroupParam());
+      const selectedUrl = `/api/theme-month?year=${viewYear}&month=${viewMonth}&groups=${selectedGroups}`;
+      const allUrl = `/api/theme-month?year=${viewYear}&month=${viewMonth}&groups=ALL`;
       const [selectedData, allData] = selectedGroups === "ALL"
         ? await fetchJson(selectedUrl).then((data) => [data, data])
         : await Promise.all([fetchJson(selectedUrl), fetchJson(allUrl)]);
+      if (state.themeViewYear !== viewYear || state.themeViewMonth !== viewMonth || selectedThemeGroupParam() !== (groupParam || selectedThemeGroupParam())) return;
       state.themeCounts = selectedData.counts || {};
       state.themeFilterCounts = allData.counts || {};
-      state.counts = state.themeCounts;
-      renderCalendar();
-      renderThemeFilters();
+      rememberThemeLastFetches(selectedData.lastFetches || {}, groupParam || selectedThemeGroupParam());
+      rememberThemeLastFetches(allData.lastFetches || {}, "ALL");
+      if (state.mode === "theme") {
+        state.counts = state.themeCounts;
+        renderCalendar();
+        renderThemeFilters();
+      }
     }
 
     async function loadThemeReportForDate(selectedDate = state.selectedDate, options = {}) {
       const requestSequence = ++state.themeRequestSequence;
-      await ensureThemeGroupsLoaded();
-      const requestedGroupParam = selectedThemeGroupParam();
-      if (requestSequence !== state.themeRequestSequence) return;
-      state.themeFromDate = selectedDate;
-      state.themeUntilDate = selectedDate;
-      state.themeSearched = true;
-      state.themeSearchRunning = true;
-      state.themePapers = [];
-      state.papers = [];
-      renderThemeMonitor();
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
+      let requestedGroupParam = selectedThemeGroupParam();
+      let requestedViewYear = state.viewYear;
+      let requestedViewMonth = state.viewMonth;
       try {
-        const groups = encodeURIComponent(requestedGroupParam);
-        const autoFetch = options.autoFetch === false ? "0" : "1";
-        const data = await fetchJson(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=${autoFetch}`, 20 * 60 * 1000);
+        await ensureThemeGroupsLoaded();
+        requestedGroupParam = selectedThemeGroupParam();
+        requestedViewYear = state.viewYear;
+        requestedViewMonth = state.viewMonth;
         if (requestSequence !== state.themeRequestSequence) return;
+        const hasFetchRecord = Boolean(cachedThemeLastFetch(selectedDate, requestedGroupParam));
+        const shouldFetchRemote = Boolean(options.forceFetch) || (options.autoFetch !== false && !hasFetchRecord);
+        state.themeFromDate = selectedDate;
+        state.themeUntilDate = selectedDate;
+        state.themeSearched = true;
+        state.themeSearchRunning = shouldFetchRemote;
+        if (shouldFetchRemote) {
+          state.themeFetchingDates.add(selectedDate);
+          state.themeFetchControllers.set(selectedDate, controller);
+        }
+        state.themeSummaryGroupParam = requestedGroupParam;
+        const cachedPapers = cachedThemePapers(selectedDate, requestedGroupParam);
+        state.themePapers = cachedPapers;
+        if (state.mode === "theme" && state.selectedDate === selectedDate) state.papers = cachedPapers;
+        state.themeSummary = pendingThemeSummaryForDate(selectedDate, requestedGroupParam);
+        if (state.mode === "theme" && state.selectedDate === selectedDate) {
+          renderThemeMonitor();
+          renderCalendar();
+        }
+        const groups = encodeURIComponent(requestedGroupParam);
+        const autoFetch = shouldFetchRemote ? "1" : "0";
+        const forceFetch = options.forceFetch ? "1" : "0";
+        const res = await fetch(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=${autoFetch}&force_fetch=${forceFetch}`, {signal: controller.signal});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText || "Subject fetch failed");
+        if (requestSequence !== state.themeRequestSequence) {
+          refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+          return;
+        }
         state.themeSummary = data.summary || null;
+        state.themeSummaryGroupParam = requestedGroupParam;
+        rememberThemeLastFetch(selectedDate, requestedGroupParam, state.themeSummary?.last_fetch || null);
         state.themePapers = data.papers || [];
-        state.papers = state.themePapers;
+        rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
         updateThemeCalendarCount(selectedDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
         updateThemeFilterCount(selectedDate, data.allThemeCounts || data.themeCounts || countPapersByThemeGroup(state.themePapers));
-        renderThemeFilters();
+        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+          state.papers = state.themePapers;
+          renderThemeFilters();
+        }
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
       } catch (error) {
-        if (requestSequence !== state.themeRequestSequence) return;
-        state.themeSummary = {errors: [error.message || "Subject search failed"]};
+        if (error?.name === "AbortError") return;
+        if (requestSequence !== state.themeRequestSequence) {
+          refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+          return;
+        }
+        const fallback = await loadThemeCachedReportAfterFailure(selectedDate, requestedGroupParam);
+        if (fallback && requestSequence === state.themeRequestSequence) {
+          state.themeSummary = fallback.summary || null;
+          state.themeSummaryGroupParam = requestedGroupParam;
+          rememberThemeLastFetch(selectedDate, requestedGroupParam, state.themeSummary?.last_fetch || null);
+          state.themePapers = fallback.papers || [];
+          rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
+          updateThemeCalendarCount(selectedDate, fallback.themeCounts || countPapersByThemeGroup(state.themePapers));
+          updateThemeFilterCount(selectedDate, fallback.allThemeCounts || fallback.themeCounts || countPapersByThemeGroup(state.themePapers));
+          if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+            state.papers = state.themePapers;
+            renderThemeFilters();
+          }
+          refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+          return;
+        }
+        state.themeSummary = {
+          errors: [themeRequestErrorMessage(error, "Subject fetch failed")],
+          window_start: selectedDate,
+          window_end: selectedDate,
+          last_fetch: cachedThemeLastFetch(selectedDate, requestedGroupParam)
+        };
       } finally {
-        if (requestSequence === state.themeRequestSequence) {
+        window.clearTimeout(timeout);
+        if (state.themeFetchingDates.has(selectedDate)) state.themeFetchingDates.delete(selectedDate);
+        if (state.themeFetchControllers.get(selectedDate) === controller) state.themeFetchControllers.delete(selectedDate);
+        if (state.mode === "theme") renderCalendar();
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+        if (requestSequence === state.themeRequestSequence && state.mode === "theme" && state.selectedDate === selectedDate) {
           state.themeSearchRunning = false;
           renderThemeMonitor();
         }
       }
     }
 
+    async function loadThemeCachedReportAfterFailure(selectedDate, groupParam) {
+      try {
+        const groups = encodeURIComponent(groupParam || selectedThemeGroupParam());
+        return await fetchJson(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=0&force_fetch=0`, 12000);
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    async function forceFetchSelectedThemeDate() {
+      await ensureThemeGroupsLoaded();
+      const selectedDate = state.selectedDate;
+      if (isFutureDateIso(selectedDate) || state.themeFetchingDates.has(selectedDate)) return;
+      const requestedGroupParam = selectedThemeGroupParam();
+      const requestedViewYear = state.viewYear;
+      const requestedViewMonth = state.viewMonth;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
+      state.themeFetchingDates.add(selectedDate);
+      state.themeFetchControllers.set(selectedDate, controller);
+      state.themeSummaryGroupParam = requestedGroupParam;
+      restoreCachedThemePapers(selectedDate, requestedGroupParam);
+      if (state.mode === "theme") {
+        state.themeSearched = true;
+        state.themeFromDate = selectedDate;
+        state.themeUntilDate = selectedDate;
+        state.themeSummary = pendingThemeSummaryForDate(selectedDate, requestedGroupParam);
+        renderThemeMonitor();
+      }
+      if (state.mode === "theme") renderCalendar();
+      try {
+        const groups = encodeURIComponent(requestedGroupParam);
+        const res = await fetch(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=1&force_fetch=1`, {signal: controller.signal});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText || "Subject fetch failed");
+        rememberThemeLastFetch(selectedDate, requestedGroupParam, data.summary?.last_fetch || null);
+        updateThemeCalendarCount(selectedDate, data.themeCounts || countPapersByThemeGroup(data.papers || []));
+        updateThemeFilterCount(selectedDate, data.allThemeCounts || data.themeCounts || countPapersByThemeGroup(data.papers || []));
+        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+          state.themeSummary = data.summary || null;
+          state.themeSummaryGroupParam = requestedGroupParam;
+          state.themePapers = data.papers || [];
+          state.papers = state.themePapers;
+          rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
+          renderThemeFilters();
+        }
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+          state.themeSummary = {
+            errors: [themeRequestErrorMessage(error, "Subject fetch failed")],
+            window_start: selectedDate,
+            window_end: selectedDate,
+            last_fetch: cachedThemeLastFetch(selectedDate, requestedGroupParam)
+          };
+          state.themeSummaryGroupParam = requestedGroupParam;
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        state.themeFetchingDates.delete(selectedDate);
+        state.themeFetchControllers.delete(selectedDate);
+        if (state.mode === "theme") renderCalendar();
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+          renderThemeMonitor();
+        }
+      }
+    }
+
+    function cancelThemeFetch(selectedDate = state.selectedDate) {
+      const controller = state.themeFetchControllers.get(selectedDate);
+      if (controller) controller.abort();
+      state.themeFetchingDates.delete(selectedDate);
+      state.themeFetchControllers.delete(selectedDate);
+      restoreCachedThemePapers(selectedDate, selectedThemeGroupParam());
+      if (state.mode === "theme") renderCalendar();
+      if (state.mode === "theme" && state.selectedDate === selectedDate) renderThemeMonitor();
+    }
+
     function updateThemeCalendarCount(selectedDate, counts) {
       state.themeCounts[selectedDate] = counts || {};
-      state.counts = state.themeCounts;
-      if (selectedDate.startsWith(fmtMonth(state.viewYear, state.viewMonth))) renderCalendar();
+      if (state.mode === "theme") state.counts = state.themeCounts;
+      if (state.mode === "theme" && selectedDate.startsWith(fmtMonth(state.viewYear, state.viewMonth))) renderCalendar();
     }
 
     function updateThemeFilterCount(selectedDate, counts) {
@@ -27690,8 +29201,8 @@ INDEX_HTML = """<!doctype html>
           else state.selectedThemeGroups.delete(key);
           if (!state.selectedThemeGroups.size) state.selectedThemeGroups.add(key);
           state.themeGroup = selectedThemeGroupParam();
-          await loadThemeMonth({force: true});
-          await loadThemeReportForDate(state.selectedDate);
+          await loadThemeMonth({force: true}).catch((error) => handleMonthLoadFailure(error));
+          await loadThemeReportForDate(state.selectedDate).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
         });
         label.addEventListener("contextmenu", (event) => {
           event.preventDefault();
@@ -27776,6 +29287,7 @@ INDEX_HTML = """<!doctype html>
 
     async function openThemeMonitor() {
       state.mode = "theme";
+      applyCalendarState("theme");
       closeLibraryQuickLook();
       closeAnalysis();
       stopArxivUpdateCountdown();
@@ -27792,42 +29304,45 @@ INDEX_HTML = """<!doctype html>
     async function runThemeSearch() {
       const requestSequence = ++state.themeRequestSequence;
       await ensureThemeGroupsLoaded();
+      if (requestSequence !== state.themeRequestSequence) return;
       const fromDate = $("themeFromDate")?.value || state.themeFromDate || state.selectedDate;
       const untilDate = $("themeUntilDate")?.value || state.themeUntilDate || state.selectedDate;
-      const requestedGroupParam = selectedThemeGroupParam();
       state.themeFromDate = fromDate;
       state.themeUntilDate = untilDate;
       state.themeSearched = true;
       state.themeSearchRunning = true;
       state.themePapers = [];
-      state.papers = [];
+      if (state.mode === "theme") state.papers = [];
       renderThemeMonitor();
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
       try {
         const res = await fetch("/api/theme-search", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
+            group: selectedThemeGroupParam(),
             from_date: fromDate,
-            until_date: untilDate,
-            group: requestedGroupParam
-          })
+            until_date: untilDate
+          }),
+          signal: controller.signal
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Subject search failed");
         if (requestSequence !== state.themeRequestSequence) return;
         state.themeSummary = data.summary || null;
         state.themePapers = data.papers || [];
-        state.papers = state.themePapers;
-        if (fromDate === untilDate) {
-          updateThemeCalendarCount(untilDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
-          updateThemeFilterCount(untilDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
+        if (state.mode === "theme") {
+          state.papers = state.themePapers;
+          renderThemeFilters();
         }
-        renderThemeFilters();
       } catch (error) {
         if (requestSequence !== state.themeRequestSequence) return;
-        state.themeSummary = {errors: [error.message || "Subject search failed"]};
+        const message = themeRequestErrorMessage(error, "Subject search failed");
+        state.themeSummary = {errors: [message], window_start: fromDate, window_end: untilDate};
       } finally {
-        if (requestSequence === state.themeRequestSequence) {
+        window.clearTimeout(timer);
+        if (requestSequence === state.themeRequestSequence && state.mode === "theme") {
           state.themeSearchRunning = false;
           renderThemeMonitor();
         }
@@ -27835,7 +29350,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderThemeMonitor() {
-      state.mode = "theme";
+      if (state.mode !== "theme") return;
+      state.papers = state.themePapers;
       setPrimaryView("theme");
       closeLibraryQuickLook();
       stopArxivUpdateCountdown();
@@ -27849,28 +29365,41 @@ INDEX_HTML = """<!doctype html>
       root.style.height = "";
       root.style.minHeight = "";
       root.innerHTML = "";
+      const summary = state.themeSummary || {};
+      const windowStart = summary.window_start || state.selectedDate;
+      const windowEnd = summary.window_end || windowStart;
+      if (windowStart === state.selectedDate && windowEnd === state.selectedDate) {
+        restoreCachedThemePapers(state.selectedDate, selectedThemeGroupParam());
+      }
+      const selectedDateFetching = state.themeFetchingDates.has(state.selectedDate);
+      const summaryMatchesSelectedDate = windowStart === state.selectedDate && windowEnd === state.selectedDate;
+      const currentThemeBusy = selectedDateFetching || (state.themeSearchRunning && summaryMatchesSelectedDate);
       const button = $("runThemeSearch");
       if (button) {
-        button.disabled = state.themeSearchRunning;
+        button.disabled = currentThemeBusy;
         button.textContent = state.themeSearchRunning ? "Searching..." : "Search";
       }
-      if ($("themeGroupSelect")) $("themeGroupSelect").value = state.themeGroup || "ALL";
-      if ($("themeFromDate")) $("themeFromDate").value = state.themeFromDate || state.selectedDate;
-      if ($("themeUntilDate")) $("themeUntilDate").value = state.themeUntilDate || state.selectedDate;
+      const forceButton = $("forceThemeFetch");
+      if (forceButton) {
+        forceButton.disabled = currentThemeBusy;
+        forceButton.textContent = selectedDateFetching ? "Fetching..." : "Fetch selected date";
+      }
       const groupLabel = selectedThemeGroupLabel();
-      const dateLabel = state.themeFromDate && state.themeUntilDate && state.themeFromDate !== state.themeUntilDate
-        ? `${state.themeFromDate} to ${state.themeUntilDate}`
-        : state.selectedDate;
-      const summary = state.themeSummary || {};
       const saved = Number(summary.saved || 0);
       const raw = Number(summary.raw_results || 0);
       const errors = Array.isArray(summary.errors) ? summary.errors : [];
+      const dateLabel = windowStart === windowEnd ? windowStart : `${windowStart} to ${windowEnd}`;
+      const lastFetchLabel = themeLastFetchLabel(summary.last_fetch);
       $("summary").textContent = state.themeSearched
-        ? `${dateLabel} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits${errors.length ? ` · ${errors.length} errors` : ""}`
-        : "Choose a date on the calendar to fetch subject-matched papers from OpenAlex, Crossref, and arXiv.";
-      if (state.themeSearchRunning) {
-        root.innerHTML = `<div class="empty fetch-progress"><div class="fetch-progress-head"><strong>Fetching subject papers for ${escapeHtml(state.selectedDate)}...</strong></div></div>`;
-        return;
+        ? `${dateLabel} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
+        : "Choose a date on the calendar to fetch subject-matched papers from multiple metadata sources.";
+      if (currentThemeBusy) {
+        const progress = document.createElement("div");
+        progress.className = "empty fetch-progress";
+        progress.innerHTML = `<div class="fetch-progress-head"><strong>Fetching subject papers for ${escapeHtml(state.selectedDate)}...</strong></div><div>${escapeHtml(lastFetchLabel)}</div>${selectedDateFetching ? `<button class="smallbtn theme-fetch-cancel-inline" type="button" data-action="cancel-theme-fetch">Cancel fetch</button>` : ""}`;
+        root.appendChild(progress);
+        root.querySelector('[data-action="cancel-theme-fetch"]')?.addEventListener("click", () => cancelThemeFetch(state.selectedDate));
+        if (!state.themePapers.length) return;
       }
       if (errors.length && !state.themePapers.length) {
         root.innerHTML = `<div class="empty">${escapeHtml(errors[0])}</div>`;
@@ -27888,8 +29417,75 @@ INDEX_HTML = """<!doctype html>
       state.themePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
     }
 
+    function themeLastFetchLabel(lastFetch) {
+      if (!lastFetch || !lastFetch.finished_at) return "Last fetched: never";
+      const count = Number(lastFetch.fetched_group_count || 0);
+      const total = Number(lastFetch.selected_group_count || 0);
+      const coverage = total > 1 ? ` (${count}/${total} subjects)` : "";
+      return `Last fetched: ${formatThemeFetchTime(lastFetch.finished_at)}${coverage}`;
+    }
+
+    function formatThemeFetchTime(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) return raw.replace("T", " ").slice(0, 16);
+      const yyyy = parsed.getFullYear();
+      const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+      const dd = String(parsed.getDate()).padStart(2, "0");
+      const hh = String(parsed.getHours()).padStart(2, "0");
+      const min = String(parsed.getMinutes()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+    }
+
+    function themeRequestErrorMessage(error, fallback) {
+      if (error?.name === "AbortError") return "Subject search timed out";
+      const message = String(error?.message || fallback || "Subject fetch failed").trim();
+      if (!message || message === "Load failed" || message === "Failed to fetch") {
+        return "Subject fetch request failed. The local server may still be busy; try Fetch selected date again.";
+      }
+      return message;
+    }
+
+    function handleMonthLoadFailure(error) {
+      if (state.mode === "theme") {
+        state.themeSummary = {
+          ...(state.themeSummary || {}),
+          window_start: state.selectedDate,
+          window_end: state.selectedDate,
+          errors: [themeRequestErrorMessage(error, "Subject month counts failed")]
+        };
+        state.themeSearchRunning = false;
+        renderThemeMonitor();
+      }
+      if (state.mode === "theme") renderCalendar();
+    }
+
+    function handleThemeLoadFailure(error, selectedDate = state.selectedDate) {
+      if (state.mode !== "theme") return;
+      state.themeSummary = {
+        ...(state.themeSummary || {}),
+        window_start: selectedDate,
+        window_end: selectedDate,
+        errors: [themeRequestErrorMessage(error, "Subject fetch failed")],
+        last_fetch: cachedThemeLastFetch(selectedDate, selectedThemeGroupParam())
+      };
+      state.themeSearchRunning = false;
+      state.themeFetchingDates.delete(selectedDate);
+      state.themeFetchControllers.delete(selectedDate);
+      renderCalendar();
+      renderThemeMonitor();
+    }
+
+    function handleReportLoadFailure(error) {
+      if (state.mode !== "report") return;
+      $("summary").textContent = error?.message || "Load failed";
+      renderCalendar();
+    }
+
     async function openJournalMonitor() {
       state.mode = "report";
+      applyCalendarState("report");
       setSidebarCollapsed(false);
       await loadMonth();
       await loadReport({showLoading: false});
@@ -28071,6 +29667,10 @@ INDEX_HTML = """<!doctype html>
       state.themeSearchRunning = false;
       renderThemeMonitor();
     }));
+    $("forceThemeFetch")?.addEventListener("click", () => {
+      forceFetchSelectedThemeDate().catch((error) => handleThemeLoadFailure(error, state.selectedDate));
+    });
+    $("recommendThemeKeywords")?.addEventListener("click", recommendThemeKeywords);
     $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
     $("themeFromDate")?.addEventListener("change", (event) => { state.themeFromDate = event.target.value || state.themeFromDate; });
     $("themeUntilDate")?.addEventListener("change", (event) => { state.themeUntilDate = event.target.value || state.themeUntilDate; });

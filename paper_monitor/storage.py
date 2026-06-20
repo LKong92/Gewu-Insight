@@ -713,6 +713,8 @@ class Storage:
     ) -> list[dict[str, Any]]:
         clauses = ["theme_results.window_start = ?", "theme_results.window_end = ?"]
         params: list[Any] = [window_start, window_end]
+        if window_start == window_end:
+            clauses.append("papers.publication_date = theme_results.window_start")
         keys = [str(key) for key in (group_keys or []) if str(key)]
         if group_keys is not None and not keys:
             return []
