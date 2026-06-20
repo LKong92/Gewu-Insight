@@ -109,6 +109,21 @@ class ThemeMonitorTest(unittest.TestCase):
         item = theme_paper_to_api(paper)
         self.assertEqual(item["theme_hits"], ["quantum dot intermediate band"])
 
+    def test_theme_hit_chips_convert_legacy_regex_hits(self):
+        paper = {
+            "paper_id": "p1",
+            "title": "Example",
+            "journal": "Example Journal",
+            "theme_score": 6,
+            "theme_groups": [{"key": "electride", "name": "Electride"}],
+            "theme_hits": [
+                r"(?<![A-Za-z0-9])(?:electride|electrides)(?![A-Za-z0-9])",
+                r"(?<![A-Za-z0-9])anionic\s+(?:electrons|electron)(?![A-Za-z0-9])",
+            ],
+        }
+        item = theme_paper_to_api(paper)
+        self.assertEqual(item["theme_hits"], ["anionic electrons"])
+
     def test_curated_electride_recommendations_show_existing_keywords_too(self):
         result = recommend_theme_keywords(
             "Electride",

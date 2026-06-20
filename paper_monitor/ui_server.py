@@ -4802,7 +4802,7 @@ def theme_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     hits: list[str] = []
     seen_hits: set[str] = set()
     for hit in paper.get("theme_hits") or []:
-        label = clean_text(hit)
+        label = readable_theme_hit_label(hit)
         key = theme_display_label_key(label)
         if not label or not key or key in group_label_keys or key in seen_hits:
             continue
