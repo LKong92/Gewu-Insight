@@ -97,6 +97,52 @@ class ThemeMonitorTest(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_month_count_matches_deduplicated_theme_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                first = {
+                    "paper_id": "doi_first",
+                    "doi": "10.1000/first",
+                    "title": "Duplicate electride title",
+                    "journal": "Example Journal",
+                    "publication_date": "2026-05-29",
+                    "abstract": "Electride example.",
+                    "url": "https://doi.org/10.1000/first",
+                    "source": "crossref",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                }
+                second = {
+                    **first,
+                    "paper_id": "doi_second",
+                    "doi": "10.1000/second",
+                    "url": "https://doi.org/10.1000/second",
+                }
+                storage.upsert_paper(first)
+                storage.upsert_paper(second)
+                for paper_id in ["doi_first", "doi_second"]:
+                    storage.record_theme_result(
+                        paper_id=paper_id,
+                        group_key="electride",
+                        group_name="Electride",
+                        query="electride",
+                        score=2,
+                        hits=["electride"],
+                        window_start="2026-05-29",
+                        window_end="2026-05-29",
+                    )
+                papers = storage.list_theme_papers(
+                    window_start="2026-05-29",
+                    window_end="2026-05-29",
+                    group_keys=["electride"],
+                )
+                self.assertEqual(len(papers), 1)
+                counts = theme_counts_for_month(storage, prefix="2026-05-", group_keys=["electride"])
+                self.assertEqual(counts.get("2026-05-29", {}).get("electride"), 1)
+            finally:
+                storage.close()
+
     def test_theme_hit_chips_omit_group_name_duplicates(self):
         paper = {
             "paper_id": "p1",

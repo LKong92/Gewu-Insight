@@ -4835,13 +4835,9 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
         return {}
     mark_stale_theme_fetch_runs(storage)
     placeholders = ", ".join(["?"] * len(group_keys))
-    rows = storage.conn.execute(
+    day_rows = storage.conn.execute(
         f"""
-        SELECT theme_results.window_start AS day,
-               theme_results.group_key AS group_key,
-               papers.paper_id AS paper_id,
-               papers.doi AS doi,
-               papers.title AS title
+        SELECT DISTINCT theme_results.window_start AS day
         FROM theme_results
         JOIN papers ON papers.paper_id = theme_results.paper_id
         WHERE theme_results.window_start = theme_results.window_end
@@ -4849,19 +4845,22 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
           AND theme_results.group_key IN ({placeholders})
           AND papers.publication_date = theme_results.window_start
           AND (papers.section_allowed IS NULL OR papers.section_allowed != 0)
-        ORDER BY theme_results.window_start ASC, theme_results.group_key ASC
+        ORDER BY theme_results.window_start ASC
         """,
         (prefix + "%", *group_keys),
     ).fetchall()
-    seen: dict[tuple[str, str], set[str]] = {}
-    for row in rows:
-        day = str(row["day"] or "")
-        group_key = str(row["group_key"] or "")
-        identity = theme_candidate_merge_key(dict(row))
-        seen.setdefault((day, group_key), set()).add(identity)
     counts: dict[str, dict[str, int]] = {}
-    for (day, group_key), identities in seen.items():
-        counts.setdefault(day, {})[group_key] = len(identities)
+    for row in day_rows:
+        day = str(row["day"] or "")
+        papers = storage.list_theme_papers(window_start=day, window_end=day, group_keys=group_keys)
+        group_counts: dict[str, int] = {}
+        for paper in papers:
+            for group in paper.get("theme_groups") or []:
+                group_key = str(group.get("key") or "")
+                if group_key in group_keys:
+                    group_counts[group_key] = group_counts.get(group_key, 0) + 1
+        if group_counts:
+            counts[day] = group_counts
     run_rows = storage.conn.execute(
         f"""
         SELECT window_start AS day,
@@ -28721,19 +28720,29 @@ INDEX_HTML = """<!doctype html>
         <button type="button" class="danger" data-action="delete">Delete</button>
       `;
       document.body.appendChild(menu);
+      menu.addEventListener("mousedown", (event) => event.stopPropagation());
+      menu.addEventListener("click", (event) => event.stopPropagation());
       const width = menu.offsetWidth || 132;
       const height = menu.offsetHeight || 68;
       menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
       menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
-      menu.querySelector('[data-action="edit"]').addEventListener("click", () => openThemeGroupDialog(group));
-      menu.querySelector('[data-action="delete"]').addEventListener("click", () => deleteThemeGroup(group));
+      menu.querySelector('[data-action="edit"]').addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openThemeGroupDialog(group);
+      });
+      menu.querySelector('[data-action="delete"]').addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteThemeGroup(group).catch((error) => window.alert(error?.message || "Could not delete subject"));
+      });
     }
 
     async function deleteThemeGroup(group) {
       hideThemeContextMenu();
       if (!group?.key) return;
       const name = group.name || "this subject";
-      if (!window.confirm(`Delete subject "${name}"?`)) return;
+      if (!window.confirm(`Delete subject "${name}"?\n\nThis will remove the subject and clear its cached subject-monitor matches.`)) return;
       const res = await fetch("/api/theme-groups/delete", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
