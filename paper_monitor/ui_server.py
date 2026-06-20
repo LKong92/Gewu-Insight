@@ -28726,15 +28726,22 @@ INDEX_HTML = """<!doctype html>
       const height = menu.offsetHeight || 68;
       menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
       menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
-      menu.querySelector('[data-action="edit"]').addEventListener("click", (event) => {
+      const handleMenuAction = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openThemeGroupDialog(group);
-      });
-      menu.querySelector('[data-action="delete"]').addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        deleteThemeGroup(group).catch((error) => window.alert(error?.message || "Could not delete subject"));
+        const action = event.currentTarget?.dataset?.action || "";
+        if (action === "edit") {
+          openThemeGroupDialog(group);
+        } else if (action === "delete") {
+          deleteThemeGroup(group).catch((error) => window.alert(error?.message || "Could not delete subject"));
+        }
+      };
+      menu.querySelectorAll("[data-action]").forEach((button) => {
+        button.addEventListener("pointerdown", handleMenuAction);
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
       });
     }
 
