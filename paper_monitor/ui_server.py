@@ -7192,6 +7192,18 @@ def paper_to_library_summary_api(paper: dict[str, Any], *, verify_paths: bool = 
         value = paper.get(key) or ""
         if value:
             summary[key] = value
+    authors = author_summary(paper)
+    if authors:
+        summary["authors"] = authors
+    full_authors = full_author_names(paper)
+    if full_authors:
+        summary["full_authors"] = full_authors
+    citation = citation_label(paper)
+    if citation:
+        summary["citation_label"] = citation
+    reference = nature_reference(paper)
+    if any(reference.values()):
+        summary["nature_reference"] = reference
     download_status = paper.get("download_status") or "not_attempted"
     if download_status != "not_attempted":
         summary["download_status"] = download_status
@@ -14738,14 +14750,14 @@ INDEX_HTML = """<!doctype html>
       display: none;
       -webkit-appearance: none;
     }
-    .library-search-tools:hover .library-search-wrap,
-    .library-search-tools:focus-within .library-search-wrap,
+    .library-search-wrap:hover,
+    .library-search-wrap:focus-within,
     .library-search-tools.has-query .library-search-wrap {
       width: 292px;
       flex-basis: 292px;
     }
-    .library-search-tools:hover .library-search-wrap input,
-    .library-search-tools:focus-within .library-search-wrap input,
+    .library-search-wrap:hover input,
+    .library-search-wrap:focus-within input,
     .library-search-tools.has-query .library-search-wrap input {
       opacity: 1;
       cursor: text;
@@ -16418,6 +16430,38 @@ INDEX_HTML = """<!doctype html>
       overscroll-behavior: contain;
       padding: 8px;
     }
+    .library-view-toggle {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      padding: 2px 0;
+      color: #c0c7d2;
+      font-size: inherit;
+      line-height: inherit;
+      user-select: none;
+      flex: 0 0 auto;
+    }
+    .library-view-toggle button {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: #a8b0bd;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 500;
+    }
+    .library-view-toggle button.active {
+      color: var(--ink);
+      font-weight: 800;
+    }
+    .library-view-toggle button:disabled {
+      color: #c9cfd8;
+      cursor: default;
+    }
+    .library-view-toggle-separator {
+      color: #c0c7d2;
+      font-weight: 500;
+    }
     .library-search-path {
       color: var(--muted);
       font-size: 12px;
@@ -16446,6 +16490,14 @@ INDEX_HTML = """<!doctype html>
     }
     .library-column > .library-pane-header { display: none; }
     .library-column:last-child { border-right: 0; }
+    .library-columns.table-view .library-column.path-column {
+      flex-basis: min(210px, var(--library-column-width, 210px));
+      min-width: 170px;
+    }
+    .library-column.table-column {
+      flex: 1 0 660px;
+      min-width: 520px;
+    }
     .library-column-resizer {
       position: absolute;
       top: 0;
@@ -16712,6 +16764,97 @@ INDEX_HTML = """<!doctype html>
       cursor: crosshair !important;
     }
     .library-row.special-folder.path-parent { color: #1f2328; }
+    .library-table {
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      background: #fff;
+    }
+    .library-table-head {
+      min-width: 0;
+      min-height: 38px;
+      padding: 8px 12px 6px;
+      border-bottom: 1px solid #eef1f5;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 10px;
+    }
+    .library-table-folder-title {
+      min-width: 0;
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 750;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-table-folder-count {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .library-table-header-row {
+      min-height: 30px;
+      display: grid;
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      gap: 10px;
+      align-items: center;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      color: #667085;
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+    .library-table-body {
+      padding: 4px 8px;
+      overflow: auto;
+    }
+    .library-table-row {
+      min-width: 640px;
+      height: 34px;
+      grid-template-columns: minmax(260px, 2.2fr) minmax(128px, 1fr) 70px minmax(120px, 0.9fr);
+      gap: 10px;
+      padding: 2px 4px;
+      border-radius: 5px;
+    }
+    .library-table-title-cell {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 7px;
+      align-items: center;
+    }
+    .library-table-title-text,
+    .library-table-cell {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-table-title-text {
+      color: inherit;
+      font-weight: 650;
+    }
+    .library-table-cell {
+      color: #475467;
+      font-size: 12px;
+    }
+    .library-table-cell.year {
+      color: #344054;
+      font-variant-numeric: tabular-nums;
+    }
+    .library-table-row.active:not(.range-selected) .library-table-cell,
+    .library-table-row.active:not(.range-selected) .library-table-title-text {
+      color: rgba(255, 255, 255, 0.92);
+    }
+    .library-table-row.path-parent .library-table-cell,
+    .library-table-row.path-parent .library-table-title-text {
+      color: #1f2328;
+    }
     .library-entry-icon {
       width: 20px;
       height: 20px;
@@ -16872,9 +17015,9 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       gap: 6px;
       overflow: hidden;
+      flex: 1 1 auto;
     }
     .library-activity-status {
-      margin-left: auto;
       max-width: min(360px, 42vw);
       min-height: 18px;
       display: inline-flex;
@@ -18559,6 +18702,7 @@ INDEX_HTML = """<!doctype html>
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
     const LIBRARY_SORT_STORAGE_KEY = "daiqo-library-sort-mode";
+    const LIBRARY_CONTENT_VIEW_STORAGE_KEY = "daiqo-library-content-view";
     const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
@@ -18694,6 +18838,7 @@ INDEX_HTML = """<!doctype html>
       libraryProgrammaticScroll: false,
       libraryColumnWidths: {},
       libraryDetailWidth: 340,
+      libraryContentView: initialLibraryContentView(),
       libraryClipboard: null,
       librarySortMode: initialLibrarySortMode(),
       libraryActivityText: "",
@@ -19790,6 +19935,49 @@ INDEX_HTML = """<!doctype html>
       }
       updateLibraryActivityStatus(`Sorted by ${librarySortLabel(nextMode)}.`, {live: false});
       renderLibrary();
+    }
+
+    function initialLibraryContentView() {
+      try {
+        return normalizeLibraryContentView(window.localStorage?.getItem(LIBRARY_CONTENT_VIEW_STORAGE_KEY));
+      } catch (_) {
+        return "list";
+      }
+    }
+
+    function normalizeLibraryContentView(value) {
+      return value === "table" ? "table" : "list";
+    }
+
+    function libraryTableViewActive() {
+      return state.libraryContentView === "table" && !librarySearchIsActive();
+    }
+
+    function applyLibraryContentView(view, options = {}) {
+      const nextView = normalizeLibraryContentView(view);
+      const changed = state.libraryContentView !== nextView;
+      state.libraryContentView = nextView;
+      try {
+        window.localStorage?.setItem(LIBRARY_CONTENT_VIEW_STORAGE_KEY, nextView);
+      } catch (_) {
+      }
+      if (options.openLibrary && (state.mode !== "library" || state.libraryTab === "my-publications")) {
+        loadLibrary().catch((error) => {
+          $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        });
+      } else if (changed || state.mode === "library") {
+        renderActiveLibraryTab();
+      }
+      return nextView;
+    }
+
+    function setLibraryContentViewFromMenu(view) {
+      return applyLibraryContentView(view, {openLibrary: true});
+    }
+
+    function toggleLibraryContentViewFromMenu() {
+      const nextView = state.libraryContentView === "table" ? "list" : "table";
+      return applyLibraryContentView(nextView, {openLibrary: true});
     }
 
     function sortLibraryEntries(entries) {
@@ -22254,6 +22442,11 @@ INDEX_HTML = """<!doctype html>
           <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
             <span class="library-path-parts">${librarySelectionPathMarkup()}</span>
             <span class="${libraryActivityStatusClass()}" id="libraryActivityStatus">${escapeHtml(libraryActivityStatusText())}</span>
+            <span class="library-view-toggle" id="libraryViewToggle" role="group" aria-label="Library content view">
+              <button type="button" data-library-content-view="list" title="Finder list view">List View</button>
+              <span class="library-view-toggle-separator">/</span>
+              <button type="button" data-library-content-view="table" title="Table view for the current folder">Table View</button>
+            </span>
           </div>
         </div>
         <div class="library-tab-context-menu" id="libraryTabContextMenu">
@@ -22278,6 +22471,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       renderLibraryShortcutTabs();
+      updateLibraryViewToggle();
       wireLibraryPaneTools();
       resizeLibraryViewport();
       if (librarySearchIsActive()) renderLibrarySearchResults();
@@ -23120,6 +23314,17 @@ INDEX_HTML = """<!doctype html>
       count.textContent = state.query.trim()
         ? `${results} match${results === 1 ? "" : "es"}`
         : "";
+      updateLibraryViewToggle();
+    }
+
+    function updateLibraryViewToggle() {
+      const toggle = $("libraryViewToggle");
+      if (!toggle) return;
+      toggle.querySelectorAll("[data-library-content-view]").forEach((button) => {
+        const view = normalizeLibraryContentView(button.dataset.libraryContentView);
+        button.classList.toggle("active", state.libraryContentView === view);
+        button.disabled = view === "table" && Boolean(state.query.trim());
+      });
     }
 
     function commitLibrarySearch(value) {
@@ -24202,7 +24407,12 @@ INDEX_HTML = """<!doctype html>
       if (!root) return;
       const folderIds = libraryColumnFolderIds();
       const pathFolderIds = selectedLibraryPathFolderIds();
-      root.innerHTML = folderIds.map((folderId) => libraryColumnMarkup(folderId, pathFolderIds)).join("");
+      const tableMode = libraryTableViewActive();
+      root.classList.toggle("table-view", tableMode);
+      root.innerHTML = folderIds.map((folderId, index) => libraryColumnMarkup(folderId, pathFolderIds, {
+        tableColumn: tableMode && index === folderIds.length - 1,
+        pathColumn: tableMode && index < folderIds.length - 1
+      })).join("");
     }
 
     function libraryColumnFolderIds() {
@@ -24221,23 +24431,58 @@ INDEX_HTML = """<!doctype html>
       return folderIds;
     }
 
-    function libraryColumnMarkup(folderId, pathFolderIds = new Set()) {
+    function libraryColumnMarkup(folderId, pathFolderIds = new Set(), options = {}) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
       const loaded = libraryFolderLoaded(folderId);
       if (!loaded) loadLibraryFolderAndRender(folderId);
       const entries = loaded ? libraryEntriesForFolder(folderId) : [];
+      if (options.tableColumn) return libraryTableColumnMarkup(folderId, folder, entries, loaded, pathFolderIds);
       const rows = entries.map((entry) => {
         const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
         return data ? libraryRowMarkup(entry.type, data, folderId, pathFolderIds) : "";
       }).join("");
       const width = Number(state.libraryColumnWidths[folderId] || 260);
       return `
-        <section class="library-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}" style="--library-column-width:${Math.max(180, Math.min(520, width))}px">
+        <section class="library-column${options.pathColumn ? " path-column" : ""}" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}" style="--library-column-width:${Math.max(180, Math.min(520, width))}px">
           <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
           <div class="library-column-body">
             ${loaded
               ? (rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`)
               : `<div class="empty">Loading folder...</div>`}
+          </div>
+          <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
+        </section>
+      `;
+    }
+
+    function libraryTableColumnMarkup(folderId, folder, entries, loaded, pathFolderIds = new Set()) {
+      const rows = loaded ? entries.map((entry) => {
+        const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
+        return data ? libraryTableRowMarkup(entry.type, data, folderId, pathFolderIds) : "";
+      }).join("") : "";
+      const folderCount = entries.filter((entry) => entry.type === "folder").length;
+      const itemCount = entries.filter((entry) => entry.type === "item").length;
+      const subtitle = loaded
+        ? `${folderCount} folder${folderCount === 1 ? "" : "s"} · ${itemCount} item${itemCount === 1 ? "" : "s"}`
+        : "Loading";
+      return `
+        <section class="library-column table-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
+          <div class="library-table">
+            <div class="library-table-head">
+              <div class="library-table-folder-title" title="${escapeAttr(folder.name || "Library")}">${escapeHtml(folder.name || "Library")}</div>
+              <div class="library-table-folder-count">${escapeHtml(subtitle)}</div>
+            </div>
+            <div class="library-table-header-row" aria-hidden="true">
+              <span>Title</span>
+              <span>Authors</span>
+              <span>Year</span>
+              <span>Journal</span>
+            </div>
+            <div class="library-column-body library-table-body">
+              ${loaded
+                ? (rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`)
+                : `<div class="empty">Loading folder...</div>`}
+            </div>
           </div>
           <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
         </section>
@@ -24329,6 +24574,114 @@ INDEX_HTML = """<!doctype html>
           <span class="library-meta">${renaming ? "" : escapeHtml(String(meta || ""))}</span>
         </${rowTag}>
       `;
+    }
+
+    function libraryTableRowMarkup(type, entry, parentFolderId, pathFolderIds = new Set()) {
+      const id = Number(entry.id);
+      const selected = Number(parentFolderId) === Number(state.libraryActiveFolderId)
+        && libraryEntryKey(state.librarySelection) === libraryEntryKey({type, id});
+      const rangeSelected = libraryEntryIsRangeSelected(parentFolderId, {type, id});
+      const paper = entry.paper || {};
+      const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
+      const iconClass = libraryEntryIconClass(type, entry);
+      const iconStyle = libraryEntryIconStyle(type, entry);
+      const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
+      const isPathParent = type === "folder" && pathFolderIds.has(id) && !selected;
+      const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
+      const draggable = !(type === "folder" && (entry.protected || id === state.libraryRootId));
+      const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
+      const title = type === "item" ? libraryPaperTableTitle(entry, paper, name) : name;
+      const authors = type === "item" ? libraryPaperAuthorsText(paper, entry, name) : "";
+      const year = type === "item" ? libraryPaperYearText(paper, entry, name) : "";
+      const journal = type === "item" ? libraryPaperJournalText(paper) : "Folder";
+      return `
+        <button class="library-row library-table-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
+          type="button"
+          draggable="${draggable ? "true" : "false"}"
+          data-library-type="${type}"
+          data-library-id="${id}"
+          data-library-parent-folder="${parentFolderId}"
+          ${type === "folder" ? `data-library-drop-folder="${id}"` : ""}
+          aria-selected="${selected || rangeSelected ? "true" : "false"}">
+          <span class="library-table-title-cell" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>
+            <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
+            <span class="library-table-title-text">${publicationTitleMarkup(title)}</span>
+          </span>
+          <span class="library-table-cell" title="${escapeAttr(authors)}">${escapeHtml(authors)}</span>
+          <span class="library-table-cell year">${escapeHtml(year)}</span>
+          <span class="library-table-cell" title="${escapeAttr(journal)}">${escapeHtml(journal)}</span>
+        </button>
+      `;
+    }
+
+    function libraryPaperTableFallbackParts(entry, paper, displayName = "") {
+      const candidates = [
+        entry?.display_name,
+        displayName,
+        paper?.citation_label,
+        paper?.original_filename,
+        fileNameFromPath(paper?.native_file_path || paper?.source_path || paper?.merged_pdf_path || paper?.main_pdf_path || "")
+      ].filter(Boolean);
+      for (const value of candidates) {
+        const text = String(value || "")
+          .replace(/\.(pdf|docx?|pptx?|xlsx?|txt|md|ris|bib)$/i, "")
+          .replace(/\s+[–—]\s+/g, " - ")
+          .replace(/\s+/g, " ")
+          .trim();
+        const match = text.match(/^(.+?)\s+-\s+((?:18|19|20|21)\d{2})(?:[-/]\d{1,2}(?:[-/]\d{1,2})?)?\s+-\s+(.+)$/);
+        if (!match) continue;
+        return {
+          authors: match[1].trim(),
+          year: match[2].trim(),
+          title: match[3].trim()
+        };
+      }
+      return {authors: "", year: "", title: ""};
+    }
+
+    function libraryPaperTableTitle(entry, paper, displayName = "") {
+      const title = String(paper?.title || "").trim();
+      if (title && !isPlaceholderPaperTitle(title)) return title;
+      const fallback = libraryPaperTableFallbackParts(entry, paper, displayName);
+      return fallback.title || displayName || libraryPaperDisplayName(paper);
+    }
+
+    function libraryAuthorValues(value) {
+      if (!value) return [];
+      if (Array.isArray(value)) return value;
+      return String(value)
+        .split(/\s*(?:;|,|\band\b|、|，)\s*/i)
+        .filter(Boolean);
+    }
+
+    function libraryPaperAuthorsText(paper, entry = null, displayName = "") {
+      const candidates = [];
+      candidates.push(...libraryAuthorValues(paper?.authors));
+      if (!candidates.length) candidates.push(...libraryAuthorValues(paper?.full_authors));
+      const refAuthors = paper?.nature_reference?.authors;
+      if (!candidates.length) candidates.push(...libraryAuthorValues(refAuthors));
+      const clean = candidates.map((author) => String(author || "").trim()).filter(Boolean);
+      if (!clean.length) return libraryPaperTableFallbackParts(entry, paper, displayName).authors;
+      if (clean.length === 1) return clean[0];
+      if (clean.length === 2) return `${clean[0]}, ${clean[1]}`;
+      return `${clean[0]} et al.`;
+    }
+
+    function libraryPaperYearText(paper, entry = null, displayName = "") {
+      const values = [
+        paper?.publication_date,
+        paper?.nature_reference?.year,
+        paper?.year
+      ];
+      for (const value of values) {
+        const match = String(value || "").match(/\b(18|19|20|21)\d{2}\b/);
+        if (match) return match[0];
+      }
+      return libraryPaperTableFallbackParts(entry, paper, displayName).year;
+    }
+
+    function libraryPaperJournalText(paper) {
+      return String(paper?.journal || paper?.nature_reference?.journal || paper?.source || "").trim();
     }
 
     function libraryNativeDragHandleAttrs(type, entry, fallbackName) {
@@ -28651,6 +29004,16 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function handleLibraryViewShortcut(event) {
+      if (event.altKey || !event.shiftKey) return false;
+      const key = String(event.key || "").toLowerCase();
+      const isCommandLike = event.metaKey || event.ctrlKey;
+      if (!isCommandLike || key !== "v") return false;
+      event.preventDefault();
+      toggleLibraryContentViewFromMenu();
+      return true;
+    }
+
     function handleTextClipboardShortcut(event) {
       if (event.altKey || event.shiftKey) return false;
       const key = String(event.key || "").toLowerCase();
@@ -30339,6 +30702,11 @@ INDEX_HTML = """<!doctype html>
     $("librarySearchBox").addEventListener("keydown", (event) => {
       if (event.key === "Enter") commitLibrarySearch(event.target.value);
     });
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-library-content-view]");
+      if (!button || button.disabled) return;
+      applyLibraryContentView(button.dataset.libraryContentView || "list");
+    });
     $("clearLibrarySearch").addEventListener("click", () => {
       window.clearTimeout(librarySearchTimer);
       state.query = "";
@@ -30373,6 +30741,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
       if (handleSearchShortcut(event)) return;
+      if (handleLibraryViewShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (handleReportKeydown(event)) return;
@@ -30519,6 +30888,8 @@ INDEX_HTML = """<!doctype html>
     window.openCitationSettings = openCitationSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;
+    window.setLibraryContentView = setLibraryContentViewFromMenu;
+    window.toggleLibraryContentView = toggleLibraryContentViewFromMenu;
 
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");

@@ -135,6 +135,8 @@
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
+@property(nonatomic, strong) NSMenuItem *listViewItem;
+@property(nonatomic, strong) NSMenuItem *tableViewItem;
 @property(nonatomic) BOOL windowDragging;
 @property(nonatomic) NSPoint windowDragStartPoint;
 @property(nonatomic) NSRect windowDragStartFrame;
@@ -314,6 +316,20 @@
     [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
     editMenuItem.submenu = editMenu;
 
+    NSMenuItem *viewMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:viewMenuItem];
+    NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+    self.listViewItem = [viewMenu addItemWithTitle:@"List View" action:@selector(useListLibraryView:) keyEquivalent:@""];
+    self.listViewItem.target = self;
+    self.listViewItem.state = NSControlStateValueOn;
+    self.tableViewItem = [viewMenu addItemWithTitle:@"Table View" action:@selector(useTableLibraryView:) keyEquivalent:@""];
+    self.tableViewItem.target = self;
+    [viewMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *toggleViewItem = [viewMenu addItemWithTitle:@"Toggle List/Table" action:@selector(toggleLibraryContentView:) keyEquivalent:@"v"];
+    toggleViewItem.target = self;
+    toggleViewItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    viewMenuItem.submenu = viewMenu;
+
     NSMenuItem *loaderMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:loaderMenuItem];
     NSMenu *loaderMenu = [[NSMenu alloc] initWithTitle:@"Loader"];
@@ -461,6 +477,30 @@
 
 - (void)openMetadataRefresh:(id)sender {
     [self.webView evaluateJavaScript:@"window.openMetadataRefreshWindow && window.openMetadataRefreshWindow()" completionHandler:nil];
+}
+
+- (void)setNativeLibraryViewMenuState:(NSString *)viewMode {
+    BOOL table = [viewMode isEqualToString:@"table"];
+    self.listViewItem.state = table ? NSControlStateValueOff : NSControlStateValueOn;
+    self.tableViewItem.state = table ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (void)useListLibraryView:(id)sender {
+    [self setNativeLibraryViewMenuState:@"list"];
+    [self.webView evaluateJavaScript:@"window.setLibraryContentView && window.setLibraryContentView('list')" completionHandler:nil];
+}
+
+- (void)useTableLibraryView:(id)sender {
+    [self setNativeLibraryViewMenuState:@"table"];
+    [self.webView evaluateJavaScript:@"window.setLibraryContentView && window.setLibraryContentView('table')" completionHandler:nil];
+}
+
+- (void)toggleLibraryContentView:(id)sender {
+    [self.webView evaluateJavaScript:@"window.toggleLibraryContentView && window.toggleLibraryContentView()" completionHandler:^(id result, NSError *error) {
+        if ([result isKindOfClass:[NSString class]]) {
+            [self setNativeLibraryViewMenuState:(NSString *)result];
+        }
+    }];
 }
 
 - (NSURL *)userGuideURL {
