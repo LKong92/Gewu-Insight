@@ -80,6 +80,7 @@ LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_SHORTCUT_TAB_COUNT = 5
 LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
+PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
 THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
@@ -89,6 +90,8 @@ THEME_FETCH_COMPLETED_STATUSES = ("success", "empty", "error")
 THEME_FETCH_STALE_AFTER_MINUTES = 30
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
+DEFAULT_PDF_RENAME_TEMPLATE = "{author}_{year}_{title}"
+PDF_RENAME_TEMPLATE_TOKENS = {"author", "authors", "year", "title", "journal", "doi"}
 LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
 MY_PUBLICATIONS_LOCAL_COPY_ROOT = DEFAULT_MY_PUBLICATIONS_DIR
 SPACES_LOCAL_COPY_ROOT = DEFAULT_SPACES_DIR
@@ -411,6 +414,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/library-naming":
                 self.handle_get_library_naming_rule()
                 return
+            if parsed.path == "/api/settings/pdf-rename":
+                self.handle_get_pdf_rename_settings()
+                return
             if parsed.path == "/api/settings/citation":
                 self.handle_get_citation_settings()
                 return
@@ -515,6 +521,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/library-naming":
                 self.handle_set_library_naming_rule(payload)
                 return
+            if parsed.path == "/api/settings/pdf-rename":
+                self.handle_set_pdf_rename_settings(payload)
+                return
             if parsed.path == "/api/settings/citation":
                 self.handle_set_citation_settings(payload)
                 return
@@ -523,6 +532,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/items/rename":
                 self.handle_rename_library_item(payload)
+                return
+            if parsed.path == "/api/library/items/rename-pdf":
+                self.handle_rename_library_pdf(payload)
                 return
             if parsed.path == "/api/library/move":
                 self.handle_move_library_entry(payload)
@@ -1965,6 +1977,33 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json({"rule": rule})
 
+    def handle_get_pdf_rename_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            template = pdf_rename_template(storage)
+        finally:
+            storage.close()
+        self.send_json({
+            "template": template,
+            "default_template": DEFAULT_PDF_RENAME_TEMPLATE,
+            "preview": pdf_rename_preview_for_template(template),
+            "tokens": sorted(PDF_RENAME_TEMPLATE_TOKENS),
+        })
+
+    def handle_set_pdf_rename_settings(self, payload: dict[str, Any]) -> None:
+        template = normalize_pdf_rename_template(str(payload.get("template") or ""))
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(PDF_RENAME_TEMPLATE_SETTING, template)
+        finally:
+            storage.close()
+        self.send_json({
+            "template": template,
+            "default_template": DEFAULT_PDF_RENAME_TEMPLATE,
+            "preview": pdf_rename_preview_for_template(template),
+            "tokens": sorted(PDF_RENAME_TEMPLATE_TOKENS),
+        })
+
     def handle_get_citation_settings(self) -> None:
         storage = Storage(self.configured_db_path)
         try:
@@ -2030,6 +2069,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"item_id": int(item.get("id") or item_id), **snapshot})
+
+    def handle_rename_library_pdf(self, payload: dict[str, Any]) -> None:
+        item_id = int(payload.get("item_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            result = rename_library_item_pdf_from_metadata(storage, item_id)
+            snapshot = library_snapshot(storage)
+        except FileNotFoundError as exc:
+            self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except PermissionError as exc:
+            self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"renamed": result, **snapshot})
 
     def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -7233,6 +7291,80 @@ def library_naming_rule(storage: Storage) -> str:
     return rule if rule in LIBRARY_NAMING_RULES else DEFAULT_LIBRARY_NAMING_RULE
 
 
+def normalize_pdf_rename_template(template: str) -> str:
+    normalized = " ".join(str(template or "").strip().split())
+    return normalized[:240] or DEFAULT_PDF_RENAME_TEMPLATE
+
+
+def pdf_rename_template(storage: Storage) -> str:
+    return normalize_pdf_rename_template(storage.get_setting(PDF_RENAME_TEMPLATE_SETTING, DEFAULT_PDF_RENAME_TEMPLATE))
+
+
+def pdf_rename_preview_for_template(template: str) -> str:
+    sample = {
+        "author": "Dale",
+        "authors": "Dale et al",
+        "year": "2018",
+        "title": "Theoretical Descriptors of Electrides",
+        "journal": "Journal of Physical Chemistry",
+        "doi": "10.1021/example",
+    }
+    return pdf_rename_filename_from_values(template, sample, ".pdf")
+
+
+def pdf_rename_values_for_paper(paper: dict[str, Any]) -> dict[str, str]:
+    authors = full_author_names(paper) or author_summary(paper)
+    author = author_last_name(authors[0]) if authors else ""
+    authors_text = f"{author} et al" if author and len(authors) > 1 else author
+    reference = nature_reference(paper)
+    title = clean_text(paper.get("title") or reference.get("title") or "")
+    if title.lower().endswith(".pdf"):
+        title = title[:-4].strip()
+    return {
+        "author": author,
+        "authors": authors_text or author,
+        "year": publication_year(paper) or reference.get("year") or "",
+        "title": title,
+        "journal": display_journal_name(paper) or reference.get("journal") or "",
+        "doi": clean_text(paper.get("doi") or reference.get("doi") or ""),
+    }
+
+
+def pdf_rename_template_tokens(template: str) -> set[str]:
+    return {
+        match.group(1).strip().lower()
+        for match in re.finditer(r"\{([A-Za-z_]+)\}", normalize_pdf_rename_template(template))
+        if match.group(1).strip().lower() in PDF_RENAME_TEMPLATE_TOKENS
+    }
+
+
+def missing_pdf_rename_metadata_tokens(template: str, values: dict[str, str]) -> list[str]:
+    tokens = pdf_rename_template_tokens(template)
+    required = tokens or {"author", "year", "title"}
+    return sorted(token for token in required if not clean_text(values.get(token) or ""))
+
+
+def pdf_rename_filename_from_values(template: str, values: dict[str, str], suffix: str = ".pdf") -> str:
+    normalized_template = normalize_pdf_rename_template(template)
+
+    def replace_token(match: re.Match[str]) -> str:
+        key = match.group(1).strip().lower()
+        return clean_text(values.get(key) or "") if key in PDF_RENAME_TEMPLATE_TOKENS else match.group(0)
+
+    stem = re.sub(r"\{([A-Za-z_]+)\}", replace_token, normalized_template)
+    stem = re.sub(r"\s*_\s*", "_", stem)
+    stem = re.sub(r"_+", "_", stem).strip(" _.-")
+    filename = finder_safe_name(stem, "paper")
+    clean_suffix = suffix if suffix and suffix.startswith(".") else ".pdf"
+    if clean_suffix.lower() != ".pdf":
+        clean_suffix = ".pdf"
+    return finder_safe_name(f"{filename}{clean_suffix}", "paper.pdf")
+
+
+def pdf_rename_filename_for_paper(paper: dict[str, Any], template: str, current_path: Path) -> str:
+    return pdf_rename_filename_from_values(template, pdf_rename_values_for_paper(paper), current_path.suffix or ".pdf")
+
+
 def ads_api_token(storage: Storage) -> str:
     return clean_text(storage.get_setting(ADS_API_TOKEN_SETTING, ""))
 
@@ -12132,6 +12264,26 @@ def library_item_real_file_for_export(paper: dict[str, Any] | None) -> Path | No
     return None
 
 
+def pdf_file_path_for_rename(paper: dict[str, Any] | None) -> Path | None:
+    if not paper:
+        return None
+    candidates: list[str] = []
+    for key in ("merged_pdf_path", "main_pdf_path", "source_path"):
+        value = clean_text(paper.get(key) or "")
+        if value:
+            candidates.append(value)
+    raw = parse_raw_json(paper)
+    imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
+    value = clean_text(imported.get("stored_path") or "")
+    if value:
+        candidates.append(value)
+    for value in candidates:
+        path = Path(value).expanduser()
+        if path.exists() and path.is_file() and path.suffix.lower() == ".pdf":
+            return path.resolve()
+    return None
+
+
 def paper_pdf_basename(paper: dict[str, Any], canonical_path: Path | None = None) -> str:
     if canonical_path:
         return finder_safe_name(canonical_path.name, "paper.pdf")
@@ -12148,6 +12300,86 @@ def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, messa
         supplement_pdf_paths=[],
         merged_pdf_path=str(path),
     )
+
+
+def update_paper_file_path_references(storage: Storage, paper_id: str, old_path: Path, new_path: Path) -> None:
+    paper = storage.get_paper(paper_id)
+    if not paper:
+        return
+    old_value = str(old_path)
+    new_value = str(new_path)
+    updates: dict[str, str] = {}
+    for key in ("main_pdf_path", "merged_pdf_path", "source_path"):
+        if str(paper.get(key) or "") == old_value:
+            updates[key] = new_value
+    raw = parse_raw_json(paper)
+    imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
+    if clean_text(imported.get("stored_path") or "") == old_value:
+        imported["stored_path"] = new_value
+        raw["import"] = imported
+        updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
+    if not updates:
+        return
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    params = list(updates.values()) + [paper_id]
+    storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", params)
+    storage.conn.commit()
+
+
+def rename_library_item_pdf_from_metadata(storage: Storage, item_id: int) -> dict[str, Any]:
+    item = storage.get_library_item(int(item_id or 0))
+    if not item:
+        raise ValueError("Library item not found")
+    paper_id = str(item.get("paper_id") or "")
+    paper = storage.get_paper(paper_id)
+    if not paper:
+        raise ValueError("Paper metadata not found")
+    current_path = pdf_file_path_for_rename(paper)
+    if not current_path:
+        raise FileNotFoundError("No local PDF file was found for this item")
+    template = pdf_rename_template(storage)
+    values = pdf_rename_values_for_paper(paper)
+    missing = missing_pdf_rename_metadata_tokens(template, values)
+    if missing:
+        return {
+            "item_id": int(item_id),
+            "paper_id": paper_id,
+            "old_path": str(current_path),
+            "new_path": str(current_path),
+            "filename": current_path.name,
+            "display_name": item.get("display_name") or "",
+            "changed": False,
+            "skipped": True,
+            "missing": missing,
+        }
+    target_name = pdf_rename_filename_from_values(template, values, current_path.suffix or ".pdf")
+    target_path = current_path.with_name(target_name)
+    display_name = Path(target_name).stem
+    if target_path == current_path:
+        storage.rename_library_item(item_id=int(item_id), name=display_name)
+        return {
+            "item_id": int(item_id),
+            "paper_id": paper_id,
+            "old_path": str(current_path),
+            "new_path": str(current_path),
+            "filename": current_path.name,
+            "display_name": display_name,
+            "changed": False,
+        }
+    target_path = unique_path_in_dir(target_path)
+    current_path.rename(target_path)
+    update_paper_file_path_references(storage, paper_id, current_path, target_path)
+    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=current_path)
+    storage.rename_library_item(item_id=int(item_id), name=display_name)
+    return {
+        "item_id": int(item_id),
+        "paper_id": paper_id,
+        "old_path": str(current_path),
+        "new_path": str(target_path),
+        "filename": target_path.name,
+        "display_name": display_name,
+        "changed": True,
+    }
 
 
 def local_copy_roots(*, include_legacy: bool = True) -> list[Path]:
@@ -13580,6 +13812,10 @@ INDEX_HTML = """<!doctype html>
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .app.report-mode input[type="checkbox"],
+    .app.theme-mode input[type="checkbox"] {
+      accent-color: var(--accent);
+    }
     .app {
       --sidebar-width: 340px;
       display: grid;
@@ -14506,7 +14742,7 @@ INDEX_HTML = """<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .theme-chip.score { color: #075985; background: #e0f2fe; border-color: #bae6fd; font-weight: 700; }
+    .theme-chip.score { color: #0f6b6e; background: #e8f5f3; border-color: #b7d8d4; font-weight: 700; }
     .app.library-mode #reportToolbarActions { display: none; }
     .toolbar-import {
       display: none;
@@ -14629,18 +14865,22 @@ INDEX_HTML = """<!doctype html>
       flex-wrap: wrap;
       align-items: center;
       gap: 8px;
-      padding: 10px 12px;
-      border: 1px solid #bfdbfe;
-      border-radius: 8px;
-      background: #eff6ff;
-      color: #1e3a8a;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
       font-size: 13px;
+    }
+    .late-arrivals strong,
+    .late-arrivals span {
+      color: var(--ink);
     }
     .late-arrivals strong { font-weight: 750; }
     .late-arrival-link {
       border: 0;
       background: transparent;
-      color: #1d4ed8;
+      color: var(--ink);
       font-weight: 700;
       padding: 0;
       cursor: pointer;
@@ -14650,8 +14890,8 @@ INDEX_HTML = """<!doctype html>
       width: 9px;
       height: 9px;
       border-radius: 999px;
-      background: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.18);
       flex: 0 0 auto;
     }
     .journal-tab .late-dot {
@@ -14660,7 +14900,7 @@ INDEX_HTML = """<!doctype html>
       right: 6px;
       width: 8px;
       height: 8px;
-      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18);
+      box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.18);
     }
     .library-controls {
       display: none;
@@ -16516,7 +16756,7 @@ INDEX_HTML = """<!doctype html>
       width: 1px;
       background: #d8d8dc;
     }
-    .library-column:last-child .library-column-resizer::after {
+    .library-columns.four-level-or-deeper .library-column:last-child .library-column-resizer::after {
       display: none;
     }
     .library-column-resizer:hover::after,
@@ -17403,7 +17643,7 @@ INDEX_HTML = """<!doctype html>
       width: 13px;
       min-height: 2px;
       border-radius: 3px 3px 0 0;
-      background: var(--accent);
+      background: #526071;
     }
     .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
     .citation-comments-row {
@@ -17442,7 +17682,7 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .citation-source-cell:hover { border-color: #b9c7dd; background: #f6f9fe; }
-    .citation-source-cell.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .citation-source-cell.active { border-color: #111827; box-shadow: inset 0 0 0 1px #111827; }
     .citation-source-cell b {
       display: block;
       color: var(--ink);
@@ -17758,8 +17998,8 @@ INDEX_HTML = """<!doctype html>
       width: 10px;
       height: 10px;
       border-radius: 999px;
-      background: #2563eb;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.18);
     }
     .paper-layout { display: grid; gap: 14px; }
     .paper.with-figure .paper-layout { grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); align-items: start; }
@@ -18313,7 +18553,8 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode .workspace,
     .app.loader-window-mode .internal-browser,
     .app.loader-window-mode .library-quicklook,
-    .app.loader-window-mode #citationSettingsBackdrop {
+    .app.loader-window-mode #citationSettingsBackdrop,
+    .app.loader-window-mode #pdfRenameSettingsBackdrop {
       display: none !important;
     }
     .app.loader-window-mode .main {
@@ -18412,6 +18653,34 @@ INDEX_HTML = """<!doctype html>
     }
     .citation-token-row button {
       flex: 0 0 auto;
+    }
+    .pdf-rename-template-box {
+      display: grid;
+      gap: 8px;
+    }
+    .pdf-rename-template-box input {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+    .pdf-rename-template-help {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .pdf-rename-preview {
+      min-height: 30px;
+      border: 1px solid #e5e7eb;
+      border-radius: 7px;
+      background: #fbfcfe;
+      color: #344054;
+      padding: 7px 9px;
+      font-size: 12px;
+      word-break: break-all;
     }
     .citation-settings-status {
       margin-top: 8px;
@@ -18660,6 +18929,32 @@ INDEX_HTML = """<!doctype html>
                 <button class="smallbtn" id="clearAdsToken" type="button">Clear</button>
               </div>
               <div class="citation-settings-status" id="citationSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="settings-backdrop" id="pdfRenameSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="pdfRenameSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="pdfRenameSettingsTitle">PDF Rename Settings</h2>
+              <p>Set the metadata template used by the Library right-click PDF rename action.</p>
+            </div>
+            <button class="settings-modal-close" id="closePdfRenameSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Filename Template</strong><span>Applies to real PDF files</span></div>
+              <div class="pdf-rename-template-box">
+                <input class="search" id="pdfRenameTemplateInput" type="text" spellcheck="false" placeholder="{author}_{year}_{title}">
+                <div class="pdf-rename-template-help">Available tokens: <code>{author}</code>, <code>{authors}</code>, <code>{year}</code>, <code>{title}</code>, <code>{journal}</code>, <code>{doi}</code>.</div>
+                <div class="pdf-rename-preview" id="pdfRenameTemplatePreview"></div>
+                <div class="citation-token-row">
+                  <button class="smallbtn" id="savePdfRenameTemplate" type="button">Save</button>
+                  <button class="smallbtn" id="resetPdfRenameTemplate" type="button">Default</button>
+                </div>
+              </div>
+              <div class="citation-settings-status" id="pdfRenameSettingsStatus"></div>
             </div>
           </div>
         </section>
@@ -21208,6 +21503,31 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    async function renameLibraryPdfFromMetadata(itemId) {
+      const id = Number(itemId || 0);
+      if (!id) return;
+      return withLibraryActivityStatus("Renaming PDF...", "", async () => {
+        const res = await fetch("/api/library/items/rename-pdf", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({item_id: id})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not rename PDF");
+        applyLibrarySnapshot(data);
+        setLibraryColumnSelection(Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId), {type: "item", id});
+        renderLibrary();
+        const name = data.renamed?.filename || "PDF";
+        const displayName = data.renamed?.display_name || "";
+        if (data.renamed?.skipped) {
+          const missing = Array.isArray(data.renamed.missing) ? data.renamed.missing.join(", ") : "metadata";
+          updateLibraryActivityStatus(`Skipped rename: missing ${missing}.`, {delay: 5200});
+        } else {
+          updateLibraryActivityStatus(data.renamed?.changed ? `Renamed PDF: ${name}` : `PDF already named: ${name}${displayName ? ` · Library: ${displayName}` : ""}`, {delay: 4200});
+        }
+      });
+    }
+
     async function refreshLibraryMetadataFromDoi(paper) {
       if (!paper?.paper_id) return;
       const input = $("libraryDetailDoiInput");
@@ -22457,6 +22777,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="sort-by-name">Sort by Name</button>
           <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
           <button type="button" data-action="rename-entry">Rename</button>
+          <button type="button" data-action="rename-pdf-metadata">Rename PDF from Metadata</button>
           <button type="button" data-action="copy-entry">Copy</button>
           <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
           <button type="button" data-action="open-native-entry">Open Native File</button>
@@ -22595,7 +22916,7 @@ INDEX_HTML = """<!doctype html>
       updateLibraryActivityStatus(liveText, {live: true, clear: false});
       try {
         const result = await action();
-        updateLibraryActivityStatus(doneText, {live: false});
+        if (doneText) updateLibraryActivityStatus(doneText, {live: false});
         return result;
       } catch (error) {
         updateLibraryActivityStatus(`Library action failed: ${error.message || "Unknown error"}`, {live: false});
@@ -24409,6 +24730,7 @@ INDEX_HTML = """<!doctype html>
       const pathFolderIds = selectedLibraryPathFolderIds();
       const tableMode = libraryTableViewActive();
       root.classList.toggle("table-view", tableMode);
+      root.classList.toggle("four-level-or-deeper", folderIds.length >= 4);
       root.innerHTML = folderIds.map((folderId, index) => libraryColumnMarkup(folderId, pathFolderIds, {
         tableColumn: tableMode && index === folderIds.length - 1,
         pathColumn: tableMode && index < folderIds.length - 1
@@ -25240,7 +25562,7 @@ INDEX_HTML = """<!doctype html>
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
-          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path && isPdfLike ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
@@ -25426,7 +25748,7 @@ INDEX_HTML = """<!doctype html>
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
-          ${paper.merged_pdf_path ? `<button class="action primary" data-action="preview-library-pdf">Open in Preview</button>` : ""}
+          ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
@@ -28279,6 +28601,7 @@ INDEX_HTML = """<!doctype html>
       const isRecoverable = (entryType === "item" && Number(item?.folder_id || 0) === recycleId)
         || (entryType === "folder" && Number(folder?.parent_id || 0) === recycleId);
       const renameButton = menu.querySelector('[data-action="rename-entry"]');
+      const renamePdfButton = menu.querySelector('[data-action="rename-pdf-metadata"]');
       const colorButton = menu.querySelector('[data-action="color-folder"]');
       const colorPicker = menu.querySelector('[data-action="folder-color-picker"]');
       const deleteButton = menu.querySelector('[data-action="delete-entry"]');
@@ -28297,6 +28620,15 @@ INDEX_HTML = """<!doctype html>
         renameButton.onclick = () => {
           hideLibraryContextMenu();
           beginLibraryEntryRename(menu.dataset.entryType, Number(menu.dataset.entryId || 0));
+        };
+      }
+      if (renamePdfButton) {
+        const canRenamePdf = entryType === "item" && hasEntry && libraryPaperIsPdfLike(item?.paper) && Boolean(paperNativePath(item?.paper || {}));
+        renamePdfButton.style.display = canRenamePdf ? "" : "none";
+        renamePdfButton.onclick = async () => {
+          const id = Number(menu.dataset.entryId || 0);
+          hideLibraryContextMenu();
+          await runLibraryMenuAction(() => renameLibraryPdfFromMetadata(id));
         };
       }
       if (colorButton && colorPicker) {
@@ -29357,6 +29689,81 @@ INDEX_HTML = """<!doctype html>
       const text = match ? match[2].trim() : String(value || "");
       const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "context";
       return `<blockquote class="citation-context context-${escapeAttr(slug)}"><strong>${escapeHtml(label)}</strong>${inlineMarkdown(text)}</blockquote>`;
+    }
+
+    async function openPdfRenameSettings() {
+      const backdrop = $("pdfRenameSettingsBackdrop");
+      if (!backdrop) return;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      $("pdfRenameSettingsStatus").textContent = "Loading PDF rename settings...";
+      $("pdfRenameSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/pdf-rename");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load PDF rename settings");
+        $("pdfRenameTemplateInput").value = data.template || "{author}_{year}_{title}";
+        $("pdfRenameTemplateInput").dataset.defaultTemplate = data.default_template || "{author}_{year}_{title}";
+        updatePdfRenameTemplatePreview(data.preview || "");
+        $("pdfRenameSettingsStatus").textContent = "This rule is used by Library right-click Rename PDF from Metadata.";
+        $("pdfRenameSettingsStatus").className = "citation-settings-status";
+      } catch (error) {
+        $("pdfRenameSettingsStatus").textContent = error.message || "Could not load PDF rename settings";
+        $("pdfRenameSettingsStatus").className = "citation-settings-status err";
+      }
+      $("pdfRenameTemplateInput")?.focus({preventScroll: true});
+      $("pdfRenameTemplateInput")?.select?.();
+    }
+
+    function closePdfRenameSettings() {
+      $("pdfRenameSettingsBackdrop")?.classList.remove("open");
+      $("pdfRenameSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    function pdfRenamePreviewFromTemplate(template) {
+      const sample = {
+        author: "Dale",
+        authors: "Dale et al",
+        year: "2018",
+        title: "Theoretical Descriptors of Electrides",
+        journal: "Journal of Physical Chemistry",
+        doi: "10.1021/example"
+      };
+      const stem = String(template || "{author}_{year}_{title}")
+        .replace(/\{([A-Za-z_]+)\}/g, (_, key) => sample[String(key || "").toLowerCase()] || `{${key}}`)
+        .replace(/\s*_\s*/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/[/:\\0]+/g, "-")
+        .replace(/^[ _.]+|[ _.]+$/g, "") || "paper";
+      return `${stem}.pdf`;
+    }
+
+    function updatePdfRenameTemplatePreview(preview = "") {
+      const value = preview || pdfRenamePreviewFromTemplate($("pdfRenameTemplateInput")?.value || "");
+      $("pdfRenameTemplatePreview").textContent = `Preview: ${value}`;
+    }
+
+    async function savePdfRenameTemplate(templateOverride = null) {
+      const input = $("pdfRenameTemplateInput");
+      const template = templateOverride ?? (input?.value || "");
+      $("pdfRenameSettingsStatus").textContent = "Saving PDF rename template...";
+      $("pdfRenameSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/pdf-rename", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({template})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save PDF rename settings");
+        if (input) input.value = data.template || template;
+        updatePdfRenameTemplatePreview(data.preview || "");
+        $("pdfRenameSettingsStatus").textContent = "PDF rename template saved.";
+        $("pdfRenameSettingsStatus").className = "citation-settings-status ok";
+      } catch (error) {
+        $("pdfRenameSettingsStatus").textContent = error.message || "Could not save PDF rename settings";
+        $("pdfRenameSettingsStatus").className = "citation-settings-status err";
+      }
     }
 
     async function openCitationSettings() {
@@ -30554,6 +30961,7 @@ INDEX_HTML = """<!doctype html>
     function setPrimaryView(view) {
       const isLibrarySurface = view === "library" || view === "my-publications" || view === "deep-survey";
       document.querySelector(".app")?.classList.toggle("library-mode", isLibrarySurface);
+      document.querySelector(".app")?.classList.toggle("report-mode", view === "report");
       document.querySelector(".app")?.classList.toggle("deep-survey-mode", view === "deep-survey");
       document.querySelector(".app")?.classList.toggle("theme-mode", view === "theme");
       $("libraryMode")?.classList.toggle("active", view === "library");
@@ -30721,7 +31129,20 @@ INDEX_HTML = """<!doctype html>
     $("citationSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("citationSettingsBackdrop")) closeCitationSettings();
     });
+    $("closePdfRenameSettings").addEventListener("click", closePdfRenameSettings);
+    $("pdfRenameSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("pdfRenameSettingsBackdrop")) closePdfRenameSettings();
+    });
     $("closeLibraryLoader").addEventListener("click", closeLibraryLoader);
+    $("pdfRenameTemplateInput").addEventListener("input", () => updatePdfRenameTemplatePreview());
+    $("savePdfRenameTemplate").addEventListener("click", () => savePdfRenameTemplate());
+    $("resetPdfRenameTemplate").addEventListener("click", () => savePdfRenameTemplate($("pdfRenameTemplateInput")?.dataset.defaultTemplate || "{author}_{year}_{title}"));
+    $("pdfRenameTemplateInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        savePdfRenameTemplate();
+      }
+    });
     $("saveAdsToken").addEventListener("click", () => saveCitationAdsToken());
     $("testAdsToken").addEventListener("click", testCitationAdsToken);
     $("clearAdsToken").addEventListener("click", clearCitationAdsToken);
@@ -30754,6 +31175,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeCitationSettings();
+        return;
+      }
+      if ($("pdfRenameSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closePdfRenameSettings();
         return;
       }
       if ($("libraryLoaderBackdrop").classList.contains("open")) {
@@ -30886,6 +31313,7 @@ INDEX_HTML = """<!doctype html>
     window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;
     window.openCitationSettings = openCitationSettings;
+    window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;
     window.setLibraryContentView = setLibraryContentViewFromMenu;

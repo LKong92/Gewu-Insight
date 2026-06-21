@@ -351,6 +351,8 @@
     self.citationNamingItem.state = NSControlStateValueOn;
     namingRuleMenuItem.submenu = namingRuleMenu;
     [settingMenu addItem:namingRuleMenuItem];
+    NSMenuItem *pdfRenameSettingsItem = [settingMenu addItemWithTitle:@"PDF Rename Settings..." action:@selector(openPdfRenameSettings:) keyEquivalent:@""];
+    pdfRenameSettingsItem.target = self;
     NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings..." action:@selector(openCitationSettings:) keyEquivalent:@","];
     citationSettingsItem.target = self;
     [settingMenu addItem:[NSMenuItem separatorItem]];
@@ -469,6 +471,10 @@
 
 - (void)openCitationSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openCitationSettings && window.openCitationSettings()" completionHandler:nil];
+}
+
+- (void)openPdfRenameSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openPdfRenameSettings && window.openPdfRenameSettings()" completionHandler:nil];
 }
 
 - (void)openLibraryLoader:(id)sender {
