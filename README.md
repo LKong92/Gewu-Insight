@@ -137,6 +137,8 @@ the Scholar profile in your browser first.
 
 Journal Monitor is available from the top view switcher. It watches configured
 journals and arXiv categories, then stores results in the same SQLite database.
+When the UI server is running, it automatically refreshes yesterday and today
+once per day after 09:00.
 
 The UI supports:
 
@@ -153,6 +155,14 @@ The monitored list is configured in:
 ```text
 config/journals.json
 ```
+
+### Subject Monitor
+
+Subject Monitor is available from the top view switcher. It searches configured
+subjects across multiple metadata sources, stores matches in SQLite, and shows
+the same calendar-backed reading workflow. When the UI server is running, it
+automatically refreshes missing subject/date matches for yesterday and today
+once per day after 09:00.
 
 ### Folder Loader
 

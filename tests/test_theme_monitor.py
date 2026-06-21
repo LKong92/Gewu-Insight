@@ -6,6 +6,7 @@ from pathlib import Path
 from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
     ELECTRIDE_RECOMMENDED_KEYWORDS,
+    missing_theme_group_keys_for_date,
     recommend_theme_keywords,
     theme_candidate_in_window,
     theme_candidate_is_literature_like,
@@ -140,6 +141,53 @@ class ThemeMonitorTest(unittest.TestCase):
                 self.assertEqual(len(papers), 1)
                 counts = theme_counts_for_month(storage, prefix="2026-05-", group_keys=["electride"])
                 self.assertEqual(counts.get("2026-05-29", {}).get("electride"), 1)
+            finally:
+                storage.close()
+
+    def test_missing_theme_group_keys_skip_completed_and_present_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.record_fetch_run(
+                    monitor_type="theme",
+                    source="multi",
+                    journal="theme:electride",
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                    status="empty",
+                    records_found=0,
+                    started_at="2026-06-02T09:00:00+09:00",
+                )
+                storage.upsert_paper(
+                    {
+                        "paper_id": "doi_ibsc",
+                        "doi": "10.1000/ibsc",
+                        "title": "Intermediate band solar cell with exact date",
+                        "journal": "Example Journal",
+                        "publication_date": "2026-06-02",
+                        "abstract": "",
+                        "url": "https://doi.org/10.1000/ibsc",
+                        "source": "crossref",
+                        "type_crossref": "journal-article",
+                        "section_allowed": True,
+                    }
+                )
+                storage.record_theme_result(
+                    paper_id="doi_ibsc",
+                    group_key="ibsc",
+                    group_name="Intermediate band solar cell",
+                    query="intermediate band solar cell",
+                    score=2,
+                    hits=["intermediate band solar cell"],
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                )
+                missing = missing_theme_group_keys_for_date(
+                    storage,
+                    "2026-06-02",
+                    ["electride", "ibsc", "perovskite"],
+                )
+                self.assertEqual(missing, ["perovskite"])
             finally:
                 storage.close()
 

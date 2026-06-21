@@ -72,6 +72,7 @@ LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
 MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
+ACTIVE_THEME_FETCH_DATES: set[str] = set()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
@@ -142,6 +143,11 @@ AUTO_JOURNAL_MONITOR_STATUS_SETTING = "auto_journal_monitor_status"
 AUTO_JOURNAL_MONITOR_HOUR = 9
 AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS = 10
 AUTO_JOURNAL_MONITOR_POLL_SECONDS = 60
+AUTO_SUBJECT_MONITOR_LAST_RUN_SETTING = "auto_subject_monitor_last_run_date"
+AUTO_SUBJECT_MONITOR_STATUS_SETTING = "auto_subject_monitor_status"
+AUTO_SUBJECT_MONITOR_HOUR = 9
+AUTO_SUBJECT_MONITOR_STARTUP_DELAY_SECONDS = 20
+AUTO_SUBJECT_MONITOR_POLL_SECONDS = 60
 NCBI_EUTILS_TOOL = "PaperMonitor"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -298,6 +304,7 @@ def run_ui_server(
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
+    threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -2811,18 +2818,19 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             theme_groups = load_theme_groups(storage)
             group_keys = selected_theme_group_keys(first(query, "groups") or first(query, "group") or "ALL", theme_groups)
             existing = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
-            present_group_keys = theme_groups_present(existing)
-            completed_group_keys = present_group_keys | theme_fetch_completed_group_keys(storage, selected, group_keys)
-            missing_group_keys = list(group_keys) if force_fetch else [key for key in group_keys if key not in completed_group_keys]
-            if auto_fetch and missing_group_keys:
-                summary = run_theme_monitor(
-                    storage=storage,
-                    start_date=selected_date,
-                    end_date=selected_date,
-                    group_keys=missing_group_keys,
-                    theme_groups=theme_groups,
-                )
-                fetched = True
+            missing_group_keys = list(group_keys) if force_fetch else missing_theme_group_keys_for_date(storage, selected, group_keys)
+            if auto_fetch and missing_group_keys and try_start_theme_fetch(selected):
+                try:
+                    summary = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected_date,
+                        end_date=selected_date,
+                        group_keys=missing_group_keys,
+                        theme_groups=theme_groups,
+                    )
+                    fetched = True
+                finally:
+                    finish_theme_fetch(selected)
             else:
                 summary = theme_existing_summary(existing, selected, group_keys, theme_groups)
             papers = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
@@ -4968,6 +4976,15 @@ def theme_fetch_completed_group_keys(storage: Storage, selected: str, group_keys
     return completed
 
 
+def missing_theme_group_keys_for_date(storage: Storage, selected: str, group_keys: list[str]) -> list[str]:
+    if not group_keys:
+        return []
+    existing = storage.list_theme_papers(window_start=selected, window_end=selected, group_keys=group_keys)
+    present_group_keys = theme_groups_present(existing)
+    completed_group_keys = present_group_keys | theme_fetch_completed_group_keys(storage, selected, group_keys)
+    return [key for key in group_keys if key not in completed_group_keys]
+
+
 def mark_stale_theme_fetch_runs(storage: Storage) -> None:
     cutoff = (datetime.now(ZoneInfo("Asia/Tokyo")) - timedelta(minutes=THEME_FETCH_STALE_AFTER_MINUTES)).isoformat(timespec="seconds")
     cursor = storage.conn.execute(
@@ -5274,6 +5291,114 @@ def run_auto_journal_monitor_scheduler(db_path: Path) -> None:
         except Exception as exc:
             print(f"Auto Journal Monitor scheduler error: {exc}")
             time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
+
+
+def auto_subject_monitor_due(now: datetime) -> bool:
+    return now.hour >= AUTO_SUBJECT_MONITOR_HOUR
+
+
+def claim_auto_subject_monitor_day(storage: Storage, run_date: date) -> bool:
+    run_date_value = run_date.isoformat()
+    cursor = storage.conn.execute(
+        """
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        WHERE app_settings.value != excluded.value
+        """,
+        (AUTO_SUBJECT_MONITOR_LAST_RUN_SETTING, run_date_value, now_iso()),
+    )
+    storage.conn.commit()
+    return cursor.rowcount > 0
+
+
+def write_auto_subject_monitor_status(db_path: Path, status: dict[str, Any]) -> None:
+    storage = Storage(db_path)
+    try:
+        storage.set_setting(
+            AUTO_SUBJECT_MONITOR_STATUS_SETTING,
+            json.dumps(status, ensure_ascii=False, sort_keys=True),
+        )
+    finally:
+        storage.close()
+
+
+def run_auto_subject_monitor_once(db_path: Path, run_date: date) -> None:
+    targets = [run_date - timedelta(days=1), run_date]
+    results: list[dict[str, Any]] = []
+
+    for target_date in targets:
+        selected = target_date.isoformat()
+        if not try_start_theme_fetch(selected):
+            results.append({"date": selected, "status": "skipped", "reason": "fetch already active"})
+            continue
+
+        storage = Storage(db_path)
+        try:
+            theme_groups = load_theme_groups(storage)
+            group_keys = list(theme_groups.keys())
+            if not group_keys:
+                results.append({"date": selected, "status": "skipped", "reason": "no subjects"})
+                continue
+            missing_group_keys = missing_theme_group_keys_for_date(storage, selected, group_keys)
+            if not missing_group_keys:
+                results.append({"date": selected, "status": "skipped", "reason": "already complete"})
+                continue
+            summary = run_theme_monitor(
+                storage=storage,
+                start_date=target_date,
+                end_date=target_date,
+                group_keys=missing_group_keys,
+                theme_groups=theme_groups,
+            )
+            results.append(
+                {
+                    "date": selected,
+                    "status": "fetched",
+                    "subjects": len(missing_group_keys),
+                    "saved": int(summary.get("saved") or 0),
+                    "raw_results": int(summary.get("raw_results") or 0),
+                    "errors": len(summary.get("errors") or []),
+                }
+            )
+        except Exception as exc:
+            print(f"Auto Subject Monitor failed for {selected}: {exc}")
+            results.append({"date": selected, "status": "error", "error": str(exc)})
+        finally:
+            storage.close()
+            finish_theme_fetch(selected)
+
+    write_auto_subject_monitor_status(
+        db_path,
+        {
+            "run_date": run_date.isoformat(),
+            "finished_at": now_iso(),
+            "targets": results,
+        },
+    )
+
+
+def run_auto_subject_monitor_scheduler(db_path: Path) -> None:
+    time.sleep(AUTO_SUBJECT_MONITOR_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            now = datetime.now().astimezone()
+            if auto_subject_monitor_due(now):
+                run_date = now.date()
+                storage = Storage(db_path)
+                try:
+                    claimed = claim_auto_subject_monitor_day(storage, run_date)
+                finally:
+                    storage.close()
+                if claimed:
+                    print(f"Auto Subject Monitor starting for {run_date.isoformat()}")
+                    run_auto_subject_monitor_once(db_path, run_date)
+            time.sleep(AUTO_SUBJECT_MONITOR_POLL_SECONDS)
+        except Exception as exc:
+            print(f"Auto Subject Monitor scheduler error: {exc}")
+            time.sleep(AUTO_SUBJECT_MONITOR_POLL_SECONDS)
 
 
 def prepare_internal_page_html(html: str, base_url: str) -> str:
@@ -10644,6 +10769,19 @@ def finish_active_fetch(selected: str) -> None:
 def is_fetch_active(selected: str) -> bool:
     with FETCH_PROGRESS_LOCK:
         return selected in ACTIVE_FETCH_DATES
+
+
+def try_start_theme_fetch(selected: str) -> bool:
+    with FETCH_PROGRESS_LOCK:
+        if selected in ACTIVE_THEME_FETCH_DATES:
+            return False
+        ACTIVE_THEME_FETCH_DATES.add(selected)
+        return True
+
+
+def finish_theme_fetch(selected: str) -> None:
+    with FETCH_PROGRESS_LOCK:
+        ACTIVE_THEME_FETCH_DATES.discard(selected)
 
 
 def update_fetch_progress(selected: str, *, journal: str, completed: int, total: int) -> None:
@@ -16326,6 +16464,9 @@ INDEX_HTML = """<!doctype html>
       width: 1px;
       background: #d8d8dc;
     }
+    .library-column:last-child .library-column-resizer::after {
+      display: none;
+    }
     .library-column-resizer:hover::after,
     .library-column.resizing .library-column-resizer::after {
       background: var(--accent);
@@ -17554,6 +17695,7 @@ INDEX_HTML = """<!doctype html>
     .authors { color: #526071; }
     .abstract { color: #344054; line-height: 1.55; margin: 12px 0 0; font-size: 14px; }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+    .library-add-control { position: relative; display: inline-flex; }
     .action {
       border: 1px solid var(--line);
       background: #fff;
@@ -17580,6 +17722,153 @@ INDEX_HTML = """<!doctype html>
       border-radius: 999px;
       animation: actionBusySpin 0.65s linear infinite;
     }
+    .library-add-menu {
+      position: fixed;
+      z-index: 240;
+      display: none;
+      width: min(760px, calc(100vw - 24px));
+      max-height: min(360px, calc(100vh - 24px));
+      overflow: hidden;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+    }
+    .library-add-menu.open {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+    }
+    .library-add-columns {
+      display: flex;
+      align-items: stretch;
+      min-height: 0;
+      overflow: auto hidden;
+    }
+    .library-add-column {
+      width: 240px;
+      min-width: 220px;
+      max-width: 260px;
+      border-right: 1px solid var(--line);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      background: #fff;
+    }
+    .library-add-column:last-child { border-right: 0; }
+    .library-add-column-head {
+      min-height: 32px;
+      padding: 8px 10px 6px;
+      border-bottom: 1px solid #eef1f5;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-add-column-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 5px;
+    }
+    .library-add-folder-row {
+      display: block;
+      align-items: stretch;
+      min-height: 32px;
+      border-radius: 7px;
+      overflow: hidden;
+    }
+    .library-add-folder-row:hover,
+    .library-add-folder-row.active { background: #eef6f6; }
+    .library-add-folder-row.selected {
+      background: #0f6b6e;
+      color: #fff;
+    }
+    .library-add-folder-row.selected .library-add-folder-option { color: #fff; }
+    .library-add-folder-option {
+      width: 100%;
+      min-height: 30px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      padding: 5px 8px;
+      text-align: left;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .library-add-folder-option:hover,
+    .library-add-folder-option:focus-visible { outline: 0; }
+    .library-add-folder-option .library-add-folder-icon {
+      width: 16px;
+      height: 13px;
+      border-radius: 3px;
+      background: #d9e1ea;
+      position: relative;
+    }
+    .library-add-folder-option .library-add-folder-icon::before {
+      content: "";
+      position: absolute;
+      top: -3px;
+      left: 2px;
+      width: 8px;
+      height: 4px;
+      border-radius: 2px 2px 0 0;
+      background: #c4ceda;
+    }
+    .library-add-folder-option.unsorted .library-add-folder-icon { background: #0f9f8f; }
+    .library-add-folder-option.unsorted .library-add-folder-icon::before { background: #78c3ff; }
+    .library-add-folder-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-add-menu-status {
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: left;
+      min-width: 220px;
+    }
+    .library-add-menu-footer {
+      min-height: 42px;
+      border-top: 1px solid var(--line);
+      padding: 6px 8px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+      background: #fbfcfe;
+    }
+    .library-add-selected-path {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-add-menu-footer button {
+      min-height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .library-add-menu-footer button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    .library-add-menu-footer button:disabled { opacity: 0.55; cursor: default; }
     @keyframes actionBusySpin {
       to { transform: rotate(360deg); }
     }
@@ -20018,19 +20307,310 @@ INDEX_HTML = """<!doctype html>
       await commitLibraryEntryRename("folder", folderId, name);
     }
 
-    async function addPaperToLibrary(article, paperId) {
+    async function ensureLibrarySnapshotForAddMenu() {
+      if (state.libraryLoaded) return;
+      const res = await fetch("/api/library");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load Library folders");
+      applyLibrarySnapshot(data);
+    }
+
+    async function refreshLibrarySnapshotForNavigation() {
+      const res = await fetch("/api/library");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not load Library");
+      applyLibrarySnapshot(data);
+      return data;
+    }
+
+    function firstLibraryItemForPaper(paperId) {
+      const targetPaperId = String(paperId || "");
+      const recycleId = Number(libraryRecycleFolderId() || 0);
+      const candidates = (state.libraryItems || []).filter((item) => {
+        if (String(item?.paper_id || item?.paper?.paper_id || "") !== targetPaperId) return false;
+        if (item?.trashed_at) return false;
+        const folderId = Number(item?.folder_id || 0);
+        if (!folderId || !libraryFolderById(folderId)) return false;
+        if (recycleId && libraryFolderIsWithin(folderId, recycleId)) return false;
+        return true;
+      });
+      return candidates[0] || null;
+    }
+
+    function libraryFolderPathIdsFromDisplayRoot(folderId) {
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const pathIds = [];
+      const seen = new Set();
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        const currentId = Number(current.id || 0);
+        if (!currentId || seen.has(currentId) || currentId === displayRootId) break;
+        pathIds.unshift(currentId);
+        seen.add(currentId);
+        if (current.parent_id === null) break;
+        current = libraryFolderById(current.parent_id);
+      }
+      return pathIds;
+    }
+
+    function selectLibraryItemInColumns(item) {
+      const itemId = Number(item?.id || 0);
+      const folderId = Number(item?.folder_id || 0);
+      if (!itemId || !libraryFolderById(folderId)) return false;
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      let parentId = displayRootId;
+      libraryFolderPathIdsFromDisplayRoot(folderId).forEach((pathFolderId) => {
+        setLibraryColumnSelection(parentId, {type: "folder", id: pathFolderId});
+        parentId = pathFolderId;
+      });
+      setLibraryColumnSelection(folderId, {type: "item", id: itemId});
+      state.libraryActiveFolderId = folderId;
+      state.libraryCurrentFolderId = folderId;
+      state.librarySelection = {type: "item", id: itemId};
+      requestLibraryColumnReveal(folderId);
+      return true;
+    }
+
+    function setReportLibraryButtonShowState(button) {
+      if (!button) return;
+      button.dataset.libraryState = "show";
+      button.disabled = false;
+      button.classList.remove("is-busy");
+      button.classList.add("primary");
+      button.textContent = "Show in Library";
+      button.title = "Show in Library";
+      button.setAttribute("aria-haspopup", "false");
+      button.setAttribute("aria-expanded", "false");
+    }
+
+    function setReportLibraryButtonAddState(button) {
+      if (!button) return;
+      button.dataset.libraryState = "add";
+      button.disabled = false;
+      button.classList.remove("is-busy");
+      button.classList.remove("primary");
+      button.textContent = "Add to Library";
+      button.title = "Add a shortcut to Library";
+      button.setAttribute("aria-haspopup", "menu");
+      button.setAttribute("aria-expanded", "false");
+    }
+
+    async function showPaperInLibrary(article, paperId) {
       const button = article.querySelector('[data-action="add-library"]');
-      if (button?.disabled && button.textContent.trim() === "In Library") return;
+      closeLibraryAddMenus();
+      if (button) {
+        button.disabled = true;
+        button.classList.add("is-busy");
+        button.textContent = "Opening...";
+      }
+      try {
+        await refreshLibrarySnapshotForNavigation();
+        state.libraryTab = "library";
+        const item = firstLibraryItemForPaper(paperId);
+        if (!item || !selectLibraryItemInColumns(item)) {
+          throw new Error("This paper is not available in Library.");
+        }
+        state.mode = "library";
+        setSidebarCollapsed(true);
+        window.clearTimeout(librarySearchTimer);
+        state.query = "";
+        if ($("searchBox")) $("searchBox").value = "";
+        if ($("librarySearchBox")) $("librarySearchBox").value = "";
+        clearLibraryRangeSelection();
+        renderLibrary();
+        refreshLibraryQuickLookForSelection();
+      } catch (error) {
+        const status = article.querySelector('[data-role="status"]');
+        if (status) {
+          status.textContent = error.message || "Could not show paper in Library";
+          status.className = "status err";
+        }
+      } finally {
+        setReportLibraryButtonShowState(button);
+      }
+    }
+
+    function closeLibraryAddMenus(exceptMenu = null) {
+      document.querySelectorAll(".library-add-menu.open").forEach((menu) => {
+        if (exceptMenu && menu === exceptMenu) return;
+        menu.classList.remove("open");
+        menu.setAttribute("aria-hidden", "true");
+        menu.style.left = "";
+        menu.style.top = "";
+        menu.style.width = "";
+        menu.style.maxHeight = "";
+        menu.closest(".library-add-control")?.querySelector('[data-action="add-library"]')?.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    function libraryAddFolderCanTarget(folder) {
+      const rootId = Number(state.libraryRootId || 1);
+      const recycleId = Number(libraryRecycleFolderId() || 0);
+      const folderId = Number(folder?.id || 0);
+      if (!folderId || folderId === rootId) return false;
+      if (folder?.trashed_at || folder?.is_recycle) return false;
+      if (recycleId && libraryFolderIsWithin(folderId, recycleId)) return false;
+      return true;
+    }
+
+    function libraryAddChildFolders(parentId) {
+      const rootId = Number(state.libraryRootId || 1);
+      const unsortedId = Number(libraryUnsortedFolderId() || 0);
+      const folders = libraryChildFolders(parentId)
+        .filter((folder) => libraryAddFolderCanTarget(folder))
+        .sort((a, b) => compareLibraryOrder(a, b, "name"));
+      if (Number(parentId) !== rootId) return folders;
+      const unsorted = libraryFolderById(unsortedId);
+      if (!libraryAddFolderCanTarget(unsorted)) return folders.filter((folder) => Number(folder.id) !== unsortedId);
+      return [unsorted, ...folders.filter((folder) => Number(folder.id) !== unsortedId)];
+    }
+
+    function libraryAddFolderHasChildren(folderId) {
+      return libraryAddChildFolders(folderId).length > 0;
+    }
+
+    function libraryAddColumnTitle(parentId) {
+      if (Number(parentId) === Number(state.libraryRootId || 1)) return "Library";
+      return libraryFolderById(parentId)?.name || "Folder";
+    }
+
+    function renderLibraryAddMenu(menu, paperId, article, pathIds = [], selectedFolderId = 0) {
+      const rootId = Number(state.libraryRootId || 1);
+      const unsortedId = Number(libraryUnsortedFolderId() || 0);
+      const selectedId = Number(selectedFolderId || unsortedId || 0);
+      const columns = [rootId, ...pathIds.map(Number).filter(Boolean)];
+      const firstRows = libraryAddChildFolders(rootId);
+      if (!firstRows.length) {
+        menu.innerHTML = `<div class="library-add-menu-status">No Library folders available.</div>`;
+        return;
+      }
+      const columnsMarkup = columns.map((parentId, depth) => {
+        const activeId = Number(pathIds[depth] || 0);
+        const rows = libraryAddChildFolders(parentId);
+        return `
+          <section class="library-add-column" data-add-column-depth="${depth}">
+            <div class="library-add-column-head" title="${escapeAttr(libraryAddColumnTitle(parentId))}">${escapeHtml(libraryAddColumnTitle(parentId))}</div>
+            <div class="library-add-column-body">
+              ${rows.length ? rows.map((folder) => {
+                const folderId = Number(folder.id);
+                const hasChildren = libraryAddFolderHasChildren(folderId);
+                const active = folderId === activeId;
+                const selected = folderId === selectedId;
+                return `
+                  <div class="library-add-folder-row${active ? " active" : ""}${selected ? " selected" : ""}" data-folder-id="${folderId}">
+                    <button class="library-add-folder-option${folder.is_unsorted ? " unsorted" : ""}" type="button" role="menuitem" data-folder-id="${folderId}" data-has-children="${hasChildren ? "1" : "0"}" data-depth="${depth}" title="${escapeAttr(libraryFolderPath(folderId))}">
+                      <span class="library-add-folder-icon" aria-hidden="true"></span>
+                      <span class="library-add-folder-name">${escapeHtml(folder.name || "Folder")}</span>
+                    </button>
+                  </div>
+                `;
+              }).join("") : `<div class="library-add-menu-status">No subfolders.</div>`}
+            </div>
+          </section>
+        `;
+      }).join("");
+      const selectedPath = selectedId ? libraryFolderPath(selectedId) : "No folder selected";
+      menu.innerHTML = `
+        <div class="library-add-columns">${columnsMarkup}</div>
+        <div class="library-add-menu-footer">
+          <div class="library-add-selected-path" title="${escapeAttr(selectedPath)}">${escapeHtml(selectedPath)}</div>
+          <button type="button" data-action="cancel-library-add">Cancel</button>
+          <button class="primary" type="button" data-action="confirm-library-add" ${selectedId ? "" : "disabled"}>Confirm</button>
+        </div>
+      `;
+      menu.querySelectorAll("[data-folder-id].library-add-folder-option").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const folderId = Number(button.dataset.folderId || 0);
+          const depth = Number(button.dataset.depth || 0);
+          const nextPath = pathIds.slice(0, depth);
+          if (folderId && libraryAddFolderHasChildren(folderId)) nextPath[depth] = folderId;
+          renderLibraryAddMenu(menu, paperId, article, nextPath, folderId);
+          positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
+        });
+      });
+      menu.querySelector('[data-action="cancel-library-add"]')?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryAddMenus();
+      });
+      menu.querySelector('[data-action="confirm-library-add"]')?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!selectedId) return;
+        closeLibraryAddMenus();
+        addPaperToLibrary(article, paperId, {folderId: selectedId});
+      });
+    }
+
+    function positionLibraryAddMenu(menu, button) {
+      if (!menu || !button) return;
+      const rect = button.getBoundingClientRect();
+      const margin = 12;
+      const columnCount = Math.max(1, menu.querySelectorAll(".library-add-column").length || 1);
+      const desiredWidth = menu.querySelector(".library-add-column")
+        ? Math.max(280, Math.min(760, columnCount * 240))
+        : 320;
+      const width = Math.min(desiredWidth, Math.max(260, window.innerWidth - margin * 2));
+      const maxHeight = Math.min(360, Math.max(180, window.innerHeight - margin * 2));
+      const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin));
+      let top = rect.bottom + 6;
+      if (top + maxHeight > window.innerHeight - margin && rect.top - maxHeight - 6 >= margin) {
+        top = rect.top - maxHeight - 6;
+      }
+      menu.style.width = `${width}px`;
+      menu.style.maxHeight = `${maxHeight}px`;
+      menu.style.left = `${Math.round(left)}px`;
+      menu.style.top = `${Math.round(Math.max(margin, Math.min(top, window.innerHeight - maxHeight - margin)))}px`;
+    }
+
+    async function toggleLibraryAddMenu(event, article, paperId) {
+      event.preventDefault();
+      event.stopPropagation();
+      const button = event.currentTarget;
+      if (button?.disabled) return;
+      const menu = article.querySelector('[data-role="library-add-menu"]');
+      if (!menu) return;
+      if (menu.classList.contains("open")) {
+        closeLibraryAddMenus();
+        return;
+      }
+      closeLibraryAddMenus(menu);
+      menu.innerHTML = `<div class="library-add-menu-status">Loading folders...</div>`;
+      menu.classList.add("open");
+      menu.setAttribute("aria-hidden", "false");
+      button.setAttribute("aria-expanded", "true");
+      positionLibraryAddMenu(menu, button);
+      try {
+        await ensureLibrarySnapshotForAddMenu();
+        renderLibraryAddMenu(menu, paperId, article, [], libraryUnsortedFolderId());
+        positionLibraryAddMenu(menu, button);
+      } catch (error) {
+        menu.innerHTML = `<div class="library-add-menu-status">${escapeHtml(error.message || "Could not load folders")}</div>`;
+        positionLibraryAddMenu(menu, button);
+      }
+    }
+
+    async function addPaperToLibrary(article, paperId, options = {}) {
+      const button = article.querySelector('[data-action="add-library"]');
+      if (button?.dataset.libraryState === "show") return showPaperInLibrary(article, paperId);
       if (button) {
         button.disabled = true;
         button.classList.add("is-busy");
         button.textContent = "Adding...";
       }
+      const folderId = Number(options.folderId || 0);
+      const payload = folderId
+        ? {paper_id: paperId, folder_id: folderId, snapshot: false}
+        : {paper_id: paperId, unsorted: true, snapshot: false};
       try {
         const res = await fetch("/api/library/items", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paperId, unsorted: true, snapshot: false})
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add to library");
@@ -20042,17 +20622,12 @@ INDEX_HTML = """<!doctype html>
         }
         if (data.paper) updatePaperState(paperId, data.paper);
         if (button) {
-          button.classList.remove("is-busy");
-          button.textContent = "In Library";
-          button.title = "Already in Library";
-          button.disabled = true;
+          setReportLibraryButtonShowState(button);
         }
         renderCurrentPaperSurface();
       } catch (error) {
         if (button) {
-          button.classList.remove("is-busy");
-          button.disabled = false;
-          button.textContent = "Add to Library";
+          setReportLibraryButtonAddState(button);
         }
         const status = article.querySelector('[data-role="status"]');
         if (status) {
@@ -27671,6 +28246,9 @@ INDEX_HTML = """<!doctype html>
         .join("");
       const themeMeta = state.mode === "theme" ? themePaperMetaMarkup(paper) : "";
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
+      const analysisStatusText = paper.analysis_status && paper.analysis_status !== "not_started"
+        ? ` · Analysis: ${escapeHtml(paper.analysis_status)}`
+        : "";
       article.innerHTML = `
         <div class="paper-layout">
           ${reserveFigure ? reportFigureMarkup(paper) : ""}
@@ -27694,15 +28272,18 @@ INDEX_HTML = """<!doctype html>
             </div>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
-              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open</button>` : ""}
-              <button class="action" data-action="add-library" title="${inLibrary ? "Already in Library" : "Add a shortcut to Library"}" ${inLibrary ? "disabled" : ""}>${inLibrary ? "In Library" : "Add to Library"}</button>
-              <button class="action primary" data-action="download" title="Download merged PDF">↓ Download</button>
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open Website</button>` : ""}
+              <span class="library-add-control">
+                <button class="action${inLibrary ? " primary" : ""}" data-action="add-library" data-library-state="${inLibrary ? "show" : "add"}" type="button" aria-haspopup="${inLibrary ? "false" : "menu"}" aria-expanded="false" title="${inLibrary ? "Show in Library" : "Add a shortcut to Library"}">${inLibrary ? "Show in Library" : "Add to Library"}</button>
+                <div class="library-add-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div>
+              </span>
+              <button class="action" data-action="download" title="Download merged PDF">↓ Download</button>
               ${paper.merged_pdf_path ? `<button class="action" data-action="open-pdf" title="Open merged PDF in Preview">PDF</button>` : ""}
               ${paper.merged_pdf_path ? `<button class="action danger" data-action="delete-pdf" title="Delete local PDF and reset download status">Delete PDF</button>` : ""}
               ${paper.analysis_path ? `<button class="action" data-action="view-analysis" title="Show analysis">Note</button>` : ""}
               ${paper.analysis_path ? `<button class="action danger" data-action="delete-analysis" title="Delete analysis note and reset analysis status">Delete Note</button>` : ""}
               <span class="status ${statusClass(paper.download_status)}" data-role="status">
-                Download: ${escapeHtml(paper.download_status)}${paper.analysis_status ? ` · Analysis: ${escapeHtml(paper.analysis_status)}` : ""}
+                Download: ${escapeHtml(paper.download_status)}${analysisStatusText}
               </span>
             </div>
           </div>
@@ -27711,7 +28292,17 @@ INDEX_HTML = """<!doctype html>
       const openPageButton = article.querySelector('[data-action="open-page"]');
       if (openPageButton) openPageButton.addEventListener("click", () => openUrlExternally(paper.url));
       article.addEventListener("click", () => selectReportPaper(paper.paper_id));
-      article.querySelector('[data-action="add-library"]').addEventListener("click", () => addPaperToLibrary(article, paper.paper_id));
+      article.querySelector(".library-add-control")?.addEventListener("click", (event) => event.stopPropagation());
+      const libraryButton = article.querySelector('[data-action="add-library"]');
+      libraryButton.addEventListener("click", (event) => {
+        if (libraryButton.dataset.libraryState === "show") {
+          event.preventDefault();
+          event.stopPropagation();
+          showPaperInLibrary(article, paper.paper_id);
+          return;
+        }
+        toggleLibraryAddMenu(event, article, paper.paper_id);
+      });
       article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
       if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, paper));
@@ -29786,6 +30377,7 @@ INDEX_HTML = """<!doctype html>
       if (handleLibraryKeydown(event)) return;
       if (handleReportKeydown(event)) return;
       if (event.key !== "Escape") return;
+      closeLibraryAddMenus();
       closePublicationAuthorMenu();
       closePublicationExportMenu();
       closeAuthorAffiliationTooltip();
@@ -29823,6 +30415,7 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
     }, true);
     window.addEventListener("click", (event) => {
+      if (!event.target.closest?.(".library-add-control")) closeLibraryAddMenus();
       if (!event.target.closest?.(".theme-context-menu")) hideThemeContextMenu();
       if (event.target === $("themeGroupBackdrop")) {
         closeThemeGroupDialog();
@@ -29861,9 +30454,13 @@ INDEX_HTML = """<!doctype html>
         revealActiveReportTab();
         updateReportTabsOverflow();
       }
+      closeLibraryAddMenus();
       closeAuthorAffiliationTooltip();
     });
-    window.addEventListener("scroll", closeAuthorAffiliationTooltip, true);
+    window.addEventListener("scroll", (event) => {
+      if (!event.target?.closest?.(".library-add-menu")) closeLibraryAddMenus();
+      closeAuthorAffiliationTooltip();
+    }, true);
     document.addEventListener("pointerover", (event) => {
       const anchor = event.target.closest?.(".author-affiliation-hover");
       if (anchor) showAuthorAffiliationTooltip(anchor);
