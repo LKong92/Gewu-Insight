@@ -105,6 +105,7 @@ const els = {
   stagePill: document.querySelector("#stagePill"),
   manualPill: document.querySelector("#manualPill"),
   timeline: document.querySelector("#timeline"),
+  stageDetailPanel: document.querySelector("#stageDetailPanel"),
   log: document.querySelector("#log"),
   runState: document.querySelector("#runState")
 };
@@ -400,6 +401,7 @@ function renderStatus(status) {
   maybePromptStageAction(displayTopic);
 
   els.timeline.replaceChildren(...(displayTopic.stages || []).map((stage) => renderStageRow(stage, displayTopic.nextStage)));
+  renderStageDetails(displayTopic);
   renderTopics(status);
   let boundThreadId = state.appThreadsLoaded ? boundThreadIdForTopic(selectedTopic) : "";
   if (state.appThreadsLoaded && boundThreadId && !threadLooksLikeDlwWorkThread(boundThreadId, selectedTopic)) {
@@ -418,6 +420,168 @@ function renderStatus(status) {
     renderThreadOptions(state.appThreads, selectedThreadForTopic);
   }
   ensureBoundThreadForExistingTopic(selectedTopic);
+}
+
+function currentDetailStage(topic = {}) {
+  return (
+    topic.nextStage ||
+    topic.stages?.find((stage) => stage.isActive)?.id ||
+    topic.stages?.find((stage) => (stage.rawStatus || stage.status) !== "done")?.id ||
+    "complete"
+  );
+}
+
+function fallbackStageDetails(topic = {}) {
+  const stage = currentDetailStage(topic);
+  const defaults = {
+    stage_1_discovery: {
+      title: "Discovery",
+      items: [
+        {
+          label: "Discover 200-500 candidate papers",
+          meta: "Search legal metadata sources such as OpenAlex and Semantic Scholar to build a broad first-pass candidate table. The table records bibliographic metadata, abstracts, citation/relevance signals, recency, method centrality, and review utility scores.",
+          done: false,
+          showOrder: false
+        },
+        {
+          label: "Deduplicated core candidate table, ideally 40-80 papers",
+          meta: "Narrow the first-pass pool into about 40-80 core candidates for screening.",
+          done: false,
+          showOrder: false
+        }
+      ]
+    },
+    stage_2_screening: {
+      title: "Screening",
+      items: [
+        {
+          label: "Audit core candidates",
+          meta: "Review the 40-80 core candidates from Stage 1 and assign keep / background / exclude decisions.",
+          done: false,
+          showOrder: false
+        },
+        {
+          label: "Record exclusion and background reasons",
+          meta: "Document why broad, generic, or off-topic papers are excluded or kept only as background.",
+          done: false,
+          showOrder: false
+        },
+        {
+          label: "Select 15-25 deep-reading papers",
+          meta: "Choose the numbered deep-reading queue and create matching starter notes in 05_Papers with expected PDF filenames in 06_PDFs.",
+          done: false,
+          showOrder: false
+        }
+      ]
+    },
+    stage_3_pdf_acquisition: {
+      title: "PDF Acquisition",
+      empty: "Waiting for the PDF queue."
+    },
+    stage_4_paper_deep_reading: {
+      title: "Deep Reading Papers",
+      empty: "Waiting for paper notes."
+    },
+    stage_5a_concept_notes: {
+      title: "Concept Notes",
+      items: [
+        {
+          label: "Build concept index",
+          meta: "Create 03_Concepts/01_Concept_Index.md as the entry point and reading route for the concept notes.",
+          done: false,
+          showOrder: false
+        },
+        {
+          label: "Create numbered concept notes",
+          meta: "Write reader-ordered concept notes from Stage 4 deep-reading results, using 02_..., 03_..., etc.",
+          done: false,
+          showOrder: false
+        },
+        {
+          label: "Clarify concept boundaries",
+          meta: "For each concept, explain definitions, formulas, assumptions, field usage, neighboring concepts, misconceptions, and representative reading routes.",
+          done: false,
+          showOrder: false
+        }
+      ]
+    },
+    stage_5b_review_synthesis: {
+      title: "",
+      items: [
+        {
+          label: "Write the reader-facing review",
+          meta: "Create the main domain review at 02_Review.md.",
+          done: false,
+          showOrder: false
+        }
+      ]
+    },
+    complete: {
+      title: "Workflow Complete",
+      empty: ""
+    }
+  };
+  return { stage, items: [], ...(defaults[stage] || defaults.complete) };
+}
+
+function renderStageDetails(topic = {}) {
+  if (!els.stageDetailPanel) return;
+  const details = topic.stageDetails || fallbackStageDetails(topic);
+  const children = [];
+  if (details.title) {
+    const title = document.createElement("div");
+    title.className = "stage-detail-title";
+    title.textContent = details.title;
+    children.push(title);
+  }
+
+  const items = Array.isArray(details.items) ? details.items : [];
+  if (!items.length) {
+    if (details.empty) {
+      const empty = document.createElement("div");
+      empty.className = "stage-detail-empty";
+      empty.textContent = details.empty;
+      children.push(empty);
+      els.stageDetailPanel.replaceChildren(...children);
+    } else {
+      els.stageDetailPanel.replaceChildren(...children);
+    }
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "stage-detail-list";
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    const showOrder = item.showOrder !== false;
+    row.className = `stage-detail-row ${item.done ? "done" : ""} ${showOrder ? "" : "no-order"}`;
+    const check = document.createElement("span");
+    check.className = "stage-detail-check";
+    check.setAttribute("aria-hidden", "true");
+    const text = document.createElement("div");
+    text.className = "stage-detail-text";
+    const name = document.createElement("div");
+    name.className = "stage-detail-name";
+    name.textContent = item.label || item.name || "Untitled";
+    text.append(name);
+    if (item.meta) {
+      const meta = document.createElement("div");
+      meta.className = "stage-detail-meta";
+      meta.textContent = item.meta;
+      text.append(meta);
+    }
+    row.append(check);
+    if (showOrder) {
+      const order = document.createElement("span");
+      order.className = "stage-detail-index";
+      order.textContent = String(item.order || index + 1).padStart(2, "0");
+      row.append(order);
+    }
+    row.append(text);
+    list.append(row);
+  });
+  children.push(list);
+  els.stageDetailPanel.replaceChildren(...children);
 }
 
 function displayVaultPath(workspaceRoot, vault) {
@@ -1480,6 +1644,10 @@ function bufferKey(threadId, turnId) {
   return `${threadId || "unknown"}:${turnId || "pending"}`;
 }
 
+function isTerminalAppThreadStatusValue(status) {
+  return ["idle", "completed", "interrupted", "failed"].includes(String(status || ""));
+}
+
 function renderThreadChat() {
   const threadId = selectedThreadId();
   const messages = chatForThread(threadId);
@@ -1627,10 +1795,10 @@ function appendThreadChatMessage(threadId, role, text, options = {}) {
 function normalizeAppThreadStatus(status = {}) {
   const threadStatus = status.threadStatus || {};
   const activeFlags = threadStatus.activeFlags || [];
-  let normalizedStatus = status.status || "idle";
+  let normalizedStatus = status.status || (threadStatus.type === "active" ? "running" : "idle");
   if (activeFlags.includes("waitingOnApproval")) {
     normalizedStatus = "waiting_approval";
-  } else if (threadStatus.type === "active" && ["idle", "completed", "interrupted", "failed"].includes(normalizedStatus)) {
+  } else if (threadStatus.type === "active" && !isTerminalAppThreadStatusValue(normalizedStatus)) {
     normalizedStatus = "running";
   } else if (threadStatus.type && threadStatus.type !== "active") {
     normalizedStatus = threadStatus.type;
@@ -1691,9 +1859,16 @@ function flushAssistantBuffer(threadId, turnId) {
   for (const key of keys) {
     const buffer = state.appThreadAssistantBuffers[key];
     if (buffer?.text?.trim()) {
-      chatForThread(threadId).push({
+      const text = buffer.text.trim();
+      const messages = chatForThread(threadId);
+      const duplicate = messages.some((message) => (
+        message.role === "assistant"
+        && message.text === text
+        && (!buffer.turnId || !message.turnId || message.turnId === buffer.turnId)
+      ));
+      if (!duplicate) messages.push({
         role: "assistant",
-        text: buffer.text.trim(),
+        text,
         at: new Date().toISOString(),
         turnId: buffer.turnId || turnId || null
       });
@@ -1782,6 +1957,7 @@ function applyAppServerEventStatus(data) {
       summary: `Running${turnId ? ` · ${turnId.slice(0, 8)}` : ""}`
     });
   } else if (method === "turn/completed") {
+    flushAssistantBuffer(threadId, turnId);
     clearPendingApprovalsForThread(threadId, turnId);
     mergeAppThreadStatus(threadId, {
       status: data.params?.turn?.status?.type || "completed",
@@ -1790,6 +1966,7 @@ function applyAppServerEventStatus(data) {
     });
     scheduleStatusRefresh();
   } else if (method === "turn/interrupt/local") {
+    flushAssistantBuffer(threadId, turnId);
     clearPendingApprovalsForThread(threadId, turnId);
     mergeAppThreadStatus(threadId, {
       status: "interrupted",
@@ -2704,10 +2881,19 @@ async function bindSelectedTopicToExistingThread(topicInfo = state.status?.selec
   return threadId;
 }
 
+function setImportVaultButtonLabel(label) {
+  if (!els.importVaultBtn) return;
+  const icon = document.createElement("span");
+  icon.className = "rail-plus-icon";
+  icon.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = label;
+  els.importVaultBtn.replaceChildren(icon, text);
+}
+
 async function importExistingVault() {
-  const previousLabel = els.importVaultBtn.textContent;
   els.importVaultBtn.disabled = true;
-  els.importVaultBtn.textContent = "Importing...";
+  setImportVaultButtonLabel("Importing...");
   state.dlwStartupBusy = true;
   els.appServerState.textContent = "Importing vault...";
   appendLog("meta", "Choose an existing Deep Survey vault to import.");
@@ -2725,7 +2911,7 @@ async function importExistingVault() {
   } finally {
     state.dlwStartupBusy = false;
     els.importVaultBtn.disabled = false;
-    els.importVaultBtn.textContent = previousLabel;
+    setImportVaultButtonLabel("Import Vault");
     if (state.status) renderStatus(state.status);
   }
 }

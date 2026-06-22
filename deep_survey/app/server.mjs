@@ -401,10 +401,10 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function runningStageForDlwAction(action) {
+function runningStageForDlwAction(action, selectedTopic = null) {
   if (action === "start") return "stage_1_discovery";
   if (action === "stage3" || action === "importManual") return "stage_3_pdf_acquisition";
-  return null;
+  return selectedTopic?.nextStage || selectedTopic?.currentStage || null;
 }
 
 function statusLooksLikeStage3(status = {}) {
@@ -600,6 +600,17 @@ async function getStatus() {
     readTopicIndex(workflowState),
     readAppPreferences()
   ]);
+  const activeTopic = topics.find((topic) => topic.active);
+  const displayWorkflowState = activeTopic
+    ? {
+        ...(workflowState || {}),
+        topic: activeTopic.topic,
+        vault_root: activeTopic.vault,
+        current_stage: activeTopic.currentStage || inferNextStage(activeTopic.stageStatus || {}),
+        stage_status: activeTopic.stageStatus || {},
+        manual_pdf_queue: Array.from({ length: activeTopic.manualPdfCount || 0 })
+      }
+    : workflowState;
 
   const dlwOk = Boolean(existsSync(dlwScript));
 
@@ -616,13 +627,13 @@ async function getStatus() {
       ok: dlwOk,
       error: dlwOk ? null : dlwStatus.stderr.trim() || dlwStatus.error
     },
-    state: workflowState,
+    state: displayWorkflowState,
     topics,
     topicOrder: Array.isArray(appPreferences.topicOrder) ? appPreferences.topicOrder : [],
     selectedVault: typeof appPreferences.selectedVault === "string" ? appPreferences.selectedVault : "",
     stages: stages.map(([id, label]) => {
-      const rawStatus = workflowState?.stage_status?.[id] ?? "pending";
-      const isActive = workflowState?.current_stage === id && rawStatus !== "done";
+      const rawStatus = displayWorkflowState?.stage_status?.[id] ?? "pending";
+      const isActive = displayWorkflowState?.current_stage === id && rawStatus !== "done";
       return {
         id,
         label,
@@ -637,12 +648,12 @@ async function getStatus() {
       topicHandoff,
       manualQueue: manualQueuePath
     },
-    manualPdfCount: workflowState?.manual_pdf_queue?.length ?? 0,
+    manualPdfCount: displayWorkflowState?.manual_pdf_queue?.length ?? 0,
     stage3Downloads: {
       count: stage3DownloadProcesses.length,
       processes: stage3DownloadProcesses.map((item) => ({ pid: item.pid, command: item.command }))
     },
-    nextStage: inferNextStage(workflowState?.stage_status)
+    nextStage: inferNextStage(displayWorkflowState?.stage_status)
   };
 }
 
@@ -661,21 +672,21 @@ function buildSelectedTopic(activeState, topics, vault) {
     topics[0] ||
     null;
   const selectedState =
-    selected?.active || !selected
-      ? activeState
-      : {
+    selected
+      ? {
           topic: selected.topic,
           vault_root: selected.vault,
           current_stage: selected.currentStage,
           stage_status: selected.stageStatus || {},
           manual_pdf_queue: Array.from({ length: selected.manualPdfCount || 0 })
-        };
+        }
+      : activeState;
   const nextStage = inferNextStage(selectedState?.stage_status);
   return {
     topic: selected?.topic || selectedState?.topic || null,
     vault: selected?.vault || selectedState?.vault_root || null,
     active: Boolean(selected?.active),
-    status: selected?.status || null,
+    status: selectedState ? topicStatusSummary(selectedState) : selected?.status || null,
     handoff: selected?.handoff || null,
     artifactPaths: selected
       ? {
@@ -726,6 +737,298 @@ function topicStatusSummary(state = {}) {
   const nextStage = inferNextStage(stageStatus);
   if (!nextStage || nextStage === "complete") return "All stages complete";
   return `${doneCount} stage(s) done; ${stageLabel(nextStage)} next`;
+}
+
+async function safeReadText(filePath) {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function safeReadDir(filePath) {
+  try {
+    return await readdir(filePath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+function stripMarkdownTitle(title = "") {
+  return title
+    .replace(/\.md$/i, "")
+    .replace(/^\d+[_ -]+/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "Untitled";
+}
+
+function paperNumberFromName(name = "") {
+  const match = name.match(/^(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function paperNumberPattern(number) {
+  if (!Number.isFinite(number)) return null;
+  return String(number).padStart(2, "0");
+}
+
+function sortPaperEntries(a, b) {
+  const aNumber = paperNumberFromName(a.name);
+  const bNumber = paperNumberFromName(b.name);
+  const numberDiff = (aNumber ?? Number.MAX_SAFE_INTEGER) - (bNumber ?? Number.MAX_SAFE_INTEGER);
+  if (numberDiff) return numberDiff;
+  return a.name.localeCompare(b.name);
+}
+
+async function listPaperNotes(vaultRoot) {
+  const papersDir = path.join(vaultRoot, "05_Papers");
+  const entries = (await safeReadDir(papersDir))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .sort(sortPaperEntries)
+    .slice(0, 40);
+  return Promise.all(
+    entries.map(async (entry) => {
+      const filePath = path.join(papersDir, entry.name);
+      const content = await safeReadText(filePath);
+      const titleMatch = content.match(/^#\s+(.+?)\s*$/m);
+      return {
+        name: entry.name,
+        number: paperNumberFromName(entry.name),
+        label: titleMatch?.[1]?.trim() || stripMarkdownTitle(entry.name),
+        path: filePath,
+        content
+      };
+    })
+  );
+}
+
+async function listVaultPdfs(vaultRoot) {
+  const pdfDir = path.join(vaultRoot, "06_PDFs");
+  const entries = await safeReadDir(pdfDir);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".pdf"))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function pdfExistsForPaper(note, pdfNames) {
+  const number = paperNumberPattern(note.number);
+  if (number && pdfNames.some((name) => name.startsWith(`${number}_`) || name.startsWith(`${number}-`) || name.startsWith(`${number} `))) {
+    return true;
+  }
+  const normalizedTitle = stripMarkdownTitle(note.label).toLowerCase().slice(0, 26);
+  return Boolean(normalizedTitle) && pdfNames.some((name) => name.toLowerCase().includes(normalizedTitle));
+}
+
+function deepReadStatus(note) {
+  const text = note.content || "";
+  if (/needs_correct_main_pdf|supplementary_only|blocked/i.test(text)) {
+    return { done: false, meta: "blocked" };
+  }
+  if (
+    /read_depth:\s*(full_pdf|deep|broad)/i.test(text) ||
+    /status:\s*(done|complete|deep_read)/i.test(text) ||
+    /^##\s+(Deep Reading|Broad Reading|Evidence Chain|Mechanism|Key Findings)/im.test(text)
+  ) {
+    return { done: true, meta: "deep-read note ready" };
+  }
+  return { done: false, meta: "pending deep read" };
+}
+
+async function artifactDetailItems(vaultRoot, paths) {
+  return Promise.all(
+    paths.map(async ([label, relativePath], index) => ({
+      order: index + 1,
+      label,
+      done: await pathExists(path.join(vaultRoot, relativePath)),
+      meta: relativePath
+    }))
+  );
+}
+
+function progressItem(label, meta, done) {
+  return {
+    label,
+    meta,
+    done,
+    showOrder: false
+  };
+}
+
+async function stage2AuditExists(vaultRoot) {
+  return (
+    await pathExists(path.join(vaultRoot, "04_Evidence_Tables/06_stage2_screening_audit.csv")) ||
+    await pathExists(path.join(vaultRoot, "04_Evidence_Tables/06_stage2_screening_audit.md"))
+  );
+}
+
+async function stage2QueueExists(vaultRoot) {
+  const queueExists = await pathExists(path.join(vaultRoot, "04_Evidence_Tables/07_stage2_deep_reading_queue.md"));
+  if (queueExists) return true;
+  const notes = await listPaperNotes(vaultRoot);
+  return notes.length > 0;
+}
+
+async function numberedConceptNotesExist(vaultRoot) {
+  const conceptsDir = path.join(vaultRoot, "03_Concepts");
+  const entries = await safeReadDir(conceptsDir);
+  return entries.some((entry) => entry.isFile() && /^0[2-9]_.*\.md$/i.test(entry.name));
+}
+
+async function buildStageDetails(selectedTopic = {}) {
+  const vaultRoot = resolveVaultRoot(selectedTopic.vault);
+  const stage =
+    selectedTopic.nextStage ||
+    selectedTopic.stages?.find((item) => item.isActive)?.id ||
+    selectedTopic.stages?.find((item) => (item.rawStatus || item.status) !== "done")?.id ||
+    "complete";
+  if (!vaultRoot) {
+    return {
+      stage,
+      title: "Stage Details",
+      empty: "Select or import a vault to show stage details.",
+      items: []
+    };
+  }
+
+  if (stage === "stage_3_pdf_acquisition") {
+    const [notes, pdfNames] = await Promise.all([listPaperNotes(vaultRoot), listVaultPdfs(vaultRoot)]);
+    const items = notes.map((note, index) => {
+      const done = pdfExistsForPaper(note, pdfNames);
+      return {
+        order: note.number || index + 1,
+        label: note.label,
+        done,
+        meta: done ? "PDF in 06_PDFs" : "PDF not in local vault"
+      };
+    });
+    if (!items.length) {
+      return {
+        stage,
+        title: "PDF Acquisition",
+        empty: pdfNames.length ? "PDFs exist in 06_PDFs, but no paper notes were found." : "No PDF queue or paper notes found yet.",
+        items: pdfNames.slice(0, 40).map((name, index) => ({ order: index + 1, label: stripMarkdownTitle(name), done: true, meta: "PDF in 06_PDFs" }))
+      };
+    }
+    return { stage, title: "PDF Acquisition", empty: "No PDF queue found yet.", items };
+  }
+
+  if (stage === "stage_4_paper_deep_reading") {
+    const [notes, pdfNames] = await Promise.all([listPaperNotes(vaultRoot), listVaultPdfs(vaultRoot)]);
+    const items = notes.map((note, index) => {
+      const status = deepReadStatus(note);
+      const pdfMeta = pdfExistsForPaper(note, pdfNames) ? "PDF ready" : "PDF missing";
+      return {
+        order: note.number || index + 1,
+        label: note.label,
+        done: status.done,
+        meta: status.done ? status.meta : `${status.meta}; ${pdfMeta}`
+      };
+    });
+    return {
+      stage,
+      title: "Deep Reading Papers",
+      empty: "No paper notes found yet.",
+      items
+    };
+  }
+
+  if (stage === "stage_1_discovery") {
+    const firstPassDone = await pathExists(path.join(vaultRoot, "04_Evidence_Tables/03_stage1_candidates.csv"));
+    const coreDone = await pathExists(path.join(vaultRoot, "04_Evidence_Tables/04_stage1_core_candidates.csv"));
+    return {
+      stage,
+      title: "Discovery",
+      items: [
+        progressItem(
+          "Discover 200-500 candidate papers",
+          "Search legal metadata sources such as OpenAlex and Semantic Scholar to build a broad first-pass candidate table. The table records bibliographic metadata, abstracts, citation/relevance signals, recency, method centrality, and review utility scores.",
+          firstPassDone
+        ),
+        progressItem(
+          "Deduplicated core candidate table, ideally 40-80 papers",
+          "Narrow the first-pass pool into about 40-80 core candidates for screening.",
+          coreDone
+        )
+      ]
+    };
+  }
+
+  if (stage === "stage_2_screening") {
+    const auditDone = await stage2AuditExists(vaultRoot);
+    const queueDone = await stage2QueueExists(vaultRoot);
+    return {
+      stage,
+      title: "Screening",
+      items: [
+        progressItem(
+          "Audit core candidates",
+          "Review the 40-80 core candidates from Stage 1 and assign keep / background / exclude decisions.",
+          auditDone
+        ),
+        progressItem(
+          "Record exclusion and background reasons",
+          "Document why broad, generic, or off-topic papers are excluded or kept only as background.",
+          auditDone
+        ),
+        progressItem(
+          "Select 15-25 deep-reading papers",
+          "Choose the numbered deep-reading queue and create matching starter notes in 05_Papers with expected PDF filenames in 06_PDFs.",
+          queueDone
+        )
+      ]
+    };
+  }
+
+  if (stage === "stage_5a_concept_notes") {
+    const conceptIndexDone = await pathExists(path.join(vaultRoot, "03_Concepts/01_Concept_Index.md"));
+    const conceptNotesDone = await numberedConceptNotesExist(vaultRoot);
+    return {
+      stage,
+      title: "Concept Notes",
+      items: [
+        progressItem(
+          "Build concept index",
+          "Create 03_Concepts/01_Concept_Index.md as the entry point and reading route for the concept notes.",
+          conceptIndexDone
+        ),
+        progressItem(
+          "Create numbered concept notes",
+          "Write reader-ordered concept notes from Stage 4 deep-reading results, using 02_..., 03_..., etc.",
+          conceptNotesDone
+        ),
+        progressItem(
+          "Clarify concept boundaries",
+          "For each concept, explain definitions, formulas, assumptions, field usage, neighboring concepts, misconceptions, and representative reading routes.",
+          conceptNotesDone
+        )
+      ]
+    };
+  }
+
+  if (stage === "stage_5b_review_synthesis") {
+    const reviewDone = await pathExists(path.join(vaultRoot, "02_Review.md"));
+    return {
+      stage,
+      title: "",
+      items: [
+        progressItem(
+          "Write the reader-facing review",
+          "Create the main domain review at 02_Review.md.",
+          reviewDone
+        )
+      ]
+    };
+  }
+
+  return {
+    stage,
+    title: "Workflow Complete",
+    empty: "",
+    items: []
+  };
 }
 
 function tableCell(value = "") {
@@ -1126,6 +1429,20 @@ async function switchStateToTopicRow(row) {
   await mkdir(path.dirname(statePath), { recursive: true });
   await writeFile(statePath, JSON.stringify(nextState, null, 2) + "\n", "utf8");
   return nextState;
+}
+
+async function activateSelectedTopicState(selectedTopic) {
+  const selectedVault = typeof selectedTopic?.vault === "string" ? selectedTopic.vault.trim() : "";
+  if (!selectedVault) return selectedTopic;
+  const workflowState = await readJsonIfExists(statePath);
+  const topics = await readTopicIndex(workflowState);
+  const row = topics.find((topic) => topic.vault === selectedVault);
+  if (!row) {
+    throw new Error(`Selected topic vault is not in the Deep Survey index: ${selectedVault}`);
+  }
+  const nextState = await switchStateToTopicRow([row.topic, row.vault, row.status, row.handoff]);
+  const nextTopics = await readTopicIndex(nextState);
+  return buildSelectedTopic(nextState, nextTopics, selectedVault);
 }
 
 async function renameTopicInIndex(vault, nextTopic) {
@@ -1671,10 +1988,14 @@ async function handleApi(req, res, url) {
     const requestedVault = url.searchParams.get("vault");
     const orderedFallbackVault = (status.topicOrder || []).find((vault) => status.topics.some((topic) => topic.vault === vault)) || "";
     const selected = buildSelectedTopic(status.state, status.topics, requestedVault || status.selectedVault || orderedFallbackVault);
+    const selectedWithDetails = {
+      ...selected,
+      stageDetails: await buildStageDetails(selected)
+    };
     return json(res, 200, {
       ...status,
-      selectedVault: selected.vault || requestedVault || status.selectedVault || "",
-      selectedTopic: selected
+      selectedVault: selectedWithDetails.vault || requestedVault || status.selectedVault || "",
+      selectedTopic: selectedWithDetails
     });
   }
 
@@ -2001,6 +2322,12 @@ async function handleApi(req, res, url) {
       } catch (error) {
         return json(res, 500, { ok: false, action, error: error.message || String(error) });
       }
+    } else {
+      try {
+        selectedTopic = await activateSelectedTopicState(selectedTopic);
+      } catch (error) {
+        return json(res, 500, { ok: false, action, error: error.message || String(error) });
+      }
     }
     const promptSet = prompts(action, topic, selectedTopic, { workspaceDirectory });
     const prompt = promptSet[action];
@@ -2017,7 +2344,7 @@ async function handleApi(req, res, url) {
       const status = updateAppServerThreadStatus(threadId, {
         status: "running",
         turnId: result?.turn?.id || null,
-        runningStage: runningStageForDlwAction(action),
+        runningStage: runningStageForDlwAction(action, selectedTopic),
         dlwAction: action,
         summary: `DLW ${action} ${result?.turn?.id || ""}`.trim()
       });

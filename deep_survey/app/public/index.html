@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex Literature Workflow</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-    <link rel="stylesheet" href="/styles.css?v=deep-survey-stage-confirm-status-poll" />
+    <link rel="stylesheet" href="/styles.css?v=deep-survey-stage-detail-compact-gap" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="topic-rail">
-        <button id="newTopicBtn" class="new-topic-btn">New Topic</button>
+        <button id="newTopicBtn" class="new-topic-btn"><span class="rail-plus-icon" aria-hidden="true"></span><span>New Topic</span></button>
         <div id="topicList" class="topic-list"></div>
-        <button id="importVaultBtn" class="import-vault-btn" type="button">Import Vault</button>
+        <button id="importVaultBtn" class="import-vault-btn" type="button"><span class="rail-plus-icon" aria-hidden="true"></span><span>Import Vault</span></button>
       </aside>
 
       <aside class="sidebar">
@@ -41,6 +41,7 @@
             <button id="refreshBtn" class="refresh-button" type="button" title="Refresh">↻</button>
           </div>
           <div id="timeline" class="timeline"></div>
+          <div id="stageDetailPanel" class="stage-detail-panel"></div>
         </section>
       </aside>
 
