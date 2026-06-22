@@ -1,18 +1,40 @@
 import unittest
 import tempfile
+import time
 from datetime import date
 from pathlib import Path
 
 from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
     ELECTRIDE_RECOMMENDED_KEYWORDS,
+    get_fetch_progress,
     missing_theme_group_keys_for_date,
     recommend_theme_keywords,
+    run_theme_monitor,
     theme_candidate_in_window,
     theme_candidate_is_literature_like,
     theme_counts_for_month,
     theme_paper_to_api,
 )
+
+
+def mock_theme_keyword_records(query):
+    return [
+        {
+            "title": "Majorana zero modes for topological quantum computation",
+            "abstract": "Non-Abelian anyon braiding enables fault tolerant quantum computation.",
+            "keywords": ["Majorana zero mode", "non-Abelian anyon"],
+        }
+    ]
+
+
+def slow_theme_keyword_records(query):
+    time.sleep(5)
+    return [{"title": "slow source result", "abstract": "", "keywords": ["slow keyword"]}]
+
+
+def empty_theme_source_records(query, start_date, end_date):
+    return []
 
 
 class ThemeMonitorTest(unittest.TestCase):
@@ -232,6 +254,63 @@ class ThemeMonitorTest(unittest.TestCase):
         )
         keywords = [item["keyword"] for item in result["recommendations"]]
         self.assertEqual(keywords, ELECTRIDE_RECOMMENDED_KEYWORDS)
+
+    def test_theme_fetch_progress_tracks_each_subject(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 1, 3)
+        groups = {
+            "one": {"name": "Subject One", "queries": ["alpha"]},
+            "two": {"name": "Subject Two", "queries": ["beta"]},
+        }
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("mock_source", empty_theme_source_records)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    run_theme_monitor(storage=storage, start_date=selected, end_date=selected, group_keys=["one", "two"], theme_groups=groups)
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+        progress = get_fetch_progress(selected.isoformat())
+        self.assertEqual(progress["kind"], "theme")
+        self.assertFalse(progress["active"])
+        self.assertEqual(progress["completed"], 2)
+        self.assertEqual(progress["total"], 2)
+        statuses = {item["key"]: item["status"] for item in progress["subjects"]}
+        self.assertEqual(statuses, {"one": "empty", "two": "empty"})
+
+    def test_keyword_recommendations_come_from_external_fetchers(self):
+        import paper_monitor.ui_server as ui_server
+
+        original_fetchers = ui_server.theme_keyword_recommendation_fetchers
+        try:
+            ui_server.theme_keyword_recommendation_fetchers = lambda: [("mock_source", mock_theme_keyword_records)]
+            result = recommend_theme_keywords("Topological quantum computing", existing_keywords=[])
+        finally:
+            ui_server.theme_keyword_recommendation_fetchers = original_fetchers
+        keywords = [item["keyword"] for item in result["recommendations"]]
+        self.assertIn("non-Abelian anyon", keywords)
+        self.assertTrue(all("mock_source" in item["sources"] for item in result["recommendations"]))
+
+    def test_slow_keyword_recommendation_source_times_out(self):
+        import paper_monitor.ui_server as ui_server
+
+        original_fetchers = ui_server.theme_keyword_recommendation_fetchers
+        original_timeout = ui_server.THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS
+        try:
+            ui_server.theme_keyword_recommendation_fetchers = lambda: [("slow_source", slow_theme_keyword_records)]
+            ui_server.THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS = 0.2
+            start = time.monotonic()
+            result = recommend_theme_keywords("Topological quantum computing", existing_keywords=[])
+        finally:
+            ui_server.theme_keyword_recommendation_fetchers = original_fetchers
+            ui_server.THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS = original_timeout
+        self.assertLess(time.monotonic() - start, 2.0)
+        self.assertEqual(result["recommendations"], [])
+        self.assertIn("slow_source: timed out", result["errors"])
 
 
 if __name__ == "__main__":

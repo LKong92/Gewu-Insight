@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, wait
 from email.parser import BytesParser
 from email.policy import default as email_policy
 import html
@@ -10,11 +9,13 @@ from io import BytesIO
 import json
 import mimetypes
 import os
+import queue
 import re
 import shutil
 import socket
 import socketserver
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -3690,6 +3691,13 @@ INTERMEDIATE_BAND_SOLAR_CELL_RECOMMENDED_KEYWORDS = [
 ]
 
 THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS = 12
+THEME_KEYWORD_FETCHER_SUBPROCESS_NAMES = {
+    "openalex": "fetch_openalex_keyword_records",
+    "crossref": "fetch_crossref_keyword_records",
+    "semantic_scholar": "fetch_semantic_keyword_records",
+    "arxiv": "fetch_arxiv_keyword_records",
+    "pubmed": "fetch_pubmed_keyword_records",
+}
 
 
 def recommend_theme_keywords(subject: str, *, existing_keywords: list[str], limit: int = 24) -> dict[str, Any]:
@@ -3709,33 +3717,16 @@ def recommend_theme_keywords(subject: str, *, existing_keywords: list[str], limi
             limit,
             curated_only=True,
         )
-    fetchers = theme_keyword_recommendation_fetchers()
-    jobs: dict[Any, tuple[str, str]] = {}
-    executor = ThreadPoolExecutor(max_workers=min(5, max(1, len(search_terms) * len(fetchers))))
-    try:
-        for term in search_terms:
-            for source_name, fetcher in fetchers:
-                jobs[executor.submit(fetcher, term)] = (source_name, term)
-        done, pending = wait(jobs.keys(), timeout=THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS)
-        for future in pending:
-            source_name, _term = jobs[future]
-            future.cancel()
-            if f"{source_name}: timed out" not in errors:
-                errors.append(f"{source_name}: timed out")
-        for future in done:
-            source_name, _term = jobs[future]
-            try:
-                records = future.result()
-            except Exception as exc:
-                errors.append(f"{source_name}: {exc}")
-                continue
-            source_counts[source_name] = source_counts.get(source_name, 0) + len(records)
-            for record in records:
-                add_theme_keyword_metadata_candidates(candidates, record, source_name)
-                add_theme_keyword_text_candidates(candidates, clean_text(record.get("title") or ""), source_name, base_score=3.0)
-                add_theme_keyword_text_candidates(candidates, clean_text(record.get("abstract") or ""), source_name, base_score=1.0)
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    for source_name, records, error in run_theme_keyword_recommendation_fetchers(search_terms):
+        if error:
+            if error not in errors:
+                errors.append(error)
+            continue
+        source_counts[source_name] = source_counts.get(source_name, 0) + len(records)
+        for record in records:
+            add_theme_keyword_metadata_candidates(candidates, record, source_name)
+            add_theme_keyword_text_candidates(candidates, clean_text(record.get("title") or ""), source_name, base_score=3.0)
+            add_theme_keyword_text_candidates(candidates, clean_text(record.get("abstract") or ""), source_name, base_score=1.0)
 
     return theme_keyword_recommendation_response(
         subject,
@@ -3746,6 +3737,114 @@ def recommend_theme_keywords(subject: str, *, existing_keywords: list[str], limi
         errors,
         limit,
     )
+
+
+def run_theme_keyword_recommendation_fetchers(search_terms: list[str]) -> list[tuple[str, list[dict[str, Any]], str]]:
+    fetchers = theme_keyword_recommendation_fetchers()
+    if not search_terms or not fetchers:
+        return []
+    if all(theme_keyword_fetcher_can_run_in_subprocess(source_name, fetcher) for source_name, fetcher in fetchers):
+        return run_theme_keyword_recommendation_fetcher_subprocesses(search_terms, fetchers)
+    return run_theme_keyword_recommendation_fetcher_threads(search_terms, fetchers)
+
+
+def theme_keyword_fetcher_can_run_in_subprocess(source_name: str, fetcher: Any) -> bool:
+    return THEME_KEYWORD_FETCHER_SUBPROCESS_NAMES.get(source_name) == getattr(fetcher, "__name__", "")
+
+
+def run_theme_keyword_recommendation_fetcher_subprocesses(
+    search_terms: list[str],
+    fetchers: list[tuple[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]], str]]:
+    jobs: list[dict[str, Any]] = []
+    for term in search_terms:
+        for source_name, _fetcher in fetchers:
+            function_name = THEME_KEYWORD_FETCHER_SUBPROCESS_NAMES[source_name]
+            script = (
+                "import json, sys;"
+                "from paper_monitor import ui_server as u;"
+                "records = getattr(u, sys.argv[1])(sys.argv[2]);"
+                "sys.stdout.write(json.dumps(records))"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, function_name, term],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            jobs.append({"source": source_name, "term": term, "process": process})
+    deadline = time.monotonic() + THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS
+    results: list[tuple[str, list[dict[str, Any]], str]] = []
+    for job in jobs:
+        source_name = str(job["source"])
+        process = job["process"]
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            stdout, stderr = process.communicate(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            results.append((source_name, [], f"{source_name}: timed out"))
+            continue
+        if process.returncode != 0:
+            message = clean_text(stderr or stdout or f"exited with code {process.returncode}")
+            results.append((source_name, [], f"{source_name}: {message}"))
+            continue
+        try:
+            records = json.loads(stdout or "[]")
+        except json.JSONDecodeError as exc:
+            results.append((source_name, [], f"{source_name}: invalid JSON from fetcher: {exc}"))
+            continue
+        results.append((source_name, records if isinstance(records, list) else [], ""))
+    return results
+
+
+def run_theme_keyword_recommendation_fetcher_threads(
+    search_terms: list[str],
+    fetchers: list[tuple[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]], str]]:
+    jobs: list[dict[str, Any]] = []
+    for term in search_terms:
+        for source_name, fetcher in fetchers:
+            result_queue: queue.Queue = queue.Queue(maxsize=1)
+            thread = threading.Thread(
+                target=theme_keyword_recommendation_fetch_worker,
+                args=(source_name, fetcher, term, result_queue),
+                daemon=True,
+            )
+            thread.start()
+            jobs.append({"source": source_name, "term": term, "thread": thread, "queue": result_queue})
+    deadline = time.monotonic() + THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS
+    for job in jobs:
+        remaining = max(0.0, deadline - time.monotonic())
+        job["thread"].join(remaining)
+
+    results: list[tuple[str, list[dict[str, Any]], str]] = []
+    for job in jobs:
+        source_name = str(job["source"])
+        thread = job["thread"]
+        result_queue = job["queue"]
+        if thread.is_alive():
+            results.append((source_name, [], f"{source_name}: timed out"))
+            continue
+        try:
+            payload = result_queue.get_nowait()
+        except Exception:
+            results.append((source_name, [], f"{source_name}: exited without results"))
+            continue
+        if payload.get("error"):
+            results.append((source_name, [], f"{source_name}: {payload['error']}"))
+            continue
+        records = payload.get("records")
+        results.append((source_name, records if isinstance(records, list) else [], ""))
+    return results
+
+
+def theme_keyword_recommendation_fetch_worker(source_name: str, fetcher: Any, term: str, result_queue: queue.Queue) -> None:
+    try:
+        result_queue.put({"records": fetcher(term)})
+    except Exception as exc:
+        result_queue.put({"error": str(exc) or exc.__class__.__name__})
 
 
 def theme_keyword_recommendation_response(
@@ -4270,108 +4369,136 @@ def run_theme_monitor(
         "errors": [],
     }
     groups = theme_groups or load_theme_groups(storage)
-    for group_key in group_keys:
-        group = groups[group_key]
-        group_name = str(group["name"])
-        fetch_run_id = storage.start_fetch_run(
-            monitor_type="theme",
-            source="multi",
-            journal=f"theme:{group_key}",
-            window_start=start_date.isoformat(),
-            window_end=end_date.isoformat(),
-            started_at=now_iso(),
-        )
-        best: dict[str, dict[str, Any]] = {}
-        group_errors: list[str] = []
-        seen_group_errors: set[str] = set()
-        raw_count = 0
-        saved = 0
-        try:
-            search_queries = theme_search_queries(list(group["queries"]))
-            expected_fetches = len(search_queries) * len(theme_source_fetchers())
-            for query in search_queries:
-                for source_name, fetcher in theme_source_fetchers():
-                    summary["queries"] += 1
-                    try:
-                        papers = fetcher(query, start_date, end_date)
-                    except Exception as exc:
-                        message = theme_fetch_error_message(group_name, exc, source_name=source_name)
-                        append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
-                        continue
-                    raw_count += len(papers)
-                    summary["source_counts"][source_name] = int(summary["source_counts"].get(source_name) or 0) + len(papers)
-                    for paper in papers:
-                        if not theme_candidate_in_window(paper, start_date, end_date):
+    progress_date = start_date.isoformat() if start_date == end_date else ""
+    if progress_date:
+        start_theme_fetch_progress(progress_date, group_keys, groups)
+    try:
+        for group_key in group_keys:
+            group = groups[group_key]
+            group_name = str(group["name"])
+            if progress_date:
+                update_theme_fetch_progress(progress_date, group_key, status="running")
+            fetch_run_id = storage.start_fetch_run(
+                monitor_type="theme",
+                source="multi",
+                journal=f"theme:{group_key}",
+                window_start=start_date.isoformat(),
+                window_end=end_date.isoformat(),
+                started_at=now_iso(),
+            )
+            best: dict[str, dict[str, Any]] = {}
+            group_errors: list[str] = []
+            seen_group_errors: set[str] = set()
+            raw_count = 0
+            saved = 0
+            try:
+                search_queries = theme_search_queries(list(group["queries"]))
+                expected_fetches = len(search_queries) * len(theme_source_fetchers())
+                for query in search_queries:
+                    for source_name, fetcher in theme_source_fetchers():
+                        summary["queries"] += 1
+                        try:
+                            papers = fetcher(query, start_date, end_date)
+                        except Exception as exc:
+                            message = theme_fetch_error_message(group_name, exc, source_name=source_name)
+                            append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
                             continue
-                        if not theme_candidate_is_literature_like(paper):
-                            continue
-                        paper = theme_merge_source_marker(paper, source_name)
-                        score, hits = score_theme_relevance(
-                            paper.get("title") or "",
-                            paper.get("abstract") or "",
-                            theme_keyword_matchers(list(group["queries"])),
-                        )
-                        if score <= 0:
-                            continue
-                        paper_id = clean_text(paper.get("paper_id") or "")
-                        if not paper_id:
-                            continue
-                        merge_key = theme_candidate_merge_key(paper)
-                        current = best.get(merge_key)
-                        if not current:
-                            best[merge_key] = {
-                                "paper": paper,
-                                "score": score,
-                                "hits": set(hits),
-                                "queries": [query],
-                                "sources": {source_name},
-                            }
-                        else:
-                            current["score"] = max(int(current["score"]), score)
-                            current["hits"].update(hits)
-                            if query not in current["queries"]:
-                                current["queries"].append(query)
-                            current["sources"].add(source_name)
-                            current["paper"] = theme_preferred_candidate(current["paper"], paper)
-            for item in best.values():
-                paper = dict(item["paper"])
-                raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
-                raw["_paper_monitor_theme"] = {
-                    "group_key": group_key,
-                    "group_name": group_name,
-                    "queries": item["queries"],
-                    "sources": sorted(item["sources"]),
-                    "hits": sorted(item["hits"]),
-                    "score": int(item["score"]),
-                    "window_start": start_date.isoformat(),
-                    "window_end": end_date.isoformat(),
-                }
-                paper["raw"] = raw
-                paper["source"] = "theme:" + "+".join(sorted(item["sources"]))
-                if paper.get("section_allowed") is None:
-                    paper["section_allowed"] = True
-                storage.upsert_paper(paper)
-                storage.record_theme_result(
-                    paper_id=paper["paper_id"],
-                    group_key=group_key,
-                    group_name=group_name,
-                    query=", ".join(item["queries"]),
-                    score=int(item["score"]),
-                    hits=sorted(item["hits"]),
-                    window_start=start_date.isoformat(),
-                    window_end=end_date.isoformat(),
-                )
-                saved += 1
-            summary["raw_results"] += raw_count
-            summary["saved"] += saved
-            status = "success" if saved else ("error" if expected_fetches and len(group_errors) == expected_fetches else "empty")
-            storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message="; ".join(group_errors[:3]))
-            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": saved, "errors": group_errors}
-        except Exception as exc:
-            message = theme_fetch_error_message(group_name, exc)
-            append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
-            storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
-            summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": 0, "errors": group_errors}
+                        raw_count += len(papers)
+                        summary["source_counts"][source_name] = int(summary["source_counts"].get(source_name) or 0) + len(papers)
+                        for paper in papers:
+                            if not theme_candidate_in_window(paper, start_date, end_date):
+                                continue
+                            if not theme_candidate_is_literature_like(paper):
+                                continue
+                            paper = theme_merge_source_marker(paper, source_name)
+                            score, hits = score_theme_relevance(
+                                paper.get("title") or "",
+                                paper.get("abstract") or "",
+                                theme_keyword_matchers(list(group["queries"])),
+                            )
+                            if score <= 0:
+                                continue
+                            paper_id = clean_text(paper.get("paper_id") or "")
+                            if not paper_id:
+                                continue
+                            merge_key = theme_candidate_merge_key(paper)
+                            current = best.get(merge_key)
+                            if not current:
+                                best[merge_key] = {
+                                    "paper": paper,
+                                    "score": score,
+                                    "hits": set(hits),
+                                    "queries": [query],
+                                    "sources": {source_name},
+                                }
+                            else:
+                                current["score"] = max(int(current["score"]), score)
+                                current["hits"].update(hits)
+                                if query not in current["queries"]:
+                                    current["queries"].append(query)
+                                current["sources"].add(source_name)
+                                current["paper"] = theme_preferred_candidate(current["paper"], paper)
+                for item in best.values():
+                    paper = dict(item["paper"])
+                    raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+                    raw["_paper_monitor_theme"] = {
+                        "group_key": group_key,
+                        "group_name": group_name,
+                        "queries": item["queries"],
+                        "sources": sorted(item["sources"]),
+                        "hits": sorted(item["hits"]),
+                        "score": int(item["score"]),
+                        "window_start": start_date.isoformat(),
+                        "window_end": end_date.isoformat(),
+                    }
+                    paper["raw"] = raw
+                    paper["source"] = "theme:" + "+".join(sorted(item["sources"]))
+                    if paper.get("section_allowed") is None:
+                        paper["section_allowed"] = True
+                    storage.upsert_paper(paper)
+                    storage.record_theme_result(
+                        paper_id=paper["paper_id"],
+                        group_key=group_key,
+                        group_name=group_name,
+                        query=", ".join(item["queries"]),
+                        score=int(item["score"]),
+                        hits=sorted(item["hits"]),
+                        window_start=start_date.isoformat(),
+                        window_end=end_date.isoformat(),
+                    )
+                    saved += 1
+                summary["raw_results"] += raw_count
+                summary["saved"] += saved
+                status = "success" if saved else ("error" if expected_fetches and len(group_errors) == expected_fetches else "empty")
+                message = "; ".join(group_errors[:3])
+                storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message=message)
+                summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": saved, "errors": group_errors}
+                if progress_date:
+                    update_theme_fetch_progress(
+                        progress_date,
+                        group_key,
+                        status=status,
+                        records_found=saved,
+                        raw_results=raw_count,
+                        message=message,
+                    )
+            except Exception as exc:
+                message = theme_fetch_error_message(group_name, exc)
+                append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
+                storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
+                summary["groups"][group_key] = {"name": group_name, "raw_results": raw_count, "saved": 0, "errors": group_errors}
+                if progress_date:
+                    update_theme_fetch_progress(
+                        progress_date,
+                        group_key,
+                        status="error",
+                        records_found=0,
+                        raw_results=raw_count,
+                        message=message,
+                    )
+    finally:
+        if progress_date:
+            finish_theme_fetch_progress(progress_date)
     return summary
 
 
@@ -10890,6 +11017,7 @@ def start_fetch_progress(selected: str, journals: list[str]) -> None:
     with FETCH_PROGRESS_LOCK:
         FETCH_PROGRESS[selected] = {
             "active": True,
+            "kind": "journal",
             "completed": 0,
             "total": len(journals),
             "percent": 0,
@@ -10933,6 +11061,7 @@ def update_fetch_progress(selected: str, *, journal: str, completed: int, total:
     with FETCH_PROGRESS_LOCK:
         FETCH_PROGRESS[selected] = {
             "active": True,
+            "kind": "journal",
             "completed": completed,
             "total": total,
             "percent": percent,
@@ -10954,6 +11083,76 @@ def finish_fetch_progress(selected: str) -> None:
                 "currentJournal": progress.get("currentJournal") or "",
             }
         )
+
+
+def start_theme_fetch_progress(selected: str, group_keys: list[str], theme_groups: dict[str, dict[str, Any]]) -> None:
+    subjects = []
+    for key in group_keys:
+        group = theme_groups.get(key) or {}
+        subjects.append(
+            {
+                "key": key,
+                "name": str(group.get("name") or key),
+                "status": "pending",
+                "records_found": 0,
+                "raw_results": 0,
+                "message": "",
+            }
+        )
+    with FETCH_PROGRESS_LOCK:
+        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=True)
+
+
+def update_theme_fetch_progress(
+    selected: str,
+    group_key: str,
+    *,
+    status: str,
+    records_found: int | None = None,
+    raw_results: int | None = None,
+    message: str = "",
+) -> None:
+    with FETCH_PROGRESS_LOCK:
+        progress = FETCH_PROGRESS.get(selected)
+        if not progress or progress.get("kind") != "theme":
+            return
+        subjects = [dict(item) for item in progress.get("subjects") or [] if isinstance(item, dict)]
+        for item in subjects:
+            if item.get("key") != group_key:
+                continue
+            item["status"] = status
+            if records_found is not None:
+                item["records_found"] = int(records_found or 0)
+            if raw_results is not None:
+                item["raw_results"] = int(raw_results or 0)
+            item["message"] = message
+            break
+        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=True)
+
+
+def finish_theme_fetch_progress(selected: str) -> None:
+    with FETCH_PROGRESS_LOCK:
+        progress = FETCH_PROGRESS.get(selected)
+        if not progress or progress.get("kind") != "theme":
+            return
+        subjects = [dict(item) for item in progress.get("subjects") or [] if isinstance(item, dict)]
+        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=False)
+
+
+def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool) -> dict[str, Any]:
+    total = len(subjects)
+    completed = sum(1 for item in subjects if item.get("status") in {"success", "empty", "error"})
+    percent = round((completed / total) * 100) if total else 100
+    current = next((item.get("name") or "" for item in subjects if item.get("status") == "running"), "")
+    return {
+        "active": active,
+        "kind": "theme",
+        "completed": completed,
+        "total": total,
+        "percent": percent,
+        "currentSubject": current,
+        "subjects": subjects,
+    }
 
 
 def get_fetch_progress(selected: str) -> dict[str, Any] | None:
@@ -13886,15 +14085,12 @@ INDEX_HTML = """<!doctype html>
       z-index: 60;
       pointer-events: none;
     }
-    .app.sidebar-collapsed { --sidebar-width: 0px; grid-template-columns: 0 minmax(0, 1fr); }
-    .app.sidebar-collapsed .sidebar { padding: 0; border-right: 0; overflow: hidden; }
     .app.library-mode {
       --sidebar-width: 0px;
       grid-template-columns: minmax(0, 1fr);
       background: #fff;
     }
-    .app.library-mode .sidebar,
-    .app.library-mode .sidebar-edge {
+    .app.library-mode .sidebar {
       display: none;
     }
     .sidebar {
@@ -13916,31 +14112,6 @@ INDEX_HTML = """<!doctype html>
     }
     .brand h1 { font-size: 22px; margin: 0; letter-spacing: 0; }
     .today { color: var(--muted); font-size: 13px; white-space: nowrap; }
-    .sidebar-edge {
-      position: fixed;
-      left: var(--sidebar-width);
-      top: 50%;
-      transform: translate(-50%, -50%);
-      z-index: 30;
-      width: 14px;
-      min-height: 46px;
-      border: 0;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.62);
-      color: #98a2b3;
-      cursor: pointer;
-      box-shadow: none;
-      font-size: 10px;
-      line-height: 1;
-      opacity: 0.6;
-    }
-    .sidebar-edge:hover {
-      color: var(--accent);
-      background: #fff;
-      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.08);
-      opacity: 1;
-    }
-    .app.sidebar-collapsed .sidebar-edge { left: 8px; }
     .monthbar { display: grid; grid-template-columns: 38px 1fr 38px; gap: 8px; align-items: center; }
     .monthbar strong { text-align: center; font-size: 16px; }
     .iconbtn, .smallbtn {
@@ -14036,6 +14207,40 @@ INDEX_HTML = """<!doctype html>
       transform: translateX(-100%);
       animation: fetchTrackSweep 1.55s ease-in-out infinite;
     }
+    .theme-fetch-subjects {
+      display: grid;
+      gap: 6px;
+      margin-top: 2px;
+      text-align: left;
+    }
+    .theme-fetch-subject-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 28px;
+      padding: 5px 8px;
+      border: 1px solid rgba(15, 107, 110, 0.12);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .theme-fetch-subject-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .theme-fetch-subject-status { font-weight: 650; white-space: nowrap; }
+    .theme-fetch-subject-meta { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .theme-fetch-subject-row.ok .theme-fetch-subject-status { color: var(--ok); }
+    .theme-fetch-subject-row.warn .theme-fetch-subject-status,
+    .theme-fetch-subject-row.pending .theme-fetch-subject-status { color: var(--warn); }
+    .theme-fetch-subject-row.err .theme-fetch-subject-status { color: var(--accent-2); }
+    .theme-fetch-subject-row.live .theme-fetch-subject-status { color: var(--accent); }
     .arxiv-countdown {
       border: 1px solid rgba(15, 107, 110, 0.24);
       border-radius: 7px;
@@ -14841,7 +15046,7 @@ INDEX_HTML = """<!doctype html>
     .journal-tab {
       position: relative;
       flex: 0 0 auto;
-      min-width: 132px;
+      min-width: 104px;
       max-width: 260px;
       min-height: 46px;
       border: 1px solid var(--line);
@@ -14857,8 +15062,8 @@ INDEX_HTML = """<!doctype html>
       text-align: left;
     }
     .journal-tab.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-    .journal-tab img { max-width: 180px; max-height: 24px; object-fit: contain; display: block; }
-    .journal-tab-label { min-width: 0; font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .journal-tab img { max-width: 128px; max-height: 16px; object-fit: contain; display: block; }
+    .journal-tab-label { min-width: 0; font-size: 15px; font-weight: 650; line-height: 1.12; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .journal-tab-count { color: var(--muted); font-size: 12px; font-weight: 500; }
     .late-arrivals {
       display: flex;
@@ -16634,6 +16839,8 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-shell .library-detail .citation-source-cell.active {
       border: 0;
+      outline: 2px solid var(--accent);
+      outline-offset: -3px;
       box-shadow: none;
     }
     .library-columns {
@@ -17645,6 +17852,9 @@ INDEX_HTML = """<!doctype html>
       border-radius: 3px 3px 0 0;
       background: #526071;
     }
+    .my-publications-shell .library-detail .citation-bar {
+      background: var(--accent);
+    }
     .citation-empty { margin-top: 8px; color: var(--muted); font-size: 12px; }
     .citation-comments-row {
       display: flex;
@@ -17896,6 +18106,11 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-context-menu button:hover { background: rgba(0, 0, 0, 0.08); }
+    .library-context-menu .library-menu-separator {
+      height: 1px;
+      margin: 4px 6px;
+      background: rgba(0, 0, 0, 0.13);
+    }
     .library-context-menu button[data-action="delete-entry"],
     .library-context-menu button[data-action="delete-my-publication"] { color: #1f2328; }
     .library-context-menu button[data-action="delete-entry"]:hover,
@@ -17979,7 +18194,7 @@ INDEX_HTML = """<!doctype html>
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-      box-shadow: var(--shadow);
+      box-shadow: none;
       padding: 16px;
       outline: 0;
       transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
@@ -17987,8 +18202,10 @@ INDEX_HTML = """<!doctype html>
     }
     .paper.report-selected {
       border-color: rgba(15, 107, 110, 0.68);
+      border-width: 2px;
       background: #f7fcfb;
-      box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.18), var(--shadow);
+      box-shadow: none;
+      padding: 15px;
     }
     .paper.late-unread::before {
       content: "";
@@ -18549,7 +18766,6 @@ INDEX_HTML = """<!doctype html>
       display: none;
     }
     .app.loader-window-mode .sidebar,
-    .app.loader-window-mode .sidebar-edge,
     .app.loader-window-mode .workspace,
     .app.loader-window-mode .internal-browser,
     .app.loader-window-mode .library-quicklook,
@@ -18692,7 +18908,6 @@ INDEX_HTML = """<!doctype html>
     .citation-settings-status.err { color: #b42318; }
     @media (max-width: 480px) {
       .app { grid-template-columns: 1fr; }
-      .app.sidebar-collapsed { grid-template-columns: 1fr; }
       .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
       .main { padding: 20px; height: auto; overflow: visible; }
       body, .app { height: auto; overflow: auto; }
@@ -18732,7 +18947,7 @@ INDEX_HTML = """<!doctype html>
     </div>
   </div>
   <div class="window-drag-region" id="windowDragRegion" aria-hidden="true"></div>
-  <div class="app library-mode sidebar-collapsed">
+  <div class="app library-mode">
     <aside class="sidebar">
       <div class="brand">
         <div class="sidebar-view-switcher" id="sidebarViewSwitcher">
@@ -18779,7 +18994,6 @@ INDEX_HTML = """<!doctype html>
         <button class="smallbtn" id="addJournal">Add Journal</button>
       </div>
     </aside>
-    <button class="sidebar-edge" id="toggleSidebar" title="Hide filters">&lsaquo;&lsaquo;</button>
     <main class="main">
       <div class="workspace" id="workspace">
         <section class="report-column">
@@ -19686,7 +19900,9 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (data.progress) {
           state.fetchProgress[selectedDate] = data.progress;
-          if (state.fetchingDates.has(selectedDate)) {
+          if (data.progress.kind === "theme" && state.themeFetchingDates.has(selectedDate)) {
+            updateThemeFetchProgressDisplay(selectedDate);
+          } else if (state.fetchingDates.has(selectedDate)) {
             updateFetchProgressDisplay(selectedDate);
             refreshReportSnapshotDuringFetch(selectedDate);
           }
@@ -19770,7 +19986,7 @@ INDEX_HTML = """<!doctype html>
     async function loadLibrary(options = {}) {
       state.mode = "library";
       state.libraryTab = "library";
-      setSidebarCollapsed(true);
+      setPrimaryView("library");
       if (!options.force && state.libraryLoaded) {
         resetLibraryRootSelection();
         renderLibrary();
@@ -19796,7 +20012,7 @@ INDEX_HTML = """<!doctype html>
     async function loadMyPublications() {
       state.mode = "library";
       state.libraryTab = "my-publications";
-      setSidebarCollapsed(true);
+      setPrimaryView("my-publications");
       renderMyPublications();
       if (state.myPublicationsLoaded) return;
       const res = await fetch("/api/my-publications");
@@ -20896,7 +21112,7 @@ INDEX_HTML = """<!doctype html>
           throw new Error("This paper is not available in Library.");
         }
         state.mode = "library";
-        setSidebarCollapsed(true);
+        setPrimaryView("library");
         window.clearTimeout(librarySearchTimer);
         state.query = "";
         if ($("searchBox")) $("searchBox").value = "";
@@ -22334,6 +22550,106 @@ INDEX_HTML = """<!doctype html>
       return {percent, completed, total, detail};
     }
 
+    function updateThemeFetchProgressDisplay(selectedDate) {
+      if (state.mode !== "theme" || state.selectedDate !== selectedDate) return;
+      let panel = $("papers")?.querySelector("[data-theme-fetch-progress]");
+      if (!panel) {
+        renderThemeMonitor();
+        panel = $("papers")?.querySelector("[data-theme-fetch-progress]");
+        if (!panel) return;
+      }
+      const progress = normalizedThemeFetchProgress(selectedDate, state.themeSummary?.last_fetch || null);
+      panel.querySelector('[data-role="theme-fetch-percent"]').textContent = `${progress.percent}%`;
+      panel.querySelector('[data-role="theme-fetch-bar"]').style.width = `${progress.percent}%`;
+      panel.querySelector('[data-role="theme-fetch-detail"]').textContent = progress.detail;
+      const list = panel.querySelector('[data-role="theme-fetch-subjects"]');
+      if (list) list.innerHTML = themeFetchSubjectRows(progress.subjects);
+    }
+
+    function themeFetchProgressMarkup(selectedDate, lastFetch = null) {
+      const progress = normalizedThemeFetchProgress(selectedDate, lastFetch);
+      return `
+        <div class="empty fetch-progress theme-fetch-progress" data-theme-fetch-progress="${escapeAttr(selectedDate)}">
+          <div class="fetch-progress-head">
+            <strong>Fetching subject papers for ${escapeHtml(selectedDate)}. You can keep browsing other dates.</strong>
+            <span class="fetch-progress-percent" data-role="theme-fetch-percent">${progress.percent}%</span>
+          </div>
+          <div class="fetch-progress-track"><div class="fetch-progress-bar" data-role="theme-fetch-bar" style="width:${progress.percent}%"></div></div>
+          <div data-role="theme-fetch-detail">${escapeHtml(progress.detail)}</div>
+          <div class="theme-fetch-subjects" data-role="theme-fetch-subjects">${themeFetchSubjectRows(progress.subjects)}</div>
+          ${state.themeFetchingDates.has(selectedDate) ? `<button class="smallbtn theme-fetch-cancel-inline" type="button" data-action="cancel-theme-fetch">Cancel fetch</button>` : ""}
+        </div>
+      `;
+    }
+
+    function normalizedThemeFetchProgress(selectedDate, lastFetch = null) {
+      const live = state.fetchProgress[selectedDate]?.kind === "theme" ? state.fetchProgress[selectedDate] : null;
+      const subjects = live ? normalizedThemeProgressSubjects(live.subjects || []) : themeSubjectsFromLastFetch(lastFetch);
+      const total = Number(live?.total || subjects.length || 0);
+      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "error"].includes(item.status)).length || 0);
+      const percent = Math.max(0, Math.min(100, Number(live?.percent ?? (total ? Math.round((completed / total) * 100) : 0))));
+      const detail = total ? `${completed} / ${total} subjects completed` : "Preparing subject fetch";
+      return {percent, completed, total, detail, subjects};
+    }
+
+    function normalizedThemeProgressSubjects(subjects) {
+      return (subjects || []).map((item) => ({
+        key: String(item?.key || ""),
+        name: String(item?.name || item?.key || "Subject"),
+        status: String(item?.status || "pending"),
+        records_found: Number(item?.records_found || 0),
+        raw_results: Number(item?.raw_results || 0),
+        message: String(item?.message || "")
+      }));
+    }
+
+    function themeSubjectsFromLastFetch(lastFetch) {
+      const groups = lastFetch?.groups || {};
+      return selectedThemeGroupKeys().map((key) => {
+        const item = groups[key] || null;
+        return {
+          key,
+          name: themeGroupLabelForKey(key),
+          status: item?.status || "not_fetched",
+          records_found: Number(item?.records_found || 0),
+          raw_results: 0,
+          message: String(item?.message || "")
+        };
+      });
+    }
+
+    function themeFetchSubjectRows(subjects) {
+      return (subjects || []).map((item) => {
+        const status = themeFetchSubjectStatus(item);
+        const meta = themeFetchSubjectMeta(item);
+        return `
+          <div class="theme-fetch-subject-row ${escapeAttr(status.className)}">
+            <span class="theme-fetch-subject-name">${escapeHtml(item.name || item.key || "Subject")}</span>
+            <span class="theme-fetch-subject-status">${escapeHtml(status.label)}</span>
+            ${meta ? `<span class="theme-fetch-subject-meta">${escapeHtml(meta)}</span>` : ""}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function themeFetchSubjectStatus(item) {
+      const status = String(item?.status || "pending");
+      if (status === "success") return {label: "Fetched", className: "ok"};
+      if (status === "empty") return {label: "Fetched, no matches", className: "warn"};
+      if (status === "error") return {label: "Failed", className: "err"};
+      if (status === "running") return {label: "Fetching", className: "live"};
+      if (status === "not_fetched") return {label: "Not fetched", className: "pending"};
+      return {label: "Pending", className: "pending"};
+    }
+
+    function themeFetchSubjectMeta(item) {
+      const status = String(item?.status || "");
+      if (status === "success" || status === "empty") return `${Number(item.records_found || 0)} saved`;
+      if (status === "error") return item.message || "No successful source fetches";
+      if (status === "running") return "Searching metadata sources";
+      return "";
+    }
+
     function renderLibraryLoader() {
       const backdrop = $("libraryLoaderBackdrop");
       const root = $("libraryLoaderModalBody");
@@ -22774,17 +23090,22 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
-          <button type="button" data-action="sort-by-name">Sort by Name</button>
-          <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
-          <button type="button" data-action="rename-entry">Rename</button>
-          <button type="button" data-action="rename-pdf-metadata">Rename PDF from Metadata</button>
-          <button type="button" data-action="copy-entry">Copy</button>
-          <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
+          <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
-          <button type="button" data-action="copy-folder-desktop">Make Copy Desktop</button>
+          <div class="library-menu-separator" role="separator"></div>
+          <button type="button" data-action="rename-entry">Rename</button>
+          <button type="button" data-action="rename-pdf-metadata">Auto rename from Metadata</button>
           <button type="button" data-action="color-folder">Color</button>
+          <div class="library-menu-separator" role="separator"></div>
+          <button type="button" data-action="copy-entry">Copy</button>
+          <button type="button" data-action="add-to-my-publications">Add to My Publications</button>
+          <button type="button" data-action="copy-folder-desktop">Make Copy Desktop</button>
           <button type="button" data-action="paste-entry">Paste</button>
+          <div class="library-menu-separator" role="separator"></div>
+          <button type="button" data-action="sort-by-name">Sort by Name</button>
+          <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
+          <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="recover-entry">Recover</button>
           <button type="button" data-action="delete-recycle-all">Delete All</button>
           <button type="button" data-action="delete-entry">Delete</button>
@@ -28573,6 +28894,28 @@ INDEX_HTML = """<!doctype html>
       $("myPublicationContextMenu")?.classList.remove("open");
     }
 
+    function refreshLibraryContextMenuSeparators(menu) {
+      if (!menu) return;
+      const entries = Array.from(menu.children).filter((child) => child.matches?.("button, .library-menu-separator"));
+      entries.forEach((child) => {
+        if (child.classList.contains("library-menu-separator")) child.style.display = "none";
+      });
+      let hasVisibleGroup = false;
+      let pendingSeparator = null;
+      entries.forEach((child) => {
+        if (child.classList.contains("library-menu-separator")) {
+          if (hasVisibleGroup && !pendingSeparator) pendingSeparator = child;
+          return;
+        }
+        if (!child.matches("button") || child.style.display === "none") return;
+        if (pendingSeparator) {
+          pendingSeparator.style.display = "";
+          pendingSeparator = null;
+        }
+        hasVisibleGroup = true;
+      });
+    }
+
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
       hideMyPublicationContextMenu();
@@ -28745,6 +29088,7 @@ INDEX_HTML = """<!doctype html>
         hideLibraryContextMenu();
         await runLibraryMenuAction(() => createLibraryFolder(Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId)));
       };
+      refreshLibraryContextMenuSeparators(menu);
     }
 
     function hideLibraryContextMenu() {
@@ -29583,17 +29927,6 @@ INDEX_HTML = """<!doctype html>
       updateReportPanelToggle();
     }
 
-    function updateSidebarToggle() {
-      const collapsed = document.querySelector(".app").classList.contains("sidebar-collapsed");
-      $("toggleSidebar").innerHTML = collapsed ? "&rsaquo;&rsaquo;" : "&lsaquo;&lsaquo;";
-      $("toggleSidebar").title = collapsed ? "Show filters" : "Hide filters";
-    }
-
-    function setSidebarCollapsed(collapsed) {
-      document.querySelector(".app").classList.toggle("sidebar-collapsed", Boolean(collapsed));
-      updateSidebarToggle();
-    }
-
     function updateReportPanelToggle() {
       const workspace = $("workspace");
       const collapsed = workspace.classList.contains("report-collapsed");
@@ -30307,6 +30640,26 @@ INDEX_HTML = """<!doctype html>
       return keys.length === knownThemeGroupKeys().length ? "All Subjects" : (keys.map(themeGroupLabelForKey).join(", ") || "No Subjects");
     }
 
+    function initialThemeFetchProgress() {
+      const subjects = selectedThemeGroupKeys().map((key) => ({
+        key,
+        name: themeGroupLabelForKey(key),
+        status: "pending",
+        records_found: 0,
+        raw_results: 0,
+        message: ""
+      }));
+      return {
+        active: true,
+        kind: "theme",
+        completed: 0,
+        total: subjects.length,
+        percent: 0,
+        currentSubject: "",
+        subjects
+      };
+    }
+
     function themeLastFetchCacheKey(selectedDate, groupParam) {
       return `${selectedDate}|${groupParam || "ALL"}`;
     }
@@ -30421,6 +30774,8 @@ INDEX_HTML = """<!doctype html>
         if (shouldFetchRemote) {
           state.themeFetchingDates.add(selectedDate);
           state.themeFetchControllers.set(selectedDate, controller);
+          state.fetchProgress[selectedDate] = initialThemeFetchProgress();
+          await startProgressPolling(selectedDate);
         }
         state.themeSummaryGroupParam = requestedGroupParam;
         const cachedPapers = cachedThemePapers(selectedDate, requestedGroupParam);
@@ -30485,6 +30840,7 @@ INDEX_HTML = """<!doctype html>
         window.clearTimeout(timeout);
         if (state.themeFetchingDates.has(selectedDate)) state.themeFetchingDates.delete(selectedDate);
         if (state.themeFetchControllers.get(selectedDate) === controller) state.themeFetchControllers.delete(selectedDate);
+        stopProgressPolling(selectedDate);
         if (state.mode === "theme") renderCalendar();
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
         if (requestSequence === state.themeRequestSequence && state.mode === "theme" && state.selectedDate === selectedDate) {
@@ -30514,6 +30870,8 @@ INDEX_HTML = """<!doctype html>
       const timeout = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
       state.themeFetchingDates.add(selectedDate);
       state.themeFetchControllers.set(selectedDate, controller);
+      state.fetchProgress[selectedDate] = initialThemeFetchProgress();
+      await startProgressPolling(selectedDate);
       state.themeSummaryGroupParam = requestedGroupParam;
       restoreCachedThemePapers(selectedDate, requestedGroupParam);
       if (state.mode === "theme") {
@@ -30556,6 +30914,7 @@ INDEX_HTML = """<!doctype html>
         window.clearTimeout(timeout);
         state.themeFetchingDates.delete(selectedDate);
         state.themeFetchControllers.delete(selectedDate);
+        stopProgressPolling(selectedDate);
         if (state.mode === "theme") renderCalendar();
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
         if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
@@ -30569,6 +30928,7 @@ INDEX_HTML = """<!doctype html>
       if (controller) controller.abort();
       state.themeFetchingDates.delete(selectedDate);
       state.themeFetchControllers.delete(selectedDate);
+      stopProgressPolling(selectedDate);
       restoreCachedThemePapers(selectedDate, selectedThemeGroupParam());
       if (state.mode === "theme") renderCalendar();
       if (state.mode === "theme" && state.selectedDate === selectedDate) renderThemeMonitor();
@@ -30716,7 +31076,7 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
       stopArxivUpdateCountdown();
       clearFetchProgressDisplay();
-      setSidebarCollapsed(false);
+      setPrimaryView("theme");
       await ensureThemeGroupsLoaded();
       state.themeFromDate = state.selectedDate;
       state.themeUntilDate = state.selectedDate;
@@ -30818,10 +31178,7 @@ INDEX_HTML = """<!doctype html>
         ? `${dateLabel} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
         : "Choose a date on the calendar to fetch subject-matched papers from multiple metadata sources.";
       if (currentThemeBusy) {
-        const progress = document.createElement("div");
-        progress.className = "empty fetch-progress";
-        progress.innerHTML = `<div class="fetch-progress-head"><strong>Fetching subject papers for ${escapeHtml(state.selectedDate)}...</strong></div><div>${escapeHtml(lastFetchLabel)}</div>${selectedDateFetching ? `<button class="smallbtn theme-fetch-cancel-inline" type="button" data-action="cancel-theme-fetch">Cancel fetch</button>` : ""}`;
-        root.appendChild(progress);
+        root.insertAdjacentHTML("beforeend", themeFetchProgressMarkup(state.selectedDate, summary.last_fetch));
         root.querySelector('[data-action="cancel-theme-fetch"]')?.addEventListener("click", () => cancelThemeFetch(state.selectedDate));
         if (!state.themePapers.length) return;
       }
@@ -30910,7 +31267,7 @@ INDEX_HTML = """<!doctype html>
     async function openJournalMonitor() {
       state.mode = "report";
       applyCalendarState("report");
-      setSidebarCollapsed(false);
+      setPrimaryView("report");
       await loadMonth();
       await loadReport({showLoading: false});
     }
@@ -30960,10 +31317,11 @@ INDEX_HTML = """<!doctype html>
 
     function setPrimaryView(view) {
       const isLibrarySurface = view === "library" || view === "my-publications" || view === "deep-survey";
-      document.querySelector(".app")?.classList.toggle("library-mode", isLibrarySurface);
-      document.querySelector(".app")?.classList.toggle("report-mode", view === "report");
-      document.querySelector(".app")?.classList.toggle("deep-survey-mode", view === "deep-survey");
-      document.querySelector(".app")?.classList.toggle("theme-mode", view === "theme");
+      const app = document.querySelector(".app");
+      app?.classList.toggle("library-mode", isLibrarySurface);
+      app?.classList.toggle("report-mode", view === "report");
+      app?.classList.toggle("deep-survey-mode", view === "deep-survey");
+      app?.classList.toggle("theme-mode", view === "theme");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
@@ -31063,10 +31421,6 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         saveMyPublicationName().catch(() => {});
       }
-    });
-    $("toggleSidebar").addEventListener("click", () => {
-      const collapsed = document.querySelector(".app").classList.contains("sidebar-collapsed");
-      setSidebarCollapsed(!collapsed);
     });
     $("toggleReportPanel").addEventListener("click", toggleReportPanel);
     $("workspaceResizer").addEventListener("pointerdown", startWorkspaceResize);
@@ -31333,7 +31687,6 @@ INDEX_HTML = """<!doctype html>
       window.setTimeout(() => {
         fetch("/api/arxiv-daily-refresh").catch(() => {});
       }, 1600);
-      updateSidebarToggle();
       updateReportPanelToggle();
     }
   </script>
