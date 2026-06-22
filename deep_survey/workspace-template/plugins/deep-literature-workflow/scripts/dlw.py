@@ -215,10 +215,9 @@ def write_workspace_index(state: dict[str, Any]) -> Path:
 ## Shared Rules
 
 - Do not delete or rewrite another topic vault unless explicitly asked.
-- Chrome is authorized for literature downloads only through the `chrome-literature-downloader` skill.
 - Use legal metadata and PDF sources only; do not use Sci-Hub or unauthorized sources.
-- Always use the `chrome-literature-downloader` skill for article/PDF downloads.
-- Downloads should land in `~/Downloads` first, then be validated before import.
+- Stage 3 is manual-download only: create linked download queues, wait for user-provided PDFs, then validate and import them.
+- Do not start automatic PDF downloaders or browser download scripts unless the user explicitly asks outside the Stage 3 app workflow.
 - Do not commit automatically after small edits; commit only when asked or at a meaningful milestone.
 
 ## Current Plugin State
@@ -296,7 +295,7 @@ def cmd_next(args: argparse.Namespace) -> None:
     guidance = {
         "stage_1_discovery": "Discover 200-500 candidates from OpenAlex/Semantic Scholar, dedupe, and score to 40-80 core candidates.",
         "stage_2_screening": "Audit core candidates, remove broad background papers, and choose 15-25 deep-reading papers.",
-        "stage_3_pdf_acquisition": "Use chrome-literature-downloader, validate PDFs, import manual PDFs, and update inventory.",
+        "stage_3_pdf_acquisition": "Use the manual download queue, import user-provided PDFs, validate them, and update inventory.",
         "stage_4_paper_deep_reading": "Use paper-broad-reading-analysis to rebuild PDF-backed paper notes.",
         "stage_5a_concept_notes": "Write numbered concept knowledge notes under 03_Concepts, using 01_Concept_Index.md and 02_... onward for the recommended reading order.",
         "stage_5b_review_synthesis": "Write a domain review covering field structure, directions, methods, controversies, and expansion route. Store the reader-facing note as 02_Review.md; numbering follows reading order, not generation stage.",

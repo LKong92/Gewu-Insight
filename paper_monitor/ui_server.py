@@ -23775,6 +23775,9 @@ INDEX_HTML = """<!doctype html>
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
       if (!droppedPaths.length) return;
+      if (state.mode === "deep-survey") {
+        return;
+      }
       if (state.mode !== "library") {
         renderLibrary();
       }

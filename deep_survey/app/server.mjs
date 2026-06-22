@@ -1,6 +1,6 @@
 import { spawn, execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,6 +32,7 @@ const codexModel = process.env.CODEX_DLW_MODEL || "gpt-5.5";
 const codexSandbox = process.env.CODEX_DLW_SANDBOX || "danger-full-access";
 const codexApprovalPolicy = process.env.CODEX_DLW_APPROVAL_POLICY || "never";
 const codexBinary = "/Applications/Codex.app/Contents/Resources/codex";
+const pythonBinary = process.env.CODEX_DLW_PYTHON || "/usr/bin/python3";
 const commandPath = [
   "/Applications/Codex.app/Contents/Resources",
   "/opt/homebrew/bin",
@@ -49,6 +50,7 @@ const childEnv = {
   LC_ALL: process.env.LC_ALL || "en_US.UTF-8",
   PYTHONIOENCODING: process.env.PYTHONIOENCODING || "utf-8"
 };
+childEnv.PYTHONDONTWRITEBYTECODE = process.env.PYTHONDONTWRITEBYTECODE || "1";
 const codexAppServer = new CodexAppServerClient({
   codexPath: codexBinary,
   cwd: workspaceRoot,
@@ -158,6 +160,19 @@ function readRequestBody(req) {
   });
 }
 
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeAppleScriptString(value = "") {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 async function readJsonIfExists(filePath) {
   try {
     const raw = await readFile(filePath, "utf8");
@@ -226,16 +241,41 @@ async function skillDirStatus(skillName) {
   };
 }
 
+async function pluginDirsEquivalent(sourceDir, targetDir) {
+  const relativeFiles = [
+    ".codex-plugin/plugin.json",
+    "README.md",
+    "scripts/dlw.py",
+    "skills/deep-literature-workflow/SKILL.md"
+  ];
+  for (const relPath of relativeFiles) {
+    const [source, target] = await Promise.all([
+      safeReadText(path.join(sourceDir, relPath)),
+      safeReadText(path.join(targetDir, relPath))
+    ]);
+    if (!source || source !== target) return false;
+  }
+  return true;
+}
+
 async function copyBundledPluginIfMissing(targetDir) {
   if (!(await pathExists(bundledDlwPluginDir))) {
     return { ok: false, installed: false, error: "Bundled Deep Literature Workflow plugin template is missing." };
   }
   const before = await pluginDirStatus(targetDir);
-  if (before.ok) return { ok: true, installed: false, status: before };
+  if (before.ok && await pluginDirsEquivalent(bundledDlwPluginDir, targetDir)) {
+    return { ok: true, installed: false, changed: false, status: before };
+  }
   await mkdir(path.dirname(targetDir), { recursive: true });
-  await cp(bundledDlwPluginDir, targetDir, { recursive: true, force: false, errorOnExist: false });
+  await cp(bundledDlwPluginDir, targetDir, { recursive: true, force: true, errorOnExist: false });
   const after = await pluginDirStatus(targetDir);
-  return { ok: after.ok, installed: true, status: after, error: after.ok ? null : "Plugin copy finished, but required files are still missing." };
+  return {
+    ok: after.ok,
+    installed: !before.ok,
+    changed: before.ok,
+    status: after,
+    error: after.ok ? null : "Plugin copy finished, but required files are still missing."
+  };
 }
 
 async function copyBundledSkillIfMissing(skillName) {
@@ -260,7 +300,7 @@ async function ensureBundledDlwPluginInstalled() {
   }
   const marketplace = await ensureDeepResearchMarketplace();
   const config = await ensureCodexDeepResearchPluginEnabled();
-  if (workspace.installed || cache.installed || Object.values(bundledSkills).some((item) => item.installed) || marketplace.changed || config.changed) {
+  if (workspace.installed || workspace.changed || cache.installed || cache.changed || Object.values(bundledSkills).some((item) => item.installed) || marketplace.changed || config.changed) {
     codexAppServer.stop();
   }
   return { workspace, cache, bundledSkills, marketplace, config };
@@ -554,7 +594,7 @@ async function getStatus() {
     execFileText("codex", ["--version"], { cwd: workspaceRoot }),
     Promise.resolve({ ok: true, stdout: process.version }),
     existsSync(dlwScript)
-      ? execFileText("python3", [dlwScript, "status"], { cwd: workspaceRoot })
+      ? execFileText(pythonBinary, [dlwScript, "status"], { cwd: workspaceRoot })
       : Promise.resolve({ ok: false, stdout: "", stderr: "dlw.py not found" }),
     listStage3DownloadProcesses()
   ]);
@@ -704,7 +744,7 @@ function buildSelectedTopic(activeState, topics, vault) {
     nextStage,
     stages: stages.map(([id, label]) => {
       const rawStatus = selectedState?.stage_status?.[id] ?? "unknown";
-      const isActive = selectedState?.current_stage === id && rawStatus !== "done";
+      const isActive = nextStage === id && rawStatus !== "done";
       return {
         id,
         label,
@@ -822,6 +862,348 @@ function pdfExistsForPaper(note, pdfNames) {
   return Boolean(normalizedTitle) && pdfNames.some((name) => name.toLowerCase().includes(normalizedTitle));
 }
 
+function expectedPdfNameForNote(note) {
+  return note?.name ? note.name.replace(/\.md$/i, ".pdf") : "";
+}
+
+function normalizeForMatch(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/10\.\d{4,9}\//g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function uniqueValues(values) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function normalizeDoi(value = "") {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "")
+    .replace(/[)\].,;:\s]+$/g, "")
+    .toLowerCase();
+}
+
+function extractDoiValues(text = "") {
+  return uniqueValues((text.match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi) || [])
+    .map(normalizeDoi));
+}
+
+function extractUrls(text = "") {
+  const urls = (text.match(/https?:\/\/[^\s<>)\]]+/gi) || [])
+    .map((url) => url.replace(/[)\].,;:\s]+$/g, ""));
+  return uniqueValues(urls);
+}
+
+function urlKind(url = "") {
+  if (/doi\.org\/10\./i.test(url)) return "DOI";
+  if (/\.pdf(\?|$)|\/pdf\b/i.test(url)) return "PDF";
+  if (/openalex|semanticscholar|crossref|pubmed|arxiv/i.test(url)) return "metadata";
+  return "site";
+}
+
+function linkObjectsFromText(text = "") {
+  const urls = extractUrls(text).map((url) => ({ url, label: urlKind(url) }));
+  for (const doi of extractDoiValues(text)) {
+    const doiUrl = `https://doi.org/${doi}`;
+    if (!urls.some((item) => item.url.toLowerCase() === doiUrl.toLowerCase())) {
+      urls.unshift({ url: doiUrl, label: "DOI" });
+    }
+  }
+  return urls.slice(0, 8);
+}
+
+function paperEntryFromNote(note, pdfNames = []) {
+  const expectedFilename = expectedPdfNameForNote(note);
+  const imported = pdfExistsForPaper(note, pdfNames);
+  return {
+    order: note.number || null,
+    title: note.label || stripMarkdownTitle(note.name),
+    expectedFilename,
+    imported,
+    links: linkObjectsFromText(note.content || "")
+  };
+}
+
+function noteDisplayTitle(note) {
+  const title = note?.label || stripMarkdownTitle(note?.name || "");
+  if (/^\s*\d{1,3}\s*[.)]/.test(title)) return title;
+  const order = note?.number ? String(note.number).padStart(2, "0") : "";
+  return order ? `${order}. ${title}` : title;
+}
+
+function missingPdfEntry(note) {
+  return {
+    order: note?.number || null,
+    title: noteDisplayTitle(note),
+    expectedFilename: expectedPdfNameForNote(note)
+  };
+}
+
+async function buildManualDownloadEntries(vaultRoot) {
+  const [notes, pdfNames] = await Promise.all([listPaperNotes(vaultRoot), listVaultPdfs(vaultRoot)]);
+  const entries = notes.map((note, index) => ({
+    ...paperEntryFromNote(note, pdfNames),
+    order: note.number || index + 1
+  }));
+  const queuePath = path.join(vaultRoot, "04_Evidence_Tables/09_manual_pdf_download_queue.md");
+  const queueText = await safeReadText(queuePath);
+  return {
+    entries,
+    queuePath,
+    queueRelativePath: "04_Evidence_Tables/09_manual_pdf_download_queue.md",
+    queueExists: Boolean(queueText),
+    queueLinks: linkObjectsFromText(queueText)
+  };
+}
+
+function renderManualDownloadListHtml(vaultRoot, data) {
+  const pendingEntries = data.entries.filter((entry) => !entry.imported);
+  const rows = pendingEntries.map((entry) => {
+    const links = entry.links.length
+      ? entry.links.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join(" ")
+      : `<span class="muted">No link found in note yet</span>`;
+    return `<li>
+      <div class="paper">
+        <div class="title">${escapeHtml(entry.title)}</div>
+        <div class="meta">${escapeHtml(entry.expectedFilename || "Expected PDF filename unavailable")}</div>
+        <div class="links">${links}</div>
+      </div>
+      <div class="status">Needs PDF</div>
+    </li>`;
+  }).join("\n");
+  const queueLinks = data.queueLinks.length
+    ? `<section><h2>All Links Found In Manual Queue</h2><p>${data.queueLinks.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.url)}</a>`).join("<br>")}</p></section>`
+    : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Manual PDF Download List</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 28px; color: #17202d; background: #fbfcfe; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .hint { color: #687386; margin: 0 0 22px; }
+    ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+    li { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 14px; padding: 14px 0; border-top: 1px solid #d8dee8; }
+    .title { font-weight: 800; line-height: 1.35; }
+    .meta, .muted { color: #687386; font-size: 13px; margin-top: 4px; overflow-wrap: anywhere; }
+    .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    a { color: #087b7c; font-weight: 700; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .status { color: #a65d12; font-weight: 800; text-align: right; }
+    li.done .status { color: #218554; }
+    section { margin-top: 28px; border-top: 1px dashed #d8dee8; padding-top: 18px; }
+    h2 { font-size: 16px; }
+  </style>
+</head>
+<body>
+  <h1>Manual PDF Download List</h1>
+  <p class="hint">${escapeHtml(vaultRoot)}<br>${pendingEntries.length} PDF(s) still need manual download. Open each legal source link, download the main article PDF, then choose the PDF files in Deep Survey.</p>
+  <ol>${rows || "<li>All queued PDFs have been imported.</li>"}</ol>
+  ${queueLinks}
+</body>
+</html>`;
+}
+
+function parsePdfInfoValue(output = "", key = "") {
+  const pattern = new RegExp(`^${key}:\\s*(.*)$`, "im");
+  const match = output.match(pattern);
+  return match?.[1]?.trim() || "";
+}
+
+async function pdfEvidenceForPath(filePath) {
+  const [info, text] = await Promise.all([
+    execFileText("pdfinfo", [filePath], { cwd: workspaceRoot }),
+    execFileText("pdftotext", ["-f", "1", "-l", "2", filePath, "-"], { cwd: workspaceRoot })
+  ]);
+  const infoText = info.ok ? info.stdout : "";
+  const textSample = text.ok ? text.stdout.slice(0, 12000) : "";
+  const title = parsePdfInfoValue(infoText, "Title");
+  const subject = parsePdfInfoValue(infoText, "Subject");
+  const keywords = parsePdfInfoValue(infoText, "Keywords");
+  return {
+    title,
+    subject,
+    keywords,
+    dois: extractDoiValues([title, subject, keywords, textSample].join("\n")),
+    titleHaystack: normalizeForMatch([title, subject, textSample.slice(0, 5000)].join(" "))
+  };
+}
+
+function noteDoi(note) {
+  return extractDoiValues(note?.content || "")[0] || "";
+}
+
+function noteTitle(note) {
+  return String(note?.label || stripMarkdownTitle(note?.name || "")).replace(/^\s*\d{1,3}\s*[.)]\s*/, "");
+}
+
+function titlePrefix(value = "", tokenCount = 10) {
+  return normalizeForMatch(value).split(" ").filter(Boolean).slice(0, tokenCount).join(" ");
+}
+
+function titleMatchScore(note, evidence) {
+  const title = noteTitle(note);
+  const normalizedTitle = normalizeForMatch(title);
+  const haystack = evidence.titleHaystack || "";
+  if (!normalizedTitle || !haystack) return 0;
+  if (haystack.includes(normalizedTitle) || normalizedTitle.includes(normalizeForMatch(evidence.title || ""))) return 90;
+  const prefix = titlePrefix(title, 10);
+  if (prefix && haystack.includes(prefix)) return 84;
+  const shorterPrefix = titlePrefix(title, 7);
+  if (shorterPrefix && haystack.includes(shorterPrefix)) return 72;
+  return 0;
+}
+
+function scorePdfEvidence(evidence, note, sourceName = "") {
+  const expectedDoi = noteDoi(note);
+  const pdfDois = evidence.dois || [];
+  if (expectedDoi && pdfDois.length) {
+    if (pdfDois.includes(expectedDoi)) return 120;
+    return -100;
+  }
+  const titleScore = titleMatchScore(note, evidence);
+  if (!titleScore) return 0;
+  const noteNumber = paperNumberPattern(note.number);
+  const fileNumber = paperNumberPattern(paperNumberFromName(sourceName));
+  return titleScore + (noteNumber && fileNumber && noteNumber === fileNumber ? 5 : 0);
+}
+
+async function bestPdfMatch(filePath, notes) {
+  const evidence = await pdfEvidenceForPath(filePath);
+  const sourceName = path.basename(filePath);
+  const ranked = notes
+    .map((note) => ({ note, score: scorePdfEvidence(evidence, note, sourceName) }))
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0];
+  const second = ranked[1];
+  if (!best || best.score < 70 || (second && best.score - second.score < 12)) {
+    return { match: null, evidence, ranked };
+  }
+  return { match: best, evidence, ranked };
+}
+
+async function moveFileAcrossVolumes(sourcePath, targetPath) {
+  try {
+    await rename(sourcePath, targetPath);
+  } catch (error) {
+    if (error?.code !== "EXDEV") throw error;
+    await copyFile(sourcePath, targetPath);
+    await unlink(sourcePath);
+  }
+}
+
+async function importManualPdfPaths(vaultRoot, paths = []) {
+  const sourcePaths = Array.isArray(paths)
+    ? paths.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  if (!sourcePaths.length) return { ok: false, imported: [], failed: [{ error: "No PDF files were selected." }] };
+  const notes = await listPaperNotes(vaultRoot);
+  const pdfDir = path.join(vaultRoot, "06_PDFs");
+  await mkdir(pdfDir, { recursive: true });
+  const imported = [];
+  const failed = [];
+  for (const sourcePath of sourcePaths) {
+    const filename = path.basename(sourcePath);
+    try {
+      const resolved = path.resolve(sourcePath);
+      if (!filename.toLowerCase().endsWith(".pdf")) {
+        failed.push({ filename, sourcePath, error: "Only PDF files can be imported." });
+        continue;
+      }
+      const fileStat = await stat(resolved);
+      if (!fileStat.isFile()) {
+        failed.push({ filename, sourcePath, error: "Selected item is not a file." });
+        continue;
+      }
+      const { match, evidence, ranked } = await bestPdfMatch(resolved, notes);
+      if (!match) {
+        const best = ranked?.[0];
+        const doiText = evidence?.dois?.length ? ` DOI found: ${evidence.dois.join(", ")}.` : "";
+        const bestText = best ? ` Best candidate: ${noteDisplayTitle(best.note)} (score ${best.score}).` : "";
+        failed.push({ filename, sourcePath, error: `Could not confidently match this PDF by DOI/title.${doiText}${bestText}` });
+        continue;
+      }
+      const targetName = expectedPdfNameForNote(match.note);
+      const targetPath = path.join(pdfDir, targetName);
+      if (await pathExists(targetPath)) {
+        const existing = await bestPdfMatch(targetPath, [match.note]);
+        const samePaper = Boolean(existing.match);
+        failed.push({
+          filename,
+          sourcePath,
+          match: match.note.label,
+          target: targetName,
+          error: samePaper
+            ? "Target PDF already exists in 06_PDFs."
+            : "Target filename is occupied by a PDF that does not verify against this paper."
+        });
+        continue;
+      }
+      await moveFileAcrossVolumes(resolved, targetPath);
+      imported.push({ filename, sourcePath, match: match.note.label, target: targetName, score: match.score });
+    } catch (error) {
+      failed.push({ filename, sourcePath, error: error.message || String(error) });
+    }
+  }
+  return { ok: imported.length > 0, imported, failed };
+}
+
+async function choosePdfFilesWithDialog(prompt = "Choose PDF files for Stage 3") {
+  const safePrompt = escapeAppleScriptString(prompt);
+  const script = `
+set selectedFiles to choose file with prompt "${safePrompt}" of type {"com.adobe.pdf", "PDF"} with multiple selections allowed
+set outputText to ""
+repeat with selectedFile in selectedFiles
+  set outputText to outputText & POSIX path of selectedFile & linefeed
+end repeat
+return outputText`;
+  const result = await execFileText("osascript", ["-e", script], { cwd: workspaceRoot });
+  if (!result.ok) {
+    const message = result.stderr || result.error || "";
+    if (/User canceled/i.test(message)) return { cancelled: true, paths: [] };
+    return { error: message || "PDF selection failed", status: 500, paths: [] };
+  }
+  const paths = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return paths.length ? { paths } : { cancelled: true, paths: [] };
+}
+
+async function maybeCompleteStage3AfterImport(vaultRoot) {
+  const [notes, pdfNames] = await Promise.all([listPaperNotes(vaultRoot), listVaultPdfs(vaultRoot)]);
+  if (!notes.length) return { complete: false, reason: "No paper notes found." };
+  const missing = notes
+    .filter((note) => !pdfExistsForPaper(note, pdfNames))
+    .map((note) => missingPdfEntry(note));
+  if (missing.length) return { complete: false, missing };
+  const clear = await execFileText(pythonBinary, [
+    dlwScript,
+    "manual-pdf-clear",
+    "--note",
+    "Stage 3 complete: all manual PDFs imported."
+  ], { cwd: workspaceRoot });
+  const mark = await execFileText(pythonBinary, [
+    dlwScript,
+    "mark",
+    "stage_3_pdf_acquisition",
+    "done",
+    "--note",
+    "Stage 3 complete: all manual PDFs imported through the Deep Survey file chooser."
+  ], { cwd: workspaceRoot });
+  return {
+    complete: mark.ok,
+    mark: { ok: mark.ok, stderr: mark.stderr.trim(), error: mark.error },
+    clear: { ok: clear.ok, stderr: clear.stderr.trim(), error: clear.error }
+  };
+}
+
 function deepReadStatus(note) {
   const text = note.content || "";
   if (/needs_correct_main_pdf|supplementary_only|blocked/i.test(text)) {
@@ -894,25 +1276,36 @@ async function buildStageDetails(selectedTopic = {}) {
   }
 
   if (stage === "stage_3_pdf_acquisition") {
-    const [notes, pdfNames] = await Promise.all([listPaperNotes(vaultRoot), listVaultPdfs(vaultRoot)]);
-    const items = notes.map((note, index) => {
-      const done = pdfExistsForPaper(note, pdfNames);
-      return {
-        order: note.number || index + 1,
-        label: note.label,
-        done,
-        meta: done ? "PDF in 06_PDFs" : "PDF not in local vault"
-      };
-    });
-    if (!items.length) {
-      return {
-        stage,
-        title: "PDF Acquisition",
-        empty: pdfNames.length ? "PDFs exist in 06_PDFs, but no paper notes were found." : "No PDF queue or paper notes found yet.",
-        items: pdfNames.slice(0, 40).map((name, index) => ({ order: index + 1, label: stripMarkdownTitle(name), done: true, meta: "PDF in 06_PDFs" }))
-      };
-    }
-    return { stage, title: "PDF Acquisition", empty: "No PDF queue found yet.", items };
+    const data = await buildManualDownloadEntries(vaultRoot);
+    const importedCount = data.entries.filter((entry) => entry.imported).length;
+    const pendingCount = Math.max(data.entries.length - importedCount, 0);
+    return {
+      stage,
+      title: "Manual PDF Download",
+      empty: "",
+      message: data.entries.length
+        ? `${pendingCount} PDF(s) still need manual download. Open the queued literature links, download the main article PDFs, then choose the downloaded files here to move them into 06_PDFs.`
+        : "Stage 3 is manual-only. After Stage 2 creates the deep-reading queue, open the download list and choose downloaded PDFs here.",
+      stats: [
+        { label: "Queued papers", value: data.entries.length },
+        { label: "Imported PDFs", value: importedCount },
+        { label: "Pending PDFs", value: pendingCount }
+      ],
+      actions: [
+        {
+          id: "openStage3DownloadList",
+          label: "Open Download List",
+          meta: data.queueExists
+            ? "Uses 09_manual_pdf_download_queue.md plus paper-note links."
+            : "Builds the list from Stage 2 paper notes."
+        }
+      ],
+      dropZone: {
+        label: "Choose PDFs",
+        meta: "Select one or more PDFs in Finder. The app matches each file to the planned paper and moves it into 06_PDFs with the expected filename."
+      },
+      items: []
+    };
   }
 
   if (stage === "stage_4_paper_deep_reading") {
@@ -936,21 +1329,24 @@ async function buildStageDetails(selectedTopic = {}) {
   }
 
   if (stage === "stage_1_discovery") {
-    const firstPassDone = await pathExists(path.join(vaultRoot, "04_Evidence_Tables/03_stage1_candidates.csv"));
-    const coreDone = await pathExists(path.join(vaultRoot, "04_Evidence_Tables/04_stage1_core_candidates.csv"));
+    const quality = await stage1DiscoveryQuality(vaultRoot);
     return {
       stage,
       title: "Discovery",
       items: [
         progressItem(
           "Discover 200-500 candidate papers",
-          "Search legal metadata sources such as OpenAlex and Semantic Scholar to build a broad first-pass candidate table. The table records bibliographic metadata, abstracts, citation/relevance signals, recency, method centrality, and review utility scores.",
-          firstPassDone
+          quality.candidateRows
+            ? `${quality.candidateRows} candidate row(s) recorded. The table should contain bibliographic metadata, abstracts when available, citation/relevance signals, recency, method centrality, and review utility scores.`
+            : "No candidate rows were recorded yet. Rerun Stage 1 with available legal metadata sources before screening.",
+          quality.candidateRows > 0
         ),
         progressItem(
           "Deduplicated core candidate table, ideally 40-80 papers",
-          "Narrow the first-pass pool into about 40-80 core candidates for screening.",
-          coreDone
+          quality.coreRows
+            ? `${quality.coreRows} core candidate row(s) recorded for screening.`
+            : "No core candidates were recorded yet. Stage 2 should not start until this table has real candidate rows.",
+          quality.coreRows > 0
         )
       ]
     };
@@ -1121,10 +1517,11 @@ async function readTopicIndex(workflowState) {
         : path.join(workspaceRoot, topic.handoff);
       try {
         const handoff = await readFile(handoffPath, "utf8");
+        const vaultRoot = resolveVaultRoot(topic.vault) || path.resolve(topic.vault);
         return {
           ...topic,
           currentStage: parseCurrentStage(handoff),
-          stageStatus: parseStageStatus(handoff, topic.status),
+          stageStatus: await inferStageStatusFromVault(vaultRoot, handoff),
           manualPdfCount: parseManualPdfCount(handoff)
         };
       } catch {
@@ -1204,6 +1601,44 @@ async function firstExistingFile(paths) {
   return null;
 }
 
+async function csvDataRowCount(filePath) {
+  try {
+    const text = await readFile(filePath, "utf8");
+    const rows = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return Math.max(rows.length - 1, 0);
+  } catch {
+    return 0;
+  }
+}
+
+async function stage1DiscoveryQuality(vaultRoot) {
+  const candidatePaths = [
+    "04_Evidence_Tables/01_stage1_candidate_papers.csv",
+    "04_Evidence_Tables/03_stage1_candidates.csv"
+  ].map((relPath) => path.join(vaultRoot, relPath));
+  const corePaths = [
+    "04_Evidence_Tables/02_stage1_core_candidates.csv",
+    "04_Evidence_Tables/04_stage1_core_candidates.csv"
+  ].map((relPath) => path.join(vaultRoot, relPath));
+  let candidateRows = 0;
+  let coreRows = 0;
+  for (const filePath of candidatePaths) candidateRows = Math.max(candidateRows, await csvDataRowCount(filePath));
+  for (const filePath of corePaths) coreRows = Math.max(coreRows, await csvDataRowCount(filePath));
+  const hasSummary = await firstExistingFile([
+    path.join(vaultRoot, "08_Project_Workflow/01_stage1_discovery_summary.md"),
+    path.join(vaultRoot, "04_Evidence_Tables/05_stage1_summary.md")
+  ]);
+  return {
+    candidateRows,
+    coreRows,
+    hasSummary: Boolean(hasSummary),
+    done: candidateRows > 0 && coreRows > 0
+  };
+}
+
 function markStagesThrough(status, stageId) {
   const next = { ...status };
   for (const [stage] of stages) {
@@ -1221,12 +1656,9 @@ async function inferStageStatusFromVault(vaultRoot, handoffMarkdown = "") {
   const fromHandoff = parseStageStatus(handoffMarkdown);
   const status = {};
   for (const [stage] of stages) status[stage] = fromHandoff[stage] || "pending";
+  const stage1Quality = await stage1DiscoveryQuality(vaultRoot);
 
   const checks = [
-    ["stage_1_discovery", [
-      "04_Evidence_Tables/03_stage1_candidates.csv",
-      "04_Evidence_Tables/05_stage1_summary.md"
-    ]],
     ["stage_2_screening", [
       "04_Evidence_Tables/06_stage2_summary.md",
       "04_Evidence_Tables/06_stage2_screening_audit.csv",
@@ -1255,6 +1687,14 @@ async function inferStageStatusFromVault(vaultRoot, handoffMarkdown = "") {
     if (status[stage] === "done") continue;
     const exists = await firstExistingFile(relPaths.map((relPath) => path.join(vaultRoot, relPath)));
     if (exists) status[stage] = "done";
+  }
+
+  if (stage1Quality.done) {
+    status.stage_1_discovery = "done";
+  } else if (status.stage_1_discovery === "done") {
+    status.stage_1_discovery = stage1Quality.candidateRows || stage1Quality.coreRows || stage1Quality.hasSummary
+      ? "blocked"
+      : "pending";
   }
 
   if (hasExplicitStageStatus) return status;
@@ -1317,10 +1757,9 @@ ${table}
 ## Shared Rules
 
 - Do not delete or rewrite another topic vault unless explicitly asked.
-- Chrome is authorized for literature downloads only through the \`chrome-literature-downloader\` skill.
 - Use legal metadata and PDF sources only; do not use Sci-Hub or unauthorized sources.
-- Always use the \`chrome-literature-downloader\` skill for article/PDF downloads.
-- Downloads should land in \`~/Downloads\` first, then be validated before import.
+- Stage 3 is manual-download only: create linked download queues, wait for user-provided PDFs, then validate and import them.
+- Do not start automatic PDF downloaders or browser download scripts unless the user explicitly asks outside the Stage 3 app workflow.
 - Do not commit automatically after small edits; commit only when asked or at a meaningful milestone.
 
 ## Current Plugin State
@@ -1929,7 +2368,7 @@ async function initTopic(topic, workspaceDirectory = "") {
   const args = [dlwScript, "init", "--topic", topic];
   const vault = vaultArgForSelectedDirectory(topic, workspaceDirectory);
   if (vault) args.push("--vault", vault);
-  const result = await execFileText("python3", args, {
+  const result = await execFileText(pythonBinary, args, {
     cwd: workspaceRoot
   });
   if (!result.ok) {
@@ -1959,10 +2398,10 @@ function prompts(action, topic, selectedTopic, options = {}) {
     ? `\n新课题保存目录（父目录）：${options.workspaceDirectory}\n如果需要调用 dlw.py init，请让 --vault 指向该父目录下的新课题 vault 文件夹，而不是父目录本身。`
     : "";
   return {
-    start: `${common}\n${selectedContext}${directoryInstruction}\n新建文献调研课题：${topic}\n然后按 deep-literature-workflow 插件原本流程继续，直到 Stage 3 前停止，等待用户确认。`,
-    resume: `${common}\n${selectedContext}\n继续当前选中课题。若下一步是 Stage 3，停止并等待用户确认，不要开始 PDF 获取。`,
-    stage3: `${common}\n${selectedContext}\n继续当前选中课题的 Stage 3。`,
-    importManual: `${common}\n${selectedContext}\n导入当前选中课题中手动下载的 PDF。`
+    start: `${common}\n${selectedContext}${directoryInstruction}\n新建文献调研课题：${topic}\n然后按 deep-literature-workflow 插件原本流程继续，完成 Stage 2 后停在 Stage 3，不要开始任何自动 PDF 下载。Stage 2 必须为 Stage 3 准备带完整 DOI/landing/OA/PDF 候选链接的手动下载列表。`,
+    resume: `${common}\n${selectedContext}\n继续当前选中课题。若下一步是 Stage 3，停止在手动 PDF 下载/导入阶段，不要开始任何自动 PDF 下载或 Chrome downloader。`,
+    stage3: `${common}\n${selectedContext}\n继续当前选中课题的 Stage 3：只检查手动下载列表和已导入 PDF，不要启动自动下载；如果 PDF 缺失，提示用户用 App 的下载列表按钮和 Choose PDFs 区导入。`,
+    importManual: `${common}\n${selectedContext}\n导入当前选中课题中用户手动下载并放入本地的 PDF；不要启动自动 PDF 下载。`
   };
 }
 
@@ -2127,6 +2566,53 @@ async function handleApi(req, res, url) {
       const result = await openVaultPath(body.vault, body.path);
       if (result.error) return json(res, result.status || 500, { ok: false, error: result.error });
       return json(res, 200, result);
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/stage3/manual-download-list.html") {
+    const vault = url.searchParams.get("vault");
+    const root = safeVaultRoot(vault);
+    if (!root) return forbidden(res, "Invalid vault path");
+    try {
+      const data = await buildManualDownloadEntries(root);
+      const html = renderManualDownloadListHtml(root, data);
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": Buffer.byteLength(html)
+      });
+      res.end(html);
+      return;
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/stage3/manual-pdf/choose") {
+    const vault = url.searchParams.get("vault");
+    const root = safeVaultRoot(vault);
+    if (!root) return forbidden(res, "Invalid vault path");
+    try {
+      const selection = await choosePdfFilesWithDialog("Choose one or more PDFs for this Deep Survey topic");
+      if (selection.error) return json(res, selection.status || 500, { ok: false, error: selection.error });
+      if (selection.cancelled) return json(res, 200, { ok: false, cancelled: true, imported: [], failed: [] });
+      return json(res, 200, { ok: true, paths: selection.paths, selectedCount: selection.paths.length });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: error.message || String(error) });
+    }
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/stage3/manual-pdf/import-selected") {
+    const vault = url.searchParams.get("vault");
+    const root = safeVaultRoot(vault);
+    if (!root) return forbidden(res, "Invalid vault path");
+    try {
+      const body = JSON.parse((await readRequestBody(req)) || "{}");
+      const paths = Array.isArray(body.paths) ? body.paths : [];
+      const result = await importManualPdfPaths(root, paths);
+      result.stage3 = await maybeCompleteStage3AfterImport(root);
+      return json(res, 200, { ...result, selectedCount: paths.length });
     } catch (error) {
       return json(res, 500, { ok: false, error: error.message || String(error) });
     }
@@ -2444,7 +2930,7 @@ async function handleApi(req, res, url) {
     const titles = {
       start: "Start Topic: Stage 1-2",
       resume: "Resume Automatic Workflow",
-      stage3: "Confirm and Run Stage 3",
+      stage3: "Review Manual PDF Stage",
       importManual: "Import Manual PDFs",
       custom: mode === "write" ? "Codex Instruction: Write" : "Codex Instruction: Read-only"
     };

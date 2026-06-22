@@ -51,7 +51,7 @@ Recognize these user intents:
 - `继续` or `继续下一阶段`: inspect state and continue the next incomplete stage.
 - `继续 Stage 1`: discover 200-500 candidate papers.
 - `继续 Stage 2`: screen and audit core candidates.
-- `继续 Stage 3`: download, import, validate, and rename PDFs.
+- `继续 Stage 3`: use the manual download queue, import user-provided PDFs, validate, and rename them.
 - `继续 Stage 4`: rebuild all pending PDF-backed paper notes in the Stage 4 queue.
 - `继续 Stage 5A`: create concept knowledge notes.
 - `继续 Stage 5B`: create the review note.
@@ -114,26 +114,23 @@ Outputs should include:
 - exclusion reasons for broad or generic papers
 - 15-25 paper queue for deep reading
 - numbered starter paper notes in `05_Papers/` and expected/imported PDF filenames in `06_PDFs/`, using the same `01_...`, `02_...`, etc. recommended deep-reading queue order
+- `04_Evidence_Tables/09_manual_pdf_download_queue.md` with complete DOI, publisher/landing, and OA/PDF candidate links for every selected deep-reading paper
 
-### Stage 3: PDF Acquisition And Import
+### Stage 3: Manual PDF Acquisition And Import
 
-Always use the `chrome-literature-downloader` skill for article/PDF downloads. The PaperMonitor Deep Survey app bundles this skill and installs it into `~/.codex/skills` when missing. The user has explicitly authorized this workflow to use Chrome for literature downloads. The skill still tries direct/API retrieval first with Safari disabled, then falls back to Google Chrome as the user's authorized browser session.
+Stage 3 is manual-download only in the PaperMonitor Deep Survey app. Do not start `chrome-literature-downloader`, browser automation, batch download scripts, or any other automatic PDF download route unless the user explicitly asks outside this app workflow.
 
 Rules:
 
 - Use only legal or user-provided access.
 - Do not use Sci-Hub or other unauthorized sources.
-- Downloads must land in `~/Downloads` first when using `chrome-literature-downloader`.
-- Use the bundled command by default: `python3 ~/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "<doi-or-url>"`.
-- If the skill is not installed, stop and ask the user to reopen PaperMonitor Deep Survey or run `deep_survey/scripts/install_codex_deps.sh`; do not substitute a different PDF acquisition route.
-- Do not inspect, export, or reuse Chrome cookies, profile files, passwords, local storage, or session databases.
-- If Chrome shows captcha, Cloudflare, human verification, login/access problems, browser warnings, or a publisher save/download flow that cannot be completed safely, stop and mark the item as needing user action.
-- If the Chrome downloader reports `needs_user_action`, no new valid main PDF, or a non-PDF main result, write the paper to the manual download queue rather than improvising another route.
-- Validate PDFs with `file` and, when available, `pdfinfo`.
-- If a PDF cannot be automatically downloaded, write it to a manual download queue with direct helper links. The queue must include DOI link, publisher/DOI landing link, OA/PDF candidate link when known, expected filename, title, and failure reason.
+- Stage 2 should prepare a manual download queue before stopping at Stage 3.
+- The queue must include DOI link, publisher/DOI landing link, OA/PDF candidate link when known, expected filename, title, and any source notes needed for the user to download quickly.
+- Use `04_Evidence_Tables/09_manual_pdf_download_queue.md` as the user-facing linked queue.
 - Track linked manual queue entries in plugin state with `dlw.py manual-pdf`; pass `--doi-url`, `--landing-page-url`, `--oa-url`, `--expected-filename`, and `--reason` when known. Repeated DOI/filename entries should update existing state rather than create duplicates.
-- When the user manually downloads PDFs, identify the paper from `~/Downloads`, tolerate minor filename issues such as leading/trailing whitespace, rename it to the expected filename, validate it, and import it into the vault.
-- After a PDF is validated and imported into the vault, delete only the corresponding source file(s) from `~/Downloads`. Do not clear the whole Downloads folder. Record a cleanup log in the vault.
+- The app imports PDFs that the user chooses with the Stage 3 PDF file chooser. It matches them to the Stage 2 queue and moves them into `06_PDFs/` with the expected filenames.
+- Validate PDFs with `file` and, when available, `pdfinfo`.
+- If the app cannot confidently match a chosen PDF, leave it unimported and report the ambiguity instead of guessing.
 - When all manual downloads are imported, update the manual queue file to say no downloads are needed and run `dlw.py manual-pdf-clear` so plugin state no longer shows stale manual items.
 - Do not require or create a `07_PDF_Text` directory for new topics. PDF text extraction is an optional legacy/debug aid, not a Stage 3 done criterion, because Stage 4 deep reading reads PDFs directly.
 
@@ -141,8 +138,7 @@ Recommended Stage 3 artifacts:
 
 - `04_Evidence_Tables/08_stage3_pdf_inventory.csv` with DOI URL, landing page URL, OA/PDF URL, expected filename, download/import status, imported PDF path, and validation summary.
 - `04_Evidence_Tables/09_manual_pdf_download_queue.md` with clickable DOI, site, and OA/PDF links.
-- `04_Evidence_Tables/10_stage3_download_attempts.csv` or `.json` for `chrome-literature-downloader` outcomes.
-- `04_Evidence_Tables/11_stage3_deleted_download_sources.json` listing exactly which `~/Downloads` files were removed after successful import.
+- `04_Evidence_Tables/10_stage3_import_log.csv` or `.json` for user-provided PDF import and validation outcomes.
 
 ### Stage 4: Paper Deep Reading
 

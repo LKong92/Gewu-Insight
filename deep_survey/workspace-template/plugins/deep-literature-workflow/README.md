@@ -34,19 +34,12 @@ Refresh the workspace index from the active state:
 python3 plugins/deep-literature-workflow/scripts/dlw.py index
 ```
 
-Stage 3 article/PDF downloads use the Chrome literature downloader skill. It
-downloads into `~/Downloads`, tries direct/API retrieval first, and uses Google
-Chrome only as the user's authorized browser fallback:
+Stage 3 is manual-download only in PaperMonitor Deep Survey. Stage 2 should
+prepare a linked manual queue, then the user opens those links, downloads the
+main PDFs, and chooses the PDFs in the app for matching, validation, and import.
 
-```bash
-python3 ~/.codex/skills/chrome-literature-downloader/scripts/download_literature_chrome.py "10.xxxx/yyyy"
-```
-
-PaperMonitor Deep Survey bundles `chrome-literature-downloader`,
-`literature-downloader`, and `paper-broad-reading-analysis`, and installs them
-into `~/.codex/skills` when they are missing. If the Chrome downloader skill is
-not available, stop and install the bundled skills; do not replace Stage 3 with
-a different PDF acquisition route.
+Do not start automatic PDF downloaders, browser automation, or batch download
+scripts unless the user explicitly asks outside the Stage 3 app workflow.
 
 Record a linked manual PDF queue item:
 
@@ -61,9 +54,9 @@ python3 plugins/deep-literature-workflow/scripts/dlw.py manual-pdf \
   --reason "Main PDF was not downloaded by direct/OA retrieval."
 ```
 
-After manual PDFs have been validated, imported, and corresponding `~/Downloads` sources deleted:
+After manual PDFs have been validated and imported:
 
 ```bash
 python3 plugins/deep-literature-workflow/scripts/dlw.py manual-pdf-clear \
-  --note "Stage 3 complete: all manual PDFs imported and Downloads sources cleaned."
+  --note "Stage 3 complete: all manual PDFs imported."
 ```

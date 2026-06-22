@@ -40,7 +40,10 @@ const state = {
   appServerReconnectTimer: null,
   threadStatusRenderTimer: null,
   threadStatusPollTimer: null,
-  threadStatusPollInFlight: false
+  threadStatusPollInFlight: false,
+  runningStatusPollTimer: null,
+  runningStatusPollInFlight: false,
+  stageRefreshTextByTurn: {}
 };
 
 const els = {
@@ -327,9 +330,12 @@ function reconcileTopicThreadBinding(topic = state.status?.selectedTopic) {
 }
 
 async function api(path, options = {}) {
+  const headers = options.body instanceof FormData
+    ? (options.headers || {})
+    : { "content-type": "application/json", ...(options.headers || {}) };
   const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...options
+    ...options,
+    headers
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Request failed");
@@ -364,6 +370,39 @@ function scheduleStatusRefresh(delay = 700) {
       showError(error);
     }
   }, delay);
+}
+
+function hasActiveDlwThread() {
+  return Object.values(state.appThreadStatus || {}).some((status) => (
+    status?.dlwAction && ["running", "waiting_approval", "stopping"].includes(status.status)
+  ));
+}
+
+function startRunningStatusPoll() {
+  if (state.runningStatusPollTimer) return;
+  state.runningStatusPollTimer = setInterval(async () => {
+    if (!hasActiveDlwThread()) {
+      stopRunningStatusPoll();
+      return;
+    }
+    if (state.runningStatusPollInFlight) return;
+    state.runningStatusPollInFlight = true;
+    try {
+      await refreshStatus();
+    } catch (error) {
+      console.warn("Running status refresh failed", error);
+    } finally {
+      state.runningStatusPollInFlight = false;
+    }
+  }, 4000);
+}
+
+function stopRunningStatusPoll() {
+  if (state.runningStatusPollTimer) {
+    clearInterval(state.runningStatusPollTimer);
+    state.runningStatusPollTimer = null;
+  }
+  state.runningStatusPollInFlight = false;
 }
 
 function renderStatus(status) {
@@ -475,8 +514,19 @@ function fallbackStageDetails(topic = {}) {
       ]
     },
     stage_3_pdf_acquisition: {
-      title: "PDF Acquisition",
-      empty: "Waiting for the PDF queue."
+      title: "Manual PDF Download",
+      message: "Open the queued literature links, download the main article PDFs manually, then choose the PDFs here for matching and import.",
+      actions: [
+        {
+          id: "openStage3DownloadList",
+          label: "Open Download List"
+        }
+      ],
+      dropZone: {
+        label: "Choose PDFs",
+        meta: "Select one or more PDFs in Finder. They will be matched to the Stage 2 queue and moved into 06_PDFs."
+      },
+      empty: ""
     },
     stage_4_paper_deep_reading: {
       title: "Deep Reading Papers",
@@ -535,6 +585,65 @@ function renderStageDetails(topic = {}) {
     children.push(title);
   }
 
+  if (details.message) {
+    const message = document.createElement("div");
+    message.className = "stage-detail-message";
+    message.textContent = details.message;
+    children.push(message);
+  }
+
+  if (Array.isArray(details.stats) && details.stats.length) {
+    const stats = document.createElement("div");
+    stats.className = "stage-detail-stats";
+    details.stats.forEach((item) => {
+      const stat = document.createElement("div");
+      stat.className = "stage-detail-stat";
+      const value = document.createElement("span");
+      value.className = "stage-detail-stat-value";
+      value.textContent = item.value ?? "0";
+      const label = document.createElement("span");
+      label.className = "stage-detail-stat-label";
+      label.textContent = item.label || "";
+      stat.append(value, label);
+      stats.append(stat);
+    });
+    children.push(stats);
+  }
+
+  if (Array.isArray(details.actions) && details.actions.length) {
+    const actions = document.createElement("div");
+    actions.className = "stage-detail-actions";
+    details.actions.forEach((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "stage-detail-action";
+      button.dataset.action = item.id || "";
+      button.textContent = item.label || "Open";
+      actions.append(button);
+      if (item.meta) {
+        const meta = document.createElement("div");
+        meta.className = "stage-detail-action-meta";
+        meta.textContent = item.meta;
+        actions.append(meta);
+      }
+    });
+    children.push(actions);
+  }
+
+  if (details.dropZone) {
+    const drop = document.createElement("div");
+    drop.className = "stage3-drop-zone";
+    drop.dataset.dropzone = "stage3-pdf";
+    const label = document.createElement("div");
+    label.className = "stage3-drop-label";
+    label.textContent = details.dropZone.label || "Choose PDFs";
+    const meta = document.createElement("div");
+    meta.className = "stage3-drop-meta";
+    meta.textContent = details.dropZone.meta || "PDFs will be matched and moved into the selected vault.";
+    drop.append(label, meta);
+    children.push(drop);
+  }
+
   const items = Array.isArray(details.items) ? details.items : [];
   if (!items.length) {
     if (details.empty) {
@@ -582,6 +691,106 @@ function renderStageDetails(topic = {}) {
   });
   children.push(list);
   els.stageDetailPanel.replaceChildren(...children);
+}
+
+function selectedVaultForStageAction() {
+  return state.status?.selectedTopic?.vault || state.status?.selectedVault || "";
+}
+
+const STAGE3_MANUAL_QUEUE_FILE = "04_Evidence_Tables/09_manual_pdf_download_queue.md";
+
+async function openStage3DownloadList() {
+  const vault = selectedVaultForStageAction();
+  if (!vault) {
+    showError(new Error("No selected vault."));
+    return;
+  }
+  setActiveTab("vault");
+  await loadVaultFiles();
+  if (!vaultFiles.includes(STAGE3_MANUAL_QUEUE_FILE)) {
+    throw new Error("Manual PDF download queue was not found in Output files.");
+  }
+  collapsedFolders.delete("04_Evidence_Tables");
+  await loadVaultFile(STAGE3_MANUAL_QUEUE_FILE, { reveal: true });
+}
+
+function stage3ImportResultMessage(result = {}) {
+  const imported = result.imported || [];
+  const failed = result.failed || [];
+  const missing = result.stage3?.missing || [];
+  const lines = [];
+  if (imported.length) {
+    lines.push(`Imported: ${imported.length}`);
+    lines.push(...imported.slice(0, 8).map((item) => `- ${item.target}`));
+    if (imported.length > 8) lines.push(`- ...and ${imported.length - 8} more`);
+  }
+  if (failed.length) {
+    if (lines.length) lines.push("");
+    lines.push(`Needs attention: ${failed.length}`);
+    lines.push(...failed.slice(0, 6).map((item) => `- ${item.filename || "file"}: ${item.error}`));
+    if (failed.length > 6) lines.push(`- ...and ${failed.length - 6} more`);
+  }
+  if (result.stage3?.complete) {
+    if (lines.length) lines.push("");
+    lines.push("Stage 3 complete: all queued PDFs are imported.");
+  } else if (missing.length) {
+    if (lines.length) lines.push("");
+    lines.push(`Still missing: ${missing.length} PDF(s):`);
+    lines.push(...missing.slice(0, 12).map((item) => {
+      if (typeof item === "string") return `- ${item}`;
+      const title = item.title || item.expectedFilename || "Untitled paper";
+      const filename = item.expectedFilename ? ` (${item.expectedFilename})` : "";
+      return `- ${title}${filename}`;
+    }));
+    if (missing.length > 12) lines.push(`- ...and ${missing.length - 12} more`);
+  }
+  return lines.join("\n") || "No PDFs were imported.";
+}
+
+async function chooseStage3Pdfs() {
+  const vault = selectedVaultForStageAction();
+  if (!vault) throw new Error("No selected vault.");
+  const selection = await api(`/api/stage3/manual-pdf/choose?vault=${encodeURIComponent(vault)}`, {
+    method: "POST",
+    body: "{}"
+  });
+  if (selection.cancelled) return;
+  const selectedCount = selection.selectedCount || selection.paths?.length || 0;
+  if (!selectedCount) return;
+  const progress = openProgressDialog({
+    title: "Importing PDFs",
+    message: `Selected ${selectedCount} PDF file(s).\nMatching them to the Stage 2 queue and moving matched files into 06_PDFs...`
+  });
+  let result;
+  try {
+    result = await api(`/api/stage3/manual-pdf/import-selected?vault=${encodeURIComponent(vault)}`, {
+      method: "POST",
+      body: JSON.stringify({ paths: selection.paths || [] })
+    });
+  } catch (error) {
+    progress.close();
+    throw error;
+  }
+  const imported = result.imported || [];
+  const failed = result.failed || [];
+  if (imported.length) {
+    appendLog("meta", `Imported ${imported.length} PDF(s): ${imported.map((item) => item.target).join(", ")}`);
+  }
+  if (failed.length) {
+    appendLog("stderr", `PDF import issue(s): ${failed.map((item) => `${item.filename || "file"}: ${item.error}`).join("; ")}`);
+  }
+  if (result.stage3?.complete) {
+    appendLog("meta", "Stage 3 complete: all queued PDFs are now imported.");
+  } else if (result.stage3?.missing?.length) {
+    appendLog("meta", `Stage 3 still needs ${result.stage3.missing.length} PDF(s).`);
+  }
+  progress.close();
+  await refreshStatus();
+  await openInfoDialog({
+    title: imported.length ? "PDF Import Complete" : "PDF Import Needs Attention",
+    message: stage3ImportResultMessage(result),
+    confirmLabel: "OK"
+  });
 }
 
 function displayVaultPath(workspaceRoot, vault) {
@@ -950,7 +1159,7 @@ function closeConfirmDialog() {
   state.confirmDialog = null;
 }
 
-function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false } = {}) {
+function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger = false, cancelable = true } = {}) {
   closeConfirmDialog();
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -983,7 +1192,8 @@ function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLab
     confirmButton.textContent = confirmLabel;
     if (danger) confirmButton.classList.add("danger-action");
 
-    actions.append(cancelButton, confirmButton);
+    if (cancelable) actions.append(cancelButton);
+    actions.append(confirmButton);
     dialog.append(titleEl, messageEl, actions);
     overlay.append(dialog);
     document.body.append(overlay);
@@ -998,14 +1208,14 @@ function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLab
     };
 
     overlay.addEventListener("pointerdown", (event) => {
-      if (event.target === overlay) finish(false);
+      if (event.target === overlay && cancelable) finish(false);
     });
-    cancelButton.addEventListener("click", () => finish(false));
+    if (cancelable) cancelButton.addEventListener("click", () => finish(false));
     confirmButton.addEventListener("click", () => finish(true));
     overlay.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        finish(false);
+        finish(cancelable ? false : true);
       }
       if (event.key === "Enter") {
         event.preventDefault();
@@ -1016,6 +1226,50 @@ function openConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLab
       confirmButton.focus();
     });
   });
+}
+
+function openInfoDialog({ title, message, confirmLabel = "OK" } = {}) {
+  return openConfirmDialog({
+    title,
+    message,
+    confirmLabel,
+    cancelable: false
+  });
+}
+
+function openProgressDialog({ title = "Working", message = "Please wait..." } = {}) {
+  closeConfirmDialog();
+  const overlay = document.createElement("div");
+  overlay.className = "topic-rename-overlay";
+  const dialog = document.createElement("div");
+  dialog.className = "topic-rename-dialog confirm-dialog progress-dialog";
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", title);
+  const titleEl = document.createElement("div");
+  titleEl.className = "topic-rename-title";
+  titleEl.textContent = title;
+  const body = document.createElement("div");
+  body.className = "progress-dialog-body";
+  const spinner = document.createElement("div");
+  spinner.className = "progress-spinner";
+  const messageEl = document.createElement("div");
+  messageEl.className = "confirm-dialog-text";
+  messageEl.textContent = message;
+  body.append(spinner, messageEl);
+  dialog.append(titleEl, body);
+  overlay.append(dialog);
+  document.body.append(overlay);
+  state.confirmDialog = overlay;
+  return {
+    setMessage(nextMessage) {
+      messageEl.textContent = nextMessage || "";
+    },
+    close() {
+      if (state.confirmDialog === overlay) closeConfirmDialog();
+      else overlay.remove();
+    }
+  };
 }
 
 function openTopicRenameDialog(topic) {
@@ -1630,6 +1884,11 @@ function mergeAppThreadStatus(threadId, patch) {
     delete state.appThreadStatus[threadId].dlwAction;
     delete state.appThreadStatus[threadId].runningStage;
   }
+  if (hasActiveDlwThread()) {
+    startRunningStatusPoll();
+  } else {
+    stopRunningStatusPoll();
+  }
   renderThreadStatus();
   if (state.status) renderStatus(state.status);
 }
@@ -1835,7 +2094,9 @@ function applyAppServerChatEvent(data) {
     if (!delta) return;
     const key = bufferKey(threadId, turnId);
     const previous = state.appThreadAssistantBuffers[key] || { threadId, turnId, text: "", at: new Date().toISOString() };
-    state.appThreadAssistantBuffers[key] = { ...previous, text: `${previous.text}${delta}` };
+    const nextText = `${previous.text}${delta}`;
+    state.appThreadAssistantBuffers[key] = { ...previous, text: nextText };
+    maybeRefreshStatusFromAssistantText(threadId, turnId, nextText);
     renderThreadChat();
     return;
   }
@@ -1876,6 +2137,27 @@ function flushAssistantBuffer(threadId, turnId) {
     delete state.appThreadAssistantBuffers[key];
   }
   renderThreadChat();
+}
+
+function stageProgressSignal(text = "") {
+  const stageRef = "stage[_\\s-]*[23]";
+  return (
+    /stage\s*1[^.\n]{0,80}(complete|done|完成|成功|通过|推进到|下一步)/i.test(text) ||
+    /stage\s*2[^.\n]{0,80}(complete|done|完成|成功|通过|推进到|下一步)/i.test(text) ||
+    new RegExp(`下一步[^。\\n]{0,60}${stageRef}`, "i").test(text) ||
+    new RegExp(`next\\s+(stage|step)[^.\\n]{0,40}${stageRef}`, "i").test(text) ||
+    /current_stage[^.\n]{0,80}stage_[23]/i.test(text) ||
+    /stage_[12]_[a-z_]+[^.\n]{0,80}(done|complete|完成|通过)/i.test(text)
+  );
+}
+
+function maybeRefreshStatusFromAssistantText(threadId, turnId, text = "") {
+  if (!threadId || !stageProgressSignal(text)) return;
+  const key = `${threadId}:${turnId || "pending"}`;
+  const previous = state.stageRefreshTextByTurn[key] || 0;
+  if (text.length - previous < 80) return;
+  state.stageRefreshTextByTurn[key] = text.length;
+  scheduleStatusRefresh(250);
 }
 
 function recordAppThreadActivity(threadId, turnId, summary = "") {
@@ -1942,6 +2224,7 @@ function applyAppServerEventStatus(data) {
     state.activeDlwThreadId = threadId;
     state.localRunningStage = runningStage;
     if (runningStage) state.appThreadRunningStages[threadId] = runningStage;
+    startRunningStatusPoll();
   }
   if (String(method || "").includes("requestApproval")) {
     mergeAppThreadStatus(threadId, {
@@ -2372,6 +2655,13 @@ async function sendDlwActionToThread(action, options = {}) {
     const boundTopic = result.selectedTopic || actionTopic;
     if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
     bindThreadToTopic(threadId, boundTopic, topic);
+    if (action === "start") {
+      state.isCreatingTopic = false;
+      state.selectedVault = boundTopic?.vault || state.selectedVault;
+      if (state.selectedVault) persistSelectedVaultToServer(state.selectedVault);
+      await refreshStatus();
+      bindThreadToTopic(threadId, state.status?.selectedTopic || boundTopic, topic);
+    }
     els.appServerState.textContent = "DLW turn started";
     appendLog("meta", `DLW ${action} sent via plugin mention. turn=${result.turn?.id || ""}`);
     await refreshThreadStatus(threadId).catch(showError);
@@ -2555,9 +2845,8 @@ function topicStagePromptKey(topicInfo, action) {
 function stageActionInfo(topicInfo) {
   if (!topicInfo?.vault || !topicInfo.nextStage || topicInfo.nextStage === "complete") return null;
   if (interruptibleThreadId(topicInfo) || state.currentRunId || state.isCreatingTopic || state.stagePromptInFlight) return null;
-  const action = topicInfo.nextStage === "stage_3_pdf_acquisition"
-    ? ((topicInfo.manualPdfCount ?? 0) > 0 ? "importManual" : "stage3")
-    : "resume";
+  if (topicInfo.nextStage === "stage_3_pdf_acquisition") return null;
+  const action = "resume";
   const key = topicStagePromptKey(topicInfo, action);
   if (state.dismissedStagePrompts.has(key)) return null;
   return {
@@ -2580,7 +2869,7 @@ function stageConfirmText(info) {
     return `${info.topic} has ${info.manualCount} manual PDF queue item(s). Confirm to import them in the current thread with Allow Edits.`;
   }
   if (info.action === "stage3") {
-    return `${info.topic} has reached PDF Acquisition. Confirm to start Stage 3 in the current thread with Allow Edits.`;
+    return `${info.topic} has reached manual PDF acquisition. Use the download list and Choose PDFs area to import files.`;
   }
   return `${info.topic} is ready for ${labelStage(info.nextStage)}. Confirm to continue the workflow in the current thread with Allow Edits.`;
 }
@@ -2734,7 +3023,7 @@ function maybeContinuePipeline(shouldContinue, completedStage) {
   }
   if (nextStage === "stage_3_pdf_acquisition") {
     state.autoPipeline = false;
-    appendLog("meta", "Paused before Stage 3. Please confirm Stage 3 before PDF acquisition.");
+    appendLog("meta", "Paused at Stage 3. Open the manual download list and choose PDFs from the Stage 3 detail panel.");
     return;
   }
   if (completedStage && nextStage === completedStage) {
@@ -2947,6 +3236,53 @@ if (els.stageConfirmBtn) {
 }
 if (els.manualBtn) {
   els.manualBtn.addEventListener("click", () => confirmPendingStageAction("importManual").catch(showError));
+}
+if (els.stageDetailPanel) {
+  els.stageDetailPanel.addEventListener("click", (event) => {
+    const dropZone = event.target.closest("[data-dropzone='stage3-pdf']");
+    if (dropZone) {
+      event.preventDefault();
+      event.stopPropagation();
+      chooseStage3Pdfs().catch(showError);
+      return;
+    }
+    const button = event.target.closest("[data-action]");
+    if (!button) return;
+    if (button.dataset.action === "openStage3DownloadList") openStage3DownloadList().catch(showError);
+  });
+  els.stageDetailPanel.addEventListener("dragenter", (event) => {
+    const dropZone = event.target.closest("[data-dropzone='stage3-pdf']");
+    if (!dropZone) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dropZone.classList.add("drag-over");
+  });
+  els.stageDetailPanel.addEventListener("dragover", (event) => {
+    const dropZone = event.target.closest("[data-dropzone='stage3-pdf']");
+    if (!dropZone) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dropZone.classList.add("drag-over");
+  });
+  els.stageDetailPanel.addEventListener("dragleave", (event) => {
+    const dropZone = event.target.closest("[data-dropzone='stage3-pdf']");
+    if (!dropZone) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dropZone.classList.remove("drag-over");
+  });
+  els.stageDetailPanel.addEventListener("drop", (event) => {
+    const dropZone = event.target.closest("[data-dropzone='stage3-pdf']");
+    if (!dropZone) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dropZone.classList.remove("drag-over");
+    openInfoDialog({
+      title: "Choose PDFs",
+      message: "Use this area as a button: click it, then select one or more PDFs in Finder.",
+      confirmLabel: "OK"
+    }).catch(showError);
+  });
 }
 async function handleCancelRunClick() {
   if (state.currentRunId) {
