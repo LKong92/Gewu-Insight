@@ -2104,6 +2104,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             unsorted_id = int(special["unsorted"].get("id") or 1)
             recycle_id = int(special["recycle"].get("id") or 1)
             moved: dict[str, Any] | None = None
+            moved_response: dict[str, Any] = {}
             if entry_type == "item":
                 item_id = int(payload.get("id") or 0)
                 source_item = storage.get_library_item(item_id)
@@ -2116,6 +2117,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     moved = storage.move_library_item(item_id=item_id, folder_id=target_folder_id)
                 if moved:
                     sync_all_pdf_aliases_for_paper(storage, str(moved.get("paper_id") or source_item.get("paper_id") or ""))
+                    updated_paper = storage.get_paper(str(moved.get("paper_id") or source_item.get("paper_id") or ""))
+                    if updated_paper:
+                        annotated = annotate_papers_with_library_status(storage, [updated_paper])
+                        updated_paper = annotated[0] if annotated else updated_paper
+                        moved_response = library_item_to_api(moved, updated_paper)
+                    else:
+                        moved_response = dict(moved or {})
             elif entry_type == "folder":
                 folder_id = int(payload.get("id") or 0)
                 folder = storage.get_library_folder(folder_id)
@@ -2129,6 +2137,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 else:
                     moved = storage.move_library_folder(folder_id=folder_id, parent_id=target_folder_id)
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+                moved_response = dict(moved or {})
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -2138,7 +2147,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"moved": dict(moved or {}), **snapshot})
+        self.send_json({"moved": moved_response, **snapshot})
 
     def handle_reorder_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -7536,11 +7545,12 @@ def pdf_rename_filename_from_values(template: str, values: dict[str, str], suffi
     stem = re.sub(r"\{([A-Za-z_]+)\}", replace_token, normalized_template)
     stem = re.sub(r"\s*_\s*", "_", stem)
     stem = re.sub(r"_+", "_", stem).strip(" _.-")
-    filename = finder_safe_name(stem, "paper")
     clean_suffix = suffix if suffix and suffix.startswith(".") else ".pdf"
     if clean_suffix.lower() != ".pdf":
         clean_suffix = ".pdf"
-    return finder_safe_name(f"{filename}{clean_suffix}", "paper.pdf")
+    max_stem_length = max(1, 120 - len(clean_suffix))
+    filename = finder_safe_name(stem, "paper")[:max_stem_length].strip(" .") or "paper"
+    return f"{filename}{clean_suffix}"
 
 
 def pdf_rename_filename_for_paper(paper: dict[str, Any], template: str, current_path: Path) -> str:
@@ -20673,7 +20683,7 @@ INDEX_HTML = """<!doctype html>
 
     function localLibraryItemFromRaw(raw, fallbackItem = null, fallbackPaper = null) {
       if (!raw?.id && !fallbackItem?.id) return null;
-      const paper = fallbackPaper || fallbackItem?.paper || {};
+      const paper = raw?.paper || fallbackPaper || fallbackItem?.paper || {};
       const item = {
         ...(fallbackItem || {}),
         id: Number(raw?.id || fallbackItem?.id || 0),
@@ -20705,7 +20715,9 @@ INDEX_HTML = """<!doctype html>
       if (movedId && movedId !== itemId) {
         removeLibraryItemLocal(itemId);
         const existing = libraryItemById(movedId);
-        return existing || null;
+        const moved = localLibraryItemFromRaw(rawMoved || {id: movedId}, existing || source, rawMoved?.paper || source.paper);
+        if (moved) upsertLibraryItemLocal(moved);
+        return moved || existing || null;
       }
       const moved = localLibraryItemFromRaw(
         rawMoved || {id: itemId, folder_id: Number(targetFolderId || state.libraryRootId || 1)},
@@ -22136,6 +22148,43 @@ INDEX_HTML = """<!doctype html>
         } else {
           updateLibraryActivityStatus(data.renamed?.changed ? `Renamed PDF: ${name}` : `PDF already named: ${name}${displayName ? ` · Library: ${displayName}` : ""}`, {delay: 4200});
         }
+      });
+    }
+
+    async function renameSelectedLibraryPdfsFromMetadata(itemIds) {
+      const ids = [...new Set((Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter(Boolean))];
+      if (!ids.length) return;
+      if (ids.length === 1) return renameLibraryPdfFromMetadata(ids[0]);
+      return withLibraryActivityStatus(`Renaming ${ids.length} PDFs...`, "", async () => {
+        let changed = 0;
+        let skipped = 0;
+        let lastId = ids[ids.length - 1];
+        for (const id of ids) {
+          const res = await fetch("/api/library/items/rename-pdf", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({item_id: id})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not rename PDF");
+          applyLibrarySnapshot(data);
+          if (data.renamed?.skipped) skipped += 1;
+          else if (data.renamed?.changed) changed += 1;
+          lastId = Number(data.renamed?.item_id || id);
+        }
+        const lastItem = libraryItemById(lastId);
+        if (lastItem) {
+          setLibraryColumnSelection(Number(lastItem.folder_id || state.libraryActiveFolderId || state.libraryRootId), {type: "item", id: lastId});
+        }
+        clearLibraryRangeSelection();
+        renderLibrary();
+        const unchanged = Math.max(0, ids.length - changed - skipped);
+        const parts = [
+          `${changed} renamed`,
+          unchanged ? `${unchanged} already named` : "",
+          skipped ? `${skipped} skipped` : ""
+        ].filter(Boolean);
+        updateLibraryActivityStatus(`Auto rename complete: ${parts.join(", ")}.`, {delay: 5200});
       });
     }
 
@@ -29396,12 +29445,17 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (renamePdfButton) {
-        const canRenamePdf = entryType === "item" && hasEntry && libraryPaperIsPdfLike(item?.paper) && Boolean(paperNativePath(item?.paper || {}));
+        const renamePdfItems = actionEntries
+          .filter((entry) => entry.type === "item")
+          .map((entry) => libraryItemById(entry.id))
+          .filter((candidate) => candidate && libraryPaperIsPdfLike(candidate.paper) && Boolean(paperNativePath(candidate.paper || {})));
+        const canRenamePdf = renamePdfItems.length > 0 && renamePdfItems.length === actionEntries.length;
         renamePdfButton.style.display = canRenamePdf ? "" : "none";
+        renamePdfButton.textContent = renamePdfItems.length > 1 ? `Auto rename ${renamePdfItems.length} selected` : "Auto rename from Metadata";
         renamePdfButton.onclick = async () => {
-          const id = Number(menu.dataset.entryId || 0);
+          const ids = renamePdfItems.map((candidate) => Number(candidate.id || 0)).filter(Boolean);
           hideLibraryContextMenu();
-          await runLibraryMenuAction(() => renameLibraryPdfFromMetadata(id));
+          await runLibraryMenuAction(() => renameSelectedLibraryPdfsFromMetadata(ids));
         };
       }
       if (colorButton && colorPicker) {
