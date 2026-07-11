@@ -112,6 +112,252 @@ function badRequest(res, message) {
   json(res, 400, { error: message });
 }
 
+function sendHtml(res, html) {
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": Buffer.byteLength(html)
+  });
+  res.end(html);
+}
+
+function renderAboutDeepSurveyHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About Deep Survey</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #fbfcfd;
+        --ink: #17202a;
+        --muted: #687385;
+        --line: #d8dee8;
+        --accent: #1f7a8c;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 42px 42px 56px;
+      }
+      h1 {
+        margin: 0 0 24px;
+        font-size: 34px;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 34px 0 12px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        font-size: 20px;
+        line-height: 1.28;
+        letter-spacing: 0;
+      }
+      p { margin: 0 0 14px; }
+      ol, ul { margin: 8px 0 18px; padding-left: 24px; }
+      li { margin: 5px 0; }
+      code {
+        padding: 1px 5px;
+        border: 1px solid #dfe4ec;
+        border-radius: 5px;
+        background: #f3f5f7;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.92em;
+      }
+      .lead { color: var(--muted); }
+      .file-list li { margin-bottom: 10px; }
+      .file-list code { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>About Deep Survey</h1>
+
+      <p>Deep Survey 是一个面向深度文献调研的分阶段工作流。它的目标不是简单收集论文列表，而是把一个研究问题逐步转化为一个可阅读、可追溯、可继续扩展的知识库。</p>
+
+      <p>整个流程把文献调研拆成几个明确阶段：先广泛发现候选文献，再筛选核心论文，再获取合法 PDF，再逐篇深读，最后整理成概念笔记和综述文章。这样做的好处是避免一开始就陷入少数论文的细节，也避免最后只得到一堆没有结构的摘要。每个阶段都会留下可检查的中间产物，因此用户可以随时知道当前进度、依据和下一步应该做什么。</p>
+
+      <p>Deep Survey 默认生成 Obsidian 兼容的 Markdown vault。论文、概念、证据表、PDF 和项目状态会被分别保存，便于后续阅读、修改、扩展和人工审查。</p>
+
+      <h2>Workflow Overview</h2>
+
+      <p>Deep Survey 的主流程包括：</p>
+
+      <ol>
+        <li>Stage 1 Discovery：发现候选文献</li>
+        <li>Stage 2 Screening：筛选核心阅读队列</li>
+        <li>Stage 3 PDF Acquisition：手动获取并导入 PDF</li>
+        <li>Stage 4 Paper Deep Reading：逐篇深度阅读</li>
+        <li>Stage 5A Concept Notes：生成概念知识笔记</li>
+        <li>Stage 5B Review Synthesis：写出领域综述</li>
+      </ol>
+
+      <p>每个阶段都有自己的任务边界。前一阶段的产物会成为后一阶段的输入，因此工作流强调“先建立候选池，再精读，再综合”，而不是直接让 AI 随机写一篇综述。</p>
+
+      <h2>Stage 1: Discovery</h2>
+
+      <p>Stage 1 的任务是从合法的文献元数据来源中广泛发现候选论文，例如 OpenAlex、Semantic Scholar 或其他可访问的学术索引。这个阶段通常会建立一个较大的候选池，理想情况下包含 200 到 500 篇相关论文。</p>
+
+      <p>Stage 1 会做几件事：</p>
+
+      <ul>
+        <li>根据研究主题设计检索方向和关键词。</li>
+        <li>收集候选论文的标题、作者、年份、期刊、DOI、摘要、引用量等元数据。</li>
+        <li>去除重复记录。</li>
+        <li>对候选论文进行初步评分，例如主题相关性、引用影响、时间新旧、方法重要性、是否适合作为综述材料。</li>
+        <li>从大候选池中提炼出约 40 到 80 篇核心候选论文。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：真正可靠的文献调研不能从一开始就只看几篇最显眼的论文。先建立一个足够宽的候选池，可以减少遗漏重要方向的风险，也能让后续筛选有依据。Stage 1 不是为了深读，而是为了形成一张领域地图。</p>
+
+      <p>典型产物包括候选文献表、检索日志、去重后的核心候选表和初步评分字段。</p>
+
+      <h2>Stage 2: Screening</h2>
+
+      <p>Stage 2 的任务是审查 Stage 1 得到的核心候选论文，并选出真正值得深度阅读的论文队列。这个阶段通常会把 40 到 80 篇核心候选进一步压缩到 15 到 25 篇深读论文。</p>
+
+      <p>Stage 2 会做几件事：</p>
+
+      <ul>
+        <li>审查每篇核心候选论文。</li>
+        <li>给出 keep、background 或 exclude 判断。</li>
+        <li>记录排除理由，例如主题太宽泛、只是背景材料、方法不相关、与研究问题距离较远。</li>
+        <li>选出深读论文队列，并按推荐阅读顺序编号。</li>
+        <li>在 <code>05_Papers/</code> 中建立 starter paper notes。</li>
+        <li>为每篇深读论文准备期望的 PDF 文件名。</li>
+        <li>生成手动 PDF 下载队列，通常保存在 <code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code>。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：不是所有相关论文都值得深读。有些论文适合作背景，有些只是检索噪声，有些虽然引用高但不服务于当前问题。Stage 2 把“广泛发现”转化为“有限但高质量的深读任务”，使后续精读成本可控，也让每篇被选中的论文都有理由。</p>
+
+      <p>典型产物包括筛选审计表、排除理由、深读队列、starter notes 和 PDF 下载清单。</p>
+
+      <h2>Stage 3: Manual PDF Acquisition And Import</h2>
+
+      <p>Stage 3 的任务是获取并导入深读论文的 PDF。Deep Survey 中的 Stage 3 是手动下载优先的流程：软件提供下载队列和文件导入工具，用户从合法来源下载 PDF，然后在 Deep Survey 中选择这些 PDF 文件，系统再把它们匹配、验证并移动到 vault 的 <code>06_PDFs/</code> 文件夹。</p>
+
+      <p>Stage 3 会做几件事：</p>
+
+      <ul>
+        <li>打开 Stage 2 生成的 PDF 下载队列。</li>
+        <li>为每篇论文提供 DOI、出版社页面、开放获取链接或其他合法来源提示。</li>
+        <li>用户手动下载主论文 PDF。</li>
+        <li>用户通过 Deep Survey 选择下载好的 PDF 文件。</li>
+        <li>软件尝试把 PDF 匹配到深读队列中的论文。</li>
+        <li>将匹配成功的 PDF 移动到 <code>06_PDFs/</code>，并改成预期文件名。</li>
+        <li>检查 PDF 文件是否有效。</li>
+        <li>更新 PDF inventory 和导入记录。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：PDF 获取涉及版权、机构访问和出版社权限。Deep Survey 不应该自动绕过访问控制，也不应该使用未授权来源。手动下载加软件导入的方式，把合法访问和文件整理分开：用户负责从自己有权访问的来源下载，软件负责后续命名、验证、归档和状态管理。</p>
+
+      <p>如果某个 PDF 无法被可靠匹配，Deep Survey 应该报告不确定性，而不是猜测导入。这样可以避免论文和 PDF 对错号，保护后续深读质量。</p>
+
+      <p>典型产物包括 <code>08_stage3_pdf_inventory.csv</code>、<code>09_manual_pdf_download_queue.md</code> 和导入日志。</p>
+
+      <h2>Stage 4: Paper Deep Reading</h2>
+
+      <p>Stage 4 是整个 Deep Survey 中最重要的深读阶段。它的任务不是批量抽取摘要，而是逐篇阅读 PDF，并为每篇论文重建一份真正有信息量的 paper note。</p>
+
+      <p>Stage 4 会做几件事：</p>
+
+      <ul>
+        <li>按 Stage 2 确定的顺序逐篇处理论文。</li>
+        <li>每次只完整处理一篇论文。</li>
+        <li>检查 PDF 的结构、图表、表格和正文。</li>
+        <li>重建论文的核心问题、主要贡献、方法、关键结果、定量信息、局限性和证据链。</li>
+        <li>更新 <code>05_Papers/</code> 中对应的论文笔记。</li>
+        <li>记录每篇论文的深读状态。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：高质量综述不能建立在批量摘要或抽取片段上。论文的真正价值通常存在于问题设置、实验设计、方法假设、图表证据和局限性之间的关系中。只有逐篇完整阅读，才能知道一篇论文到底在证明什么、没有证明什么，以及它与其他论文如何连接。</p>
+
+      <p>Stage 4 特别强调顺序处理，而不是批量处理。批量提取可能看起来更快，但容易得到模板化、浅层、上下文断裂的笔记。Deep Survey 的目标是让每篇 paper note 都能独立支持后续概念整理和综述写作。</p>
+
+      <p>一篇论文只有在笔记足够具体、没有占位内容、能解释核心问题和证据链时，才应被认为完成深读。</p>
+
+      <h2>Stage 5A: Concept Notes</h2>
+
+      <p>Stage 5A 的任务是把 Stage 4 的论文理解转化为概念知识笔记。这里的重点不是继续总结单篇论文，而是整理领域中的关键概念、物理含义、方法边界和阅读路径。</p>
+
+      <p>Stage 5A 会做几件事：</p>
+
+      <ul>
+        <li>在 <code>03_Concepts/</code> 中建立概念索引。</li>
+        <li>创建按推荐阅读顺序编号的概念笔记。</li>
+        <li>解释每个概念的定义和物理意义。</li>
+        <li>整理相关公式、单位和测量假设。</li>
+        <li>说明概念在该领域中的位置。</li>
+        <li>区分相邻概念，指出常见误解。</li>
+        <li>给出代表性论文和继续阅读路线。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：读完论文之后，用户需要的不只是“哪篇论文说了什么”，还需要“这个领域到底有哪些概念，它们之间怎么连接”。概念笔记把论文级别的信息抽象成知识结构，使用户能更快进入领域，也方便之后写论文、做报告或继续扩展调研。</p>
+
+      <p>Stage 5A 不应该把每个概念笔记写成论文深读笔记。它关注知识解释，而不是重复 paper note 的结构。</p>
+
+      <h2>Stage 5B: Review Writing</h2>
+
+      <p>Stage 5B 的任务是写出面向读者的领域综述。它应该是一篇真正的 domain review 或 knowledge synthesis，而不是项目过程报告。</p>
+
+      <p>Stage 5B 会做几件事：</p>
+
+      <ul>
+        <li>整合 Stage 4 的论文深读结果。</li>
+        <li>使用 Stage 5A 的概念结构作为阅读入口。</li>
+        <li>解释领域的基本概念。</li>
+        <li>梳理主要研究方向。</li>
+        <li>比较常用方法、测量体系和评价指标。</li>
+        <li>总结材料、应用或问题 landscape。</li>
+        <li>指出争议、开放问题和边界条件。</li>
+        <li>给出下一轮文献扩展路线。</li>
+        <li>将主综述保存为读者容易找到的 <code>02_Review.md</code>。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：综述不是把论文摘要拼接起来，而是重新组织一个领域。好的综述应该帮助读者理解“为什么这个领域这样发展”“哪些问题已经清楚”“哪些地方仍然不确定”“下一步应该读什么”。因此 Stage 5B 要把项目管理信息和领域叙事分开：状态、日志、进度应留在 workflow 文件中，主综述只服务于知识表达。</p>
+
+      <h2>Files And Outputs</h2>
+
+      <p>Deep Survey 的输出是一个 Obsidian 兼容的 vault。文件编号同时承担“阅读顺序”的作用：编号越靠前，越适合作为进入该主题的入口。这个编号不是简单的生成顺序，而是根据读者理解路径安排的。</p>
+
+      <p>主要文件和文件夹如下：</p>
+
+      <ul class="file-list">
+        <li><code>02_Review.md</code><br />Stage 5B 的最终主综述。虽然它最后生成，但阅读时通常最先打开。它提供领域全景、主要概念、研究方向、方法体系、争议和后续扩展路线。</li>
+        <li><code>03_Concepts/01_Concept_Index.md</code><br />Stage 5A 的概念索引。它是概念笔记的入口，说明哪些概念应该先读、哪些概念需要依赖前置知识。</li>
+        <li><code>03_Concepts/02_...md</code>, <code>03_Concepts/03_...md</code>, etc.<br />Stage 5A 生成的概念笔记。编号表示推荐概念阅读顺序，通常从基础定义、关键物理图像或核心方法开始，再进入更专门的机制、争议或应用概念。</li>
+        <li><code>04_Evidence_Tables/</code><br />证据表和流程表所在文件夹。它保存 Stage 1 到 Stage 3 的主要中间产物，例如候选文献表、核心候选表、筛选审计表、PDF inventory、手动下载队列和导入日志。这里的文件用于检查“为什么这些论文被选中，哪些被排除，PDF 是否已经就位”。</li>
+        <li><code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code><br />Stage 2 到 Stage 3 之间的用户-facing 下载清单。它列出每篇深读论文的 DOI、出版社页面、开放获取链接或其他合法来源提示，并说明预期文件名。</li>
+        <li><code>05_Papers/01_...md</code>, <code>05_Papers/02_...md</code>, etc.<br />Stage 2 建立 starter notes，Stage 4 完成深读后升级为完整 paper notes。编号表示推荐深读顺序，通常优先放入入门性强、方法基础性强、代表性高或对后续概念理解最关键的论文。</li>
+        <li><code>06_PDFs/01_...pdf</code>, <code>06_PDFs/02_...pdf</code>, etc.<br />Stage 3 导入的论文 PDF。PDF 文件名尽量和 <code>05_Papers/</code> 中的论文笔记编号一致，使每篇 paper note 可以直接对应到原始 PDF。</li>
+        <li><code>07_Templates/</code><br />模板和辅助格式文件。它服务于笔记生成和结构统一，不是主要阅读入口。</li>
+        <li><code>08_Project_Workflow/PROJECT_STATE.md</code><br />项目状态文件。它记录当前 stage、已完成 stage、下一步任务、人工下载队列状态和 workflow handoff。这个文件用于项目管理，不应该替代 <code>02_Review.md</code> 或概念笔记。</li>
+      </ul>
+
+      <p>推荐阅读顺序一般是：</p>
+
+      <ol>
+        <li>先读 <code>02_Review.md</code>，获得领域全景。</li>
+        <li>再读 <code>03_Concepts/01_Concept_Index.md</code>，进入概念路线。</li>
+        <li>按 <code>03_Concepts/02_...</code>, <code>03_Concepts/03_...</code> 的顺序读概念笔记。</li>
+        <li>需要查看证据时，按 <code>05_Papers/01_...</code>, <code>05_Papers/02_...</code> 的顺序读深读论文笔记。</li>
+        <li>需要核查原文时，打开 <code>06_PDFs/</code> 中对应编号的 PDF。</li>
+        <li>需要检查筛选依据、PDF 状态或下载来源时，查看 <code>04_Evidence_Tables/</code>。</li>
+      </ol>
+    </main>
+  </body>
+</html>`;
+}
+
 function normalizeModel(model) {
   return allowedModels.has(model) ? model : codexModel;
 }
@@ -1209,10 +1455,16 @@ function deepReadStatus(note) {
   if (/needs_correct_main_pdf|supplementary_only|blocked/i.test(text)) {
     return { done: false, meta: "blocked" };
   }
+  const readDepthMatch = text.match(/^\s*-\s*read[\s_-]*depth\s*:\s*(.+?)\s*$/im);
+  const readDepth = readDepthMatch?.[1] || "";
+  if (/starter|metadata_only|metadata only|todo|pending/i.test(readDepth)) {
+    return { done: false, meta: "pending deep read" };
+  }
   if (
-    /read_depth:\s*(full_pdf|deep|broad)/i.test(text) ||
+    /\b(pdf[-\s]*backed\s+)?(full[_\s-]*pdf|deep|broad)\s+reading\b/i.test(readDepth) ||
+    /read[_\s-]*depth:\s*(full[_\s-]*pdf|deep|broad|pdf[-\s]*backed)/i.test(text) ||
     /status:\s*(done|complete|deep_read)/i.test(text) ||
-    /^##\s+(Deep Reading|Broad Reading|Evidence Chain|Mechanism|Key Findings)/im.test(text)
+    /^##\s+(Deep Reading|Broad Reading|Evidence Chain|Mechanism|Key Findings|Claim[-\s]*Evidence|文献概要|证据链)/im.test(text)
   ) {
     return { done: true, meta: "deep-read note ready" };
   }
@@ -3005,6 +3257,9 @@ ${userPrompt}`;
 }
 
 async function serveStatic(req, res, url) {
+  if (url.pathname === "/about-deep-survey") {
+    return sendHtml(res, renderAboutDeepSurveyHtml());
+  }
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = path.normalize(path.join(publicDir, pathname));
   if (!filePath.startsWith(publicDir)) return notFound(res);

@@ -213,6 +213,29 @@ class ThemeMonitorTest(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_missing_theme_group_keys_are_scoped_to_selected_subjects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.record_fetch_run(
+                    monitor_type="theme",
+                    source="multi",
+                    journal="theme:electride",
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                    status="empty",
+                    records_found=0,
+                    started_at="2026-06-02T09:00:00+09:00",
+                )
+                missing = missing_theme_group_keys_for_date(
+                    storage,
+                    "2026-06-02",
+                    ["nri"],
+                )
+                self.assertEqual(missing, ["nri"])
+            finally:
+                storage.close()
+
     def test_theme_hit_chips_omit_group_name_duplicates(self):
         paper = {
             "paper_id": "p1",

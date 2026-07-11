@@ -130,6 +130,8 @@
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
 @property(nonatomic, strong) WKWebView *userGuideWebView;
+@property(nonatomic, strong) NSWindow *aboutDeepSurveyWindow;
+@property(nonatomic, strong) WKWebView *aboutDeepSurveyWebView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -365,6 +367,8 @@
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
     NSMenuItem *userGuideItem = [helpMenu addItemWithTitle:@"User Guide" action:@selector(openUserGuide:) keyEquivalent:@"?"];
     userGuideItem.target = self;
+    NSMenuItem *aboutDeepSurveyItem = [helpMenu addItemWithTitle:@"About Deep Survey" action:@selector(openAboutDeepSurvey:) keyEquivalent:@""];
+    aboutDeepSurveyItem.target = self;
     helpMenuItem.submenu = helpMenu;
 
     NSApp.mainMenu = mainMenu;
@@ -513,8 +517,16 @@
     return [self.url URLByAppendingPathComponent:@"user-guide"];
 }
 
+- (NSURL *)aboutDeepSurveyURL {
+    return [self.url URLByAppendingPathComponent:@"about-deep-survey"];
+}
+
 - (void)openUserGuide:(id)sender {
     [self showUserGuideWindow];
+}
+
+- (void)openAboutDeepSurvey:(id)sender {
+    [self showAboutDeepSurveyWindow];
 }
 
 - (void)showUserGuideWindow {
@@ -539,6 +551,31 @@
     }
     [self.userGuideWebView loadRequest:[NSURLRequest requestWithURL:[self userGuideURL]]];
     [self.userGuideWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)showAboutDeepSurveyWindow {
+    if (!self.aboutDeepSurveyWindow) {
+        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        self.aboutDeepSurveyWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+        self.aboutDeepSurveyWebView.UIDelegate = self;
+
+        self.aboutDeepSurveyWindow = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 980, 760)
+                      styleMask:(NSWindowStyleMaskTitled |
+                                 NSWindowStyleMaskClosable |
+                                 NSWindowStyleMaskMiniaturizable |
+                                 NSWindowStyleMaskResizable)
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        self.aboutDeepSurveyWindow.title = @"About Deep Survey";
+        self.aboutDeepSurveyWindow.delegate = self;
+        self.aboutDeepSurveyWindow.minSize = NSMakeSize(760, 560);
+        self.aboutDeepSurveyWindow.contentView = self.aboutDeepSurveyWebView;
+        [self.aboutDeepSurveyWindow center];
+    }
+    [self.aboutDeepSurveyWebView loadRequest:[NSURLRequest requestWithURL:[self aboutDeepSurveyURL]]];
+    [self.aboutDeepSurveyWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
 
