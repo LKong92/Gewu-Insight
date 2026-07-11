@@ -25813,7 +25813,7 @@ INDEX_HTML = """<!doctype html>
       if (!value) return [];
       if (Array.isArray(value)) return value;
       return String(value)
-        .split(/\s*(?:;|,|\band\b|、|，)\s*/i)
+        .split(/\s*(?:;|,|\\band\\b|、|，)\s*/i)
         .filter(Boolean);
     }
 
@@ -25842,7 +25842,7 @@ INDEX_HTML = """<!doctype html>
         fileNameFromPath(paper?.native_file_path || paper?.source_path || paper?.merged_pdf_path || paper?.main_pdf_path || "")
       ];
       for (const value of values) {
-        const match = String(value || "").match(/\b(18|19|20|21)\d{2}\b/);
+        const match = String(value || "").match(/\\b(18|19|20|21)\d{2}\\b/);
         if (match) return match[0];
       }
       return libraryPaperTableFallbackParts(entry, paper, displayName).year;
@@ -30417,7 +30417,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function showAnalysis(paper, content) {
-      const isCommentsReport = /^#\s+Citation Comments Report\b/.test(String(content || "").trim());
+      const isCommentsReport = /^#\s+Citation Comments Report\\b/.test(String(content || "").trim());
       $("analysisMeta").innerHTML = `
         <strong>${escapeHtml(paper?.title || "Analysis")}</strong><br>
         ${escapeHtml(paper?.journal || "")} ${escapeHtml(paper?.publication_date || "")}

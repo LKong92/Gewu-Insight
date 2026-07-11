@@ -42,6 +42,10 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertTrue(filename.endswith(".pdf"))
         self.assertLessEqual(len(filename), 120)
 
+    def test_embedded_library_table_year_regex_keeps_js_word_boundaries(self) -> None:
+        self.assertNotIn("\b", ui_server.INDEX_HTML)
+        self.assertIn(r"\b(18|19|20|21)\d{2}\b", ui_server.INDEX_HTML)
+
     def test_move_library_item_api_uses_updated_pdf_path(self) -> None:
         source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
         target_folder = self.storage.create_library_folder(parent_id=1, name="Target")
