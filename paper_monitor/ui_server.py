@@ -2254,6 +2254,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
                 return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
             else:
+                remaining = first_outside_reference_item(storage, paper_ids[0], recycle_id, exclude_item_id=entry_id)
+                if remaining:
+                    storage.delete_library_item(item_id=entry_id)
+                    promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
+                    remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
+                    updated_remaining = storage.get_library_item(int(remaining.get("id") or 0)) or remaining
+                    updated_paper = storage.get_paper(paper_ids[0])
+                    moved_api = dict(updated_remaining or {})
+                    if updated_paper:
+                        annotated = annotate_papers_with_library_status(storage, [updated_paper])
+                        updated_paper = annotated[0] if annotated else updated_paper
+                        moved_api = library_item_to_api(updated_remaining, updated_paper)
+                    return {
+                        "type": "item",
+                        "id": entry_id,
+                        "mode": "removed",
+                        "paper_ids": paper_ids,
+                        "moved": moved_api,
+                        "handoff_folder_id": int(updated_remaining.get("folder_id") or 0),
+                    }
                 move_or_alias_library_item_pdf(storage, item=item, target_folder_id=recycle_id)
                 moved = storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
                 sync_all_pdf_aliases_for_paper(storage, str(item.get("paper_id") or ""))
@@ -12971,6 +12991,7 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     target_dir = local_copy_dir_for_library_folder(storage, int(target_folder_id or 1)).resolve()
     if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
         target_dir.mkdir(parents=True, exist_ok=True)
+        remove_direct_symlinks_to(canonical, [target_dir])
         target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
         old_path = canonical
         if old_path != target_path:
@@ -13078,6 +13099,31 @@ def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_
     return None
 
 
+def first_outside_reference_item(
+    storage: Storage,
+    paper_id: str,
+    recycle_folder_id: int,
+    *,
+    exclude_item_id: int = 0,
+) -> dict[str, Any] | None:
+    rows = storage.conn.execute(
+        """
+        SELECT *
+        FROM library_items
+        WHERE paper_id = ?
+          AND id != ?
+        ORDER BY id ASC
+        """,
+        (str(paper_id), int(exclude_item_id or 0)),
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        folder_id = int(item.get("folder_id") or 0)
+        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
+            return item
+    return None
+
+
 def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
@@ -13088,6 +13134,7 @@ def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recyc
         sync_all_pdf_aliases_for_paper(storage, paper_id)
         return
     target_dir.mkdir(parents=True, exist_ok=True)
+    remove_direct_symlinks_to(canonical, [target_dir])
     target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
     shutil.move(str(old_path), str(target_path))
@@ -21864,7 +21911,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
         if (fastItemDelete) {
           const moved = data.deleted?.moved || {};
-          if (moved?.id && Number(moved.id) !== Number(id)) removeLibraryItemLocal(id);
+          if (moved?.id) applyLocalLibraryItemMove(id, Number(moved.folder_id || data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
           else applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
           if (!moved?.id && sourceItem) removeLibraryItemLocal(sourceItem.id);
         } else {
@@ -22039,8 +22086,7 @@ INDEX_HTML = """<!doctype html>
           (Array.isArray(data.deleted) ? data.deleted : []).forEach((result) => {
             const originalId = Number(result?.id || 0);
             const moved = result?.moved || {};
-            if (moved?.id && Number(moved.id) !== originalId) removeLibraryItemLocal(originalId);
-            else if (originalId) applyLocalLibraryItemMove(originalId, Number(result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+            if (originalId) applyLocalLibraryItemMove(originalId, Number(moved?.folder_id || result?.recycle_folder_id || libraryRecycleFolderId()), moved);
           });
         } else {
           applyLibrarySnapshot(data);

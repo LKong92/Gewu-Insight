@@ -88,6 +88,104 @@ class LibraryFileOperationTests(unittest.TestCase):
             ui_server.local_copy_dir_for_library_folder(self.storage, int(target_folder["id"])).resolve(),
         )
 
+    def test_delete_hands_pdf_to_earliest_remaining_non_recycle_link(self) -> None:
+        folder_a = self.storage.create_library_folder(parent_id=1, name="A")
+        folder_b = self.storage.create_library_folder(parent_id=1, name="B")
+        folder_c = self.storage.create_library_folder(parent_id=1, name="C")
+        dir_a = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder_a["id"]))
+        dir_b = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder_b["id"]))
+        dir_c = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder_c["id"]))
+        dir_a.mkdir(parents=True)
+        source_pdf = dir_a / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+
+        self.storage.upsert_paper(
+            {
+                "paper_id": "handoff-paper",
+                "doi": "10.1234/handoff",
+                "title": "Handoff Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "handoff-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item_a = self.storage.add_library_item(paper_id="handoff-paper", folder_id=int(folder_a["id"]))
+        item_b = self.storage.copy_library_item(item_id=int(item_a["id"]), folder_id=int(folder_b["id"]))
+        item_c = self.storage.copy_library_item(item_id=int(item_a["id"]), folder_id=int(folder_c["id"]))
+        ui_server.sync_alias_for_library_item(self.storage, "handoff-paper", int(folder_b["id"]))
+        ui_server.sync_alias_for_library_item(self.storage, "handoff-paper", int(folder_c["id"]))
+
+        result = ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item_a["id"]),
+        )
+        paper = self.storage.get_paper("handoff-paper") or {}
+        moved_path = Path(paper["merged_pdf_path"])
+
+        self.assertEqual(result["mode"], "removed")
+        self.assertEqual(int(result["moved"]["id"]), int(item_b["id"]))
+        self.assertIsNone(self.storage.get_library_item(int(item_a["id"])))
+        self.assertIsNotNone(self.storage.get_library_item(int(item_b["id"])))
+        self.assertIsNotNone(self.storage.get_library_item(int(item_c["id"])))
+        self.assertFalse(source_pdf.exists())
+        self.assertEqual(moved_path.resolve(), (dir_b / "paper.pdf").resolve())
+        self.assertTrue(moved_path.exists())
+        self.assertFalse(moved_path.is_symlink())
+        self.assertTrue((dir_c / "paper.pdf").is_symlink())
+
+    def test_delete_moves_pdf_to_recycle_when_no_remaining_non_recycle_link(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Only")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+
+        self.storage.upsert_paper(
+            {
+                "paper_id": "solo-paper",
+                "doi": "10.1234/solo",
+                "title": "Solo Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "solo-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(paper_id="solo-paper", folder_id=int(folder["id"]))
+
+        result = ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        paper = self.storage.get_paper("solo-paper") or {}
+        moved_path = Path(paper["merged_pdf_path"])
+
+        self.assertEqual(result["mode"], "trashed")
+        self.assertFalse(source_pdf.exists())
+        self.assertTrue(moved_path.exists())
+        self.assertIn("Recycle", moved_path.parts)
+
 
 if __name__ == "__main__":
     unittest.main()
