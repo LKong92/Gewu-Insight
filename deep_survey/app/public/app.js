@@ -577,6 +577,9 @@ function fallbackStageDetails(topic = {}) {
 function renderStageDetails(topic = {}) {
   if (!els.stageDetailPanel) return;
   const details = topic.stageDetails || fallbackStageDetails(topic);
+  const previousList = els.stageDetailPanel.querySelector(".stage-detail-list");
+  const previousScrollTop = previousList?.scrollTop || 0;
+  const previousDetailKey = els.stageDetailPanel.dataset.detailKey || "";
   const children = [];
   if (details.title) {
     const title = document.createElement("div");
@@ -645,7 +648,13 @@ function renderStageDetails(topic = {}) {
   }
 
   const items = Array.isArray(details.items) ? details.items : [];
+  const detailKey = [
+    details.stage || currentDetailStage(topic),
+    items.length,
+    items.map((item, index) => `${item.order || index + 1}:${item.label || item.name || ""}`).join("|")
+  ].join(":");
   if (!items.length) {
+    els.stageDetailPanel.dataset.detailKey = detailKey;
     if (details.empty) {
       const empty = document.createElement("div");
       empty.className = "stage-detail-empty";
@@ -690,7 +699,11 @@ function renderStageDetails(topic = {}) {
     list.append(row);
   });
   children.push(list);
+  els.stageDetailPanel.dataset.detailKey = detailKey;
   els.stageDetailPanel.replaceChildren(...children);
+  if (previousDetailKey === detailKey) {
+    list.scrollTop = Math.min(previousScrollTop, Math.max(list.scrollHeight - list.clientHeight, 0));
+  }
 }
 
 function selectedVaultForStageAction() {
@@ -2073,7 +2086,17 @@ async function refreshThreadStatus(threadId = selectedThreadId()) {
   state.threadStatusPollInFlight = true;
   try {
     const result = await api(`/api/appserver/threads/${encodeURIComponent(threadId)}/status`);
-    if (result.status?.threadId) mergeAppThreadStatus(result.status.threadId, result.status);
+    if (result.status?.threadId) {
+      const previous = state.appThreadStatus[result.status.threadId] || {};
+      const next = normalizeAppThreadStatus(result.status);
+      mergeAppThreadStatus(result.status.threadId, result.status);
+      if (
+        isTerminalAppThreadStatusValue(next.status) ||
+        (next.turnId && next.turnId !== previous.turnId)
+      ) {
+        loadThreadMessages(result.status.threadId, { force: true }).catch(showError);
+      }
+    }
   } finally {
     state.threadStatusPollInFlight = false;
   }
@@ -2089,8 +2112,8 @@ function applyAppServerChatEvent(data) {
     renderThreadChat();
     return;
   }
-  if (method === "item/agentMessage/delta") {
-    const delta = data.params?.delta || "";
+  if (isAgentMessageDeltaMethod(method)) {
+    const delta = data.params?.delta || data.params?.item?.delta || data.params?.item?.textDelta || "";
     if (!delta) return;
     const key = bufferKey(threadId, turnId);
     const previous = state.appThreadAssistantBuffers[key] || { threadId, turnId, text: "", at: new Date().toISOString() };
@@ -2102,14 +2125,48 @@ function applyAppServerChatEvent(data) {
   }
   if (method === "item/completed") {
     const type = data.params?.item?.type || data.params?.item?.kind || "";
-    if (type !== "agentMessage") return;
+    if (!isAgentMessageType(type)) return;
+    const completedText = textFromCompletedAgentItem(data.params?.item);
+    if (completedText) {
+      const key = bufferKey(threadId, turnId);
+      const previous = state.appThreadAssistantBuffers[key] || { threadId, turnId, text: "", at: new Date().toISOString() };
+      if (!previous.text.trim()) {
+        state.appThreadAssistantBuffers[key] = { ...previous, text: completedText };
+      }
+    }
     flushAssistantBuffer(threadId, turnId);
     return;
   }
   if (method === "turn/completed") {
     flushAssistantBuffer(threadId, turnId);
+    loadThreadMessages(threadId, { force: true }).catch(showError);
     renderThreadChat();
   }
+}
+
+function isAgentMessageDeltaMethod(method = "") {
+  const value = String(method || "").toLowerCase();
+  return value.startsWith("item/") && value.includes("agent") && value.includes("delta");
+}
+
+function isAgentMessageType(type = "") {
+  return String(type || "").toLowerCase().replace(/[_-]/g, "").includes("agentmessage");
+}
+
+function textFromCompletedAgentItem(item = {}) {
+  const direct = typeof item.text === "string" ? item.text : "";
+  if (direct.trim()) return direct.trim();
+  const content = Array.isArray(item.content) ? item.content : [];
+  const text = content
+    .map((part) => (
+      typeof part === "string"
+        ? part
+        : part?.text || part?.content || ""
+    ))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text;
 }
 
 function flushAssistantBuffer(threadId, turnId) {

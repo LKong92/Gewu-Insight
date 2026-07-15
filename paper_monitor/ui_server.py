@@ -337,6 +337,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/user-guide":
                 self.send_text(USER_GUIDE_HTML, content_type="text/html; charset=utf-8")
                 return
+            if parsed.path == "/about-deep-survey":
+                self.send_text(ABOUT_DEEP_SURVEY_HTML, content_type="text/html; charset=utf-8")
+                return
             if parsed.path == "/api/month":
                 self.handle_month(parse_qs(parsed.query))
                 return
@@ -776,7 +779,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_fetch_progress(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or today_jst().isoformat()
-        self.send_json({"date": selected, "progress": get_fetch_progress(selected)})
+        kind = clean_text(first(query, "kind") or "")
+        self.send_json({"date": selected, "kind": kind, "progress": get_fetch_progress(selected, kind=kind)})
 
     def handle_arxiv_daily_refresh(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or datetime.now().astimezone().date().isoformat()
@@ -2125,6 +2129,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             unsorted_id = int(special["unsorted"].get("id") or 1)
             recycle_id = int(special["recycle"].get("id") or 1)
             moved: dict[str, Any] | None = None
+            moved_response: dict[str, Any] = {}
             if entry_type == "item":
                 item_id = int(payload.get("id") or 0)
                 source_item = storage.get_library_item(item_id)
@@ -2137,6 +2142,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     moved = storage.move_library_item(item_id=item_id, folder_id=target_folder_id)
                 if moved:
                     sync_all_pdf_aliases_for_paper(storage, str(moved.get("paper_id") or source_item.get("paper_id") or ""))
+                    updated_paper = storage.get_paper(str(moved.get("paper_id") or source_item.get("paper_id") or ""))
+                    if updated_paper:
+                        annotated = annotate_papers_with_library_status(storage, [updated_paper])
+                        updated_paper = annotated[0] if annotated else updated_paper
+                        moved_response = library_item_to_api(moved, updated_paper)
+                    else:
+                        moved_response = dict(moved or {})
             elif entry_type == "folder":
                 folder_id = int(payload.get("id") or 0)
                 folder = storage.get_library_folder(folder_id)
@@ -2150,6 +2162,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 else:
                     moved = storage.move_library_folder(folder_id=folder_id, parent_id=target_folder_id)
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
+                moved_response = dict(moved or {})
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -2159,7 +2172,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"moved": dict(moved or {}), **snapshot})
+        self.send_json({"moved": moved_response, **snapshot})
 
     def handle_reorder_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -2266,6 +2279,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
                 return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
             else:
+                remaining = first_outside_reference_item(storage, paper_ids[0], recycle_id, exclude_item_id=entry_id)
+                if remaining:
+                    storage.delete_library_item(item_id=entry_id)
+                    promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
+                    remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
+                    updated_remaining = storage.get_library_item(int(remaining.get("id") or 0)) or remaining
+                    updated_paper = storage.get_paper(paper_ids[0])
+                    moved_api = dict(updated_remaining or {})
+                    if updated_paper:
+                        annotated = annotate_papers_with_library_status(storage, [updated_paper])
+                        updated_paper = annotated[0] if annotated else updated_paper
+                        moved_api = library_item_to_api(updated_remaining, updated_paper)
+                    return {
+                        "type": "item",
+                        "id": entry_id,
+                        "mode": "removed",
+                        "paper_ids": paper_ids,
+                        "moved": moved_api,
+                        "handoff_folder_id": int(updated_remaining.get("folder_id") or 0),
+                    }
                 move_or_alias_library_item_pdf(storage, item=item, target_folder_id=recycle_id)
                 moved = storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
                 sync_all_pdf_aliases_for_paper(storage, str(item.get("paper_id") or ""))
@@ -2936,6 +2969,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 "summary": summary,
                 "papers": [theme_paper_to_api(paper) for paper in papers],
                 "fetched": fetched,
+                "fetchActive": is_theme_fetch_active(selected),
                 "themeCounts": selected_counts or count_by_theme_group(papers),
                 "allThemeCounts": all_counts or count_by_theme_group(all_date_papers),
             }
@@ -3261,6 +3295,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
     def send_bytes(self, data: bytes, *, content_type: str) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -3270,6 +3305,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -4395,14 +4431,25 @@ def run_theme_monitor(
     }
     groups = theme_groups or load_theme_groups(storage)
     progress_date = start_date.isoformat() if start_date == end_date else ""
+    source_fetchers = theme_source_fetchers()
+    source_totals = {
+        group_key: len(theme_search_queries(list(groups[group_key]["queries"]))) * len(source_fetchers)
+        for group_key in group_keys
+        if group_key in groups
+    }
     if progress_date:
-        start_theme_fetch_progress(progress_date, group_keys, groups)
+        start_theme_fetch_progress(progress_date, group_keys, groups, source_totals)
     try:
         for group_key in group_keys:
             group = groups[group_key]
             group_name = str(group["name"])
             if progress_date:
-                update_theme_fetch_progress(progress_date, group_key, status="running")
+                update_theme_fetch_progress(
+                    progress_date,
+                    group_key,
+                    status="running",
+                    source_total=source_totals.get(group_key, 0),
+                )
             fetch_run_id = storage.start_fetch_run(
                 monitor_type="theme",
                 source="multi",
@@ -4418,18 +4465,55 @@ def run_theme_monitor(
             saved = 0
             try:
                 search_queries = theme_search_queries(list(group["queries"]))
-                expected_fetches = len(search_queries) * len(theme_source_fetchers())
+                expected_fetches = len(search_queries) * len(source_fetchers)
+                source_index = 0
                 for query in search_queries:
-                    for source_name, fetcher in theme_source_fetchers():
+                    for source_name, fetcher in source_fetchers:
                         summary["queries"] += 1
+                        if progress_date:
+                            update_theme_fetch_progress(
+                                progress_date,
+                                group_key,
+                                status="running",
+                                raw_results=raw_count,
+                                current_source=source_name,
+                                current_query=query,
+                                source_completed=source_index,
+                                source_total=expected_fetches,
+                            )
                         try:
                             papers = fetcher(query, start_date, end_date)
                         except Exception as exc:
                             message = theme_fetch_error_message(group_name, exc, source_name=source_name)
                             append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
+                            source_index += 1
+                            if progress_date:
+                                update_theme_fetch_progress(
+                                    progress_date,
+                                    group_key,
+                                    status="running",
+                                    raw_results=raw_count,
+                                    message=message,
+                                    current_source=source_name,
+                                    current_query=query,
+                                    source_completed=source_index,
+                                    source_total=expected_fetches,
+                                )
                             continue
                         raw_count += len(papers)
                         summary["source_counts"][source_name] = int(summary["source_counts"].get(source_name) or 0) + len(papers)
+                        source_index += 1
+                        if progress_date:
+                            update_theme_fetch_progress(
+                                progress_date,
+                                group_key,
+                                status="running",
+                                raw_results=raw_count,
+                                current_source=source_name,
+                                current_query=query,
+                                source_completed=source_index,
+                                source_total=expected_fetches,
+                            )
                         for paper in papers:
                             if not theme_candidate_in_window(paper, start_date, end_date):
                                 continue
@@ -7506,11 +7590,12 @@ def pdf_rename_filename_from_values(template: str, values: dict[str, str], suffi
     stem = re.sub(r"\{([A-Za-z_]+)\}", replace_token, normalized_template)
     stem = re.sub(r"\s*_\s*", "_", stem)
     stem = re.sub(r"_+", "_", stem).strip(" _.-")
-    filename = finder_safe_name(stem, "paper")
     clean_suffix = suffix if suffix and suffix.startswith(".") else ".pdf"
     if clean_suffix.lower() != ".pdf":
         clean_suffix = ".pdf"
-    return finder_safe_name(f"{filename}{clean_suffix}", "paper.pdf")
+    max_stem_length = max(1, 120 - len(clean_suffix))
+    filename = finder_safe_name(stem, "paper")[:max_stem_length].strip(" .") or "paper"
+    return f"{filename}{clean_suffix}"
 
 
 def pdf_rename_filename_for_paper(paper: dict[str, Any], template: str, current_path: Path) -> str:
@@ -11040,7 +11125,7 @@ def dedup_names(names: list[str]) -> list[str]:
 
 def start_fetch_progress(selected: str, journals: list[str]) -> None:
     with FETCH_PROGRESS_LOCK:
-        FETCH_PROGRESS[selected] = {
+        FETCH_PROGRESS[fetch_progress_key("journal", selected)] = {
             "active": True,
             "kind": "journal",
             "completed": 0,
@@ -11081,10 +11166,15 @@ def finish_theme_fetch(selected: str) -> None:
         ACTIVE_THEME_FETCH_DATES.discard(selected)
 
 
+def is_theme_fetch_active(selected: str) -> bool:
+    with FETCH_PROGRESS_LOCK:
+        return selected in ACTIVE_THEME_FETCH_DATES
+
+
 def update_fetch_progress(selected: str, *, journal: str, completed: int, total: int) -> None:
     percent = round((completed / total) * 100) if total else 100
     with FETCH_PROGRESS_LOCK:
-        FETCH_PROGRESS[selected] = {
+        FETCH_PROGRESS[fetch_progress_key("journal", selected)] = {
             "active": True,
             "kind": "journal",
             "completed": completed,
@@ -11096,7 +11186,7 @@ def update_fetch_progress(selected: str, *, journal: str, completed: int, total:
 
 def finish_fetch_progress(selected: str) -> None:
     with FETCH_PROGRESS_LOCK:
-        progress = FETCH_PROGRESS.get(selected)
+        progress = FETCH_PROGRESS.get(fetch_progress_key("journal", selected))
         if not progress:
             return
         total = int(progress.get("total") or 0)
@@ -11110,8 +11200,14 @@ def finish_fetch_progress(selected: str) -> None:
         )
 
 
-def start_theme_fetch_progress(selected: str, group_keys: list[str], theme_groups: dict[str, dict[str, Any]]) -> None:
+def start_theme_fetch_progress(
+    selected: str,
+    group_keys: list[str],
+    theme_groups: dict[str, dict[str, Any]],
+    source_totals: dict[str, int] | None = None,
+) -> None:
     subjects = []
+    source_totals = source_totals or {}
     for key in group_keys:
         group = theme_groups.get(key) or {}
         subjects.append(
@@ -11122,10 +11218,14 @@ def start_theme_fetch_progress(selected: str, group_keys: list[str], theme_group
                 "records_found": 0,
                 "raw_results": 0,
                 "message": "",
+                "current_source": "",
+                "current_query": "",
+                "source_completed": 0,
+                "source_total": int(source_totals.get(key) or 0),
             }
         )
     with FETCH_PROGRESS_LOCK:
-        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=True)
+        FETCH_PROGRESS[fetch_progress_key("theme", selected)] = theme_fetch_progress_payload(subjects, active=True)
 
 
 def update_theme_fetch_progress(
@@ -11136,9 +11236,13 @@ def update_theme_fetch_progress(
     records_found: int | None = None,
     raw_results: int | None = None,
     message: str = "",
+    current_source: str = "",
+    current_query: str = "",
+    source_completed: int | None = None,
+    source_total: int | None = None,
 ) -> None:
     with FETCH_PROGRESS_LOCK:
-        progress = FETCH_PROGRESS.get(selected)
+        progress = FETCH_PROGRESS.get(fetch_progress_key("theme", selected))
         if not progress or progress.get("kind") != "theme":
             return
         subjects = [dict(item) for item in progress.get("subjects") or [] if isinstance(item, dict)]
@@ -11151,24 +11255,44 @@ def update_theme_fetch_progress(
             if raw_results is not None:
                 item["raw_results"] = int(raw_results or 0)
             item["message"] = message
+            if current_source or status != "running":
+                item["current_source"] = current_source
+            if current_query or status != "running":
+                item["current_query"] = current_query
+            if source_completed is not None:
+                item["source_completed"] = int(source_completed or 0)
+            if source_total is not None:
+                item["source_total"] = int(source_total or 0)
             break
-        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=True)
+        FETCH_PROGRESS[fetch_progress_key("theme", selected)] = theme_fetch_progress_payload(subjects, active=True)
 
 
 def finish_theme_fetch_progress(selected: str) -> None:
     with FETCH_PROGRESS_LOCK:
-        progress = FETCH_PROGRESS.get(selected)
+        progress = FETCH_PROGRESS.get(fetch_progress_key("theme", selected))
         if not progress or progress.get("kind") != "theme":
             return
         subjects = [dict(item) for item in progress.get("subjects") or [] if isinstance(item, dict)]
-        FETCH_PROGRESS[selected] = theme_fetch_progress_payload(subjects, active=False)
+        FETCH_PROGRESS[fetch_progress_key("theme", selected)] = theme_fetch_progress_payload(subjects, active=False)
 
 
 def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool) -> dict[str, Any]:
     total = len(subjects)
     completed = sum(1 for item in subjects if item.get("status") in {"success", "empty", "error"})
-    percent = round((completed / total) * 100) if total else 100
+    source_total = 0
+    source_completed = 0
+    for item in subjects:
+        item_source_total = int(item.get("source_total") or 0)
+        if item_source_total <= 0:
+            continue
+        source_total += item_source_total
+        if item.get("status") in {"success", "empty", "error"}:
+            source_completed += item_source_total
+        else:
+            source_completed += max(0, min(item_source_total, int(item.get("source_completed") or 0)))
+    percent = round((source_completed / source_total) * 100) if source_total else (round((completed / total) * 100) if total else 100)
     current = next((item.get("name") or "" for item in subjects if item.get("status") == "running"), "")
+    running = next((item for item in subjects if item.get("status") == "running"), {})
     return {
         "active": active,
         "kind": "theme",
@@ -11176,13 +11300,25 @@ def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool
         "total": total,
         "percent": percent,
         "currentSubject": current,
+        "currentSource": running.get("current_source") or "",
+        "currentQuery": running.get("current_query") or "",
+        "sourceCompleted": source_completed,
+        "sourceTotal": source_total,
         "subjects": subjects,
     }
 
 
-def get_fetch_progress(selected: str) -> dict[str, Any] | None:
+def fetch_progress_key(kind: str, selected: str) -> str:
+    normalized_kind = "theme" if kind == "theme" else "journal"
+    return f"{normalized_kind}:{selected}"
+
+
+def get_fetch_progress(selected: str, *, kind: str = "") -> dict[str, Any] | None:
     with FETCH_PROGRESS_LOCK:
-        progress = FETCH_PROGRESS.get(selected)
+        if kind in {"journal", "theme"}:
+            progress = FETCH_PROGRESS.get(fetch_progress_key(kind, selected))
+            return dict(progress) if progress else None
+        progress = FETCH_PROGRESS.get(fetch_progress_key("journal", selected)) or FETCH_PROGRESS.get(fetch_progress_key("theme", selected))
         return dict(progress) if progress else None
 
 
@@ -12943,6 +13079,7 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
     target_dir = local_copy_dir_for_library_folder(storage, int(target_folder_id or 1)).resolve()
     if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
         target_dir.mkdir(parents=True, exist_ok=True)
+        remove_direct_symlinks_to(canonical, [target_dir])
         target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
         old_path = canonical
         if old_path != target_path:
@@ -13050,6 +13187,31 @@ def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_
     return None
 
 
+def first_outside_reference_item(
+    storage: Storage,
+    paper_id: str,
+    recycle_folder_id: int,
+    *,
+    exclude_item_id: int = 0,
+) -> dict[str, Any] | None:
+    rows = storage.conn.execute(
+        """
+        SELECT *
+        FROM library_items
+        WHERE paper_id = ?
+          AND id != ?
+        ORDER BY id ASC
+        """,
+        (str(paper_id), int(exclude_item_id or 0)),
+    ).fetchall()
+    for row in rows:
+        item = dict(row)
+        folder_id = int(item.get("folder_id") or 0)
+        if folder_id and not library_folder_is_within(storage, folder_id, recycle_folder_id):
+            return item
+    return None
+
+
 def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
@@ -13060,6 +13222,7 @@ def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recyc
         sync_all_pdf_aliases_for_paper(storage, paper_id)
         return
     target_dir.mkdir(parents=True, exist_ok=True)
+    remove_direct_symlinks_to(canonical, [target_dir])
     target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
     shutil.move(str(old_path), str(target_path))
@@ -13814,6 +13977,242 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+ABOUT_DEEP_SURVEY_HTML = """<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>About Deep Survey</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #fbfcfd;
+        --ink: #17202a;
+        --muted: #687385;
+        --line: #d8dee8;
+        --accent: #1f7a8c;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 42px 42px 56px;
+      }
+      h1 {
+        margin: 0 0 24px;
+        font-size: 34px;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+      h2 {
+        margin: 34px 0 12px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        font-size: 20px;
+        line-height: 1.28;
+        letter-spacing: 0;
+      }
+      p { margin: 0 0 14px; }
+      ol, ul { margin: 8px 0 18px; padding-left: 24px; }
+      li { margin: 5px 0; }
+      code {
+        padding: 1px 5px;
+        border: 1px solid #dfe4ec;
+        border-radius: 5px;
+        background: #f3f5f7;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.92em;
+      }
+      .file-list li { margin-bottom: 10px; }
+      .file-list code { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>About Deep Survey</h1>
+
+      <p>Deep Survey 是一个面向深度文献调研的分阶段工作流。它的目标不是简单收集论文列表，而是把一个研究问题逐步转化为一个可阅读、可追溯、可继续扩展的知识库。</p>
+
+      <p>整个流程把文献调研拆成几个明确阶段：先广泛发现候选文献，再筛选核心论文，再获取合法 PDF，再逐篇深读，最后整理成概念笔记和综述文章。这样做的好处是避免一开始就陷入少数论文的细节，也避免最后只得到一堆没有结构的摘要。每个阶段都会留下可检查的中间产物，因此用户可以随时知道当前进度、依据和下一步应该做什么。</p>
+
+      <p>Deep Survey 默认生成 Obsidian 兼容的 Markdown vault。论文、概念、证据表、PDF 和项目状态会被分别保存，便于后续阅读、修改、扩展和人工审查。</p>
+
+      <h2>Workflow Overview</h2>
+
+      <p>Deep Survey 的主流程包括：</p>
+
+      <ol>
+        <li>Stage 1 Discovery：发现候选文献</li>
+        <li>Stage 2 Screening：筛选核心阅读队列</li>
+        <li>Stage 3 PDF Acquisition：手动获取并导入 PDF</li>
+        <li>Stage 4 Paper Deep Reading：逐篇深度阅读</li>
+        <li>Stage 5A Concept Notes：生成概念知识笔记</li>
+        <li>Stage 5B Review Synthesis：写出领域综述</li>
+      </ol>
+
+      <p>每个阶段都有自己的任务边界。前一阶段的产物会成为后一阶段的输入，因此工作流强调“先建立候选池，再精读，再综合”，而不是直接让 AI 随机写一篇综述。</p>
+
+      <h2>Stage 1: Discovery</h2>
+
+      <p>Stage 1 的任务是从合法的文献元数据来源中广泛发现候选论文，例如 OpenAlex、Semantic Scholar 或其他可访问的学术索引。这个阶段通常会建立一个较大的候选池，理想情况下包含 200 到 500 篇相关论文。</p>
+
+      <p>Stage 1 会做几件事：</p>
+
+      <ul>
+        <li>根据研究主题设计检索方向和关键词。</li>
+        <li>收集候选论文的标题、作者、年份、期刊、DOI、摘要、引用量等元数据。</li>
+        <li>去除重复记录。</li>
+        <li>对候选论文进行初步评分，例如主题相关性、引用影响、时间新旧、方法重要性、是否适合作为综述材料。</li>
+        <li>从大候选池中提炼出约 40 到 80 篇核心候选论文。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：真正可靠的文献调研不能从一开始就只看几篇最显眼的论文。先建立一个足够宽的候选池，可以减少遗漏重要方向的风险，也能让后续筛选有依据。Stage 1 不是为了深读，而是为了形成一张领域地图。</p>
+
+      <p>典型产物包括候选文献表、检索日志、去重后的核心候选表和初步评分字段。</p>
+
+      <h2>Stage 2: Screening</h2>
+
+      <p>Stage 2 的任务是审查 Stage 1 得到的核心候选论文，并选出真正值得深度阅读的论文队列。这个阶段通常会把 40 到 80 篇核心候选进一步压缩到 15 到 25 篇深读论文。</p>
+
+      <p>Stage 2 会做几件事：</p>
+
+      <ul>
+        <li>审查每篇核心候选论文。</li>
+        <li>给出 keep、background 或 exclude 判断。</li>
+        <li>记录排除理由，例如主题太宽泛、只是背景材料、方法不相关、与研究问题距离较远。</li>
+        <li>选出深读论文队列，并按推荐阅读顺序编号。</li>
+        <li>在 <code>05_Papers/</code> 中建立 starter paper notes。</li>
+        <li>为每篇深读论文准备期望的 PDF 文件名。</li>
+        <li>生成手动 PDF 下载队列，通常保存在 <code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code>。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：不是所有相关论文都值得深读。有些论文适合作背景，有些只是检索噪声，有些虽然引用高但不服务于当前问题。Stage 2 把“广泛发现”转化为“有限但高质量的深读任务”，使后续精读成本可控，也让每篇被选中的论文都有理由。</p>
+
+      <p>典型产物包括筛选审计表、排除理由、深读队列、starter notes 和 PDF 下载清单。</p>
+
+      <h2>Stage 3: Manual PDF Acquisition And Import</h2>
+
+      <p>Stage 3 的任务是获取并导入深读论文的 PDF。Deep Survey 中的 Stage 3 是手动下载优先的流程：软件提供下载队列和文件导入工具，用户从合法来源下载 PDF，然后在 Deep Survey 中选择这些 PDF 文件，系统再把它们匹配、验证并移动到 vault 的 <code>06_PDFs/</code> 文件夹。</p>
+
+      <p>Stage 3 会做几件事：</p>
+
+      <ul>
+        <li>打开 Stage 2 生成的 PDF 下载队列。</li>
+        <li>为每篇论文提供 DOI、出版社页面、开放获取链接或其他合法来源提示。</li>
+        <li>用户手动下载主论文 PDF。</li>
+        <li>用户通过 Deep Survey 选择下载好的 PDF 文件。</li>
+        <li>软件尝试把 PDF 匹配到深读队列中的论文。</li>
+        <li>将匹配成功的 PDF 移动到 <code>06_PDFs/</code>，并改成预期文件名。</li>
+        <li>检查 PDF 文件是否有效。</li>
+        <li>更新 PDF inventory 和导入记录。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：PDF 获取涉及版权、机构访问和出版社权限。Deep Survey 不应该自动绕过访问控制，也不应该使用未授权来源。手动下载加软件导入的方式，把合法访问和文件整理分开：用户负责从自己有权访问的来源下载，软件负责后续命名、验证、归档和状态管理。</p>
+
+      <p>如果某个 PDF 无法被可靠匹配，Deep Survey 应该报告不确定性，而不是猜测导入。这样可以避免论文和 PDF 对错号，保护后续深读质量。</p>
+
+      <p>典型产物包括 <code>08_stage3_pdf_inventory.csv</code>、<code>09_manual_pdf_download_queue.md</code> 和导入日志。</p>
+
+      <h2>Stage 4: Paper Deep Reading</h2>
+
+      <p>Stage 4 是整个 Deep Survey 中最重要的深读阶段。它的任务不是批量抽取摘要，而是逐篇阅读 PDF，并为每篇论文重建一份真正有信息量的 paper note。</p>
+
+      <p>Stage 4 会做几件事：</p>
+
+      <ul>
+        <li>按 Stage 2 确定的顺序逐篇处理论文。</li>
+        <li>每次只完整处理一篇论文。</li>
+        <li>检查 PDF 的结构、图表、表格和正文。</li>
+        <li>重建论文的核心问题、主要贡献、方法、关键结果、定量信息、局限性和证据链。</li>
+        <li>更新 <code>05_Papers/</code> 中对应的论文笔记。</li>
+        <li>记录每篇论文的深读状态。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：高质量综述不能建立在批量摘要或抽取片段上。论文的真正价值通常存在于问题设置、实验设计、方法假设、图表证据和局限性之间的关系中。只有逐篇完整阅读，才能知道一篇论文到底在证明什么、没有证明什么，以及它与其他论文如何连接。</p>
+
+      <p>Stage 4 特别强调顺序处理，而不是批量处理。批量提取可能看起来更快，但容易得到模板化、浅层、上下文断裂的笔记。Deep Survey 的目标是让每篇 paper note 都能独立支持后续概念整理和综述写作。</p>
+
+      <p>一篇论文只有在笔记足够具体、没有占位内容、能解释核心问题和证据链时，才应被认为完成深读。</p>
+
+      <h2>Stage 5A: Concept Notes</h2>
+
+      <p>Stage 5A 的任务是把 Stage 4 的论文理解转化为概念知识笔记。这里的重点不是继续总结单篇论文，而是整理领域中的关键概念、物理含义、方法边界和阅读路径。</p>
+
+      <p>Stage 5A 会做几件事：</p>
+
+      <ul>
+        <li>在 <code>03_Concepts/</code> 中建立概念索引。</li>
+        <li>创建按推荐阅读顺序编号的概念笔记。</li>
+        <li>解释每个概念的定义和物理意义。</li>
+        <li>整理相关公式、单位和测量假设。</li>
+        <li>说明概念在该领域中的位置。</li>
+        <li>区分相邻概念，指出常见误解。</li>
+        <li>给出代表性论文和继续阅读路线。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：读完论文之后，用户需要的不只是“哪篇论文说了什么”，还需要“这个领域到底有哪些概念，它们之间怎么连接”。概念笔记把论文级别的信息抽象成知识结构，使用户能更快进入领域，也方便之后写论文、做报告或继续扩展调研。</p>
+
+      <p>Stage 5A 不应该把每个概念笔记写成论文深读笔记。它关注知识解释，而不是重复 paper note 的结构。</p>
+
+      <h2>Stage 5B: Review Writing</h2>
+
+      <p>Stage 5B 的任务是写出面向读者的领域综述。它应该是一篇真正的 domain review 或 knowledge synthesis，而不是项目过程报告。</p>
+
+      <p>Stage 5B 会做几件事：</p>
+
+      <ul>
+        <li>整合 Stage 4 的论文深读结果。</li>
+        <li>使用 Stage 5A 的概念结构作为阅读入口。</li>
+        <li>解释领域的基本概念。</li>
+        <li>梳理主要研究方向。</li>
+        <li>比较常用方法、测量体系和评价指标。</li>
+        <li>总结材料、应用或问题 landscape。</li>
+        <li>指出争议、开放问题和边界条件。</li>
+        <li>给出下一轮文献扩展路线。</li>
+        <li>将主综述保存为读者容易找到的 <code>02_Review.md</code>。</li>
+      </ul>
+
+      <p>这个阶段的合理性在于：综述不是把论文摘要拼接起来，而是重新组织一个领域。好的综述应该帮助读者理解“为什么这个领域这样发展”“哪些问题已经清楚”“哪些地方仍然不确定”“下一步应该读什么”。因此 Stage 5B 要把项目管理信息和领域叙事分开：状态、日志、进度应留在 workflow 文件中，主综述只服务于知识表达。</p>
+
+      <h2>Files And Outputs</h2>
+
+      <p>Deep Survey 的输出是一个 Obsidian 兼容的 vault。文件编号同时承担“阅读顺序”的作用：编号越靠前，越适合作为进入该主题的入口。这个编号不是简单的生成顺序，而是根据读者理解路径安排的。</p>
+
+      <p>主要文件和文件夹如下：</p>
+
+      <ul class="file-list">
+        <li><code>02_Review.md</code><br>Stage 5B 的最终主综述。虽然它最后生成，但阅读时通常最先打开。它提供领域全景、主要概念、研究方向、方法体系、争议和后续扩展路线。</li>
+        <li><code>03_Concepts/01_Concept_Index.md</code><br>Stage 5A 的概念索引。它是概念笔记的入口，说明哪些概念应该先读、哪些概念需要依赖前置知识。</li>
+        <li><code>03_Concepts/02_...md</code>, <code>03_Concepts/03_...md</code>, etc.<br>Stage 5A 生成的概念笔记。编号表示推荐概念阅读顺序，通常从基础定义、关键物理图像或核心方法开始，再进入更专门的机制、争议或应用概念。</li>
+        <li><code>04_Evidence_Tables/</code><br>证据表和流程表所在文件夹。它保存 Stage 1 到 Stage 3 的主要中间产物，例如候选文献表、核心候选表、筛选审计表、PDF inventory、手动下载队列和导入日志。这里的文件用于检查“为什么这些论文被选中，哪些被排除，PDF 是否已经就位”。</li>
+        <li><code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code><br>Stage 2 到 Stage 3 之间的用户-facing 下载清单。它列出每篇深读论文的 DOI、出版社页面、开放获取链接或其他合法来源提示，并说明预期文件名。</li>
+        <li><code>05_Papers/01_...md</code>, <code>05_Papers/02_...md</code>, etc.<br>Stage 2 建立 starter notes，Stage 4 完成深读后升级为完整 paper notes。编号表示推荐深读顺序，通常优先放入入门性强、方法基础性强、代表性高或对后续概念理解最关键的论文。</li>
+        <li><code>06_PDFs/01_...pdf</code>, <code>06_PDFs/02_...pdf</code>, etc.<br>Stage 3 导入的论文 PDF。PDF 文件名尽量和 <code>05_Papers/</code> 中的论文笔记编号一致，使每篇 paper note 可以直接对应到原始 PDF。</li>
+        <li><code>07_Templates/</code><br>模板和辅助格式文件。它服务于笔记生成和结构统一，不是主要阅读入口。</li>
+        <li><code>08_Project_Workflow/PROJECT_STATE.md</code><br>项目状态文件。它记录当前 stage、已完成 stage、下一步任务、人工下载队列状态和 workflow handoff。这个文件用于项目管理，不应该替代 <code>02_Review.md</code> 或概念笔记。</li>
+      </ul>
+
+      <p>推荐阅读顺序一般是：</p>
+
+      <ol>
+        <li>先读 <code>02_Review.md</code>，获得领域全景。</li>
+        <li>再读 <code>03_Concepts/01_Concept_Index.md</code>，进入概念路线。</li>
+        <li>按 <code>03_Concepts/02_...</code>, <code>03_Concepts/03_...</code> 的顺序读概念笔记。</li>
+        <li>需要查看证据时，按 <code>05_Papers/01_...</code>, <code>05_Papers/02_...</code> 的顺序读深读论文笔记。</li>
+        <li>需要核查原文时，打开 <code>06_PDFs/</code> 中对应编号的 PDF。</li>
+        <li>需要检查筛选依据、PDF 状态或下载来源时，查看 <code>04_Evidence_Tables/</code>。</li>
+      </ol>
+    </main>
+  </body>
+</html>"""
+
+
 USER_GUIDE_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -14231,7 +14630,7 @@ INDEX_HTML = """<!doctype html>
     .day.out { color: #a7adba; background: #f0f2f6; cursor: default; }
     .day.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
     .day.fetching { border-color: rgba(23, 100, 59, 0.42); background: #f7fbf8; }
-    .day.no-match::after {
+    .day.today::after {
       content: "";
       position: absolute;
       left: 8px;
@@ -14301,6 +14700,11 @@ INDEX_HTML = """<!doctype html>
       margin-top: 2px;
       text-align: left;
     }
+    .theme-fetch-cancel-inline {
+      justify-self: start;
+      width: max-content;
+      padding: 0 14px;
+    }
     .theme-fetch-subject-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto auto;
@@ -14362,8 +14766,10 @@ INDEX_HTML = """<!doctype html>
       100% { transform: translateX(100%); opacity: 0; }
     }
     .filters { display: flex; flex-direction: column; gap: 8px; }
-    .theme-sidebar-filter { display: none; }
+    .theme-sidebar-filter,
+    .theme-sidebar-fetch { display: none; }
     .app.theme-mode .theme-sidebar-filter { display: flex; }
+    .app.theme-mode .theme-sidebar-fetch { display: block; }
     .app.theme-mode .journal-sidebar-filter { display: none; }
     .theme-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .theme-add-btn {
@@ -19349,9 +19755,10 @@ INDEX_HTML = """<!doctype html>
     const initialToday = localIsoDate(new Date());
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
-    const LIBRARY_SORT_STORAGE_KEY = "daiqo-library-sort-mode";
-    const LIBRARY_CONTENT_VIEW_STORAGE_KEY = "daiqo-library-content-view";
-    const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
+	    const LIBRARY_SORT_STORAGE_KEY = "daiqo-library-sort-mode";
+	    const LIBRARY_CONTENT_VIEW_STORAGE_KEY = "daiqo-library-content-view";
+	    const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
+	    const THEME_SELECTED_GROUPS_STORAGE_KEY = "daiqo-theme-selected-groups";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
       ["cond-mat.dis-nn", "Disordered Systems"],
@@ -19423,6 +19830,7 @@ INDEX_HTML = """<!doctype html>
       themeSearchRunning: false,
       themeFetchingDates: new Set(),
       themeFetchControllers: new Map(),
+      themeFetchCompletionWatchers: new Set(),
       editingThemeGroupKey: "",
       themeDragKey: "",
       themeSuppressNextClick: false,
@@ -19839,9 +20247,9 @@ INDEX_HTML = """<!doctype html>
       if (forceFetch) delete state.reportCache[selectedDate];
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
-      state.fetchProgress[selectedDate] = state.fetchProgress[selectedDate] || {percent: 0, completed: 0, total: 0, active: true};
+      setFetchProgressState(selectedDate, "journal", getFetchProgressState(selectedDate, "journal") || {percent: 0, completed: 0, total: 0, active: true});
       updateReportRefreshButton();
-      await startProgressPolling(selectedDate);
+      await startProgressPolling(selectedDate, "journal");
       renderCalendar();
       renderReportIfActive(selectedDate);
       try {
@@ -19850,7 +20258,7 @@ INDEX_HTML = """<!doctype html>
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
         if (data.fetchActive && (data.missingJournals || []).length) {
-          await waitForDateFetchToFinish(selectedDate);
+          await waitForDateFetchToFinish(selectedDate, "journal");
           const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
           setPendingFetchDate(selectedDate, false);
           updateCalendarCountFromReport(selectedDate, finalData);
@@ -19880,11 +20288,11 @@ INDEX_HTML = """<!doctype html>
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         }
       } finally {
-        const progress = await refreshFetchProgress(selectedDate);
+        const progress = await refreshFetchProgress(selectedDate, "journal");
         if (progress && progress.active !== false) {
           setPendingFetchDate(selectedDate, true);
           state.fetchingDates.add(selectedDate);
-          await startProgressPolling(selectedDate);
+          await startProgressPolling(selectedDate, "journal");
           watchFetchCompletion(selectedDate);
           renderCalendar();
           renderReportIfActive(selectedDate);
@@ -19898,7 +20306,7 @@ INDEX_HTML = """<!doctype html>
       const selectedDate = state.selectedDate;
       if (isFutureDateIso(selectedDate) || state.fetchingDates.has(selectedDate)) return;
       state.noMatchDates.delete(selectedDate);
-      state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""};
+      setFetchProgressState(selectedDate, "journal", {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""});
       refreshMissingDateInBackground(selectedDate, {forceFetch: true});
     }
 
@@ -19909,15 +20317,15 @@ INDEX_HTML = """<!doctype html>
       state.noMatchDates.delete(selectedDate);
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
-      state.fetchProgress[selectedDate] = {percent: 0, completed: 0, total: 1, active: true, currentJournal: "arXiv"};
+      setFetchProgressState(selectedDate, "journal", {percent: 0, completed: 0, total: 1, active: true, currentJournal: "arXiv"});
       updateReportRefreshButton();
-      await startProgressPolling(selectedDate);
+      await startProgressPolling(selectedDate, "journal");
       renderCalendar();
       renderReportIfActive(selectedDate);
       try {
         const data = await fetchJson(`/api/arxiv-daily-refresh?date=${encodeURIComponent(selectedDate)}&force=1`, 12000);
         if (data.status === "active" || data.status === "started") {
-          await waitForDateFetchToFinish(selectedDate);
+          await waitForDateFetchToFinish(selectedDate, "journal");
         }
         const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
         updateCalendarCountFromReport(selectedDate, finalData);
@@ -19951,11 +20359,11 @@ INDEX_HTML = """<!doctype html>
       return Boolean(data.fetchActive || ((data.missingJournals || []).length && !data.fetched));
     }
 
-    async function waitForDateFetchToFinish(selectedDate) {
+    async function waitForDateFetchToFinish(selectedDate, kind = "journal") {
       const deadline = Date.now() + 20 * 60 * 1000;
       while (Date.now() < deadline) {
         await sleep(700);
-        const progress = await refreshFetchProgress(selectedDate);
+        const progress = await refreshFetchProgress(selectedDate, kind);
         if (progress && progress.active === false) return;
       }
     }
@@ -19969,7 +20377,8 @@ INDEX_HTML = """<!doctype html>
       state.fetchingDates.delete(selectedDate);
       delete state.fetchSnapshotPolls[selectedDate];
       delete state.fetchSnapshotInflight[selectedDate];
-      stopProgressPolling(selectedDate);
+      stopProgressPolling(selectedDate, "journal");
+      clearFetchProgressState(selectedDate, "journal");
       renderCalendar();
       renderReportIfActive(selectedDate);
       updateReportRefreshButton();
@@ -19980,7 +20389,7 @@ INDEX_HTML = """<!doctype html>
       state.fetchCompletionWatchers.add(selectedDate);
       (async () => {
         try {
-          await waitForDateFetchToFinish(selectedDate);
+          await waitForDateFetchToFinish(selectedDate, "journal");
           const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
           updateCalendarCountFromReport(selectedDate, finalData);
           state.reportCache[selectedDate] = finalData;
@@ -20020,28 +20429,47 @@ INDEX_HTML = """<!doctype html>
       }, {});
     }
 
-    async function startProgressPolling(selectedDate) {
-      if (state.progressPollers[selectedDate]) return;
-      await refreshFetchProgress(selectedDate);
-      state.progressPollers[selectedDate] = window.setInterval(() => refreshFetchProgress(selectedDate), 350);
+    function fetchProgressStateKey(selectedDate, kind = "journal") {
+      return `${kind || "journal"}:${selectedDate}`;
     }
 
-    function stopProgressPolling(selectedDate) {
-      const poller = state.progressPollers[selectedDate];
+    function getFetchProgressState(selectedDate, kind = "journal") {
+      return state.fetchProgress[fetchProgressStateKey(selectedDate, kind)];
+    }
+
+    function setFetchProgressState(selectedDate, kind, progress) {
+      state.fetchProgress[fetchProgressStateKey(selectedDate, kind)] = progress;
+    }
+
+    function clearFetchProgressState(selectedDate, kind = "journal") {
+      delete state.fetchProgress[fetchProgressStateKey(selectedDate, kind)];
+    }
+
+    async function startProgressPolling(selectedDate, kind = "journal") {
+      const key = fetchProgressStateKey(selectedDate, kind);
+      if (state.progressPollers[key]) return;
+      await refreshFetchProgress(selectedDate, kind);
+      state.progressPollers[key] = window.setInterval(() => refreshFetchProgress(selectedDate, kind), 350);
+    }
+
+    function stopProgressPolling(selectedDate, kind = "journal") {
+      const key = fetchProgressStateKey(selectedDate, kind);
+      const poller = state.progressPollers[key];
       if (!poller) return;
       window.clearInterval(poller);
-      delete state.progressPollers[selectedDate];
+      delete state.progressPollers[key];
     }
 
-    async function refreshFetchProgress(selectedDate) {
+    async function refreshFetchProgress(selectedDate, kind = "journal") {
       try {
-        const res = await fetch(`/api/fetch-progress?date=${selectedDate}`);
+        const res = await fetch(`/api/fetch-progress?date=${selectedDate}&kind=${encodeURIComponent(kind)}`);
         const data = await res.json();
         if (data.progress) {
-          state.fetchProgress[selectedDate] = data.progress;
-          if (data.progress.kind === "theme" && state.themeFetchingDates.has(selectedDate)) {
+          setFetchProgressState(selectedDate, kind, data.progress);
+          if (kind === "theme" && data.progress.kind === "theme" && state.themeFetchingDates.has(selectedDate)) {
             updateThemeFetchProgressDisplay(selectedDate);
-          } else if (state.fetchingDates.has(selectedDate)) {
+            refreshThemeSnapshotDuringFetch(selectedDate);
+          } else if (kind === "journal" && state.fetchingDates.has(selectedDate)) {
             updateFetchProgressDisplay(selectedDate);
             refreshReportSnapshotDuringFetch(selectedDate);
           }
@@ -20100,6 +20528,30 @@ INDEX_HTML = """<!doctype html>
         // Keep the progress UI alive; the completion watcher will surface persistent errors.
       } finally {
         delete state.fetchSnapshotInflight[selectedDate];
+      }
+    }
+
+    async function refreshThemeSnapshotDuringFetch(selectedDate) {
+      if (selectedDate !== state.selectedDate || state.mode !== "theme") return;
+      const groupParam = selectedThemeGroupParam();
+      const key = `theme:${selectedDate}`;
+      const now = Date.now();
+      const last = state.fetchSnapshotPolls[key] || 0;
+      if (state.fetchSnapshotInflight[key] || now - last < 1200) return;
+      state.fetchSnapshotPolls[key] = now;
+      state.fetchSnapshotInflight[key] = true;
+      try {
+        const data = await loadThemeCachedReportAfterFailure(selectedDate, groupParam);
+        if (!data || selectedDate !== state.selectedDate || selectedThemeGroupParam() !== groupParam) return;
+        const previousSignature = reportPaperListSignature(state.themePapers);
+        const nextSignature = reportPaperListSignature(data.papers || []);
+        applyThemeReportData(selectedDate, groupParam, data, {render: false});
+        if (nextSignature !== previousSignature) renderThemeMonitor();
+        else updateThemeFetchProgressDisplay(selectedDate);
+      } catch (_error) {
+        // Keep the progress UI alive; the completion read will surface persistent errors.
+      } finally {
+        delete state.fetchSnapshotInflight[key];
       }
     }
 
@@ -20417,7 +20869,7 @@ INDEX_HTML = """<!doctype html>
 
     function localLibraryItemFromRaw(raw, fallbackItem = null, fallbackPaper = null) {
       if (!raw?.id && !fallbackItem?.id) return null;
-      const paper = fallbackPaper || fallbackItem?.paper || {};
+      const paper = raw?.paper || fallbackPaper || fallbackItem?.paper || {};
       const item = {
         ...(fallbackItem || {}),
         id: Number(raw?.id || fallbackItem?.id || 0),
@@ -20449,7 +20901,9 @@ INDEX_HTML = """<!doctype html>
       if (movedId && movedId !== itemId) {
         removeLibraryItemLocal(itemId);
         const existing = libraryItemById(movedId);
-        return existing || null;
+        const moved = localLibraryItemFromRaw(rawMoved || {id: movedId}, existing || source, rawMoved?.paper || source.paper);
+        if (moved) upsertLibraryItemLocal(moved);
+        return moved || existing || null;
       }
       const moved = localLibraryItemFromRaw(
         rawMoved || {id: itemId, folder_id: Number(targetFolderId || state.libraryRootId || 1)},
@@ -21596,7 +22050,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
         if (fastItemDelete) {
           const moved = data.deleted?.moved || {};
-          if (moved?.id && Number(moved.id) !== Number(id)) removeLibraryItemLocal(id);
+          if (moved?.id) applyLocalLibraryItemMove(id, Number(moved.folder_id || data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
           else applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
           if (!moved?.id && sourceItem) removeLibraryItemLocal(sourceItem.id);
         } else {
@@ -21771,8 +22225,7 @@ INDEX_HTML = """<!doctype html>
           (Array.isArray(data.deleted) ? data.deleted : []).forEach((result) => {
             const originalId = Number(result?.id || 0);
             const moved = result?.moved || {};
-            if (moved?.id && Number(moved.id) !== originalId) removeLibraryItemLocal(originalId);
-            else if (originalId) applyLocalLibraryItemMove(originalId, Number(result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+            if (originalId) applyLocalLibraryItemMove(originalId, Number(moved?.folder_id || result?.recycle_folder_id || libraryRecycleFolderId()), moved);
           });
         } else {
           applyLibrarySnapshot(data);
@@ -21880,6 +22333,43 @@ INDEX_HTML = """<!doctype html>
         } else {
           updateLibraryActivityStatus(data.renamed?.changed ? `Renamed PDF: ${name}` : `PDF already named: ${name}${displayName ? ` · Library: ${displayName}` : ""}`, {delay: 4200});
         }
+      });
+    }
+
+    async function renameSelectedLibraryPdfsFromMetadata(itemIds) {
+      const ids = [...new Set((Array.isArray(itemIds) ? itemIds : []).map((id) => Number(id || 0)).filter(Boolean))];
+      if (!ids.length) return;
+      if (ids.length === 1) return renameLibraryPdfFromMetadata(ids[0]);
+      return withLibraryActivityStatus(`Renaming ${ids.length} PDFs...`, "", async () => {
+        let changed = 0;
+        let skipped = 0;
+        let lastId = ids[ids.length - 1];
+        for (const id of ids) {
+          const res = await fetch("/api/library/items/rename-pdf", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({item_id: id})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not rename PDF");
+          applyLibrarySnapshot(data);
+          if (data.renamed?.skipped) skipped += 1;
+          else if (data.renamed?.changed) changed += 1;
+          lastId = Number(data.renamed?.item_id || id);
+        }
+        const lastItem = libraryItemById(lastId);
+        if (lastItem) {
+          setLibraryColumnSelection(Number(lastItem.folder_id || state.libraryActiveFolderId || state.libraryRootId), {type: "item", id: lastId});
+        }
+        clearLibraryRangeSelection();
+        renderLibrary();
+        const unchanged = Math.max(0, ids.length - changed - skipped);
+        const parts = [
+          `${changed} renamed`,
+          unchanged ? `${unchanged} already named` : "",
+          skipped ? `${skipped} skipped` : ""
+        ].filter(Boolean);
+        updateLibraryActivityStatus(`Auto rename complete: ${parts.join(", ")}.`, {delay: 5200});
       });
     }
 
@@ -22020,13 +22510,13 @@ INDEX_HTML = """<!doctype html>
         const isThemeCalendar = state.mode === "theme";
         const calendarCounts = isThemeCalendar ? state.themeCounts : state.reportCounts;
         const dayCounts = calendarCounts[iso] || {};
-        const hasCount = Object.keys(dayCounts).length > 0;
-        const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
-        const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
-        const hasNoMatch = !isThemeCalendar && state.noMatchDates.has(iso);
-        const isFuture = isFutureDateIso(iso);
-        const button = document.createElement("button");
-        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${hasNoMatch ? " no-match" : ""}${isFuture ? " future" : ""}`;
+	        const hasCount = Object.keys(dayCounts).length > 0;
+	        const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
+	        const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
+	        const isFuture = isFutureDateIso(iso);
+	        const isToday = iso === todayIsoDate();
+	        const button = document.createElement("button");
+	        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${isToday ? " today" : ""}${isFuture ? " future" : ""}`;
         button.disabled = isFuture;
         button.innerHTML = `<span class="daynum">${day}</span>${
           isFetching
@@ -22681,7 +23171,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function normalizedFetchProgress(selectedDate) {
-      const progress = state.fetchProgress[selectedDate] || {};
+      const progress = getFetchProgressState(selectedDate, "journal") || {};
       const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
       const completed = Number(progress.completed || 0);
       const total = Number(progress.total || 0);
@@ -22696,51 +23186,63 @@ INDEX_HTML = """<!doctype html>
         renderThemeMonitor();
         panel = $("papers")?.querySelector("[data-theme-fetch-progress]");
         if (!panel) return;
-      }
-      const progress = normalizedThemeFetchProgress(selectedDate, state.themeSummary?.last_fetch || null);
-      panel.querySelector('[data-role="theme-fetch-percent"]').textContent = `${progress.percent}%`;
-      panel.querySelector('[data-role="theme-fetch-bar"]').style.width = `${progress.percent}%`;
-      panel.querySelector('[data-role="theme-fetch-detail"]').textContent = progress.detail;
-      const list = panel.querySelector('[data-role="theme-fetch-subjects"]');
-      if (list) list.innerHTML = themeFetchSubjectRows(progress.subjects);
-    }
+	      }
+	      const progress = normalizedThemeFetchProgress(selectedDate, state.themeSummary?.last_fetch || null);
+	      panel.querySelector('[data-role="theme-fetch-percent"]').textContent = `${progress.percent}%`;
+	      panel.querySelector('[data-role="theme-fetch-bar"]').style.width = `${progress.percent}%`;
+	      const list = panel.querySelector('[data-role="theme-fetch-subjects"]');
+	      if (list) list.innerHTML = themeFetchSubjectRows(progress.subjects);
+	    }
 
     function themeFetchProgressMarkup(selectedDate, lastFetch = null) {
       const progress = normalizedThemeFetchProgress(selectedDate, lastFetch);
       return `
         <div class="empty fetch-progress theme-fetch-progress" data-theme-fetch-progress="${escapeAttr(selectedDate)}">
-          <div class="fetch-progress-head">
-            <strong>Fetching subject papers for ${escapeHtml(selectedDate)}. You can keep browsing other dates.</strong>
-            <span class="fetch-progress-percent" data-role="theme-fetch-percent">${progress.percent}%</span>
-          </div>
-          <div class="fetch-progress-track"><div class="fetch-progress-bar" data-role="theme-fetch-bar" style="width:${progress.percent}%"></div></div>
-          <div data-role="theme-fetch-detail">${escapeHtml(progress.detail)}</div>
-          <div class="theme-fetch-subjects" data-role="theme-fetch-subjects">${themeFetchSubjectRows(progress.subjects)}</div>
-          ${state.themeFetchingDates.has(selectedDate) ? `<button class="smallbtn theme-fetch-cancel-inline" type="button" data-action="cancel-theme-fetch">Cancel fetch</button>` : ""}
-        </div>
+	          <div class="fetch-progress-head">
+	            <strong>Fetching subject papers for ${escapeHtml(selectedDate)}. You can keep browsing other dates.</strong>
+	            <span class="fetch-progress-percent" data-role="theme-fetch-percent">${progress.percent}%</span>
+	          </div>
+	          <div class="fetch-progress-track"><div class="fetch-progress-bar" data-role="theme-fetch-bar" style="width:${progress.percent}%"></div></div>
+	          <div class="theme-fetch-subjects" data-role="theme-fetch-subjects">${themeFetchSubjectRows(progress.subjects)}</div>
+	          ${state.themeFetchingDates.has(selectedDate) ? `<button class="smallbtn theme-fetch-cancel-inline" type="button" data-action="cancel-theme-fetch">Cancel fetch</button>` : ""}
+	        </div>
       `;
     }
 
-    function normalizedThemeFetchProgress(selectedDate, lastFetch = null) {
-      const live = state.fetchProgress[selectedDate]?.kind === "theme" ? state.fetchProgress[selectedDate] : null;
-      const subjects = live ? normalizedThemeProgressSubjects(live.subjects || []) : themeSubjectsFromLastFetch(lastFetch);
-      const total = Number(live?.total || subjects.length || 0);
-      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "error"].includes(item.status)).length || 0);
-      const percent = Math.max(0, Math.min(100, Number(live?.percent ?? (total ? Math.round((completed / total) * 100) : 0))));
-      const detail = total ? `${completed} / ${total} subjects completed` : "Preparing subject fetch";
-      return {percent, completed, total, detail, subjects};
-    }
+	    function normalizedThemeFetchProgress(selectedDate, lastFetch = null) {
+	      const themeProgress = getFetchProgressState(selectedDate, "theme");
+	      const live = themeProgress?.kind === "theme" ? themeProgress : null;
+	      const subjects = live ? normalizedThemeProgressSubjects(live.subjects || []) : themeSubjectsFromLastFetch(lastFetch);
+	      const total = Number(live?.total || subjects.length || 0);
+	      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "error"].includes(item.status)).length || 0);
+	      const percent = Math.max(0, Math.min(100, Number(live?.percent ?? (total ? Math.round((completed / total) * 100) : 0))));
+	      const sourceTotal = Number(live?.sourceTotal || 0);
+	      const sourceCompleted = Number(live?.sourceCompleted || 0);
+	      const currentSource = themeSourceLabel(live?.currentSource || "");
+	      const currentSubject = live?.currentSubject || "";
+	      const detail = currentSubject
+	        ? currentSubject
+	        : (total ? `${completed} / ${total} subjects completed` : "Preparing subject fetch");
+	      const sourceDetail = currentSource
+	        ? `Database: ${currentSource}${sourceTotal ? ` · ${sourceCompleted}/${sourceTotal}` : ""}`
+	        : "";
+	      return {percent, completed, total, detail, sourceDetail, subjects};
+	    }
 
     function normalizedThemeProgressSubjects(subjects) {
       return (subjects || []).map((item) => ({
         key: String(item?.key || ""),
         name: String(item?.name || item?.key || "Subject"),
         status: String(item?.status || "pending"),
-        records_found: Number(item?.records_found || 0),
-        raw_results: Number(item?.raw_results || 0),
-        message: String(item?.message || "")
-      }));
-    }
+	        records_found: Number(item?.records_found || 0),
+	        raw_results: Number(item?.raw_results || 0),
+	        message: String(item?.message || ""),
+	        current_source: String(item?.current_source || ""),
+	        current_query: String(item?.current_query || ""),
+	        source_completed: Number(item?.source_completed || 0),
+	        source_total: Number(item?.source_total || 0)
+	      }));
+	    }
 
     function themeSubjectsFromLastFetch(lastFetch) {
       const groups = lastFetch?.groups || {};
@@ -22781,13 +23283,28 @@ INDEX_HTML = """<!doctype html>
       return {label: "Pending", className: "pending"};
     }
 
-    function themeFetchSubjectMeta(item) {
-      const status = String(item?.status || "");
-      if (status === "success" || status === "empty") return `${Number(item.records_found || 0)} saved`;
-      if (status === "error") return item.message || "No successful source fetches";
-      if (status === "running") return "Searching metadata sources";
-      return "";
-    }
+	    function themeFetchSubjectMeta(item) {
+	      const status = String(item?.status || "");
+	      if (status === "success" || status === "empty") return `${Number(item.records_found || 0)} saved`;
+	      if (status === "error") return item.message || "No successful source fetches";
+	      if (status === "running") {
+	        const source = themeSourceLabel(item.current_source || "");
+	        const progress = item.source_total ? ` ${Number(item.source_completed || 0)}/${Number(item.source_total || 0)}` : "";
+	        return source ? `${source}${progress}` : "Searching metadata sources";
+	      }
+	      return "";
+	    }
+
+	    function themeSourceLabel(source) {
+	      const labels = {
+	        openalex: "OpenAlex",
+	        crossref: "Crossref",
+	        semantic_scholar: "Semantic Scholar",
+	        arxiv: "arXiv",
+	        pubmed: "PubMed"
+	      };
+	      return labels[String(source || "")] || String(source || "");
+	    }
 
     function renderLibraryLoader() {
       const backdrop = $("libraryLoaderBackdrop");
@@ -25466,7 +25983,7 @@ INDEX_HTML = """<!doctype html>
       if (!value) return [];
       if (Array.isArray(value)) return value;
       return String(value)
-        .split(/\s*(?:;|,|\band\b|、|，)\s*/i)
+        .split(/\s*(?:;|,|\\band\\b|、|，)\s*/i)
         .filter(Boolean);
     }
 
@@ -25487,10 +26004,15 @@ INDEX_HTML = """<!doctype html>
       const values = [
         paper?.publication_date,
         paper?.nature_reference?.year,
-        paper?.year
+        paper?.year,
+        paper?.citation_label,
+        entry?.display_name,
+        displayName,
+        paper?.original_filename,
+        fileNameFromPath(paper?.native_file_path || paper?.source_path || paper?.merged_pdf_path || paper?.main_pdf_path || "")
       ];
       for (const value of values) {
-        const match = String(value || "").match(/\b(18|19|20|21)\d{2}\b/);
+        const match = String(value || "").match(/\\b(18|19|20|21)\d{2}\\b/);
         if (match) return match[0];
       }
       return libraryPaperTableFallbackParts(entry, paper, displayName).year;
@@ -29246,12 +29768,17 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (renamePdfButton) {
-        const canRenamePdf = entryType === "item" && hasEntry && libraryPaperIsPdfLike(item?.paper) && Boolean(paperNativePath(item?.paper || {}));
+        const renamePdfItems = actionEntries
+          .filter((entry) => entry.type === "item")
+          .map((entry) => libraryItemById(entry.id))
+          .filter((candidate) => candidate && libraryPaperIsPdfLike(candidate.paper) && Boolean(paperNativePath(candidate.paper || {})));
+        const canRenamePdf = renamePdfItems.length > 0 && renamePdfItems.length === actionEntries.length;
         renamePdfButton.style.display = canRenamePdf ? "" : "none";
+        renamePdfButton.textContent = renamePdfItems.length > 1 ? `Auto rename ${renamePdfItems.length} selected` : "Auto rename from Metadata";
         renamePdfButton.onclick = async () => {
-          const id = Number(menu.dataset.entryId || 0);
+          const ids = renamePdfItems.map((candidate) => Number(candidate.id || 0)).filter(Boolean);
           hideLibraryContextMenu();
-          await runLibraryMenuAction(() => renameLibraryPdfFromMetadata(id));
+          await runLibraryMenuAction(() => renameSelectedLibraryPdfsFromMetadata(ids));
         };
       }
       if (colorButton && colorPicker) {
@@ -30175,7 +30702,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function showAnalysis(paper, content) {
-      const isCommentsReport = /^#\s+Citation Comments Report\b/.test(String(content || "").trim());
+      const isCommentsReport = /^#\s+Citation Comments Report\\b/.test(String(content || "").trim());
       $("analysisMeta").innerHTML = `
         <strong>${escapeHtml(paper?.title || "Analysis")}</strong><br>
         ${escapeHtml(paper?.journal || "")} ${escapeHtml(paper?.publication_date || "")}
@@ -30673,10 +31200,11 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not save subject");
-        state.themeGroups = data.groups || [];
-        state.themeGroupsLoaded = true;
-        if (data.group?.key) state.selectedThemeGroups.add(data.group.key);
-        closeThemeGroupDialog();
+	        state.themeGroups = data.groups || [];
+	        state.themeGroupsLoaded = true;
+	        if (data.group?.key) state.selectedThemeGroups.add(data.group.key);
+	        saveSelectedThemeGroups();
+	        closeThemeGroupDialog();
         renderThemeFilters();
         await loadThemeMonth({force: true});
         await loadThemeReportForDate(state.selectedDate);
@@ -30780,11 +31308,12 @@ INDEX_HTML = """<!doctype html>
       state.selectedThemeGroups.delete(group.key);
       const known = new Set(knownThemeGroupKeys());
       state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
-      if (!state.selectedThemeGroups.size) {
-        const firstKey = knownThemeGroupKeys()[0];
-        if (firstKey) state.selectedThemeGroups.add(firstKey);
-      }
-      renderThemeFilters();
+	      if (!state.selectedThemeGroups.size) {
+	        const firstKey = knownThemeGroupKeys()[0];
+	        if (firstKey) state.selectedThemeGroups.add(firstKey);
+	      }
+	      saveSelectedThemeGroups();
+	      renderThemeFilters();
       await loadThemeMonth({force: true});
       await loadThemeReportForDate(state.selectedDate);
     }
@@ -30910,12 +31439,30 @@ INDEX_HTML = """<!doctype html>
       return keys.length ? keys : known.slice(0, 1);
     }
 
-    function selectedThemeGroupParam() {
-      const keys = selectedThemeGroupKeys();
-      const known = knownThemeGroupKeys();
-      if (!known.length) return "";
-      return keys.length === known.length ? "ALL" : keys.join(",");
-    }
+	    function selectedThemeGroupParam() {
+	      const keys = selectedThemeGroupKeys();
+	      const known = knownThemeGroupKeys();
+	      if (!known.length) return "";
+	      return keys.length === known.length ? "ALL" : keys.join(",");
+	    }
+
+	    function loadStoredThemeGroupKeys() {
+	      try {
+	        const raw = window.localStorage?.getItem(THEME_SELECTED_GROUPS_STORAGE_KEY) || "";
+	        const values = JSON.parse(raw);
+	        return Array.isArray(values) ? values.map((value) => String(value || "")).filter(Boolean) : [];
+	      } catch (_error) {
+	        return [];
+	      }
+	    }
+
+	    function saveSelectedThemeGroups() {
+	      try {
+	        window.localStorage?.setItem(THEME_SELECTED_GROUPS_STORAGE_KEY, JSON.stringify(selectedThemeGroupKeys()));
+	      } catch (_error) {
+	        // Ignore private browsing or storage quota failures; the UI can still use in-memory state.
+	      }
+	    }
 
     function themeGroupLabelForKey(key) {
       const group = state.themeGroups.find((item) => item.key === key);
@@ -30963,12 +31510,11 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function cachedThemeLastFetch(selectedDate, groupParam) {
-      const direct = state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, groupParam)];
-      if (direct) return direct;
-      if (groupParam !== "ALL") return state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, "ALL")] || null;
-      return null;
-    }
+	    function cachedThemeLastFetch(selectedDate, groupParam) {
+	      const direct = state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, groupParam)];
+	      if (direct) return direct;
+	      return null;
+	    }
 
     function themePapersCacheKey(selectedDate, groupParam) {
       return `${selectedDate}|${groupParam || "ALL"}`;
@@ -30979,15 +31525,11 @@ INDEX_HTML = """<!doctype html>
       state.themePapersByDate[themePapersCacheKey(selectedDate, groupParam)] = papers;
     }
 
-    function cachedThemePapers(selectedDate, groupParam) {
-      const direct = state.themePapersByDate[themePapersCacheKey(selectedDate, groupParam)];
-      if (Array.isArray(direct)) return direct;
-      if (groupParam !== "ALL") {
-        const all = state.themePapersByDate[themePapersCacheKey(selectedDate, "ALL")];
-        if (Array.isArray(all)) return all;
-      }
-      return [];
-    }
+	    function cachedThemePapers(selectedDate, groupParam) {
+	      const direct = state.themePapersByDate[themePapersCacheKey(selectedDate, groupParam)];
+	      if (Array.isArray(direct)) return direct;
+	      return [];
+	    }
 
     function restoreCachedThemePapers(selectedDate = state.selectedDate, groupParam = selectedThemeGroupParam()) {
       if (state.themePapers.length) return;
@@ -31010,6 +31552,64 @@ INDEX_HTML = """<!doctype html>
         errors: [],
         last_fetch: lastFetch || null
       };
+    }
+
+    function applyThemeReportData(selectedDate, groupParam, data, options = {}) {
+      const summary = data?.summary || null;
+      const papers = data?.papers || [];
+      rememberThemeLastFetch(selectedDate, groupParam, summary?.last_fetch || null);
+      rememberThemePapers(selectedDate, groupParam, papers);
+      updateThemeCalendarCount(selectedDate, data?.themeCounts || countPapersByThemeGroup(papers));
+      updateThemeFilterCount(selectedDate, data?.allThemeCounts || data?.themeCounts || countPapersByThemeGroup(papers));
+      if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === groupParam) {
+        state.themeSummary = summary;
+        state.themeSummaryGroupParam = groupParam;
+        state.themePapers = papers;
+        state.papers = papers;
+        renderThemeFilters();
+        if (options.render !== false) renderThemeMonitor();
+      }
+    }
+
+    async function finalizeThemeFetchFromStorage(selectedDate, groupParam, options = {}) {
+      const data = await loadThemeCachedReportAfterFailure(selectedDate, groupParam);
+      if (!data) return false;
+      applyThemeReportData(selectedDate, groupParam, data, options);
+      return true;
+    }
+
+    function themeFetchCompletionKey(selectedDate, groupParam) {
+      return `${selectedDate}|${groupParam || "ALL"}`;
+    }
+
+    function finishThemeFetchUi(selectedDate, groupParam) {
+      state.themeFetchingDates.delete(selectedDate);
+      state.themeFetchControllers.delete(selectedDate);
+      stopProgressPolling(selectedDate, "theme");
+      clearFetchProgressState(selectedDate, "theme");
+      delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
+      delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
+      if (state.mode === "theme") renderCalendar();
+      if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === groupParam) {
+        state.themeSearchRunning = false;
+        renderThemeMonitor();
+      }
+    }
+
+    function watchThemeFetchCompletion(selectedDate, groupParam) {
+      const key = themeFetchCompletionKey(selectedDate, groupParam);
+      if (state.themeFetchCompletionWatchers.has(key)) return;
+      state.themeFetchCompletionWatchers.add(key);
+      (async () => {
+        try {
+          await waitForDateFetchToFinish(selectedDate, "theme");
+          await finalizeThemeFetchFromStorage(selectedDate, groupParam, {render: false});
+          await refreshThemeMonthCounts(state.themeViewYear, state.themeViewMonth, groupParam).catch(() => {});
+        } finally {
+          state.themeFetchCompletionWatchers.delete(key);
+          finishThemeFetchUi(selectedDate, groupParam);
+        }
+      })();
     }
 
     async function loadThemeMonth(options = {}) {
@@ -31042,11 +31642,30 @@ INDEX_HTML = """<!doctype html>
 
     async function loadThemeReportForDate(selectedDate = state.selectedDate, options = {}) {
       const requestSequence = ++state.themeRequestSequence;
+      if (state.themeFetchingDates.has(selectedDate) && !options.forceFetch) {
+        const groupParam = selectedThemeGroupParam();
+        state.themeFromDate = selectedDate;
+        state.themeUntilDate = selectedDate;
+        state.themeSearched = true;
+        state.themeSearchRunning = true;
+        state.themeSummaryGroupParam = groupParam;
+        restoreCachedThemePapers(selectedDate, groupParam);
+        state.themeSummary = pendingThemeSummaryForDate(selectedDate, groupParam);
+        await startProgressPolling(selectedDate, "theme");
+        await finalizeThemeFetchFromStorage(selectedDate, groupParam, {render: false});
+        watchThemeFetchCompletion(selectedDate, groupParam);
+        if (state.mode === "theme" && state.selectedDate === selectedDate) {
+          renderCalendar();
+          renderThemeMonitor();
+        }
+        return;
+      }
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
       let requestedGroupParam = selectedThemeGroupParam();
       let requestedViewYear = state.viewYear;
       let requestedViewMonth = state.viewMonth;
+      let shouldFetchRemote = false;
       try {
         await ensureThemeGroupsLoaded();
         requestedGroupParam = selectedThemeGroupParam();
@@ -31054,7 +31673,7 @@ INDEX_HTML = """<!doctype html>
         requestedViewMonth = state.viewMonth;
         if (requestSequence !== state.themeRequestSequence) return;
         const hasFetchRecord = Boolean(cachedThemeLastFetch(selectedDate, requestedGroupParam));
-        const shouldFetchRemote = Boolean(options.forceFetch) || (options.autoFetch !== false && !hasFetchRecord);
+        shouldFetchRemote = Boolean(options.forceFetch) || (options.autoFetch !== false && !hasFetchRecord);
         state.themeFromDate = selectedDate;
         state.themeUntilDate = selectedDate;
         state.themeSearched = true;
@@ -31062,8 +31681,8 @@ INDEX_HTML = """<!doctype html>
         if (shouldFetchRemote) {
           state.themeFetchingDates.add(selectedDate);
           state.themeFetchControllers.set(selectedDate, controller);
-          state.fetchProgress[selectedDate] = initialThemeFetchProgress();
-          await startProgressPolling(selectedDate);
+          setFetchProgressState(selectedDate, "theme", initialThemeFetchProgress());
+          await startProgressPolling(selectedDate, "theme");
         }
         state.themeSummaryGroupParam = requestedGroupParam;
         const cachedPapers = cachedThemePapers(selectedDate, requestedGroupParam);
@@ -31084,17 +31703,7 @@ INDEX_HTML = """<!doctype html>
           refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
           return;
         }
-        state.themeSummary = data.summary || null;
-        state.themeSummaryGroupParam = requestedGroupParam;
-        rememberThemeLastFetch(selectedDate, requestedGroupParam, state.themeSummary?.last_fetch || null);
-        state.themePapers = data.papers || [];
-        rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
-        updateThemeCalendarCount(selectedDate, data.themeCounts || countPapersByThemeGroup(state.themePapers));
-        updateThemeFilterCount(selectedDate, data.allThemeCounts || data.themeCounts || countPapersByThemeGroup(state.themePapers));
-        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
-          state.papers = state.themePapers;
-          renderThemeFilters();
-        }
+        applyThemeReportData(selectedDate, requestedGroupParam, data, {render: false});
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
       } catch (error) {
         if (error?.name === "AbortError") return;
@@ -31104,17 +31713,7 @@ INDEX_HTML = """<!doctype html>
         }
         const fallback = await loadThemeCachedReportAfterFailure(selectedDate, requestedGroupParam);
         if (fallback && requestSequence === state.themeRequestSequence) {
-          state.themeSummary = fallback.summary || null;
-          state.themeSummaryGroupParam = requestedGroupParam;
-          rememberThemeLastFetch(selectedDate, requestedGroupParam, state.themeSummary?.last_fetch || null);
-          state.themePapers = fallback.papers || [];
-          rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
-          updateThemeCalendarCount(selectedDate, fallback.themeCounts || countPapersByThemeGroup(state.themePapers));
-          updateThemeFilterCount(selectedDate, fallback.allThemeCounts || fallback.themeCounts || countPapersByThemeGroup(state.themePapers));
-          if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
-            state.papers = state.themePapers;
-            renderThemeFilters();
-          }
+          applyThemeReportData(selectedDate, requestedGroupParam, fallback, {render: false});
           refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
           return;
         }
@@ -31126,9 +31725,20 @@ INDEX_HTML = """<!doctype html>
         };
       } finally {
         window.clearTimeout(timeout);
+        const shouldCompleteThemeFetch = shouldFetchRemote
+          && requestSequence === state.themeRequestSequence
+          && state.themeFetchControllers.get(selectedDate) === controller;
+        if (shouldCompleteThemeFetch) {
+          const progress = await refreshFetchProgress(selectedDate, "theme");
+          if (progress && progress.active !== false) await waitForDateFetchToFinish(selectedDate, "theme");
+          await finalizeThemeFetchFromStorage(selectedDate, requestedGroupParam, {render: false});
+        }
         if (state.themeFetchingDates.has(selectedDate)) state.themeFetchingDates.delete(selectedDate);
         if (state.themeFetchControllers.get(selectedDate) === controller) state.themeFetchControllers.delete(selectedDate);
-        stopProgressPolling(selectedDate);
+        stopProgressPolling(selectedDate, "theme");
+        clearFetchProgressState(selectedDate, "theme");
+        delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
+        delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
         if (state.mode === "theme") renderCalendar();
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
         if (requestSequence === state.themeRequestSequence && state.mode === "theme" && state.selectedDate === selectedDate) {
@@ -31158,8 +31768,8 @@ INDEX_HTML = """<!doctype html>
       const timeout = window.setTimeout(() => controller.abort(), 20 * 60 * 1000);
       state.themeFetchingDates.add(selectedDate);
       state.themeFetchControllers.set(selectedDate, controller);
-      state.fetchProgress[selectedDate] = initialThemeFetchProgress();
-      await startProgressPolling(selectedDate);
+      setFetchProgressState(selectedDate, "theme", initialThemeFetchProgress());
+      await startProgressPolling(selectedDate, "theme");
       state.themeSummaryGroupParam = requestedGroupParam;
       restoreCachedThemePapers(selectedDate, requestedGroupParam);
       if (state.mode === "theme") {
@@ -31175,17 +31785,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch(`/api/theme-report?date=${encodeURIComponent(selectedDate)}&groups=${groups}&auto_fetch=1&force_fetch=1`, {signal: controller.signal});
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || res.statusText || "Subject fetch failed");
-        rememberThemeLastFetch(selectedDate, requestedGroupParam, data.summary?.last_fetch || null);
-        updateThemeCalendarCount(selectedDate, data.themeCounts || countPapersByThemeGroup(data.papers || []));
-        updateThemeFilterCount(selectedDate, data.allThemeCounts || data.themeCounts || countPapersByThemeGroup(data.papers || []));
-        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
-          state.themeSummary = data.summary || null;
-          state.themeSummaryGroupParam = requestedGroupParam;
-          state.themePapers = data.papers || [];
-          state.papers = state.themePapers;
-          rememberThemePapers(selectedDate, requestedGroupParam, state.themePapers);
-          renderThemeFilters();
-        }
+        applyThemeReportData(selectedDate, requestedGroupParam, data, {render: false});
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
       } catch (error) {
         if (error?.name === "AbortError") return;
@@ -31200,9 +31800,18 @@ INDEX_HTML = """<!doctype html>
         }
       } finally {
         window.clearTimeout(timeout);
+        const shouldCompleteThemeFetch = state.themeFetchControllers.get(selectedDate) === controller;
+        if (shouldCompleteThemeFetch) {
+          const progress = await refreshFetchProgress(selectedDate, "theme");
+          if (progress && progress.active !== false) await waitForDateFetchToFinish(selectedDate, "theme");
+          await finalizeThemeFetchFromStorage(selectedDate, requestedGroupParam, {render: false});
+        }
         state.themeFetchingDates.delete(selectedDate);
         state.themeFetchControllers.delete(selectedDate);
-        stopProgressPolling(selectedDate);
+        stopProgressPolling(selectedDate, "theme");
+        clearFetchProgressState(selectedDate, "theme");
+        delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
+        delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
         if (state.mode === "theme") renderCalendar();
         refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
         if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
@@ -31216,7 +31825,8 @@ INDEX_HTML = """<!doctype html>
       if (controller) controller.abort();
       state.themeFetchingDates.delete(selectedDate);
       state.themeFetchControllers.delete(selectedDate);
-      stopProgressPolling(selectedDate);
+      stopProgressPolling(selectedDate, "theme");
+      clearFetchProgressState(selectedDate, "theme");
       restoreCachedThemePapers(selectedDate, selectedThemeGroupParam());
       if (state.mode === "theme") renderCalendar();
       if (state.mode === "theme" && state.selectedDate === selectedDate) renderThemeMonitor();
@@ -31269,11 +31879,12 @@ INDEX_HTML = """<!doctype html>
         label.innerHTML = `<input type="checkbox" ${state.selectedThemeGroups.has(key) ? "checked" : ""}>
           <span>${escapeHtml(labelText)}</span><b>${counts[key] || 0}</b>`;
         label.querySelector("input").addEventListener("change", async (event) => {
-          if (event.target.checked) state.selectedThemeGroups.add(key);
-          else state.selectedThemeGroups.delete(key);
-          if (!state.selectedThemeGroups.size) state.selectedThemeGroups.add(key);
-          state.themeGroup = selectedThemeGroupParam();
-          await loadThemeMonth({force: true}).catch((error) => handleMonthLoadFailure(error));
+	          if (event.target.checked) state.selectedThemeGroups.add(key);
+	          else state.selectedThemeGroups.delete(key);
+	          if (!state.selectedThemeGroups.size) state.selectedThemeGroups.add(key);
+	          state.themeGroup = selectedThemeGroupParam();
+	          saveSelectedThemeGroups();
+	          await loadThemeMonth({force: true}).catch((error) => handleMonthLoadFailure(error));
           await loadThemeReportForDate(state.selectedDate).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
         });
         label.addEventListener("contextmenu", (event) => {
@@ -31339,13 +31950,18 @@ INDEX_HTML = """<!doctype html>
       const data = await fetchJson("/api/theme-groups");
       state.themeGroups = data.groups || [];
       state.themeGroupsLoaded = true;
-      const known = new Set(knownThemeGroupKeys());
-      state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
-      if (!state.selectedThemeGroups.size) {
-        const firstKey = knownThemeGroupKeys()[0];
-        if (firstKey) state.selectedThemeGroups.add(firstKey);
-      }
-      renderThemeGroupSelect();
+	      const known = new Set(knownThemeGroupKeys());
+	      const stored = loadStoredThemeGroupKeys().filter((key) => known.has(key));
+	      state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
+	      if (!state.selectedThemeGroups.size && stored.length) {
+	        state.selectedThemeGroups = new Set(stored);
+	      }
+	      if (!state.selectedThemeGroups.size) {
+	        const firstKey = knownThemeGroupKeys()[0];
+	        if (firstKey) state.selectedThemeGroups.add(firstKey);
+	      }
+	      saveSelectedThemeGroups();
+	      renderThemeGroupSelect();
     }
 
     function renderThemeGroupSelect() {
@@ -31451,11 +32067,7 @@ INDEX_HTML = """<!doctype html>
         button.disabled = currentThemeBusy;
         button.textContent = state.themeSearchRunning ? "Searching..." : "Search";
       }
-      const forceButton = $("forceThemeFetch");
-      if (forceButton) {
-        forceButton.disabled = currentThemeBusy;
-        forceButton.textContent = selectedDateFetching ? "Fetching..." : "Fetch selected date";
-      }
+      updateThemeFetchButton(currentThemeBusy, selectedDateFetching);
       const groupLabel = selectedThemeGroupLabel();
       const saved = Number(summary.saved || 0);
       const raw = Number(summary.raw_results || 0);
@@ -31486,13 +32098,25 @@ INDEX_HTML = """<!doctype html>
       state.themePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
     }
 
-    function themeLastFetchLabel(lastFetch) {
-      if (!lastFetch || !lastFetch.finished_at) return "Last fetched: never";
+	    function themeLastFetchLabel(lastFetch) {
+	      if (!lastFetch || !lastFetch.finished_at) return "Last fetched: never";
       const count = Number(lastFetch.fetched_group_count || 0);
       const total = Number(lastFetch.selected_group_count || 0);
       const coverage = total > 1 ? ` (${count}/${total} subjects)` : "";
-      return `Last fetched: ${formatThemeFetchTime(lastFetch.finished_at)}${coverage}`;
-    }
+	      return `Last fetched: ${formatThemeFetchTime(lastFetch.finished_at)}${coverage}`;
+	    }
+
+	    function updateThemeFetchButton(currentThemeBusy = false, selectedDateFetching = false) {
+	      const forceButton = $("forceThemeFetch");
+	      if (!forceButton) return;
+	      if (state.mode !== "theme") {
+	        forceButton.disabled = false;
+	        forceButton.textContent = "Fetch selected date";
+	        return;
+	      }
+	      forceButton.disabled = Boolean(currentThemeBusy);
+	      forceButton.textContent = selectedDateFetching ? "Fetching..." : "Fetch selected date";
+	    }
 
     function formatThemeFetchTime(value) {
       const raw = String(value || "").trim();
@@ -31623,10 +32247,11 @@ INDEX_HTML = """<!doctype html>
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-      $("themeToolbarActions")?.classList.add("hidden");
-      updateLibrarySearchTools();
-      updateReportRefreshButton();
-    }
+	      $("themeToolbarActions")?.classList.add("hidden");
+	      updateLibrarySearchTools();
+	      updateReportRefreshButton();
+	      updateThemeFetchButton();
+	    }
 
     function wireWindowDragRegion() {
       const region = $("windowDragRegion");
