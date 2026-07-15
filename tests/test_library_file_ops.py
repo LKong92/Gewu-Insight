@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 from paper_monitor import ui_server
 from paper_monitor.storage import Storage
@@ -189,6 +191,327 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertFalse(source_pdf.exists())
         self.assertTrue(moved_path.exists())
         self.assertIn("Recycle", moved_path.parts)
+        self.assertEqual(
+            Path(result["moved"]["paper"]["merged_pdf_path"]).resolve(),
+            moved_path.resolve(),
+        )
+
+    def test_recover_moves_recycled_pdf_back_to_original_folder_and_returns_new_path(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Original")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "recover.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "recover-paper",
+                "doi": "10.1234/recover",
+                "title": "Recover Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "recover-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(paper_id="recover-paper", folder_id=int(folder["id"]))
+        ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        recycled_pdf = Path((self.storage.get_paper("recover-paper") or {})["merged_pdf_path"])
+        self.assertTrue(recycled_pdf.exists())
+        self.assertIn("Recycle", recycled_pdf.parts)
+
+        recovered = ui_server.PaperMonitorUiHandler.recover_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        restored_pdf = Path((self.storage.get_paper("recover-paper") or {})["merged_pdf_path"])
+
+        self.assertEqual(int(recovered["folder_id"]), int(folder["id"]))
+        self.assertEqual(Path(recovered["paper"]["merged_pdf_path"]).resolve(), restored_pdf.resolve())
+        self.assertEqual(restored_pdf.parent.resolve(), source_dir.resolve())
+        self.assertTrue(restored_pdf.exists())
+        self.assertFalse(recycled_pdf.exists())
+
+    def test_my_publication_counts_as_remaining_reference_on_library_delete(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Library Only")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "publication.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "publication-paper",
+                "doi": "10.1234/publication",
+                "title": "Publication Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "publication-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(paper_id="publication-paper", folder_id=int(folder["id"]))
+        self.storage.add_my_publication(paper_id="publication-paper")
+
+        result = ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        paper = self.storage.get_paper("publication-paper") or {}
+        retained_pdf = Path(paper["merged_pdf_path"])
+        recycle_id = int(ui_server.ensure_library_special_folders(self.storage)["recycle"]["id"])
+
+        self.assertEqual(result["mode"], "removed")
+        self.assertTrue(result["retained_by_my_publications"])
+        self.assertEqual(result["moved"], {})
+        self.assertEqual(Path(result["paper"]["merged_pdf_path"]).resolve(), retained_pdf.resolve())
+        self.assertIsNone(self.storage.get_library_item(int(item["id"])))
+        self.assertEqual(
+            self.storage.conn.execute(
+                "SELECT COUNT(*) FROM library_items WHERE paper_id = ? AND folder_id = ?",
+                ("publication-paper", recycle_id),
+            ).fetchone()[0],
+            0,
+        )
+        self.assertEqual(retained_pdf.parent.resolve(), ui_server.MY_PUBLICATIONS_LOCAL_COPY_ROOT.resolve())
+        self.assertTrue(retained_pdf.exists())
+
+    def test_permanent_recycle_delete_moves_pdf_before_removing_database_records(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Only")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "permanent.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "permanent-paper",
+                "doi": "10.1234/permanent",
+                "title": "Permanent Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "permanent-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(paper_id="permanent-paper", folder_id=int(folder["id"]))
+        ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        recycled_item = self.storage.get_library_item(int(item["id"])) or {}
+        recycled_pdf = Path((self.storage.get_paper("permanent-paper") or {})["merged_pdf_path"])
+        system_trash = self.root / "System Trash"
+        system_trash.mkdir()
+
+        def fake_system_trash(path: Path) -> Path:
+            target = system_trash / path.name
+            path.replace(target)
+            return target
+
+        with patch.object(ui_server, "move_path_to_macos_trash", side_effect=fake_system_trash):
+            result = ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+                None,
+                self.storage,
+                "item",
+                int(recycled_item["id"]),
+                confirmed=True,
+            )
+
+        self.assertEqual(result["mode"], "removed")
+        self.assertEqual(result["cleanup"]["trashed_files"], [str(recycled_pdf.resolve())])
+        self.assertFalse(recycled_pdf.exists())
+        self.assertTrue((system_trash / recycled_pdf.name).exists())
+        self.assertIsNone(self.storage.get_library_item(int(item["id"])))
+        self.assertIsNone(self.storage.get_paper("permanent-paper"))
+
+    def test_permanent_recycle_delete_keeps_records_when_macos_trash_fails(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Only")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "protected.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "protected-paper",
+                "doi": "10.1234/protected",
+                "title": "Protected Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "protected-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(paper_id="protected-paper", folder_id=int(folder["id"]))
+        ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+            None,
+            self.storage,
+            "item",
+            int(item["id"]),
+        )
+        recycled_pdf = Path((self.storage.get_paper("protected-paper") or {})["merged_pdf_path"])
+
+        with patch.object(
+            ui_server,
+            "move_path_to_macos_trash",
+            side_effect=PermissionError("Finder Trash permission denied"),
+        ):
+            with self.assertRaises(PermissionError):
+                ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
+                    None,
+                    self.storage,
+                    "item",
+                    int(item["id"]),
+                    confirmed=True,
+                )
+
+        self.assertIsNotNone(self.storage.get_library_item(int(item["id"])))
+        self.assertIsNotNone(self.storage.get_paper("protected-paper"))
+        self.assertTrue(recycled_pdf.exists())
+
+    def test_recycle_orphan_detection_does_not_include_referenced_files(self) -> None:
+        special = ui_server.ensure_library_special_folders(self.storage)
+        recycle_id = int(special["recycle"]["id"])
+        recycle_dir = ui_server.local_copy_dir_for_library_folder(self.storage, recycle_id)
+        recycle_dir.mkdir(parents=True, exist_ok=True)
+        referenced = recycle_dir / "referenced.pdf"
+        orphan = recycle_dir / "orphan.pdf"
+        referenced.write_bytes(b"%PDF referenced")
+        orphan.write_bytes(b"%PDF orphan")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "referenced-paper",
+                "doi": "10.1234/referenced",
+                "title": "Referenced Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "referenced-paper",
+            status="success",
+            main_pdf_path=str(referenced),
+            merged_pdf_path=str(referenced),
+            supplement_pdf_paths=[],
+        )
+
+        paths = ui_server.library_recycle_orphan_paths(self.storage, recycle_id)
+
+        self.assertEqual(paths, [orphan.resolve()])
+
+    def test_macos_trash_uses_nsfilemanager_instead_of_writing_dot_trash_directly(self) -> None:
+        source = self.root / "system-trash.pdf"
+        source.write_bytes(b"%PDF fixture")
+        destination = self.root / "Finder Trash" / source.name
+        completed = CompletedProcess(args=[], returncode=0, stdout=f"{destination}\n", stderr="")
+
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
+            ui_server.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            result = ui_server.move_path_to_macos_trash(source)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[0:4], ["/usr/bin/osascript", "-l", "JavaScript", "-e"])
+        self.assertIn("trashItemAtURLResultingItemURLError", command[4])
+        self.assertEqual(command[5], str(source.resolve()))
+        self.assertEqual(result, destination)
+        self.assertTrue(source.exists())
+
+    def test_macos_trash_accepts_false_error_after_source_was_moved(self) -> None:
+        source = self.root / "false-error.pdf"
+        source.write_bytes(b"%PDF fixture")
+        original_path = source.resolve()
+
+        def false_error_after_move(*args, **kwargs):
+            source.unlink()
+            return CompletedProcess(
+                args=args[0],
+                returncode=1,
+                stdout="",
+                stderr="execution error: macOS refused the Trash operation",
+            )
+
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
+            ui_server.subprocess,
+            "run",
+            side_effect=false_error_after_move,
+        ):
+            result = ui_server.move_path_to_macos_trash(source)
+
+        self.assertEqual(result, original_path)
+        self.assertFalse(source.exists())
+
+    def test_macos_trash_still_raises_when_source_remains(self) -> None:
+        source = self.root / "real-error.pdf"
+        source.write_bytes(b"%PDF fixture")
+        completed = CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="execution error: permission denied",
+        )
+
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
+            ui_server.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            with self.assertRaises(PermissionError):
+                ui_server.move_path_to_macos_trash(source)
+
+        self.assertTrue(source.exists())
+
+    def test_embedded_recycle_item_delete_uses_incremental_state_update(self) -> None:
+        self.assertIn('const fastDelete = type === "item" || (type === "folder" && requiresRecycleConfirmation);', ui_server.INDEX_HTML)
+        self.assertIn('snapshot: false', ui_server.INDEX_HTML)
+        self.assertIn("function updateLocalPaperReferences(paper)", ui_server.INDEX_HTML)
+        self.assertIn("if (rawMoved?.paper) updateLocalPaperReferences(rawMoved.paper);", ui_server.INDEX_HTML)
+        self.assertIn('const fastItemRecover = type === "item";', ui_server.INDEX_HTML)
 
 
 if __name__ == "__main__":

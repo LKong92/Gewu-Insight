@@ -13,7 +13,7 @@ from .importers.inventory import import_library_inventory
 from .monitor import apply_fast_section_hints, default_windows, run_journal_monitor
 from .reporting import export_json, write_journal_markdown_report
 from .storage import Storage
-from .time_utils import parse_date, today_jst
+from .time_utils import parse_date, today_local
 from .ui_server import cleanup_monitor_pdf_cache, run_ui_server
 
 
@@ -177,7 +177,7 @@ def handle_complete_analysis_job(args: argparse.Namespace, storage: Storage) -> 
 
 
 def handle_journal(args: argparse.Namespace, config, storage: Storage) -> int:
-    until = parse_date(args.until_date) if args.until_date else today_jst()
+    until = parse_date(args.until_date) if args.until_date else today_local()
     lookback_days = args.lookback_days or config.fetch_lookback_days
 
     if args.from_date:

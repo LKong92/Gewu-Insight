@@ -53,17 +53,47 @@ from .importers.inventory import ImportCancelled, build_inventory_from_folder, b
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, search_arxiv_works, strip_arxiv_version
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, search_arxiv_works, strip_arxiv_version
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
-from .time_utils import now_iso, today_jst
+from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
 
 
 class GoogleScholarBlockedError(RuntimeError):
     pass
+
+
+class MacOSTrashError(OSError):
+    pass
+
+
+MACOS_TRASH_JXA = r'''
+function run(argv) {
+  ObjC.import("Foundation");
+  const source = $.NSURL.fileURLWithPath($(argv[0]).stringByStandardizingPath);
+  const manager = $.NSFileManager.defaultManager;
+  const destination = Ref();
+  const error = Ref();
+  const ok = manager.trashItemAtURLResultingItemURLError(source, destination, error);
+  const sourceStillExists = manager.fileExistsAtPath(source.path);
+  if (!ok && sourceStillExists) {
+    let detail = "macOS refused the Trash operation";
+    try {
+      if (error[0]) detail = ObjC.unwrap(error[0].localizedDescription);
+    } catch (_) {
+    }
+    throw new Error(detail);
+  }
+  try {
+    if (destination[0]) return ObjC.unwrap(destination[0].path);
+  } catch (_) {
+  }
+  return "";
+}
+'''
 
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
@@ -147,6 +177,12 @@ AUTO_JOURNAL_MONITOR_STATUS_SETTING = "auto_journal_monitor_status"
 AUTO_JOURNAL_MONITOR_HOUR = 9
 AUTO_JOURNAL_MONITOR_STARTUP_DELAY_SECONDS = 10
 AUTO_JOURNAL_MONITOR_POLL_SECONDS = 60
+AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING = "auto_arxiv_monitor_last_announcement"
+AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING = "auto_arxiv_monitor_last_attempt"
+AUTO_ARXIV_MONITOR_STATUS_SETTING = "auto_arxiv_monitor_status"
+AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS = 15
+AUTO_ARXIV_MONITOR_POLL_SECONDS = 60
+AUTO_ARXIV_MONITOR_RETRY_SECONDS = 15 * 60
 AUTO_SUBJECT_MONITOR_LAST_RUN_SETTING = "auto_subject_monitor_last_run_date"
 AUTO_SUBJECT_MONITOR_STATUS_SETTING = "auto_subject_monitor_status"
 AUTO_SUBJECT_MONITOR_HOUR = 9
@@ -308,6 +344,7 @@ def run_ui_server(
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
+    threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
@@ -402,6 +439,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/bootstrap":
                 self.handle_library_bootstrap(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/add-targets":
+                self.handle_library_add_targets()
                 return
             if parsed.path == "/api/library/folder":
                 self.handle_library_folder_children(parse_qs(parsed.query))
@@ -681,8 +721,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_month(self, query: dict[str, list[str]]) -> None:
         self.refresh_journals()
-        year = int(first(query, "year") or today_jst().year)
-        month = int(first(query, "month") or today_jst().month)
+        year = int(first(query, "year") or today_local().year)
+        month = int(first(query, "month") or today_local().month)
         prefix = f"{year:04d}-{month:02d}-"
         storage = Storage(self.configured_db_path)
         try:
@@ -716,7 +756,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_report(self, query: dict[str, list[str]]) -> None:
         self.refresh_journals()
-        selected = first(query, "date") or today_jst().isoformat()
+        selected = first(query, "date") or today_local().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
         force_fetch = first(query, "force_fetch") == "1"
         fetched = False
@@ -726,7 +766,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             selected_date = date.fromisoformat(selected)
             missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
             sources_to_fetch = manual_refresh_journals_for_date(selected, self.configured_journals) if force_fetch else missing_journals
-            if (force_fetch or auto_fetch) and selected_date <= today_jst() and sources_to_fetch and try_start_fetch(selected):
+            if (force_fetch or auto_fetch) and selected_date <= today_local() and sources_to_fetch and try_start_fetch(selected):
                 storage.close()
                 fetch_storage = None
                 try:
@@ -778,7 +818,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         )
 
     def handle_fetch_progress(self, query: dict[str, list[str]]) -> None:
-        selected = first(query, "date") or today_jst().isoformat()
+        selected = first(query, "date") or today_local().isoformat()
         kind = clean_text(first(query, "kind") or "")
         self.send_json({"date": selected, "kind": kind, "progress": get_fetch_progress(selected, kind=kind)})
 
@@ -789,11 +829,19 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid date")
             return
-        if selected_date > today_jst():
+        if selected_date > today_local():
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Future dates cannot be refreshed")
             return
         selected = selected_date.isoformat()
         force_fetch = first(query, "force") == "1" or first(query, "force_fetch") == "1"
+        ready_at = arxiv_ready_time(selected_date)
+        now = datetime.now().astimezone()
+        if ready_at is None:
+            self.send_json({"date": selected, "status": "skipped", "reason": "no_arxiv_announcement"})
+            return
+        if now < ready_at:
+            self.send_json({"date": selected, "status": "skipped", "reason": "arxiv_not_ready", "readyAt": ready_at.isoformat()})
+            return
         storage = Storage(self.configured_db_path)
         try:
             missing = missing_fetch_journals_for_date(storage, selected, [ARXIV_JOURNAL_NAME])
@@ -982,6 +1030,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             snapshot = library_bootstrap_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_library_add_targets(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = library_add_targets_snapshot(storage)
         finally:
             storage.close()
         self.send_json(snapshot)
@@ -1956,6 +2012,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if payload.get("unsorted"):
                 target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
                 folder_id = int(target_folder.get("id") or 1)
+            else:
+                target_folder = storage.get_library_folder(folder_id)
+                if not target_folder:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
+                    return
+                recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+                if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
+                    return
             paper = storage.get_paper(paper_id)
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -2209,6 +2274,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except OSError as exc:
+            status = HTTPStatus.FORBIDDEN if isinstance(exc, PermissionError) else HTTPStatus.INTERNAL_SERVER_ERROR
+            self.send_error_json(status, str(exc))
+            return
         finally:
             storage.close()
         self.send_json({"deleted": deleted, **snapshot})
@@ -2234,6 +2303,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except OSError as exc:
+            status = HTTPStatus.FORBIDDEN if isinstance(exc, PermissionError) else HTTPStatus.INTERNAL_SERVER_ERROR
+            self.send_error_json(status, str(exc))
+            return
         finally:
             storage.close()
         self.send_json({"deleted": deleted, **snapshot})
@@ -2251,6 +2324,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             special = ensure_library_special_folders(storage)
             recycle_id = int(special["recycle"].get("id") or 0)
             preview = recycle_delete_preview_for_entries(storage, preview_entries, recycle_folder_id=recycle_id)
+            if payload.get("clear_special"):
+                orphan_paths = library_recycle_orphan_paths(storage, recycle_id)
+                preview["orphan_local_copy_paths"] = [str(path) for path in orphan_paths]
+                preview["orphan_local_copy_count"] = len(orphan_paths)
+                preview["requires_confirmation"] = bool(preview.get("requires_confirmation") or orphan_paths)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
@@ -2272,24 +2350,35 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 preview = recycle_delete_preview_for_entries(storage, [{"type": "item", "id": entry_id}], recycle_folder_id=recycle_id)
                 if preview.get("requires_confirmation") and not confirmed:
                     raise ValueError("confirmation is required")
-                if paper_has_reference_outside_recycle(storage, paper_ids[0], recycle_id):
+                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
+                has_outside_reference = paper_has_reference_outside_recycle(storage, paper_ids[0], recycle_id)
+                if has_outside_reference:
                     promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
-                remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
+                    remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
+                else:
+                    remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], [folder_id])
                 storage.delete_library_item(item_id=entry_id)
-                cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
-                return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
+                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
+                cleanup["trashed_files"] = file_cleanup["trashed_files"]
+                return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
             else:
                 remaining = first_outside_reference_item(storage, paper_ids[0], recycle_id, exclude_item_id=entry_id)
-                if remaining:
+                retained_by_my_publications = paper_has_my_publication_reference(storage, paper_ids[0])
+                if remaining or retained_by_my_publications:
                     storage.delete_library_item(item_id=entry_id)
                     promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
                     remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
-                    updated_remaining = storage.get_library_item(int(remaining.get("id") or 0)) or remaining
                     updated_paper = storage.get_paper(paper_ids[0])
-                    moved_api = dict(updated_remaining or {})
+                    moved_api: dict[str, Any] = {}
+                    retained_paper_api: dict[str, Any] = {}
+                    updated_remaining = None
+                    if remaining:
+                        updated_remaining = storage.get_library_item(int(remaining.get("id") or 0)) or remaining
                     if updated_paper:
                         annotated = annotate_papers_with_library_status(storage, [updated_paper])
                         updated_paper = annotated[0] if annotated else updated_paper
+                        retained_paper_api = paper_to_library_summary_api(updated_paper)
+                    if updated_paper and updated_remaining:
                         moved_api = library_item_to_api(updated_remaining, updated_paper)
                     return {
                         "type": "item",
@@ -2297,12 +2386,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                         "mode": "removed",
                         "paper_ids": paper_ids,
                         "moved": moved_api,
-                        "handoff_folder_id": int(updated_remaining.get("folder_id") or 0),
+                        "paper": retained_paper_api,
+                        "handoff_folder_id": int((updated_remaining or {}).get("folder_id") or 0),
+                        "retained_by_my_publications": bool(retained_by_my_publications),
                     }
                 move_or_alias_library_item_pdf(storage, item=item, target_folder_id=recycle_id)
                 moved = storage.move_library_item_to_trash(item_id=entry_id, recycle_folder_id=recycle_id)
                 sync_all_pdf_aliases_for_paper(storage, str(item.get("paper_id") or ""))
-                return {"type": "item", "id": entry_id, "mode": "trashed", "moved": dict(moved or {}), "recycle_folder_id": recycle_id}
+                moved_item = storage.get_library_item(int((moved or {}).get("id") or entry_id)) or moved or {}
+                moved_paper = storage.get_paper(str(item.get("paper_id") or ""))
+                moved_api = dict(moved_item or {})
+                if moved_paper:
+                    annotated = annotate_papers_with_library_status(storage, [moved_paper])
+                    moved_paper = annotated[0] if annotated else moved_paper
+                    moved_api = library_item_to_api(moved_item, moved_paper)
+                return {"type": "item", "id": entry_id, "mode": "trashed", "moved": moved_api, "recycle_folder_id": recycle_id}
         if entry_type == "folder":
             folder = storage.get_library_folder(entry_id)
             if not folder:
@@ -2315,13 +2413,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     raise ValueError("confirmation is required")
                 paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
                 removed_folder_ids = library_folder_tree_ids(storage, entry_id)
+                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
                 for paper_id in paper_ids:
                     if paper_has_reference_outside_recycle(storage, paper_id, recycle_id):
                         promote_canonical_pdf_outside_recycle(storage, paper_id, recycle_id)
-                    remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
+                        remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
+                remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
                 storage.delete_library_folder(folder_id=entry_id)
-                cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id)
-                return {"type": "folder", "id": entry_id, "mode": "removed", "paper_ids": paper_ids}
+                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
+                cleanup["trashed_files"] = file_cleanup["trashed_files"]
+                return {"type": "folder", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
             else:
                 pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
                 moved = storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
@@ -2395,6 +2496,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_clear_library_special_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
         confirmed = bool(payload.get("confirmed"))
+        include_snapshot = payload.get("snapshot", True) is not False
         if not folder_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "folder_id is required")
             return
@@ -2413,23 +2515,35 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 [{"type": "folder", "id": folder_id}],
                 recycle_folder_id=folder_id,
             )
-            if preview.get("requires_confirmation") and not confirmed:
+            orphan_paths = library_recycle_orphan_paths(storage, folder_id)
+            if (preview.get("requires_confirmation") or orphan_paths) and not confirmed:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
                 return
             paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
             removed_folder_ids = library_folder_tree_ids(storage, folder_id)
+            file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=folder_id)
+            trashed_orphans: list[str] = []
+            for path in orphan_paths:
+                move_path_to_macos_trash(path)
+                trashed_orphans.append(str(path))
             for paper_id in paper_ids:
                 if paper_has_reference_outside_recycle(storage, paper_id, folder_id):
                     promote_canonical_pdf_outside_recycle(storage, paper_id, folder_id)
-                remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
+                    remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
+            remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
             removed = clear_library_folder_contents(storage, folder_id=folder_id)
-            cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=folder_id)
-            snapshot = library_snapshot(storage)
+            cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=folder_id, delete_files=False)
+            cleanup["trashed_files"] = file_cleanup["trashed_files"]
+            cleanup["trashed_orphan_files"] = trashed_orphans
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except IsADirectoryError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
             return
         except PermissionError as exc:
             self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
+            return
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             return
         finally:
             storage.close()
@@ -2438,24 +2552,48 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
         entry_id = int(payload.get("id") or 0)
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
-            special = ensure_library_special_folders(storage)
-            unsorted_id = int(special["unsorted"].get("id") or 1)
-            if entry_type == "item":
-                recovered = storage.recover_library_item(item_id=entry_id, fallback_folder_id=unsorted_id)
-            elif entry_type == "folder":
-                recovered = storage.recover_library_folder(folder_id=entry_id, fallback_parent_id=1)
-            else:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
-                return
-            snapshot = library_snapshot(storage)
+            recovered = self.recover_library_entry_in_storage(storage, entry_type, entry_id)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
         self.send_json({"recovered": dict(recovered or {}), **snapshot})
+
+    def recover_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int) -> dict[str, Any]:
+        special = ensure_library_special_folders(storage)
+        unsorted_id = int(special["unsorted"].get("id") or 1)
+        recycle_id = int(special["recycle"].get("id") or 1)
+        if entry_type == "item":
+            source = storage.get_library_item(entry_id)
+            if not source:
+                raise ValueError("Library item not found")
+            target_folder_id = int(source.get("original_folder_id") or unsorted_id)
+            if (
+                not storage.get_library_folder(target_folder_id)
+                or library_folder_is_within(storage, target_folder_id, recycle_id)
+            ):
+                target_folder_id = unsorted_id
+            move_or_alias_library_item_pdf(storage, item=source, target_folder_id=target_folder_id)
+            recovered = storage.recover_library_item(item_id=entry_id, fallback_folder_id=unsorted_id)
+            paper_id = str(source.get("paper_id") or "")
+            sync_all_pdf_aliases_for_paper(storage, paper_id)
+            recovered_paper = storage.get_paper(paper_id)
+            if recovered_paper:
+                annotated = annotate_papers_with_library_status(storage, [recovered_paper])
+                recovered_paper = annotated[0] if annotated else recovered_paper
+                return library_item_to_api(recovered, recovered_paper)
+            return dict(recovered or {})
+        if entry_type == "folder":
+            move_plan = folder_tree_pdf_move_plan(storage, entry_id)
+            recovered = storage.recover_library_folder(folder_id=entry_id, fallback_parent_id=1)
+            apply_folder_tree_pdf_move_plan(storage, move_plan)
+            return dict(recovered or {})
+        raise ValueError("type must be item or folder")
 
     def handle_remove_library_item(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or payload.get("id") or 0)
@@ -2904,8 +3042,8 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             storage.close()
 
     def handle_theme_month(self, query: dict[str, list[str]]) -> None:
-        year = int(first(query, "year") or today_jst().year)
-        month = int(first(query, "month") or today_jst().month)
+        year = int(first(query, "year") or today_local().year)
+        month = int(first(query, "month") or today_local().month)
         prefix = f"{year:04d}-{month:02d}-"
         storage = Storage(self.configured_db_path)
         try:
@@ -2918,7 +3056,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.send_json({"year": year, "month": month, "groups": group_keys, "counts": counts, "lastFetches": last_fetches})
 
     def handle_theme_report(self, query: dict[str, list[str]]) -> None:
-        selected = first(query, "date") or today_jst().isoformat()
+        selected = first(query, "date") or today_local().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
         force_fetch = first(query, "force_fetch") == "1" or first(query, "force") == "1"
         try:
@@ -2926,7 +3064,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         except ValueError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid date")
             return
-        if selected_date > today_jst():
+        if selected_date > today_local():
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Subject search cannot run for future dates")
             return
         fetched = False
@@ -4398,8 +4536,8 @@ def reset_theme_group_fetch_cache(storage: Storage, group_key: str) -> None:
 def parse_theme_window(payload: dict[str, Any]) -> tuple[date, date]:
     until_text = clean_text(payload.get("until_date") or payload.get("untilDate") or "")
     from_text = clean_text(payload.get("from_date") or payload.get("fromDate") or "")
-    until = date.fromisoformat(until_text) if until_text else today_jst()
-    if until > today_jst():
+    until = date.fromisoformat(until_text) if until_text else today_local()
+    if until > today_local():
         raise ValueError("Subject search cannot run for future dates")
     if from_text:
         start = date.fromisoformat(from_text)
@@ -5280,7 +5418,7 @@ def missing_theme_group_keys_for_date(storage: Storage, selected: str, group_key
 
 
 def mark_stale_theme_fetch_runs(storage: Storage) -> None:
-    cutoff = (datetime.now(ZoneInfo("Asia/Tokyo")) - timedelta(minutes=THEME_FETCH_STALE_AFTER_MINUTES)).isoformat(timespec="seconds")
+    cutoff = (datetime.now(local_timezone()) - timedelta(minutes=THEME_FETCH_STALE_AFTER_MINUTES)).isoformat(timespec="seconds")
     cursor = storage.conn.execute(
         """
         UPDATE fetch_runs
@@ -5479,12 +5617,15 @@ def fetch_missing_sources_for_date(
 
     if ARXIV_JOURNAL_NAME in missing_sources:
         update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
-        fetch_one_arxiv_preprint_source(
-            storage=storage,
-            start_date=selected_date,
-            end_date=selected_date,
-            categories=ARXIV_DEFAULT_CATEGORIES,
-        )
+        ready_at = arxiv_ready_time(selected_date)
+        now = datetime.now(local_timezone())
+        if ready_at is not None and now >= ready_at:
+            fetch_one_arxiv_preprint_source(
+                storage=storage,
+                start_date=selected_date,
+                end_date=selected_date,
+                categories=ARXIV_DEFAULT_CATEGORIES,
+            )
         completed += 1
         update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
 
@@ -5523,7 +5664,7 @@ def write_auto_journal_monitor_status(db_path: Path, status: dict[str, Any]) -> 
 
 def run_auto_journal_monitor_once(db_path: Path, run_date: date) -> None:
     config = load_config()
-    journals = configured_source_names(config)
+    journals = [name for name in configured_source_names(config) if name != ARXIV_JOURNAL_NAME]
     targets = [run_date - timedelta(days=1), run_date]
     results: list[dict[str, Any]] = []
 
@@ -5585,6 +5726,87 @@ def run_auto_journal_monitor_scheduler(db_path: Path) -> None:
         except Exception as exc:
             print(f"Auto Journal Monitor scheduler error: {exc}")
             time.sleep(AUTO_JOURNAL_MONITOR_POLL_SECONDS)
+
+
+def arxiv_auto_target(now: datetime) -> tuple[str, date, datetime]:
+    announcement = latest_ready_arxiv_announcement(now, buffer=ARXIV_ANNOUNCEMENT_BUFFER)
+    target_date = announcement.astimezone(local_timezone()).date()
+    ready_at = (announcement + ARXIV_ANNOUNCEMENT_BUFFER).astimezone(local_timezone())
+    return announcement.date().isoformat(), target_date, ready_at
+
+
+def arxiv_auto_retry_due(storage: Storage, announcement_key: str, now: datetime) -> bool:
+    raw = storage.get_setting(AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING, "")
+    try:
+        attempt = json.loads(raw or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if str(attempt.get("announcement") or "") != announcement_key:
+        return True
+    try:
+        attempted_at = datetime.fromisoformat(str(attempt.get("attempted_at") or ""))
+    except ValueError:
+        return True
+    if attempted_at.tzinfo is None:
+        attempted_at = attempted_at.replace(tzinfo=now.tzinfo)
+    return (now - attempted_at.astimezone(now.tzinfo)).total_seconds() >= AUTO_ARXIV_MONITOR_RETRY_SECONDS
+
+
+def run_auto_arxiv_monitor_once(db_path: Path, now: datetime | None = None) -> dict[str, Any]:
+    current = now or datetime.now(local_timezone())
+    announcement_key, target_date, ready_at = arxiv_auto_target(current)
+    selected = target_date.isoformat()
+    storage = Storage(db_path)
+    try:
+        if storage.get_setting(AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING, "") == announcement_key:
+            return {"status": "skipped", "reason": "already complete", "announcement": announcement_key, "date": selected}
+        if not arxiv_auto_retry_due(storage, announcement_key, current):
+            return {"status": "skipped", "reason": "retry cooldown", "announcement": announcement_key, "date": selected}
+        if not try_start_fetch(selected):
+            return {"status": "skipped", "reason": "fetch already active", "announcement": announcement_key, "date": selected}
+        storage.set_setting(
+            AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING,
+            json.dumps({"announcement": announcement_key, "attempted_at": current.isoformat()}, ensure_ascii=False),
+        )
+        try:
+            start_fetch_progress(selected, [ARXIV_JOURNAL_NAME])
+            result = fetch_one_arxiv_preprint_source(
+                storage=storage,
+                start_date=target_date,
+                end_date=target_date,
+                categories=ARXIV_DEFAULT_CATEGORIES,
+            )
+            succeeded = result.get("source_statuses", {}).get("arxiv") == "success" and int(result.get("saved") or 0) > 0
+            if succeeded:
+                storage.set_setting(AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING, announcement_key)
+            status = {
+                "status": "fetched" if succeeded else str(result.get("source_statuses", {}).get("arxiv") or "empty"),
+                "announcement": announcement_key,
+                "date": selected,
+                "ready_at": ready_at.isoformat(),
+                "saved": int(result.get("saved") or 0),
+                "finished_at": now_iso(),
+            }
+            storage.set_setting(AUTO_ARXIV_MONITOR_STATUS_SETTING, json.dumps(status, ensure_ascii=False, sort_keys=True))
+            return status
+        finally:
+            finish_fetch_progress(selected)
+            finish_active_fetch(selected)
+    finally:
+        storage.close()
+
+
+def run_auto_arxiv_monitor_scheduler(db_path: Path) -> None:
+    time.sleep(AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            result = run_auto_arxiv_monitor_once(db_path)
+            if result.get("status") not in {"skipped", "fetched"}:
+                print(f"Auto arXiv Monitor: {json.dumps(result, ensure_ascii=False, sort_keys=True)}")
+            time.sleep(AUTO_ARXIV_MONITOR_POLL_SECONDS)
+        except Exception as exc:
+            print(f"Auto arXiv Monitor scheduler error: {exc}")
+            time.sleep(AUTO_ARXIV_MONITOR_POLL_SECONDS)
 
 
 def auto_subject_monitor_due(now: datetime) -> bool:
@@ -5896,6 +6118,20 @@ def library_bootstrap_snapshot(storage: Storage) -> dict[str, Any]:
         "children": root_children,
         "shortcut_tabs": library_shortcut_tabs(storage),
         "workspace_tabs": workspace_tabs,
+    }
+
+
+def library_add_targets_snapshot(storage: Storage) -> dict[str, Any]:
+    special = ensure_library_special_folders(storage)
+    return {
+        "root_id": 1,
+        "unsorted_id": int(special["unsorted"].get("id") or 0),
+        "recycle_id": int(special["recycle"].get("id") or 0),
+        "folders": [
+            library_folder_to_api(folder, storage, include_native_path=False)
+            for folder in storage.list_library_folders()
+        ],
+        "workspace_tabs": library_workspace_tabs(storage),
     }
 
 
@@ -12107,14 +12343,14 @@ def delete_import_path(path_value: str, allowed_root: Path) -> bool:
 
 def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: list[str]) -> list[str]:
     selected_date = date.fromisoformat(selected)
-    if selected_date > today_jst():
+    if selected_date > today_local():
         return []
     if not journals:
         return []
     placeholders = ", ".join(["?"] * len(journals))
     rows = storage.conn.execute(
         f"""
-        SELECT journal, source, status, records_found, started_at, finished_at
+        SELECT journal, source, status, records_found, timezone_name, started_at, finished_at
         FROM fetch_runs
         WHERE monitor_type = 'journal'
           AND window_start <= ?
@@ -12127,18 +12363,27 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
         (selected, selected, *journals),
     ).fetchall()
     now = datetime.now().astimezone()
-    arxiv_ready_at = arxiv_ready_time(selected_date).astimezone(now.tzinfo)
+    arxiv_ready_at = arxiv_ready_time(selected_date)
+    arxiv_ready_at = arxiv_ready_at.astimezone(now.tzinfo) if arxiv_ready_at else None
+    current_timezone_name = system_timezone_name()
     fetched: set[str] = journals_with_papers_for_date(storage, selected, journals)
     for row in rows:
         journal = row["journal"]
         if journal in fetched:
+            continue
+        if journal == ARXIV_JOURNAL_NAME and str(row["timezone_name"] or "") != current_timezone_name:
             continue
         status = row["status"]
         if status == "running":
             if is_fetch_active(selected) and not running_fetch_is_stale(row["started_at"], row["finished_at"], now):
                 fetched.add(journal)
             continue
+        if status == "error":
+            continue
         if journal == ARXIV_JOURNAL_NAME:
+            if arxiv_ready_at is None:
+                fetched.add(journal)
+                continue
             if now < arxiv_ready_at:
                 fetched.add(journal)
                 continue
@@ -12148,14 +12393,14 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
             continue
         fetched.add(journal)
     missing = [journal for journal in journals if journal not in fetched]
-    if ARXIV_JOURNAL_NAME in missing and now < arxiv_ready_at:
+    if ARXIV_JOURNAL_NAME in missing and (arxiv_ready_at is None or now < arxiv_ready_at):
         missing.remove(ARXIV_JOURNAL_NAME)
     return missing
 
 
 def manual_refresh_journals_for_date(selected: str, journals: list[str]) -> list[str]:
     selected_date = date.fromisoformat(selected)
-    if selected_date > today_jst():
+    if selected_date > today_local():
         return []
     return list(journals)
 
@@ -12178,16 +12423,19 @@ def journals_with_papers_for_date(storage: Storage, selected: str, journals: lis
 
 
 def journal_fetch_start_date(selected_date: date) -> date:
-    local_today = today_jst()
+    local_today = today_local()
     if selected_date >= local_today:
         return selected_date - timedelta(days=1)
     return selected_date
 
 
-def arxiv_ready_time(selected_date: date) -> datetime:
+def arxiv_ready_time(selected_date: date) -> datetime | None:
     eastern = ZoneInfo("America/New_York")
-    local_tz = datetime.now().astimezone().tzinfo or ZoneInfo("UTC")
-    announcement_date = selected_date - timedelta(days=1)
+    local_tz = local_timezone()
+    announcement_days = local_arxiv_announcement_days(selected_date, selected_date, local_tz=local_tz)
+    if not announcement_days:
+        return None
+    announcement_date = max(announcement_days)
     announcement = datetime(
         announcement_date.year,
         announcement_date.month,
@@ -12807,9 +13055,9 @@ def rename_library_item_pdf_from_metadata(storage: Storage, item_id: int) -> dic
 
 def local_copy_roots(*, include_legacy: bool = True) -> list[Path]:
     roots = [
-        DEFAULT_LIBRARY_DIR.resolve(),
-        DEFAULT_SPACES_DIR.resolve(),
-        DEFAULT_MY_PUBLICATIONS_DIR.resolve(),
+        LIBRARY_LOCAL_COPY_ROOT.resolve(),
+        SPACES_LOCAL_COPY_ROOT.resolve(),
+        MY_PUBLICATIONS_LOCAL_COPY_ROOT.resolve(),
     ]
     if include_legacy:
         roots.append(DEFAULT_LIBRARY_IMPORT_DIR.resolve())
@@ -13050,6 +13298,14 @@ def remove_pdf_aliases_for_paper_in_folders(storage: Storage, paper_id: str, fol
     return remove_direct_symlinks_to(canonical, folders)
 
 
+def remove_pdf_aliases_for_paths_in_folders(storage: Storage, paths: list[str], folder_ids: list[int]) -> list[str]:
+    folders = [local_copy_dir_for_library_folder(storage, int(folder_id or 0)) for folder_id in dict.fromkeys(folder_ids)]
+    removed: list[str] = []
+    for raw_path in dict.fromkeys(str(path or "") for path in paths if path):
+        removed.extend(remove_direct_symlinks_to(Path(raw_path), folders))
+    return removed
+
+
 def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, target_dir: Path) -> bool:
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
@@ -13249,13 +13505,24 @@ def library_folder_is_within(storage: Storage, folder_id: int, ancestor_id: int)
 def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> bool:
     if not paper_id:
         return False
-    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone():
+    if paper_has_my_publication_reference(storage, paper_id):
         return True
     rows = storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id = ?", (paper_id,)).fetchall()
     for row in rows:
         if not library_folder_is_within(storage, int(row["folder_id"] or 0), recycle_folder_id):
             return True
     return False
+
+
+def paper_has_my_publication_reference(storage: Storage, paper_id: str) -> bool:
+    if not paper_id:
+        return False
+    return bool(
+        storage.conn.execute(
+            "SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1",
+            (str(paper_id),),
+        ).fetchone()
+    )
 
 
 def recycle_delete_preview_for_entries(
@@ -13337,7 +13604,29 @@ def recycle_delete_preview_for_papers(
     }
 
 
-def cleanup_unreferenced_recycle_papers(storage: Storage, paper_ids: list[str], *, recycle_folder_id: int) -> dict[str, Any]:
+def trash_unreferenced_recycle_paper_files(
+    storage: Storage,
+    paper_ids: list[str],
+    *,
+    recycle_folder_id: int,
+) -> dict[str, Any]:
+    trashed_files: list[str] = []
+    skipped: list[str] = []
+    for paper_id in dict.fromkeys(str(paper_id or "") for paper_id in paper_ids if paper_id):
+        if paper_has_reference_outside_recycle(storage, paper_id, recycle_folder_id):
+            skipped.append(paper_id)
+            continue
+        trashed_files.extend(delete_library_paper_files(storage, [paper_id]))
+    return {"trashed_files": trashed_files, "skipped_papers": skipped}
+
+
+def cleanup_unreferenced_recycle_papers(
+    storage: Storage,
+    paper_ids: list[str],
+    *,
+    recycle_folder_id: int,
+    delete_files: bool = True,
+) -> dict[str, Any]:
     cleaned: list[str] = []
     skipped: list[str] = []
     deleted_files: list[str] = []
@@ -13345,7 +13634,8 @@ def cleanup_unreferenced_recycle_papers(storage: Storage, paper_ids: list[str], 
         if paper_has_reference_outside_recycle(storage, paper_id, recycle_folder_id):
             skipped.append(paper_id)
             continue
-        deleted_files.extend(delete_library_paper_files(storage, [paper_id]))
+        if delete_files:
+            deleted_files.extend(delete_library_paper_files(storage, [paper_id]))
         storage.conn.execute("DELETE FROM resources WHERE paper_id = ?", (paper_id,))
         storage.conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
         cleaned.append(paper_id)
@@ -13413,6 +13703,65 @@ def library_file_paths_for_delete(storage: Storage, paper: dict[str, Any]) -> li
             seen.add(key)
             unique.append(path)
     return unique
+
+
+def library_recycle_orphan_paths(storage: Storage, recycle_folder_id: int) -> list[Path]:
+    recycle_dir = local_copy_dir_for_library_folder(storage, int(recycle_folder_id or 0)).expanduser()
+    recycle_root = recycle_dir.resolve()
+    if not recycle_root.exists() or not recycle_root.is_dir():
+        return []
+    referenced: set[str] = set()
+    recycle_prefixes = list(dict.fromkeys(
+        str(path).rstrip(os.sep) + os.sep + "%"
+        for path in (recycle_dir.absolute(), recycle_root)
+    ))
+    paper_path_columns = ("main_pdf_path", "merged_pdf_path", "source_path")
+    paper_path_where = " OR ".join(
+        f"{column} LIKE ?"
+        for column in paper_path_columns
+        for _ in recycle_prefixes
+    )
+    paper_path_params = [prefix for _ in paper_path_columns for prefix in recycle_prefixes]
+    rows = storage.conn.execute(
+        f"""
+        SELECT main_pdf_path, merged_pdf_path, source_path
+        FROM papers
+        WHERE {paper_path_where}
+        """,
+        paper_path_params,
+    ).fetchall()
+    for row in rows:
+        for raw_path in (row["main_pdf_path"], row["merged_pdf_path"], row["source_path"]):
+            if not raw_path:
+                continue
+            try:
+                path = Path(str(raw_path)).expanduser().resolve()
+            except OSError:
+                continue
+            if is_relative_to(path, recycle_root):
+                referenced.add(str(path))
+    resource_rows = storage.conn.execute(
+        f"SELECT stored_path FROM resources WHERE {' OR '.join('stored_path LIKE ?' for _ in recycle_prefixes)}",
+        recycle_prefixes,
+    ).fetchall()
+    for row in resource_rows:
+        try:
+            path = Path(str(row["stored_path"])).expanduser().resolve()
+        except OSError:
+            continue
+        if is_relative_to(path, recycle_root):
+            referenced.add(str(path))
+    orphans: list[Path] = []
+    for candidate in recycle_root.rglob("*"):
+        if not candidate.is_file() and not candidate.is_symlink():
+            continue
+        try:
+            resolved = candidate.expanduser().resolve()
+        except OSError:
+            resolved = candidate.absolute()
+        if str(resolved) not in referenced:
+            orphans.append(candidate.absolute())
+    return sorted(orphans, key=lambda path: str(path).lower())
 
 
 def delete_library_paper_files(storage: Storage, paper_ids: list[str]) -> list[str]:
@@ -13545,11 +13894,34 @@ def move_path_to_macos_trash(path: Path) -> Path:
     requested = path.expanduser().resolve()
     if not requested.exists():
         raise FileNotFoundError(str(requested))
-    trash_dir = Path.home() / ".Trash"
-    trash_dir.mkdir(parents=True, exist_ok=True)
-    target = unique_trash_path(trash_dir / requested.name)
-    shutil.move(str(requested), str(target))
-    return target
+    if sys.platform != "darwin":
+        trash_dir = Path.home() / ".Trash"
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        target = unique_trash_path(trash_dir / requested.name)
+        shutil.move(str(requested), str(target))
+        return target
+    result = subprocess.run(
+        ["/usr/bin/osascript", "-l", "JavaScript", "-e", MACOS_TRASH_JXA, str(requested)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        # JXA can expose NSFileManager's successful BOOL result as a falsey value.
+        # The Trash move itself is synchronous, so disappearance of the source is
+        # the authoritative success signal and must not require a second delete.
+        if not requested.exists():
+            return requested
+        detail = clean_text(result.stderr or result.stdout) or "macOS refused the Trash operation"
+        message = f"Could not move {requested.name} to macOS Trash. The source file is still present. {detail}"
+        lowered = detail.lower()
+        if "permission" in lowered or "not authorized" in lowered or "operation not permitted" in lowered:
+            raise PermissionError(message)
+        raise MacOSTrashError(message)
+    destination = str(result.stdout or "").strip()
+    return Path(destination).expanduser() if destination else requested
 
 
 def unique_trash_path(target: Path) -> Path:
@@ -18694,12 +19066,24 @@ INDEX_HTML = """<!doctype html>
       transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
       cursor: pointer;
     }
+    .paper.in-library {
+      background: #fbfcff;
+      box-shadow: inset 4px 0 0 rgba(91, 107, 138, 0.46);
+    }
+    .paper.in-library:hover {
+      border-color: rgba(91, 107, 138, 0.36);
+      background: #f8faff;
+      box-shadow: inset 4px 0 0 rgba(91, 107, 138, 0.66);
+    }
     .paper.report-selected {
       border-color: rgba(15, 107, 110, 0.68);
       border-width: 2px;
       background: #f7fcfb;
       box-shadow: none;
       padding: 15px;
+    }
+    .paper.in-library.report-selected {
+      box-shadow: inset 4px 0 0 rgba(91, 107, 138, 0.78);
     }
     .paper.late-unread::before {
       content: "";
@@ -18741,6 +19125,8 @@ INDEX_HTML = """<!doctype html>
     .paper-title-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
     .paper-title-row > h3 { min-width: 0; flex: 1 1 auto; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
+    .paper h3 .katex, .paper .abstract .katex { font-size: 1em; color: inherit; }
+    .paper .katex-display { margin: 0.45em 0; overflow-x: auto; overflow-y: hidden; }
     .journal-group {
       margin: 10px 0 4px;
       color: var(--ink);
@@ -18968,6 +19354,10 @@ INDEX_HTML = """<!doctype html>
     }
     .library-add-folder-option.unsorted .library-add-folder-icon { background: #0f9f8f; }
     .library-add-folder-option.unsorted .library-add-folder-icon::before { background: #78c3ff; }
+    .library-add-folder-option.workspace-root .library-add-folder-icon { background: #73b9a6; }
+    .library-add-folder-option.workspace-root .library-add-folder-icon::before { background: #a7d8c9; }
+    .library-add-folder-option.workspace-root.main-library .library-add-folder-icon { background: #d6a84f; }
+    .library-add-folder-option.workspace-root.main-library .library-add-folder-icon::before { background: #efd38c; }
     .library-add-folder-name {
       min-width: 0;
       overflow: hidden;
@@ -19753,6 +20143,7 @@ INDEX_HTML = """<!doctype html>
     window.addEventListener("error", (event) => showBootError(event.error || event.message));
     window.addEventListener("unhandledrejection", (event) => showBootError(event.reason));
     const initialToday = localIsoDate(new Date());
+    const initialBrowserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
     const LIBRARY_REFRESH_SIGNAL_KEY = "daiqo-library-refresh-signal";
 	    const LIBRARY_SORT_STORAGE_KEY = "daiqo-library-sort-mode";
@@ -19781,6 +20172,8 @@ INDEX_HTML = """<!doctype html>
       "other": "Other Fields"
     };
     let themeDragGesture = null;
+    let katexLoading = false;
+    let katexLoadFailed = false;
     const MY_PUBLICATION_COLUMNS = [
       {key: "number", label: "No", defaultWidth: 48, minWidth: 40, maxWidth: 90, sortable: false},
       {key: "title", label: "Title", defaultWidth: 515, minWidth: 300, maxWidth: 1000, sortable: true},
@@ -20860,10 +21253,48 @@ INDEX_HTML = """<!doctype html>
       rebuildLibraryIndexes();
     }
 
+    function updateLocalPaperReferences(paper) {
+      const paperId = String(paper?.paper_id || "");
+      if (!paperId) return;
+      state.libraryItems = state.libraryItems.map((entry) => (
+        String(entry.paper_id || entry.paper?.paper_id || "") === paperId
+          ? {...entry, paper: {...(entry.paper || {}), ...paper}}
+          : entry
+      ));
+      state.myPublications = state.myPublications.map((entry) => (
+        String(entry.paper_id || entry.paper?.paper_id || "") === paperId
+          ? {...entry, paper: {...(entry.paper || {}), ...paper}}
+          : entry
+      ));
+      rebuildLibraryIndexes();
+    }
+
     function removeLibraryItemLocal(id) {
       const targetId = Number(id || 0);
       if (!targetId) return;
       state.libraryItems = state.libraryItems.filter((entry) => Number(entry.id) !== targetId);
+      rebuildLibraryIndexes();
+    }
+
+    function removeLibraryFolderTreeLocal(folderId) {
+      const targetId = Number(folderId || 0);
+      if (!targetId) return;
+      const folderIds = libraryDescendantFolderIds(targetId);
+      state.libraryItems = state.libraryItems.filter((entry) => !folderIds.has(Number(entry.folder_id || 0)));
+      state.libraryFolders = state.libraryFolders.filter((entry) => !folderIds.has(Number(entry.id || 0)));
+      folderIds.forEach((id) => state.libraryLoadedFolderIds.delete(Number(id)));
+      rebuildLibraryIndexes();
+    }
+
+    function clearLibraryFolderContentsLocal(folderId) {
+      const targetId = Number(folderId || 0);
+      if (!targetId) return;
+      const folderIds = libraryDescendantFolderIds(targetId);
+      state.libraryItems = state.libraryItems.filter((entry) => !folderIds.has(Number(entry.folder_id || 0)));
+      state.libraryFolders = state.libraryFolders.filter((entry) => (
+        Number(entry.id || 0) === targetId || !folderIds.has(Number(entry.id || 0))
+      ));
+      [...folderIds].filter((id) => Number(id) !== targetId).forEach((id) => state.libraryLoadedFolderIds.delete(Number(id)));
       rebuildLibraryIndexes();
     }
 
@@ -20903,6 +21334,7 @@ INDEX_HTML = """<!doctype html>
         const existing = libraryItemById(movedId);
         const moved = localLibraryItemFromRaw(rawMoved || {id: movedId}, existing || source, rawMoved?.paper || source.paper);
         if (moved) upsertLibraryItemLocal(moved);
+        if (rawMoved?.paper) updateLocalPaperReferences(rawMoved.paper);
         return moved || existing || null;
       }
       const moved = localLibraryItemFromRaw(
@@ -20911,6 +21343,7 @@ INDEX_HTML = """<!doctype html>
         source.paper
       );
       if (moved) upsertLibraryItemLocal(moved);
+      if (rawMoved?.paper) updateLocalPaperReferences(rawMoved.paper);
       return moved;
     }
 
@@ -21600,11 +22033,13 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function ensureLibrarySnapshotForAddMenu() {
-      if (state.libraryLoaded) return;
-      const res = await fetch("/api/library");
+      const res = await fetch("/api/library/add-targets");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load Library folders");
-      applyLibrarySnapshot(data);
+      state.libraryRootId = Number(data.root_id || state.libraryRootId || 1);
+      state.libraryFolders = Array.isArray(data.folders) ? data.folders : state.libraryFolders;
+      state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
+      rebuildLibraryIndexes();
     }
 
     async function refreshLibrarySnapshotForNavigation() {
@@ -21699,8 +22134,9 @@ INDEX_HTML = """<!doctype html>
       }
       try {
         await refreshLibrarySnapshotForNavigation();
-        state.libraryTab = "library";
         const item = firstLibraryItemForPaper(paperId);
+        const workspaceIndex = libraryWorkspaceIndexForFolder(Number(item?.folder_id || 0));
+        state.libraryTab = workspaceIndex >= 0 ? `workspace-${workspaceIndex}` : "library";
         if (!item || !selectLibraryItemInColumns(item)) {
           throw new Error("This paper is not available in Library.");
         }
@@ -21738,13 +22174,44 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryAddFolderCanTarget(folder) {
-      const rootId = Number(state.libraryRootId || 1);
       const recycleId = Number(libraryRecycleFolderId() || 0);
       const folderId = Number(folder?.id || 0);
-      if (!folderId || folderId === rootId) return false;
+      if (!folderId) return false;
       if (folder?.trashed_at || folder?.is_recycle) return false;
       if (recycleId && libraryFolderIsWithin(folderId, recycleId)) return false;
       return true;
+    }
+
+    function libraryAddWorkspaceRoots() {
+      const mainRootId = Number(state.libraryRootId || 1);
+      const roots = [{key: "library", label: "My Library", root_folder_id: mainRootId, main_library: true}];
+      state.libraryWorkspaceTabs.slice(0, LIBRARY_WORKSPACE_TAB_COUNT).forEach((tab, index) => {
+        const rootFolderId = Number(tab?.root_folder_id || 0);
+        const rootFolder = libraryFolderById(rootFolderId);
+        if (!rootFolderId || !rootFolder) return;
+        roots.push({
+          key: `workspace-${index}`,
+          label: String(tab?.label || rootFolder.name || `Space ${index + 1}`),
+          root_folder_id: rootFolderId,
+          main_library: false
+        });
+      });
+      return roots;
+    }
+
+    function libraryAddWorkspaceForRoot(rootFolderId) {
+      const targetId = Number(rootFolderId || 0);
+      return libraryAddWorkspaceRoots().find((workspace) => Number(workspace.root_folder_id) === targetId) || null;
+    }
+
+    function libraryWorkspaceIndexForFolder(folderId) {
+      const targetId = Number(folderId || 0);
+      if (!targetId) return -1;
+      for (let index = 0; index < state.libraryWorkspaceTabs.length; index += 1) {
+        const rootId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || 0);
+        if (rootId && libraryFolderIsWithin(targetId, rootId)) return index;
+      }
+      return -1;
     }
 
     function libraryAddChildFolders(parentId) {
@@ -21763,27 +22230,67 @@ INDEX_HTML = """<!doctype html>
       return libraryAddChildFolders(folderId).length > 0;
     }
 
-    function libraryAddColumnTitle(parentId) {
-      if (Number(parentId) === Number(state.libraryRootId || 1)) return "Library";
+    function libraryAddColumnTitle(parentId, workspaceRootId) {
+      if (Number(parentId) === Number(workspaceRootId)) {
+        return libraryAddWorkspaceForRoot(workspaceRootId)?.label || libraryFolderById(parentId)?.name || "Workspace";
+      }
       return libraryFolderById(parentId)?.name || "Folder";
     }
 
-    function renderLibraryAddMenu(menu, paperId, article, pathIds = [], selectedFolderId = 0) {
-      const rootId = Number(state.libraryRootId || 1);
+    function libraryAddFolderPath(folderId, workspaceRootId) {
+      const rootId = Number(workspaceRootId || 0);
+      const workspace = libraryAddWorkspaceForRoot(rootId);
+      const parts = [];
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        if (Number(current.id) === rootId) break;
+        parts.push(current.name || "Folder");
+        if (current.parent_id === null) break;
+        current = libraryFolderById(current.parent_id);
+      }
+      const rootLabel = workspace?.label || libraryFolderById(rootId)?.name || "Workspace";
+      return [rootLabel, ...parts.reverse()].join(" / ");
+    }
+
+    function renderLibraryAddMenu(menu, paperId, article, workspaceRootId = 0, pathIds = [], selectedFolderId = 0) {
+      const mainRootId = Number(state.libraryRootId || 1);
+      const workspaces = libraryAddWorkspaceRoots();
+      const rootId = Number(workspaceRootId || mainRootId);
       const unsortedId = Number(libraryUnsortedFolderId() || 0);
-      const selectedId = Number(selectedFolderId || unsortedId || 0);
+      const selectedId = Number(selectedFolderId || (rootId === mainRootId ? unsortedId : rootId) || 0);
       const columns = [rootId, ...pathIds.map(Number).filter(Boolean)];
-      const firstRows = libraryAddChildFolders(rootId);
-      if (!firstRows.length) {
-        menu.innerHTML = `<div class="library-add-menu-status">No Library folders available.</div>`;
+      if (!workspaces.length) {
+        menu.innerHTML = `<div class="library-add-menu-status">No Library or Space targets available.</div>`;
         return;
       }
+      const workspaceColumn = `
+        <section class="library-add-column" data-add-column-depth="workspace">
+          <div class="library-add-column-head">Workspaces</div>
+          <div class="library-add-column-body">
+            ${workspaces.map((workspace) => {
+              const workspaceId = Number(workspace.root_folder_id || 0);
+              const active = workspaceId === rootId;
+              const selected = workspaceId === selectedId;
+              return `
+                <div class="library-add-folder-row${active ? " active" : ""}${selected ? " selected" : ""}" data-workspace-root-id="${workspaceId}">
+                  <button class="library-add-folder-option workspace-root${workspace.main_library ? " main-library" : ""}" type="button" role="menuitem" data-workspace-root-id="${workspaceId}" title="${escapeAttr(workspace.label)}">
+                    <span class="library-add-folder-icon" aria-hidden="true"></span>
+                    <span class="library-add-folder-name">${escapeHtml(workspace.label)}</span>
+                  </button>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        </section>
+      `;
       const columnsMarkup = columns.map((parentId, depth) => {
         const activeId = Number(pathIds[depth] || 0);
         const rows = libraryAddChildFolders(parentId);
         return `
           <section class="library-add-column" data-add-column-depth="${depth}">
-            <div class="library-add-column-head" title="${escapeAttr(libraryAddColumnTitle(parentId))}">${escapeHtml(libraryAddColumnTitle(parentId))}</div>
+            <div class="library-add-column-head" title="${escapeAttr(libraryAddColumnTitle(parentId, rootId))}">${escapeHtml(libraryAddColumnTitle(parentId, rootId))}</div>
             <div class="library-add-column-body">
               ${rows.length ? rows.map((folder) => {
                 const folderId = Number(folder.id);
@@ -21792,7 +22299,7 @@ INDEX_HTML = """<!doctype html>
                 const selected = folderId === selectedId;
                 return `
                   <div class="library-add-folder-row${active ? " active" : ""}${selected ? " selected" : ""}" data-folder-id="${folderId}">
-                    <button class="library-add-folder-option${folder.is_unsorted ? " unsorted" : ""}" type="button" role="menuitem" data-folder-id="${folderId}" data-has-children="${hasChildren ? "1" : "0"}" data-depth="${depth}" title="${escapeAttr(libraryFolderPath(folderId))}">
+                    <button class="library-add-folder-option${folder.is_unsorted ? " unsorted" : ""}" type="button" role="menuitem" data-folder-id="${folderId}" data-has-children="${hasChildren ? "1" : "0"}" data-depth="${depth}" title="${escapeAttr(libraryAddFolderPath(folderId, rootId))}">
                       <span class="library-add-folder-icon" aria-hidden="true"></span>
                       <span class="library-add-folder-name">${escapeHtml(folder.name || "Folder")}</span>
                     </button>
@@ -21803,15 +22310,26 @@ INDEX_HTML = """<!doctype html>
           </section>
         `;
       }).join("");
-      const selectedPath = selectedId ? libraryFolderPath(selectedId) : "No folder selected";
+      const selectedPath = selectedId ? libraryAddFolderPath(selectedId, rootId) : "No folder selected";
       menu.innerHTML = `
-        <div class="library-add-columns">${columnsMarkup}</div>
+        <div class="library-add-columns">${workspaceColumn}${columnsMarkup}</div>
         <div class="library-add-menu-footer">
           <div class="library-add-selected-path" title="${escapeAttr(selectedPath)}">${escapeHtml(selectedPath)}</div>
           <button type="button" data-action="cancel-library-add">Cancel</button>
           <button class="primary" type="button" data-action="confirm-library-add" ${selectedId ? "" : "disabled"}>Confirm</button>
         </div>
       `;
+      menu.querySelectorAll("[data-workspace-root-id].library-add-folder-option").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const nextRootId = Number(button.dataset.workspaceRootId || 0);
+          if (!nextRootId) return;
+          const nextSelectedId = nextRootId === mainRootId ? Number(unsortedId || nextRootId) : nextRootId;
+          renderLibraryAddMenu(menu, paperId, article, nextRootId, [], nextSelectedId);
+          positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
+        });
+      });
       menu.querySelectorAll("[data-folder-id].library-add-folder-option").forEach((button) => {
         button.addEventListener("click", (event) => {
           event.preventDefault();
@@ -21820,7 +22338,7 @@ INDEX_HTML = """<!doctype html>
           const depth = Number(button.dataset.depth || 0);
           const nextPath = pathIds.slice(0, depth);
           if (folderId && libraryAddFolderHasChildren(folderId)) nextPath[depth] = folderId;
-          renderLibraryAddMenu(menu, paperId, article, nextPath, folderId);
+          renderLibraryAddMenu(menu, paperId, article, rootId, nextPath, folderId);
           positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
         });
       });
@@ -21878,7 +22396,7 @@ INDEX_HTML = """<!doctype html>
       positionLibraryAddMenu(menu, button);
       try {
         await ensureLibrarySnapshotForAddMenu();
-        renderLibraryAddMenu(menu, paperId, article, [], libraryUnsortedFolderId());
+        renderLibraryAddMenu(menu, paperId, article, Number(state.libraryRootId || 1), [], libraryUnsortedFolderId());
         positionLibraryAddMenu(menu, button);
       } catch (error) {
         menu.innerHTML = `<div class="library-add-menu-status">${escapeHtml(error.message || "Could not load folders")}</div>`;
@@ -22034,25 +22552,28 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("this Recycle item", deletePreview))) return;
       return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
-        const fastItemDelete = type === "item" && !requiresRecycleConfirmation;
+        const fastDelete = type === "item" || (type === "folder" && requiresRecycleConfirmation);
         const parentId = type === "item"
           ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
           : parentFolderId(id);
-        const sourceItem = fastItemDelete ? libraryItemById(id) : null;
+        const sourceItem = type === "item" ? libraryItemById(id) : null;
         const deletedEntry = entry;
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastItemDelete})
+          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastDelete})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
-        if (fastItemDelete) {
+        if (type === "item") {
           const moved = data.deleted?.moved || {};
           if (moved?.id) applyLocalLibraryItemMove(id, Number(moved.folder_id || data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
-          else applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
-          if (!moved?.id && sourceItem) removeLibraryItemLocal(sourceItem.id);
+          else if (data.deleted?.mode === "trashed") applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
+          else if (sourceItem) removeLibraryItemLocal(sourceItem.id);
+          if (data.deleted?.paper) updateLocalPaperReferences(data.deleted.paper);
+        } else if (fastDelete) {
+          removeLibraryFolderTreeLocal(id);
         } else {
           applyLibrarySnapshot(data);
         }
@@ -22071,11 +22592,11 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/special-folder/clear", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({folder_id: targetFolderId, confirmed: Boolean(deletePreview.requires_confirmation)})
+          body: JSON.stringify({folder_id: targetFolderId, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete Recycle");
-        applyLibrarySnapshot(data);
+        clearLibraryFolderContentsLocal(targetFolderId);
         clearLibraryRangeSelection();
         setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
         state.libraryActiveFolderId = targetFolderId;
@@ -22137,6 +22658,7 @@ INDEX_HTML = """<!doctype html>
       const pathList = Array.isArray(preview.local_copy_paths) ? preview.local_copy_paths : [];
       const metadataCount = Number(preview.metadata_paper_count || 0);
       const shortcutOnlyCount = Number(preview.shortcut_only_paper_count || 0);
+      const orphanPaths = Array.isArray(preview.orphan_local_copy_paths) ? preview.orphan_local_copy_paths : [];
       const pathRows = pathList.length
         ? `
             <p>The following local copy file${pathList.length === 1 ? "" : "s"} will be moved to macOS Trash:</p>
@@ -22148,6 +22670,9 @@ INDEX_HTML = """<!doctype html>
       const shortcutOnlyNote = shortcutOnlyCount
         ? `<p>${shortcutOnlyCount} Recycle shortcut${shortcutOnlyCount === 1 ? "" : "s"} still used outside Recycle will only be removed from Recycle.</p>`
         : "";
+      const orphanNote = orphanPaths.length
+        ? `<p>${orphanPaths.length} unlinked local file${orphanPaths.length === 1 ? "" : "s"} already left in the application Recycle folder will also be moved to macOS Trash.</p>`
+        : "";
       return new Promise((resolve) => {
         document.querySelector(".recycle-delete-confirm-backdrop")?.remove();
         const backdrop = document.createElement("div");
@@ -22157,6 +22682,7 @@ INDEX_HTML = """<!doctype html>
             <h2 id="recycleDeleteTitle">Delete ${escapeHtml(targetLabel)} permanently from Recycle?</h2>
             <p>This will remove ${metadataCount} paper record${metadataCount === 1 ? "" : "s"} that are no longer used outside Recycle, including related metadata and source/resource records.</p>
             ${pathRows}
+            ${orphanNote}
             <p>Original imported source files outside Daiqo will not be touched.</p>
             ${shortcutOnlyNote}
             <div class="finder-drop-actions">
@@ -22211,7 +22737,7 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion(`${entriesToDelete.length} selected Recycle items`, deletePreview))) return;
       return withLibraryActivityStatus(`Deleting ${selectedEntries.length} items...`, "Delete complete.", async () => {
-        const fastItemDelete = !requiresRecycleConfirmation && entriesToDelete.every((entry) => entry.type === "item");
+        const fastItemDelete = entriesToDelete.every((entry) => entry.type === "item");
         const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete-batch", {
@@ -22225,7 +22751,11 @@ INDEX_HTML = """<!doctype html>
           (Array.isArray(data.deleted) ? data.deleted : []).forEach((result) => {
             const originalId = Number(result?.id || 0);
             const moved = result?.moved || {};
-            if (originalId) applyLocalLibraryItemMove(originalId, Number(moved?.folder_id || result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+            if (!originalId) return;
+            if (moved?.id) applyLocalLibraryItemMove(originalId, Number(moved.folder_id || result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+            else if (result?.mode === "trashed") applyLocalLibraryItemMove(originalId, Number(result?.recycle_folder_id || libraryRecycleFolderId()), moved);
+            else removeLibraryItemLocal(originalId);
+            if (result?.paper) updateLocalPaperReferences(result.paper);
           });
         } else {
           applyLibrarySnapshot(data);
@@ -22259,14 +22789,19 @@ INDEX_HTML = """<!doctype html>
 
     async function recoverLibraryEntry(type, id) {
       if (!type || !id) return;
+      const fastItemRecover = type === "item";
       const res = await fetch("/api/library/recover", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id})
+        body: JSON.stringify({type, id, snapshot: !fastItemRecover})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not recover library entry");
-      applyLibrarySnapshot(data);
+      if (fastItemRecover) {
+        applyLocalLibraryItemMove(id, Number(data.recovered?.folder_id || libraryUnsortedFolderId()), data.recovered || null);
+      } else {
+        applyLibrarySnapshot(data);
+      }
       const recoveredId = Number(data.recovered?.id || id);
       if (type === "item") {
         const item = libraryItemById(recoveredId);
@@ -22822,6 +23357,7 @@ INDEX_HTML = """<!doctype html>
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
       renderArxivUpdateCountdown(root, activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
+      requestKatexForPapers(activePapers);
       ensureReportPaperSelection(activePapers);
       activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
       markVisibleLateArrivalsSeen(activePapers);
@@ -30069,7 +30605,8 @@ INDEX_HTML = """<!doctype html>
       const article = document.createElement("article");
       const reserveFigure = state.showFigures && (paper.image_url || (paper.paper_id && !state.figureFailures.has(paper.paper_id)));
       const selected = paper.paper_id && paper.paper_id === state.reportSelectedPaperId;
-      article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${selected ? " report-selected" : ""}`;
+      const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
+      article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${inLibrary ? " in-library" : ""}${selected ? " report-selected" : ""}`;
       article.dataset.paperId = paper.paper_id;
       article.tabIndex = -1;
       article.setAttribute("role", "option");
@@ -30081,7 +30618,6 @@ INDEX_HTML = """<!doctype html>
         .map((field) => `<span class="field-badge">${escapeHtml(FIELD_LABELS[field] || field)}</span>`)
         .join("");
       const themeMeta = state.mode === "theme" ? themePaperMetaMarkup(paper) : "";
-      const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       const analysisStatusText = paper.analysis_status && paper.analysis_status !== "not_started"
         ? ` · Analysis: ${escapeHtml(paper.analysis_status)}`
         : "";
@@ -30091,7 +30627,7 @@ INDEX_HTML = """<!doctype html>
           <div class="paper-main">
             <div class="paper-head">
               <div class="paper-title-row">
-                <h3 style="color:${paper.section_color}">${publicationTitleMarkup(paper.title || "(Untitled)")}</h3>
+                <h3 style="color:${paper.section_color}">${inlineLatexMarkup(paper.title || "(Untitled)", publicationTitleMarkup)}</h3>
                 <div class="paper-badges">
                   <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
                   ${fieldBadges}
@@ -30106,7 +30642,7 @@ INDEX_HTML = """<!doctype html>
               <div class="authors">${authorMarkup}</div>
               ${themeMeta}
             </div>
-            <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
+            <p class="abstract">${inlineLatexMarkup(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
               ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open Website</button>` : ""}
               <span class="library-add-control">
@@ -31025,6 +31561,109 @@ INDEX_HTML = """<!doctype html>
 
     function escapeAttr(value) {
       return escapeHtml(value).replace(/`/g, "&#96;");
+    }
+
+    function latexDelimiterIsEscaped(text, index) {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\\\"; cursor -= 1) slashCount += 1;
+      return slashCount % 2 === 1;
+    }
+
+    function findLatexDelimiter(text, startIndex, delimiter) {
+      for (let cursor = startIndex; cursor < text.length; cursor += 1) {
+        if (!text.startsWith(delimiter, cursor) || latexDelimiterIsEscaped(text, cursor)) continue;
+        if (delimiter === "$" && (text[cursor - 1] === "$" || text[cursor + 1] === "$")) continue;
+        return cursor;
+      }
+      return -1;
+    }
+
+    function renderLatexMarkup(formula, displayMode = false) {
+      if (window.katex) {
+        try {
+          return window.katex.renderToString(formula, {
+            displayMode,
+            throwOnError: false,
+            strict: false,
+            trust: false
+          });
+        } catch (error) {
+          // Keep malformed publisher metadata readable as escaped source text.
+        }
+      }
+      const delimiter = displayMode ? "$$" : "$";
+      return `${delimiter}${escapeHtml(formula)}${delimiter}`;
+    }
+
+    function textContainsLatex(value) {
+      const text = String(value ?? "");
+      for (let cursor = 0; cursor < text.length; cursor += 1) {
+        if (text[cursor] !== "$" || latexDelimiterIsEscaped(text, cursor)) continue;
+        const delimiter = text.startsWith("$$", cursor) ? "$$" : "$";
+        const formulaStart = cursor + delimiter.length;
+        const formulaEnd = findLatexDelimiter(text, formulaStart, delimiter);
+        if (formulaEnd >= 0 && text.slice(formulaStart, formulaEnd).trim()) return true;
+      }
+      return false;
+    }
+
+    function requestKatexForPapers(papers) {
+      if (window.katex || katexLoading || katexLoadFailed) return;
+      const needsKatex = (papers || []).some((paper) => (
+        textContainsLatex(paper?.title) || textContainsLatex(paper?.abstract)
+      ));
+      if (!needsKatex) return;
+      katexLoading = true;
+      if (!document.getElementById("katexStylesheet")) {
+        const stylesheet = document.createElement("link");
+        stylesheet.id = "katexStylesheet";
+        stylesheet.rel = "stylesheet";
+        stylesheet.href = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css";
+        document.head.appendChild(stylesheet);
+      }
+      const script = document.createElement("script");
+      script.async = true;
+      script.src = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js";
+      script.addEventListener("load", () => {
+        katexLoading = false;
+        window.dispatchEvent(new Event("katex-ready"));
+      }, {once: true});
+      script.addEventListener("error", () => {
+        katexLoading = false;
+        katexLoadFailed = true;
+      }, {once: true});
+      document.head.appendChild(script);
+    }
+
+    function inlineLatexMarkup(value, plainMarkup = escapeHtml) {
+      const text = String(value ?? "");
+      let markup = "";
+      let plainStart = 0;
+      let cursor = 0;
+      while (cursor < text.length) {
+        if (text[cursor] !== "$" || latexDelimiterIsEscaped(text, cursor)) {
+          cursor += 1;
+          continue;
+        }
+        const delimiter = text.startsWith("$$", cursor) ? "$$" : "$";
+        const formulaStart = cursor + delimiter.length;
+        const formulaEnd = findLatexDelimiter(text, formulaStart, delimiter);
+        if (formulaEnd < 0) {
+          cursor += delimiter.length;
+          continue;
+        }
+        const formula = text.slice(formulaStart, formulaEnd);
+        if (!formula.trim()) {
+          cursor = formulaEnd + delimiter.length;
+          continue;
+        }
+        markup += plainMarkup(text.slice(plainStart, cursor));
+        markup += renderLatexMarkup(formula, delimiter === "$$");
+        cursor = formulaEnd + delimiter.length;
+        plainStart = cursor;
+      }
+      markup += plainMarkup(text.slice(plainStart));
+      return markup;
     }
 
     function publicationTitleMarkup(value) {
@@ -32520,6 +33159,9 @@ INDEX_HTML = """<!doctype html>
       closeLibraryAddMenus();
       closeAuthorAffiliationTooltip();
     });
+    window.addEventListener("katex-ready", () => {
+      if (state.mode === "report") renderReport();
+    });
     window.addEventListener("scroll", (event) => {
       if (!event.target?.closest?.(".library-add-menu")) closeLibraryAddMenus();
       closeAuthorAffiliationTooltip();
@@ -32597,6 +33239,10 @@ INDEX_HTML = """<!doctype html>
       Promise.resolve().then(loadLibrary).catch((error) => {
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
+      window.setInterval(() => {
+        const currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+        if (currentTimeZone !== initialBrowserTimeZone) window.location.reload();
+      }, 60 * 1000);
       window.setTimeout(() => {
         fetch("/api/arxiv-daily-refresh").catch(() => {});
       }, 1600);

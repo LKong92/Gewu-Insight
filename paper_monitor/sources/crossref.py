@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any
 
 from ..http import request_with_retries
+from ..aps import apply_aps_publication_status
 from ..text import clean_markup_text, first_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
 
 
@@ -72,7 +73,7 @@ def fetch_crossref_journal(
                 seen.add(key)
                 papers.append(paper)
             next_cursor = message.get("next-cursor")
-            if not next_cursor or next_cursor == cursor or len(message.get("items", [])) < rows:
+            if not next_cursor or len(message.get("items", [])) < rows:
                 break
             cursor = next_cursor
 
@@ -151,7 +152,7 @@ def fetch_crossref_topic(
             seen.add(key)
             papers.append(paper)
         next_cursor = message.get("next-cursor")
-        if not next_cursor or next_cursor == cursor or len(items) < rows:
+        if not next_cursor or len(items) < rows:
             break
         cursor = next_cursor
     return papers
@@ -191,7 +192,7 @@ def normalize_crossref_item(item: dict[str, Any], journal_name: str) -> dict[str
     url = item.get("URL") or (f"https://doi.org/{doi}" if doi else "")
     paper_id = make_paper_id(doi, title, journal_name, publication_date)
     abstract = clean_abstract(item.get("abstract"))
-    return {
+    paper = {
         "paper_id": paper_id,
         "doi": doi,
         "title": title or "(Untitled)",
@@ -209,6 +210,8 @@ def normalize_crossref_item(item: dict[str, Any], journal_name: str) -> dict[str
         "section_allowed": None,
         "raw": item,
     }
+    apply_aps_publication_status(paper)
+    return paper
 
 
 def clean_abstract(value: str | None) -> str:

@@ -8,9 +8,12 @@ from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
     ELECTRIDE_RECOMMENDED_KEYWORDS,
     get_fetch_progress,
+    missing_fetch_journals_for_date,
     missing_theme_group_keys_for_date,
     recommend_theme_keywords,
     run_theme_monitor,
+    start_fetch_progress,
+    start_theme_fetch_progress,
     theme_candidate_in_window,
     theme_candidate_is_literature_like,
     theme_counts_for_month,
@@ -304,6 +307,38 @@ class ThemeMonitorTest(unittest.TestCase):
         self.assertEqual(progress["total"], 2)
         statuses = {item["key"]: item["status"] for item in progress["subjects"]}
         self.assertEqual(statuses, {"one": "empty", "two": "empty"})
+
+    def test_fetch_progress_keeps_journal_and_theme_separate(self):
+        selected = "2026-01-04"
+        start_fetch_progress(selected, ["Nature"])
+        start_theme_fetch_progress(selected, ["one"], {"one": {"name": "Subject One"}})
+
+        journal_progress = get_fetch_progress(selected, kind="journal")
+        theme_progress = get_fetch_progress(selected, kind="theme")
+
+        self.assertEqual(journal_progress["kind"], "journal")
+        self.assertEqual(journal_progress["total"], 1)
+        self.assertEqual(theme_progress["kind"], "theme")
+        self.assertEqual(theme_progress["total"], 1)
+        self.assertEqual(theme_progress["subjects"][0]["name"], "Subject One")
+
+    def test_journal_fetch_error_is_still_missing(self):
+        selected = "2026-01-05"
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                run_id = storage.start_fetch_run(
+                    monitor_type="journal",
+                    source="journal",
+                    journal="Nature",
+                    window_start=selected,
+                    window_end=selected,
+                    started_at="2026-01-05T09:00:00+09:00",
+                )
+                storage.finish_fetch_run(run_id, status="error", records_found=0, message="network failed")
+                self.assertEqual(missing_fetch_journals_for_date(storage, selected, ["Nature"]), ["Nature"])
+            finally:
+                storage.close()
 
     def test_keyword_recommendations_come_from_external_fetchers(self):
         import paper_monitor.ui_server as ui_server

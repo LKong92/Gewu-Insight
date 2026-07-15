@@ -5,6 +5,7 @@ import re
 from datetime import date
 from typing import Any
 
+from ..aps import apply_aps_publication_status
 from ..http import request_with_retries
 from ..text import clean_markup_text, clean_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
 
@@ -251,7 +252,7 @@ def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str
     journal = preferred_journal if preferred_journal and preferred_journal.lower() != "unknown journal" else source_journal or preferred_journal
     journal = journal_name_for_doi(journal, doi) or "Unknown Journal"
 
-    return {
+    paper = {
         "paper_id": paper_id,
         "doi": doi,
         "title": title,
@@ -269,6 +270,8 @@ def normalize_openalex_item(item: dict[str, Any], journal_name: str) -> dict[str
         "section_allowed": None,
         "raw": item,
     }
+    apply_aps_publication_status(paper)
+    return paper
 
 
 PHYSICAL_REVIEW_JOURNAL_NAMES = {

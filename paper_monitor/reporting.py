@@ -133,7 +133,7 @@ def section_color(section: str) -> str:
         return "#7a1fa2"
     if "analysis" in normalized:
         return "#005f73"
-    if "research" in normalized or normalized == "article":
+    if "research" in normalized or normalized in {"article", "published", "preprint"}:
         return "#17643b"
     if "news" in normalized or "comment" in normalized:
         return "#9b2226"
@@ -148,7 +148,7 @@ def section_badge_background(section: str) -> str:
         return "#f5e8ff"
     if "analysis" in normalized:
         return "#e6f7fb"
-    if "research" in normalized or normalized == "article":
+    if "research" in normalized or normalized in {"article", "published", "preprint"}:
         return "#e9f7ef"
     if "news" in normalized or "comment" in normalized:
         return "#ffe8e6"

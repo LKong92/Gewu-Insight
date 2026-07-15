@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from ..http import request_with_retries
 from ..text import clean_text, normalize_doi, normalize_publication_title, safe_slug
+from ..time_utils import local_timezone
 
 
 ARXIV_JOURNAL_NAME = "arXiv"
@@ -165,30 +166,40 @@ def arxiv_text_query(query: str) -> str:
     return " AND ".join(f"all:{term}" for term in terms[:8])
 
 
-def announcement_date_range_as_submitted_utc(start_date: date, end_date: date) -> tuple[datetime, datetime]:
+def announcement_date_range_as_submitted_utc(
+    start_date: date,
+    end_date: date,
+    *,
+    local_tz: tzinfo | None = None,
+) -> tuple[datetime, datetime]:
     windows = [
         arxiv_submission_window_for_announcement_day(announcement_day)
-        for announcement_day in local_arxiv_announcement_days(start_date, end_date)
+        for announcement_day in local_arxiv_announcement_days(start_date, end_date, local_tz=local_tz)
     ]
     if not windows:
         # This only happens for local dates that cannot contain an arXiv announcement.
         # Return an empty one-minute range instead of accidentally querying a whole day.
-        start_local = datetime.combine(start_date, datetime_time.min, tzinfo=local_timezone())
+        start_local = datetime.combine(start_date, datetime_time.min, tzinfo=local_tz or local_timezone())
         start_utc = start_local.astimezone(timezone.utc)
         return start_utc, start_utc
     return min(window[0] for window in windows), max(window[1] for window in windows)
 
 
-def local_arxiv_announcement_days(start_date: date, end_date: date) -> list[date]:
+def local_arxiv_announcement_days(
+    start_date: date,
+    end_date: date,
+    *,
+    local_tz: tzinfo | None = None,
+) -> list[date]:
     eastern = ZoneInfo("America/New_York")
-    local_tz = local_timezone()
+    target_tz = local_tz or local_timezone()
     days: list[date] = []
     current = start_date - timedelta(days=2)
     stop = end_date + timedelta(days=2)
     while current <= stop:
         if is_arxiv_announcement_day(current):
             announcement = datetime.combine(current, datetime_time(hour=20), tzinfo=eastern)
-            local_day = announcement.astimezone(local_tz).date()
+            local_day = announcement.astimezone(target_tz).date()
             if start_date <= local_day <= end_date:
                 days.append(current)
         current += timedelta(days=1)
@@ -213,11 +224,34 @@ def arxiv_submission_window_for_announcement_day(announcement_day: date) -> tupl
 
 
 def is_arxiv_announcement_day(day: date) -> bool:
+    # arXiv announces new submissions Sunday through Thursday at 20:00
+    # America/New_York time.  The Sunday announcement is the batch shown on
+    # Monday in Asian (and UTC) calendars, so it must not be treated as a
+    # weekend gap here.
     return day.weekday() in {0, 1, 2, 3, 6}
 
 
-def local_timezone() -> tzinfo:
-    return datetime.now().astimezone().tzinfo or timezone.utc
+def arxiv_announcement_at(announcement_day: date) -> datetime:
+    return datetime.combine(
+        announcement_day,
+        datetime_time(hour=20),
+        tzinfo=ZoneInfo("America/New_York"),
+    )
+
+
+def latest_ready_arxiv_announcement(now: datetime, *, buffer: timedelta = timedelta(0)) -> datetime:
+    """Return the most recent scheduled announcement whose buffer has elapsed."""
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    eastern_now = now.astimezone(ZoneInfo("America/New_York"))
+    for offset in range(8):
+        candidate_day = eastern_now.date() - timedelta(days=offset)
+        if not is_arxiv_announcement_day(candidate_day):
+            continue
+        candidate = arxiv_announcement_at(candidate_day)
+        if candidate + buffer <= eastern_now:
+            return candidate
+    raise RuntimeError("Could not resolve the latest arXiv announcement")
 
 
 def normalize_arxiv_entry(entry: ET.Element) -> dict[str, Any]:
@@ -264,6 +298,7 @@ def normalize_arxiv_entry(entry: ET.Element) -> dict[str, Any]:
             "primary_category": primary_category,
             "published": published,
             "updated": updated,
+            "announcement_at_utc": arxiv_announcement_utc(published or updated),
             "journal_ref": clean_text(entry.findtext("arxiv:journal_ref", default="", namespaces=ATOM_NS)),
             "comment": clean_text(entry.findtext("arxiv:comment", default="", namespaces=ATOM_NS)),
         },
@@ -298,7 +333,7 @@ def local_date_part(value: str) -> str:
     return parsed.astimezone(local_timezone()).date().isoformat()
 
 
-def arxiv_announcement_local_date(value: str) -> str:
+def arxiv_announcement_local_date(value: str, *, local_tz: tzinfo | None = None) -> str:
     parsed = parse_arxiv_datetime(value)
     if not parsed:
         return clean_text(value)[:10]
@@ -306,7 +341,25 @@ def arxiv_announcement_local_date(value: str) -> str:
     submitted = parsed.astimezone(eastern)
     announcement_day = arxiv_announcement_day_for_submission(submitted)
     announcement = datetime.combine(announcement_day, datetime_time(hour=20), tzinfo=eastern)
-    return announcement.astimezone(local_timezone()).date().isoformat()
+    return announcement.astimezone(local_tz or local_timezone()).date().isoformat()
+
+
+def arxiv_announcement_utc(value: str) -> str:
+    parsed = parse_arxiv_datetime(value)
+    if not parsed:
+        return ""
+    submitted = parsed.astimezone(ZoneInfo("America/New_York"))
+    announcement_day = arxiv_announcement_day_for_submission(submitted)
+    return arxiv_announcement_at(announcement_day).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def arxiv_local_date_from_raw(raw: dict[str, Any], *, local_tz: tzinfo | None = None) -> str:
+    target_tz = local_tz or local_timezone()
+    announcement = parse_arxiv_datetime(str(raw.get("announcement_at_utc") or ""))
+    if announcement:
+        return announcement.astimezone(target_tz).date().isoformat()
+    submitted_value = str(raw.get("published") or raw.get("updated") or "")
+    return arxiv_announcement_local_date(submitted_value, local_tz=target_tz) if submitted_value else ""
 
 
 def arxiv_announcement_day_for_submission(submitted: datetime) -> date:

@@ -4,6 +4,7 @@ import re
 from datetime import date, timedelta
 from typing import Any, Callable
 
+from .aps import is_aps_lifecycle_journal
 from .config import AppConfig, JournalConfig
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_condensed_matter
 from .sources.crossref import fetch_crossref_journal
@@ -133,7 +134,12 @@ def fetch_one_journal(
             if paper.get("section_allowed") is False:
                 blocked += 1
 
-            storage.upsert_paper(paper)
+            storage.upsert_paper(
+                paper,
+                replace_bibliographic_metadata=(
+                    is_aps_lifecycle_journal(paper.get("journal")) and paper.get("publisher_section") == "published"
+                ),
+            )
             saved += 1
 
         status = journal_fetch_status(saved=saved, source_errors=source_errors, source_attempts=source_attempts)
@@ -225,6 +231,18 @@ def dedup_by_id(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
             order.append(key)
             continue
         current = merged[key]
+        previous_sources = [item for item in (current.get("source") or "").split("+") if item]
+        if (
+            is_aps_lifecycle_journal(current.get("journal") or paper.get("journal"))
+            and current.get("publisher_section") != "published"
+            and paper.get("publisher_section") == "published"
+        ):
+            previous = current
+            current = dict(paper)
+            merged[key] = current
+            for field in ["abstract", "abstract_source", "landing_url", "pdf_url", "url", "type", "type_crossref"]:
+                if current.get(field) in (None, "") and previous.get(field) not in (None, ""):
+                    current[field] = previous[field]
         for field in [
             "abstract",
             "abstract_source",
@@ -239,7 +257,7 @@ def dedup_by_id(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
             value = paper.get(field)
             if value not in (None, "") and current.get(field) in (None, ""):
                 current[field] = value
-        sources = [item for item in (current.get("source") or "").split("+") if item]
+        sources = [*previous_sources, *[item for item in (current.get("source") or "").split("+") if item]]
         if paper.get("source"):
             sources.append(paper["source"])
         current["source"] = "+".join(sorted(set(sources)))
@@ -249,6 +267,8 @@ def dedup_by_id(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def apply_fast_section_hints(paper: dict[str, Any], journal: JournalConfig) -> None:
     doi = (paper.get("doi") or "").lower()
     title = clean_text(paper.get("title")).lower()
+    if is_aps_lifecycle_journal(paper.get("journal") or journal.name):
+        return
     if journal.section_policy == "nature":
         if doi.startswith("10.1038/d"):
             paper["publisher_section"] = paper.get("publisher_section") or "news/comment"

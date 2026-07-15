@@ -6,9 +6,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
+from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
 from .text import is_placeholder_publication_title, normalize_publication_title
-from .time_utils import now_iso
+from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
 SCHEMA = """
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS fetch_runs (
   status TEXT NOT NULL,
   records_found INTEGER NOT NULL DEFAULT 0,
   message TEXT,
+  timezone_name TEXT,
   started_at TEXT NOT NULL,
   finished_at TEXT NOT NULL
 );
@@ -226,6 +228,8 @@ class Storage:
         self.conn.execute("PRAGMA busy_timeout=15000")
         self.conn.executescript(SCHEMA)
         self._ensure_schema_columns()
+        self._sync_arxiv_calendar_timezone()
+        self._reclassify_aps_crossref_records()
         self._ensure_library_root()
         self._seed_library_from_existing_papers()
 
@@ -233,6 +237,10 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
         if "image_url" not in columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN image_url TEXT")
+            self.conn.commit()
+        fetch_run_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(fetch_runs)").fetchall()}
+        if "timezone_name" not in fetch_run_columns:
+            self.conn.execute("ALTER TABLE fetch_runs ADD COLUMN timezone_name TEXT")
             self.conn.commit()
         for column, column_type in {
             "source_path": "TEXT",
@@ -303,6 +311,85 @@ class Storage:
             self.conn.execute("ALTER TABLE my_publications ADD COLUMN author_marks TEXT")
             self.conn.commit()
 
+    def _sync_arxiv_calendar_timezone(self) -> None:
+        timezone_name = system_timezone_name()
+        setting_key = "arxiv_calendar_timezone"
+        existing = self.conn.execute("SELECT value FROM app_settings WHERE key = ?", (setting_key,)).fetchone()
+        if existing and str(existing["value"] or "") == timezone_name:
+            return
+
+        from .sources.arxiv import arxiv_local_date_from_raw
+
+        target_tz = local_timezone(timezone_name)
+        rows = self.conn.execute(
+            """
+            SELECT paper_id, publication_date, raw_json
+            FROM papers
+            WHERE journal = 'arXiv'
+               OR source = 'arxiv'
+               OR source LIKE 'arxiv+%'
+               OR source LIKE '%+arxiv'
+            """
+        ).fetchall()
+        updates: list[tuple[str, str]] = []
+        for row in rows:
+            try:
+                raw = json.loads(row["raw_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            local_date = arxiv_local_date_from_raw(raw, local_tz=target_tz)
+            if local_date and local_date != str(row["publication_date"] or ""):
+                updates.append((local_date, str(row["paper_id"])))
+        if updates:
+            self.conn.executemany("UPDATE papers SET publication_date = ? WHERE paper_id = ?", updates)
+        self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (setting_key, timezone_name, now_iso()),
+        )
+        self.conn.commit()
+
+    def _reclassify_aps_crossref_records(self) -> None:
+        """Hide legacy Accepted APS rows without removing user-linked paper data."""
+        journal_names = list(APS_MONITORED_JOURNALS.values())
+        placeholders = ", ".join(["?"] * len(journal_names))
+        rows = self.conn.execute(
+            f"""
+            SELECT paper_id, source, raw_json, publisher_section, section_allowed
+            FROM papers
+            WHERE journal IN ({placeholders})
+            """,
+            journal_names,
+        ).fetchall()
+        updates: list[tuple[str, int, str]] = []
+        for row in rows:
+            sources = {part.strip().lower() for part in str(row["source"] or "").split("+")}
+            if "crossref" not in sources:
+                continue
+            try:
+                raw = json.loads(row["raw_json"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if not isinstance(raw, dict) or not raw:
+                continue
+            formal = is_aps_version_of_record(raw)
+            publisher_section = "published" if formal else "accepted"
+            section_allowed = 1 if formal else 0
+            if row["publisher_section"] == publisher_section and row["section_allowed"] == section_allowed:
+                continue
+            updates.append((publisher_section, section_allowed, str(row["paper_id"])))
+        if updates:
+            self.conn.executemany(
+                "UPDATE papers SET publisher_section = ?, section_allowed = ? WHERE paper_id = ?",
+                updates,
+            )
+            self.conn.commit()
+
     def _ensure_library_root(self) -> None:
         timestamp = now_iso()
         self.conn.execute(
@@ -341,7 +428,7 @@ class Storage:
     def close(self) -> None:
         self.conn.close()
 
-    def upsert_paper(self, paper: dict[str, Any]) -> None:
+    def upsert_paper(self, paper: dict[str, Any], *, replace_bibliographic_metadata: bool = False) -> None:
         existing = self.get_paper(paper["paper_id"])
         timestamp = now_iso()
         payload = dict(paper)
@@ -377,6 +464,9 @@ class Storage:
                     merged[key] = value
                     continue
                 if key == "section_allowed" and value is not None:
+                    merged[key] = value
+                    continue
+                if replace_bibliographic_metadata and value not in (None, ""):
                     merged[key] = value
                     continue
                 if value not in (None, "") and _is_blank_existing(key, merged.get(key)):
@@ -525,8 +615,8 @@ class Storage:
             """
             INSERT INTO fetch_runs (
               monitor_type, source, journal, window_start, window_end, status,
-              records_found, message, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              records_found, message, timezone_name, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 monitor_type,
@@ -537,6 +627,7 @@ class Storage:
                 status,
                 records_found,
                 message,
+                system_timezone_name(),
                 started_at,
                 now_iso(),
             ),
@@ -557,8 +648,8 @@ class Storage:
             """
             INSERT INTO fetch_runs (
               monitor_type, source, journal, window_start, window_end, status,
-              records_found, message, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              records_found, message, timezone_name, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 monitor_type,
@@ -569,6 +660,7 @@ class Storage:
                 "running",
                 0,
                 "",
+                system_timezone_name(),
                 started_at,
                 started_at,
             ),
