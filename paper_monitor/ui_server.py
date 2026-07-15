@@ -453,6 +453,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_manual_pdf()
                 return
             payload = self.read_json_body()
+            if parsed.path == "/api/manual-pdf-path":
+                self.handle_manual_pdf_path(payload)
+                return
             if parsed.path == "/api/download":
                 self.handle_download(payload)
                 return
@@ -892,32 +895,54 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not upload:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "PDF file is required")
             return
-        filename = upload.get("filename") or ""
-        data = upload.get("content") or b""
-        if not filename.lower().endswith(".pdf") or b"%PDF-" not in data[:1024]:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "Uploaded file must be a PDF")
-            return
-
         storage = Storage(self.configured_db_path)
         try:
-            paper = storage.get_paper(paper_id)
-            if not paper:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            target_dir = local_copy_dir_for_download_context(storage, fields) or (DEFAULT_PDF_DIR / paper_id)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = unique_path_in_dir(target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_manual.pdf")
-            target_path.write_bytes(data)
-            storage.update_download_status(
-                paper_id,
-                status="success",
-                message=f"manual PDF uploaded: {filename}",
-                main_pdf_path=str(target_path),
-                supplement_pdf_paths=[],
-                merged_pdf_path=str(target_path),
+            target_path, paper = attach_manual_pdf_to_paper(
+                storage,
+                paper_id=paper_id,
+                filename=str(upload.get("filename") or ""),
+                context=fields,
+                content=upload.get("content") or b"",
+                preserve_filename=str(fields.get("preserve_filename") or "") == "1",
             )
-            sync_all_pdf_aliases_for_paper(storage, paper_id)
-            paper = storage.get_paper(paper_id)
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except (FileNotFoundError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None})
+
+    def handle_manual_pdf_path(self, payload: dict[str, Any]) -> None:
+        paper_id = str(payload.get("paper_id") or "")
+        source_path = str(payload.get("source_path") or "")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        if not source_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "source_path is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            target_path, paper = attach_manual_pdf_to_paper(
+                storage,
+                paper_id=paper_id,
+                filename=Path(source_path).name,
+                context=payload,
+                source_path=Path(source_path),
+                preserve_filename=True,
+            )
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except FileNotFoundError as exc:
+            self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
         self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None})
@@ -12337,6 +12362,69 @@ def local_copy_dir_for_download_context(storage: Storage, payload: dict[str, Any
     return None
 
 
+def attach_manual_pdf_to_paper(
+    storage: Storage,
+    *,
+    paper_id: str,
+    filename: str,
+    context: dict[str, Any],
+    content: bytes | None = None,
+    source_path: Path | None = None,
+    preserve_filename: bool = False,
+) -> tuple[Path, dict[str, Any]]:
+    paper = storage.get_paper(str(paper_id))
+    if not paper:
+        raise KeyError(str(paper_id))
+    original_name = Path(str(filename or "")).name
+    if not original_name.lower().endswith(".pdf"):
+        raise ValueError("Dropped file must be a PDF")
+    resolved_source: Path | None = None
+    if source_path is not None:
+        resolved_source = source_path.expanduser().resolve()
+        if not resolved_source.exists() or not resolved_source.is_file():
+            raise FileNotFoundError(f"PDF file was not found: {source_path}")
+        with resolved_source.open("rb") as handle:
+            header = handle.read(1024)
+    else:
+        header = bytes(content or b"")[:1024]
+    if b"%PDF-" not in header:
+        raise ValueError("Dropped file must be a valid PDF")
+
+    target_dir = local_copy_dir_for_download_context(storage, context) or (DEFAULT_PDF_DIR / str(paper_id))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if preserve_filename:
+        target_name = finder_safe_name(original_name, f"{safe_slug(paper.get('title') or paper_id, 80)}.pdf")
+        if not target_name.lower().endswith(".pdf"):
+            target_name = f"{target_name}.pdf"
+    else:
+        target_name = f"{safe_slug(paper.get('title') or paper_id, 80)}_manual.pdf"
+    target_path = unique_path_in_dir(target_dir / target_name)
+    if resolved_source is not None:
+        shutil.copy2(resolved_source, target_path)
+    else:
+        target_path.write_bytes(bytes(content or b""))
+    try:
+        storage.update_download_status(
+            str(paper_id),
+            status="success",
+            message=f"manual PDF imported: {original_name}",
+            main_pdf_path=str(target_path),
+            supplement_pdf_paths=[],
+            merged_pdf_path=str(target_path),
+        )
+    except Exception:
+        try:
+            target_path.unlink()
+        except OSError:
+            pass
+        raise
+    sync_all_pdf_aliases_for_paper(storage, str(paper_id))
+    updated = storage.get_paper(str(paper_id))
+    if not updated:
+        raise KeyError(str(paper_id))
+    return target_path, updated
+
+
 def canonical_pdf_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
     if not paper:
         return None
@@ -18243,8 +18331,9 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       background: #f8fafc;
     }
-    .paper-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
-    .paper-head > div:first-child { min-width: 0; }
+    .paper-head { min-width: 0; }
+    .paper-title-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+    .paper-title-row > h3 { min-width: 0; flex: 1 1 auto; }
     .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
     .journal-group {
       margin: 10px 0 4px;
@@ -18292,7 +18381,34 @@ INDEX_HTML = """<!doctype html>
     }
     .meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; margin-top: 8px; }
     .journal-name { color: var(--ink); font-weight: 750; }
-    .authors { color: #526071; }
+    .authors {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      margin-top: 5px;
+      color: #526071;
+      font-family: "Avenir Next", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13.5px;
+      line-height: 1.45;
+      letter-spacing: 0.005em;
+    }
+    .author-label {
+      flex: none;
+      color: #7a8797;
+      font-size: 11px;
+      font-weight: 650;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+    .author-names { min-width: 0; }
+    .report-author.last-author {
+      color: #263746;
+      font-weight: 700;
+      text-decoration-line: underline;
+      text-decoration-color: rgba(15, 107, 110, 0.42);
+      text-decoration-thickness: 1.5px;
+      text-underline-offset: 3px;
+    }
     .abstract { color: #344054; line-height: 1.55; margin: 12px 0 0; font-size: 14px; }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
     .library-add-control { position: relative; display: inline-flex; }
@@ -18311,6 +18427,29 @@ INDEX_HTML = """<!doctype html>
     .action.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .action.secondary { background: var(--accent); border-color: var(--accent); color: #fff; }
     .action.danger { border-color: var(--accent-2); color: var(--accent-2); background: #fff7f6; }
+    .action.library-pdf-drop-target {
+      position: relative;
+      transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+    }
+    .action.library-pdf-drop-target.drag-over {
+      border-color: #0b7770;
+      background: #0b7770;
+      color: transparent;
+      cursor: copy;
+      box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.16);
+    }
+    .action.library-pdf-drop-target.drag-over::after {
+      content: "\\21E9  PDF";
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-weight: 750;
+      white-space: nowrap;
+      pointer-events: none;
+    }
     .action:disabled { opacity: 0.55; cursor: default; }
     .action.is-busy:disabled { cursor: default; }
     .action.is-busy::after {
@@ -18920,7 +19059,7 @@ INDEX_HTML = """<!doctype html>
       .papers, .papers.library-view { overflow: visible; display: grid; padding-right: 0; }
       .workspace.report-collapsed .report-column { display: block; }
       .paper.with-figure .paper-layout { grid-template-columns: 1fr; }
-      .paper-head { flex-direction: column; }
+      .paper-title-row { flex-direction: column; }
       .paper-badges { justify-content: flex-start; max-width: 100%; }
       .library-shell { grid-template-columns: 1fr; }
       .loader-form {
@@ -23775,6 +23914,17 @@ INDEX_HTML = """<!doctype html>
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
       if (!droppedPaths.length) return;
+      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
+      if (pdfTarget) {
+        const paperId = String(pdfTarget.dataset.paperId || "");
+        clearLibraryFinderDropTarget();
+        if (droppedPaths.length !== 1 || !droppedPaths[0].toLowerCase().endsWith(".pdf")) {
+          showLibraryPdfDropError("Drop exactly one PDF file here.");
+          return;
+        }
+        await importDroppedPdfForLibraryPaper(paperId, {sourcePath: droppedPaths[0], button: pdfTarget});
+        return;
+      }
       if (state.mode === "deep-survey") {
         return;
       }
@@ -23802,6 +23952,16 @@ INDEX_HTML = """<!doctype html>
       saveLibraryImportDraft(draft);
       applyLibraryImportDraft(draft);
       openLibraryLoaderWindow();
+    }
+
+    function libraryPdfDropTargetFromPoint(dropPoint = null) {
+      if (state.mode !== "library") return null;
+      const x = Number(dropPoint?.x);
+      const y = Number(dropPoint?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const target = document.elementFromPoint(x, y)?.closest?.("[data-library-pdf-drop-target]");
+      if (!target || target.disabled || !target.dataset.paperId) return null;
+      return target;
     }
 
     function libraryImportDropTargetFolderId(dropPoint = null) {
@@ -23855,6 +24015,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateNativeFinderDropTarget(dropPoint = null) {
+      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
+      if (pdfTarget) {
+        clearLibraryFinderDropTargetVisuals();
+        state.libraryFinderDropTargetFolderId = 0;
+        state.libraryFinderDropTargetKind = "pdf-button";
+        $("libraryShell")?.classList.remove("finder-drag-over");
+        pdfTarget.classList.add("drag-over");
+        return;
+      }
       if (state.mode !== "library" || state.libraryTab !== "library") {
         clearLibraryFinderDropTarget();
         return;
@@ -23875,6 +24044,7 @@ INDEX_HTML = """<!doctype html>
     function clearLibraryFinderDropTargetVisuals() {
       document.querySelectorAll(".finder-drop-column-target").forEach((node) => node.classList.remove("finder-drop-column-target"));
       document.querySelectorAll(".finder-drop-row-target").forEach((node) => node.classList.remove("finder-drop-row-target"));
+      document.querySelectorAll("[data-library-pdf-drop-target].drag-over").forEach((node) => node.classList.remove("drag-over"));
     }
 
     function clearLibraryFinderDropTarget() {
@@ -25887,7 +26057,7 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
-          ${!paper.merged_pdf_path && isPdfLike ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${!paper.merged_pdf_path && isPdfLike ? `<button class="action primary library-pdf-drop-target" data-action="download-library-pdf" data-library-pdf-drop-target data-paper-id="${escapeAttr(paper.paper_id || "")}" title="Download online or drop one PDF here">Download PDF</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
@@ -25912,6 +26082,7 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      wireLibraryPdfDropTarget(root, paper);
       root.querySelector('[data-action="open-native-paper-file"]')?.addEventListener("click", () => openNativePaperFile(paper, {
         missingMessage: "No local file path is available for this item."
       }));
@@ -26073,7 +26244,7 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
-          ${!paper.merged_pdf_path ? `<button class="action primary" data-action="download-library-pdf">Download PDF</button>` : ""}
+          ${!paper.merged_pdf_path ? `<button class="action primary library-pdf-drop-target" data-action="download-library-pdf" data-library-pdf-drop-target data-paper-id="${escapeAttr(paper.paper_id || "")}" title="Download online or drop one PDF here">Download PDF</button>` : ""}
           ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
@@ -26104,6 +26275,7 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="preview-library-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="download-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper));
+      wireLibraryPdfDropTarget(root, paper);
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
@@ -28300,6 +28472,130 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function libraryPdfContextPayload(paperId) {
+      const payload = {
+        paper_id: paperId,
+        context: "library",
+        folder_id: Number(state.libraryActiveFolderId || state.libraryRootId || 1),
+        item_id: 0
+      };
+      if (state.libraryTab === "my-publications") {
+        payload.context = "my-publications";
+        payload.folder_id = 0;
+      } else if (state.libraryTab?.startsWith("workspace-")) {
+        payload.context = "workspace";
+      }
+      if (state.libraryTab !== "my-publications" && state.librarySelection?.type === "item") {
+        const selectedItem = libraryItemById(state.librarySelection.id);
+        if (selectedItem?.paper_id === paperId) {
+          payload.item_id = Number(selectedItem.id || 0);
+          payload.folder_id = Number(selectedItem.folder_id || payload.folder_id || 1);
+        }
+      }
+      return payload;
+    }
+
+    function libraryPdfDropFile(files) {
+      const candidates = [...(files || [])].filter((file) => (
+        file?.type === "application/pdf" || String(file?.name || "").toLowerCase().endsWith(".pdf")
+      ));
+      return candidates.length === 1 ? candidates[0] : null;
+    }
+
+    function showLibraryPdfDropError(message) {
+      const status = $("libraryDetailStatus");
+      if (status) {
+        status.textContent = message;
+        status.className = "library-detail-status err";
+      }
+      updateLibraryActivityStatus(message, {delay: 3600});
+    }
+
+    function wireLibraryPdfDropTarget(root, paper) {
+      const button = root?.querySelector?.("[data-library-pdf-drop-target]");
+      if (!button || !paper?.paper_id) return;
+      ["dragenter", "dragover"].forEach((eventName) => {
+        button.addEventListener(eventName, (event) => {
+          if (!event.dataTransfer?.types?.includes("Files")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = "copy";
+          button.classList.add("drag-over");
+        });
+      });
+      button.addEventListener("dragleave", (event) => {
+        if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+        button.classList.remove("drag-over");
+      });
+      button.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        button.classList.remove("drag-over");
+        clearLibraryFinderDropTarget();
+        const file = libraryPdfDropFile(event.dataTransfer?.files);
+        if (!file || Number(event.dataTransfer?.files?.length || 0) !== 1) {
+          showLibraryPdfDropError("Drop exactly one PDF file here.");
+          return;
+        }
+        await importDroppedPdfForLibraryPaper(paper.paper_id, {file, button});
+      });
+    }
+
+    async function importDroppedPdfForLibraryPaper(paperId, options = {}) {
+      if (!paperId) return;
+      const detail = $("libraryDetail");
+      const status = $("libraryDetailStatus");
+      const buttons = detail?.querySelectorAll("button") || [];
+      const activityId = `pdf:${paperId}`;
+      buttons.forEach((button) => button.disabled = true);
+      options.button?.classList.remove("drag-over");
+      options.button?.classList.add("is-busy");
+      if (status) {
+        status.textContent = "Importing dropped PDF...";
+        status.className = "library-detail-status";
+      }
+      if (state.libraryTab === "my-publications") {
+        setMyPublicationActivity(activityId, "Importing dropped PDF...");
+      }
+      updateLibraryActivityStatus("Importing dropped PDF...", {live: true, clear: false});
+      try {
+        const context = libraryPdfContextPayload(paperId);
+        let res;
+        if (options.sourcePath) {
+          res = await fetch("/api/manual-pdf-path", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({...context, source_path: options.sourcePath})
+          });
+        } else {
+          const form = new FormData();
+          Object.entries(context).forEach(([key, value]) => form.append(key, String(value)));
+          form.append("preserve_filename", "1");
+          form.append("pdf", options.file);
+          res = await fetch("/api/manual-pdf", {method: "POST", body: form});
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "PDF import failed");
+        updatePaperState(paperId, data.paper);
+        if (state.libraryTab === "my-publications") renderMyPublications();
+        else renderLibrary();
+        const nextStatus = $("libraryDetailStatus");
+        if (nextStatus) {
+          nextStatus.textContent = "PDF imported";
+          nextStatus.className = "library-detail-status ok";
+        }
+        refreshLibraryQuickLookForSelection();
+        updateLibraryActivityStatus("PDF imported.", {delay: 2600});
+      } catch (error) {
+        const message = error.message || "PDF import failed";
+        showLibraryPdfDropError(message);
+        buttons.forEach((button) => button.disabled = false);
+        options.button?.classList.remove("is-busy");
+      } finally {
+        clearMyPublicationActivity(activityId);
+      }
+    }
+
     async function downloadLibraryPdf(paper, options = {}) {
       if (!paper?.paper_id) return;
       const status = $("libraryDetailStatus");
@@ -28315,26 +28611,7 @@ INDEX_HTML = """<!doctype html>
       }
       updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
       try {
-        const payload = {
-          paper_id: paper.paper_id,
-          force: Boolean(options.force),
-          context: "library",
-          folder_id: Number(state.libraryActiveFolderId || state.libraryRootId || 1),
-          item_id: 0
-        };
-        if (state.libraryTab === "my-publications") {
-          payload.context = "my-publications";
-          payload.folder_id = 0;
-        } else if (state.libraryTab?.startsWith("workspace-")) {
-          payload.context = "workspace";
-        }
-        if (state.librarySelection?.type === "item") {
-          const selectedItem = libraryItemById(state.librarySelection.id);
-          if (selectedItem?.paper_id === paper.paper_id) {
-            payload.item_id = Number(selectedItem.id || 0);
-            payload.folder_id = Number(selectedItem.folder_id || payload.folder_id || 1);
-          }
-        }
+        const payload = {...libraryPdfContextPayload(paper.paper_id), force: Boolean(options.force)};
         const res = await fetch("/api/download", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
@@ -29270,7 +29547,7 @@ INDEX_HTML = """<!doctype html>
       article.tabIndex = -1;
       article.setAttribute("role", "option");
       article.setAttribute("aria-selected", selected ? "true" : "false");
-      const authorText = authorLine(paper);
+      const authorMarkup = authorLineMarkup(paper);
       const identifierText = paper.doi || paper.preprint_id || "no DOI";
       const preprintCategoryText = paper.preprint_category || "";
       const fieldBadges = paperFieldValues(paper)
@@ -29286,21 +29563,21 @@ INDEX_HTML = """<!doctype html>
           ${reserveFigure ? reportFigureMarkup(paper) : ""}
           <div class="paper-main">
             <div class="paper-head">
-              <div>
+              <div class="paper-title-row">
                 <h3 style="color:${paper.section_color}">${publicationTitleMarkup(paper.title || "(Untitled)")}</h3>
-                <div class="meta">
-                  <span class="journal-name">${escapeHtml(paper.journal)}</span>
-                  <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
-                  <span>${escapeHtml(identifierText)}</span>
-                  ${preprintCategoryText ? `<span>${escapeHtml(preprintCategoryText)}</span>` : ""}
-                  <span class="authors">${escapeHtml(authorText)}</span>
+                <div class="paper-badges">
+                  <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
+                  ${fieldBadges}
                 </div>
-                ${themeMeta}
               </div>
-              <div class="paper-badges">
-                <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
-                ${fieldBadges}
+              <div class="meta">
+                <span class="journal-name">${escapeHtml(paper.journal)}</span>
+                <span>${escapeHtml(paper.publication_date || "unknown date")}</span>
+                <span>${escapeHtml(identifierText)}</span>
+                ${preprintCategoryText ? `<span>${escapeHtml(preprintCategoryText)}</span>` : ""}
               </div>
+              <div class="authors">${authorMarkup}</div>
+              ${themeMeta}
             </div>
             <p class="abstract">${escapeHtml(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
@@ -29742,10 +30019,18 @@ INDEX_HTML = """<!doctype html>
       target.dispatchEvent(new Event("change", {bubbles: true}));
     }
 
-    function authorLine(paper) {
+    function authorLineMarkup(paper) {
       const authors = Array.isArray(paper.authors) ? paper.authors : [];
-      if (!authors.length) return "Authors unavailable";
-      return `Authors: ${authors.join(", ")}`;
+      if (!authors.length) {
+        return `<span class="author-label">Authors</span><span class="author-names">Unavailable</span>`;
+      }
+      let lastAuthorIndex = authors.length - 1;
+      while (lastAuthorIndex >= 0 && String(authors[lastAuthorIndex] || "").trim() === "…") lastAuthorIndex -= 1;
+      const names = authors.map((author, index) => {
+        const classes = `report-author${index === lastAuthorIndex ? " last-author" : ""}`;
+        return `<span class="${classes}">${escapeHtml(author)}</span>`;
+      }).join(`<span class="author-separator">, </span>`);
+      return `<span class="author-label">Authors</span><span class="author-names">${names}</span>`;
     }
 
     function wireManualPdfDrop(article, dropZone, paperId) {
