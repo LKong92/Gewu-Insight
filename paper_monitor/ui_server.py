@@ -2157,13 +2157,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             item = storage.rename_library_item(item_id=item_id, name=name)
-            snapshot = library_snapshot(storage)
+            paper = storage.get_paper(str(item.get("paper_id") or ""))
+            if not paper:
+                raise ValueError("Library paper not found")
+            item_api = library_item_to_api(item, paper)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"item_id": int(item.get("id") or item_id), **snapshot})
+        self.send_json({"item_id": int(item.get("id") or item_id), "item": item_api})
 
     def handle_rename_library_pdf(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or 0)
@@ -21996,10 +21999,19 @@ INDEX_HTML = """<!doctype html>
       beginLibraryEntryRename("folder", folderId);
     }
 
+    function restoreLibraryKeyboardFocus() {
+      window.requestAnimationFrame(() => {
+        if (state.mode !== "library" || document.querySelector("[data-library-rename-input]")) return;
+        window.focus();
+        $("libraryShell")?.focus({preventScroll: true});
+      });
+    }
+
     function cancelLibraryEntryRename() {
       state.libraryRenamingFolderId = 0;
       state.libraryRenamingItemId = 0;
       renderLibrary();
+      restoreLibraryKeyboardFocus();
     }
 
     function cancelLibraryFolderRename() {
@@ -22017,15 +22029,22 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename entry");
+      if (type === "item") {
+        if (!data.item?.id) throw new Error("Renamed Library item was not returned");
+        upsertLibraryItemLocal(data.item);
+      } else {
+        applyLibrarySnapshot(data);
+      }
       state.libraryRenamingFolderId = 0;
       state.libraryRenamingItemId = 0;
-      applyLibrarySnapshot(data);
       const renamedItem = type === "item" ? libraryItemById(entryId) : null;
       const targetParentId = type === "item"
         ? Number(renamedItem?.folder_id || state.libraryRootId)
         : Number(data.folder?.parent_id || parentFolderId(entryId));
       setLibraryColumnSelection(targetParentId, {type, id: entryId});
       renderLibrary();
+      updateLibraryActivityStatus("Rename complete.", {live: false});
+      restoreLibraryKeyboardFocus();
     }
 
     async function commitLibraryFolderRename(folderId, name) {
@@ -26457,16 +26476,24 @@ INDEX_HTML = """<!doctype html>
       const isSpecialFolder = type === "folder" && (entry.is_unsorted || entry.is_recycle);
       const isPathParent = type === "folder" && pathFolderIds.has(id) && !selected;
       const folderColor = type === "folder" ? libraryFolderTextColor(entry) : "";
+      const renaming = (type === "folder" && Number(state.libraryRenamingFolderId || 0) === id)
+        || (type === "item" && Number(state.libraryRenamingItemId || 0) === id);
+      const rowTag = renaming ? "div" : "button";
       const draggable = !(type === "folder" && (entry.protected || id === state.libraryRootId));
+      const rowAttrs = renaming
+        ? ""
+        : `type="button" draggable="${draggable ? "true" : "false"}"`;
       const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       const title = type === "item" ? libraryPaperTableTitle(entry, paper, name) : name;
+      const titleMarkup = renaming
+        ? `<input class="library-rename-input" data-library-rename-input data-library-rename-type="${type}" data-library-rename-id="${id}" value="${escapeAttr(name)}">`
+        : publicationTitleMarkup(title);
       const authors = type === "item" ? libraryPaperAuthorsText(paper, entry, name) : "";
       const year = type === "item" ? libraryPaperYearText(paper, entry, name) : "";
       const journal = type === "item" ? libraryPaperJournalText(paper) : "Folder";
       return `
-        <button class="library-row library-table-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
-          type="button"
-          draggable="${draggable ? "true" : "false"}"
+        <${rowTag} class="library-row library-table-row${rangeSelected ? " range-selected" : ""}${selected && !rangeSelected ? " active" : ""}${isPathParent ? " path-parent" : ""}${isSpecialFolder ? " special-folder" : ""}"
+          ${rowAttrs}
           data-library-type="${type}"
           data-library-id="${id}"
           data-library-parent-folder="${parentFolderId}"
@@ -26474,12 +26501,12 @@ INDEX_HTML = """<!doctype html>
           aria-selected="${selected || rangeSelected ? "true" : "false"}">
           <span class="library-table-title-cell" ${folderColor ? `style="color:${escapeAttr(folderColor)}"` : ""}>
             <span class="library-entry-icon ${iconClass}${nativeDragAttrs ? " native-file-drag-handle" : ""}"${iconStyle} ${nativeDragAttrs} aria-hidden="true"></span>
-            <span class="library-table-title-text">${publicationTitleMarkup(title)}</span>
+            <span class="library-table-title-text">${titleMarkup}</span>
           </span>
           <span class="library-table-cell" title="${escapeAttr(authors)}">${escapeHtml(authors)}</span>
           <span class="library-table-cell year">${escapeHtml(year)}</span>
           <span class="library-table-cell" title="${escapeAttr(journal)}">${escapeHtml(journal)}</span>
-        </button>
+        </${rowTag}>
       `;
     }
 
@@ -28916,11 +28943,12 @@ INDEX_HTML = """<!doctype html>
             cancelLibraryEntryRename();
             return;
           }
+          renameInput.disabled = true;
+          updateLibraryActivityStatus("Renaming...", {live: true, clear: false});
           try {
             await commitLibraryEntryRename(renameInput.dataset.libraryRenameType, Number(renameInput.dataset.libraryRenameId), renameInput.value);
           } catch (error) {
-            state.libraryRenamingFolderId = 0;
-            state.libraryRenamingItemId = 0;
+            updateLibraryActivityStatus(`Rename failed: ${error.message || "Unknown error"}`, {live: false, clear: false});
             renderLibrary();
           }
         };
@@ -30467,7 +30495,6 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryKeydown(event) {
       if (state.mode !== "library") return false;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
       const keyAliases = {
         "Up": "ArrowUp",
         "Down": "ArrowDown",
@@ -30476,6 +30503,14 @@ INDEX_HTML = """<!doctype html>
         "Spacebar": " "
       };
       const key = keyAliases[event.key] || event.key;
+      const renameActive = Boolean(state.libraryRenamingFolderId || state.libraryRenamingItemId);
+      if (key === "Escape" && renameActive) {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelLibraryEntryRename();
+        return true;
+      }
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
       if (state.libraryTab === "my-publications") {
         const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Delete", "Backspace"].includes(key);
         if (!handled) return false;
