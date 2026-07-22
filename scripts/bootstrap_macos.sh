@@ -6,6 +6,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PORT="${PAPER_MONITOR_PORT:-8765}"
 HOST="${PAPER_MONITOR_HOST:-127.0.0.1}"
 URL="http://$HOST:$PORT"
+HEALTH_URL="$URL/api/health"
 LOG_DIR="$PROJECT_DIR/logs"
 VENV_DIR="$PROJECT_DIR/.venv"
 PYTHON_BIN="$VENV_DIR/bin/python"
@@ -31,17 +32,16 @@ if [ ! -x "$PYTHON_BIN" ]; then
   "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
 fi
 
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-  "$PYTHON_BIN" -m ensurepip --upgrade
-fi
-
 if [ ! -f "$REQ_STAMP" ] || [ "$REQ_FILE" -nt "$REQ_STAMP" ]; then
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    "$PYTHON_BIN" -m ensurepip --upgrade
+  fi
   echo "Installing Journal Monitor dependencies..."
   "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
   touch "$REQ_STAMP"
 fi
 
-if ! /usr/bin/curl -fsS "$URL" 2>/dev/null | /usr/bin/grep -q "Journal Monitor"; then
+if ! /usr/bin/curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
   echo "Starting Journal Monitor UI at $URL"
   exec "$PYTHON_BIN" -m paper_monitor ui --host "$HOST" --port "$PORT" --open
 fi

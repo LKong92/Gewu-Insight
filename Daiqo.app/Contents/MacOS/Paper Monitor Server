@@ -8,6 +8,7 @@ LOG_FILE="$LOG_DIR/paper_monitor_launcher.log"
 PORT="${PAPER_MONITOR_PORT:-8765}"
 HOST="${PAPER_MONITOR_HOST:-127.0.0.1}"
 URL="http://$HOST:$PORT"
+HEALTH_URL="$URL/api/health"
 VENV_DIR="$PROJECT_DIR/.venv"
 PYTHON_BIN="$VENV_DIR/bin/python"
 REQ_FILE="$PROJECT_DIR/requirements.txt"
@@ -75,18 +76,17 @@ if [ ! -x "$PYTHON_BIN" ]; then
   run_or_fail "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
 fi
 
-if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
-  echo "Installing pip into virtual environment" >>"$LOG_FILE"
-  run_or_fail "$PYTHON_BIN" -m ensurepip --upgrade
-fi
-
 if [ ! -f "$REQ_STAMP" ] || [ "$REQ_FILE" -nt "$REQ_STAMP" ]; then
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    echo "Installing pip into virtual environment" >>"$LOG_FILE"
+    run_or_fail "$PYTHON_BIN" -m ensurepip --upgrade
+  fi
   echo "Installing Journal Monitor dependencies..." >>"$LOG_FILE"
   run_or_fail "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
   /usr/bin/touch "$REQ_STAMP"
 fi
 
-if /usr/bin/curl -fsS "$URL" 2>/dev/null | /usr/bin/grep -q "Journal Monitor"; then
+if /usr/bin/curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
   echo "UI is already running at $URL" >>"$LOG_FILE"
   exit 0
 fi

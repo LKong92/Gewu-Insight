@@ -38,7 +38,8 @@ class LibraryRenameUiTests(unittest.TestCase):
             "async function commitLibraryFolderRename", 1
         )[0]
         self.assertIn("upsertLibraryItemLocal(data.item);", commit)
-        self.assertIn("applyLibrarySnapshot(data);", commit)
+        self.assertIn("upsertLibraryFolderLocal(data.folder);", commit)
+        self.assertIn("snapshot: false", commit)
 
 
 if __name__ == "__main__":

@@ -59,10 +59,10 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			FOs2boeeInXLQpOaZgX8QAvbdKM=
+			L3E8OV+gzXVzSax5ObeCNnLU46A=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"fce53e9a076827080a8c10580f1422827ea5edd2" or cdhash H"14eb366e879e2275cb42939a6605fc400bdb74a3"</string>
+			<string>cdhash H"ea51c5a0624497ccf3e37e97e8ce840aa8184927" or cdhash H"2f713c395fa0cd757349ac7939b7823672d4e3a0"</string>
 		</dict>
 		<key>Resources/PaperMonitor.icns</key>
 		<dict>

@@ -464,12 +464,13 @@
 }
 
 - (void)checkServerWithCompletion:(void (^)(BOOL available))completion {
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:self.url];
+    NSURL *healthURL = [self.url URLByAppendingPathComponent:@"api/health"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:healthURL];
     request.timeoutInterval = 0.7;
     [[[NSURLSession sharedSession] dataTaskWithRequest:request
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSString *body = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"";
-        BOOL available = (error == nil && [body containsString:@"Journal Monitor"]);
+        NSHTTPURLResponse *httpResponse = [response isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse *)response : nil;
+        BOOL available = (error == nil && httpResponse.statusCode == 200 && data.length > 0);
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(available);
         });

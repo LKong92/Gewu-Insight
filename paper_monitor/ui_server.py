@@ -366,6 +366,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
+            if parsed.path == "/api/health":
+                self.send_json({"ok": True})
+                return
             if parsed.path == "/":
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
                 return
@@ -446,6 +449,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/path":
                 self.handle_library_path(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/paper-locations":
+                self.handle_library_paper_locations(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/library":
                 self.handle_library(parse_qs(parsed.query))
@@ -1089,6 +1095,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json(snapshot)
 
+    def handle_library_paper_locations(self, query: dict[str, list[str]]) -> None:
+        paper_id = str(first(query, "paper_id") or "").strip()
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+            if not paper:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+                return
+            rows = storage.conn.execute(
+                "SELECT * FROM library_items WHERE paper_id = ? ORDER BY id",
+                (paper_id,),
+            ).fetchall()
+            items = [library_item_to_api(dict(row), paper) for row in rows]
+            navigation = library_navigation_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json({"items": items, **navigation})
+
     def handle_my_publications(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
         try:
@@ -1313,10 +1340,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             publication = storage.set_my_publication_starred(publication_id=publication_id, starred=bool(payload.get("starred")))
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        self.send_json({"publication": my_publication_to_api(publication)})
 
     def handle_my_publication_head(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1329,10 +1355,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not publication:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
                 return
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        self.send_json({"publication": my_publication_to_api(publication)})
 
     def handle_my_publication_roles(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1347,10 +1372,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not publication:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
                 return
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        self.send_json({"publication": my_publication_to_api(publication)})
 
     def handle_my_publication_author_marks(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1368,10 +1392,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not publication:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Publication not found")
                 return
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        self.send_json({"publication": my_publication_to_api(publication)})
 
     def handle_my_publication_manual_metadata(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
@@ -1409,10 +1432,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             })
             updated = storage.refresh_paper_metadata(publication["paper_id"], merge_refreshed_metadata(publication, paper))
             publication = storage.get_my_publication(publication_id=publication_id) if updated else publication
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        self.send_json({"publication": my_publication_to_api(publication)})
 
     def handle_export_my_publications(self, query: dict[str, list[str]]) -> None:
         export_format = clean_text(first(query, "format") or "docx").lower()
@@ -1494,10 +1516,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             storage.delete_my_publication(publication_id=publication_id)
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publications": publications})
+        self.send_json({"deleted_publication_id": publication_id})
 
     def handle_reorder_my_publications(self, payload: dict[str, Any]) -> None:
         publication_ids: list[int] = []
@@ -1515,10 +1536,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             ordered = [publication_id for publication_id in publication_ids if publication_id in existing]
             ordered.extend(publication_id for publication_id in existing_order if publication_id not in ordered)
             storage.reorder_my_publications(ordered)
-            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
-        self.send_json({"publications": publications})
+        self.send_json({"publication_ids": ordered})
 
     def handle_set_my_publication_name(self, payload: dict[str, Any]) -> None:
         my_name = " ".join(str(payload.get("name") or "").split())
@@ -1760,8 +1780,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
                 raise ValueError("Space root folder not found")
+            item = None
             if paper_id:
-                storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
+                item = storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
                 reconcile_paper_pdf_storage(
                     storage,
                     paper_id,
@@ -1769,13 +1790,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 )
                 sync_alias_for_library_item(storage, paper_id, root_folder_id)
             save_library_workspace_tabs(storage, tabs)
-            snapshot = library_snapshot(storage)
+            stored_paper = storage.get_paper(paper_id) if paper_id else None
+            item_api = library_item_to_api(item, stored_paper) if item and stored_paper else None
+            paper_api = paper_to_api(stored_paper) if stored_paper else None
+            navigation = library_navigation_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"paper_id": paper_id, **snapshot})
+        self.send_json({"paper_id": paper_id, "item": item_api, "paper": paper_api, **navigation})
 
     def handle_choose_library_import_folder(self) -> None:
         try:
@@ -1978,13 +2002,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             result = delete_library_import_job_data(storage, job_id)
-            snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"delete_result": result, **snapshot})
+        self.send_json({"delete_result": result, "refresh_required": True})
 
     def handle_library_import_folder(self, payload: dict[str, Any]) -> None:
         folder_path = Path(str(payload.get("folder_path") or "")).expanduser()
@@ -2018,13 +2041,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     report_path=report_path,
                     library_item_name="filename",
                 )
-                snapshot = library_snapshot(storage)
             finally:
                 storage.close()
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             return
-        self.send_json({"import_result": summarize_import_result(result), "inventory_path": str(inventory_path), **snapshot})
+        self.send_json({
+            "import_result": summarize_import_result(result),
+            "inventory_path": str(inventory_path),
+            "refresh_required": True,
+        })
 
     def handle_library_import_paths(self, payload: dict[str, Any]) -> None:
         raw_paths = payload.get("paths")
@@ -2077,21 +2103,25 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     library_item_name="filename",
                     library_root_folder_id=target_folder_id,
                 )
-                snapshot = library_snapshot(storage)
             finally:
                 storage.close()
         except Exception as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             return
-        self.send_json({"import_result": summarize_import_result(result), "inventory_path": str(inventory_path), **snapshot})
+        self.send_json({
+            "import_result": summarize_import_result(result),
+            "inventory_path": str(inventory_path),
+            "refresh_required": True,
+        })
 
     def handle_create_library_folder(self, payload: dict[str, Any]) -> None:
         name = str(payload.get("name") or "New Folder")
         parent_id = int(payload.get("parent_id") or 1)
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.create_library_folder(parent_id=parent_id, name=name)
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
         finally:
             storage.close()
@@ -2100,12 +2130,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_rename_library_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
         name = str(payload.get("name") or "")
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             pdf_move_plan = folder_tree_pdf_move_plan(storage, folder_id) if storage.get_library_folder(folder_id) else []
             folder = storage.rename_library_folder(folder_id=folder_id, name=name)
             apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -2117,10 +2148,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_color_library_folder(self, payload: dict[str, Any]) -> None:
         folder_id = int(payload.get("folder_id") or 0)
         color = str(payload.get("color") or "")
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.set_library_folder_color(folder_id=folder_id, color=color)
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
             folder_api = library_folder_to_api(folder, storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -2319,10 +2351,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_rename_library_pdf(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or 0)
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             result = rename_library_item_pdf_from_metadata(storage, item_id)
-            snapshot = library_snapshot(storage)
+            item = storage.get_library_item(item_id)
+            paper = storage.get_paper(str((item or {}).get("paper_id") or result.get("paper_id") or ""))
+            item_api = library_item_to_api(item, paper) if item and paper else None
+            paper_api = paper_to_api(paper) if paper else None
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except FileNotFoundError as exc:
             self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
             return
@@ -2334,7 +2371,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"renamed": result, **snapshot})
+        self.send_json({"renamed": result, "item": item_api, "paper": paper_api, **snapshot})
 
     def handle_move_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -2379,7 +2416,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 else:
                     moved = storage.move_library_folder(folder_id=folder_id, parent_id=target_folder_id)
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
-                moved_response = dict(moved or {})
+                moved_response = library_folder_to_api(moved, storage) if moved else {}
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "type must be item or folder")
                 return
@@ -2397,6 +2434,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         parent_id = int(payload.get("parent_folder_id") or 1)
         target_id = int(payload.get("target_id") or 0)
         position = str(payload.get("position") or "before")
+        include_snapshot = payload.get("snapshot", True) is not False
         storage = Storage(self.configured_db_path)
         try:
             reordered = storage.reorder_library_entry(
@@ -2406,13 +2444,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 target_id=target_id,
                 position=position,
             )
-            snapshot = library_snapshot(storage)
+            if entry_type == "folder":
+                reordered_api = library_folder_to_api(reordered, storage)
+            else:
+                paper = storage.get_paper(str((reordered or {}).get("paper_id") or ""))
+                reordered_api = library_item_to_api(reordered, paper) if reordered and paper else dict(reordered or {})
+            snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"reordered": dict(reordered or {}), **snapshot})
+        self.send_json({"reordered": reordered_api, **snapshot})
 
     def handle_delete_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -2579,7 +2622,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
                 moved = storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
-                return {"type": "folder", "id": entry_id, "mode": "trashed", "moved": dict(moved or {}), "recycle_folder_id": recycle_id}
+                moved_api = library_folder_to_api(moved, storage) if moved else {}
+                return {"type": "folder", "id": entry_id, "mode": "trashed", "moved": moved_api, "recycle_folder_id": recycle_id}
         raise ValueError("type must be item or folder")
 
     def handle_delete_library_item_file(self, payload: dict[str, Any]) -> None:
@@ -2708,6 +2752,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             recovered = self.recover_library_entry_in_storage(storage, entry_type, entry_id)
+            if entry_type == "folder" and recovered:
+                recovered = library_folder_to_api(recovered, storage)
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -2782,6 +2828,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
         doi = normalize_publication_doi(identifier)
         arxiv_id = normalize_arxiv_identifier(identifier)
+        include_snapshot = payload.get("snapshot", True) is not False
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
@@ -2828,7 +2875,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not normalized and not parse_semantic_scholar_json(paper):
                 self.send_error_json(HTTPStatus.NOT_FOUND, f"No publication found for this {lookup_kind}: {lookup_label}")
                 return
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
@@ -2836,6 +2883,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_extract_library_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
+        include_snapshot = payload.get("snapshot", True) is not False
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
@@ -2865,7 +2913,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if not refreshed:
                 refreshed = storage.get_paper(paper_id)
-            snapshot = library_snapshot(storage)
+            snapshot = library_snapshot(storage) if include_snapshot else {}
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         finally:
             storage.close()
@@ -2886,13 +2934,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
+            pasted_tree = (
+                library_folder_tree_snapshot(storage, int((pasted or {}).get("id") or 0))
+                if entry_type == "folder" and pasted
+                else None
+            )
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
             storage.close()
-        self.send_json({"pasted": dict(pasted or {}), **snapshot})
+        self.send_json({"pasted": dict(pasted or {}), "pasted_tree": pasted_tree, **snapshot})
 
     def handle_paste_library_entries(self, payload: dict[str, Any]) -> None:
         target_folder_id = int(payload.get("target_folder_id") or 1)
@@ -2910,7 +2963,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
                 pasted = self.paste_library_entry_in_storage(storage, entry_type, entry_id, target_folder_id)
-                pasted_entries.append({"type": entry_type, "source_id": entry_id, **dict(pasted or {})})
+                pasted_entry = {"type": entry_type, "source_id": entry_id, **dict(pasted or {})}
+                if entry_type == "folder" and pasted:
+                    pasted_entry["tree"] = library_folder_tree_snapshot(storage, int(pasted.get("id") or 0))
+                pasted_entries.append(pasted_entry)
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -6263,6 +6319,26 @@ def library_folder_children_snapshot(storage: Storage, folder_id: int) -> dict[s
         "folders": [library_folder_to_api(child, storage) for child in storage.list_library_child_folders(int(folder_id))],
         "items": [library_item_to_api(item, item) for item in storage.list_library_items_for_folder(int(folder_id))],
     }
+
+
+def library_folder_tree_snapshot(storage: Storage, folder_id: int) -> dict[str, Any]:
+    root = storage.get_library_folder(int(folder_id))
+    if not root:
+        raise ValueError("Library folder not found")
+    folders: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    pending = [root]
+    while pending:
+        folder = pending.pop()
+        current_id = int(folder.get("id") or 0)
+        folders.append(library_folder_to_api(folder, storage))
+        children = storage.list_library_child_folders(current_id)
+        pending.extend(reversed(children))
+        items.extend(
+            library_item_to_api(item, item)
+            for item in storage.list_library_items_for_folder(current_id)
+        )
+    return {"root_folder_id": int(folder_id), "folders": folders, "items": items}
 
 
 def library_bootstrap_snapshot(storage: Storage) -> dict[str, Any]:
@@ -21822,7 +21898,28 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyMyPublications(data) {
-      state.myPublications = Array.isArray(data.publications) ? data.publications : [];
+      if (Array.isArray(data.publications)) {
+        state.myPublications = data.publications;
+      } else if (data.publication?.id) {
+        const publicationId = Number(data.publication.id);
+        const index = state.myPublications.findIndex((entry) => Number(entry.id) === publicationId);
+        const existing = index >= 0 ? state.myPublications[index] : null;
+        const publication = existing
+          ? {...existing, ...data.publication, paper: {...(existing.paper || {}), ...(data.publication.paper || {})}}
+          : data.publication;
+        if (index >= 0) state.myPublications[index] = publication;
+        else state.myPublications.push(publication);
+      }
+      const deletedPublicationId = Number(data.deleted_publication_id || 0);
+      if (deletedPublicationId) {
+        state.myPublications = state.myPublications.filter((entry) => Number(entry.id) !== deletedPublicationId);
+      }
+      if (Array.isArray(data.publication_ids)) {
+        const order = new Map(data.publication_ids.map((id, index) => [Number(id), index]));
+        state.myPublications = state.myPublications.map((entry) => (
+          order.has(Number(entry.id)) ? {...entry, sort_order: order.get(Number(entry.id))} : entry
+        ));
+      }
       state.myPublicationsLoaded = true;
       state.myPublicationName = data.myName || state.myPublicationName || "";
       if (Object.prototype.hasOwnProperty.call(data || {}, "scholarProfile")) {
@@ -22056,8 +22153,30 @@ INDEX_HTML = """<!doctype html>
       if (!folder?.id) return;
       const id = Number(folder.id);
       const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
-      if (index >= 0) state.libraryFolders[index] = folder;
+      if (index >= 0) state.libraryFolders[index] = {...state.libraryFolders[index], ...folder};
       else state.libraryFolders.push(folder);
+      rebuildLibraryIndexes();
+    }
+
+    function applyLibraryTreeSnapshotLocal(tree) {
+      const folders = Array.isArray(tree?.folders) ? tree.folders : [];
+      const items = Array.isArray(tree?.items) ? tree.items : [];
+      const folderMap = new Map(state.libraryFolders.map((folder) => [Number(folder.id), folder]));
+      const itemMap = new Map(state.libraryItems.map((item) => [Number(item.id), item]));
+      folders.forEach((folder) => {
+        if (!folder?.id) return;
+        const id = Number(folder.id);
+        folderMap.set(id, {...(folderMap.get(id) || {}), ...folder});
+        state.libraryLoadedFolderIds.add(id);
+      });
+      items.forEach((item) => {
+        if (!item?.id) return;
+        const id = Number(item.id);
+        const existing = itemMap.get(id) || {};
+        itemMap.set(id, {...existing, ...item, paper: {...(existing.paper || {}), ...(item.paper || {})}});
+      });
+      state.libraryFolders = [...folderMap.values()];
+      state.libraryItems = [...itemMap.values()];
       rebuildLibraryIndexes();
     }
 
@@ -22101,6 +22220,23 @@ INDEX_HTML = """<!doctype html>
       state.libraryFolders = state.libraryFolders.filter((entry) => !folderIds.has(Number(entry.id || 0)));
       folderIds.forEach((id) => state.libraryLoadedFolderIds.delete(Number(id)));
       rebuildLibraryIndexes();
+    }
+
+    function applyLocalLibraryDeleteResult(result) {
+      const type = String(result?.type || "");
+      const id = Number(result?.id || 0);
+      if (!type || !id) return;
+      if (type === "folder") {
+        if (result.mode === "removed") removeLibraryFolderTreeLocal(id);
+        else if (result.moved?.id) upsertLibraryFolderLocal(result.moved);
+        return;
+      }
+      const sourceItem = libraryItemById(id);
+      const moved = result.moved || {};
+      if (moved?.id) applyLocalLibraryItemMove(id, Number(moved.folder_id || result.recycle_folder_id || libraryRecycleFolderId()), moved);
+      else if (result.mode === "trashed") applyLocalLibraryItemMove(id, Number(result.recycle_folder_id || libraryRecycleFolderId()), moved);
+      else if (sourceItem) removeLibraryItemLocal(sourceItem.id);
+      if (result.paper) updateLocalPaperReferences(result.paper);
     }
 
     function clearLibraryFolderContentsLocal(folderId) {
@@ -22781,11 +22917,11 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/library/folders", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({parent_id: parentId || state.libraryActiveFolderId || state.libraryRootId, name: "New Folder"})
+        body: JSON.stringify({parent_id: parentId || state.libraryActiveFolderId || state.libraryRootId, name: "New Folder", snapshot: false})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not create folder");
-      applyLibrarySnapshot(data);
+      upsertLibraryFolderLocal(data.folder);
       const targetParentId = Number(data.folder?.parent_id || parentId || state.libraryActiveFolderId || state.libraryRootId);
       if (data.folder?.id) setLibraryColumnSelection(targetParentId, {type: "folder", id: Number(data.folder.id)});
       renderLibrary();
@@ -22839,7 +22975,7 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch(type === "item" ? "/api/library/items/rename" : "/api/library/folders/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(type === "item" ? {item_id: entryId, name} : {folder_id: entryId, name})
+        body: JSON.stringify(type === "item" ? {item_id: entryId, name} : {folder_id: entryId, name, snapshot: false})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename entry");
@@ -22847,7 +22983,7 @@ INDEX_HTML = """<!doctype html>
         if (!data.item?.id) throw new Error("Renamed Library item was not returned");
         upsertLibraryItemLocal(data.item);
       } else {
-        applyLibrarySnapshot(data);
+        upsertLibraryFolderLocal(data.folder);
       }
       state.libraryRenamingFolderId = 0;
       state.libraryRenamingItemId = 0;
@@ -22875,11 +23011,15 @@ INDEX_HTML = """<!doctype html>
       rebuildLibraryIndexes();
     }
 
-    async function refreshLibrarySnapshotForNavigation() {
-      const res = await fetch("/api/library");
+    async function refreshLibrarySnapshotForNavigation(paperId = "") {
+      const url = paperId
+        ? `/api/library/paper-locations?paper_id=${encodeURIComponent(paperId)}`
+        : "/api/library";
+      const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not load Library");
-      applyLibrarySnapshot(data);
+      applyLibraryNavigationSnapshot(data);
+      (Array.isArray(data.items) ? data.items : []).forEach(upsertLibraryItemLocal);
       return data;
     }
 
@@ -22966,7 +23106,7 @@ INDEX_HTML = """<!doctype html>
         button.textContent = "Opening...";
       }
       try {
-        await refreshLibrarySnapshotForNavigation();
+        await refreshLibrarySnapshotForNavigation(paperId);
         const item = firstLibraryItemForPaper(paperId);
         const workspaceIndex = libraryWorkspaceIndexForFolder(Number(item?.folder_id || 0));
         state.libraryTab = workspaceIndex >= 0 ? `workspace-${workspaceIndex}` : "library";
@@ -23282,19 +23422,15 @@ INDEX_HTML = """<!doctype html>
 
     async function moveLibraryEntry(type, id, targetFolderId) {
       return withLibraryActivityStatus("Moving...", "Move complete.", async () => {
-        const fastItemMove = type === "item";
         const res = await fetch("/api/library/move", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, target_folder_id: targetFolderId, snapshot: !fastItemMove})
+          body: JSON.stringify({type, id, target_folder_id: targetFolderId, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not move library entry");
-        if (fastItemMove) {
-          applyLocalLibraryItemMove(id, targetFolderId, data.moved || null);
-        } else {
-          applyLibrarySnapshot(data);
-        }
+        if (type === "item") applyLocalLibraryItemMove(id, targetFolderId, data.moved || null);
+        else upsertLibraryFolderLocal(data.moved);
         setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), {type, id: Number(data.moved?.id || id)});
         renderLibrary();
       });
@@ -23307,21 +23443,22 @@ INDEX_HTML = """<!doctype html>
       if (!validEntries.length) return;
       if (validEntries.length === 1) return moveLibraryEntry(validEntries[0].type, validEntries[0].id, targetFolderId);
       return withLibraryActivityStatus(`Moving ${validEntries.length} items...`, "Move complete.", async () => {
-        const fastItemMove = validEntries.every((entry) => entry.type === "item");
         let finalSelection = validEntries[validEntries.length - 1];
         for (const entry of validEntries) {
           const res = await fetch("/api/library/move", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({type: entry.type, id: entry.id, target_folder_id: targetFolderId, snapshot: !fastItemMove})
+            body: JSON.stringify({type: entry.type, id: entry.id, target_folder_id: targetFolderId, snapshot: false})
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not move library entry");
-          if (fastItemMove) {
+          if (entry.type === "item") {
             const moved = applyLocalLibraryItemMove(entry.id, targetFolderId, data.moved || null);
             if (moved?.id) finalSelection = {type: "item", id: Number(moved.id)};
+          } else {
+            upsertLibraryFolderLocal(data.moved);
+            if (data.moved?.id) finalSelection = {type: "folder", id: Number(data.moved.id)};
           }
-          else applyLibrarySnapshot(data);
         }
         setLibraryColumnSelection(Number(targetFolderId || state.libraryRootId), finalSelection);
         clearLibraryRangeSelection();
@@ -23334,11 +23471,12 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/reorder", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, parent_folder_id: parentFolderId, target_id: targetId, position})
+          body: JSON.stringify({type, id, parent_folder_id: parentFolderId, target_id: targetId, position, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not reorder library entry");
-        applyLibrarySnapshot(data);
+        if (type === "item") upsertLibraryItemLocal(data.reordered);
+        else upsertLibraryFolderLocal(data.reordered);
         setLibraryColumnSelection(Number(parentFolderId || state.libraryRootId), {type, id: Number(data.reordered?.id || id)});
         renderLibrary();
       });
@@ -23348,11 +23486,11 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/library/folders/color", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({folder_id: folderId, color})
+        body: JSON.stringify({folder_id: folderId, color, snapshot: false})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not color folder");
-      applyLibrarySnapshot(data);
+      upsertLibraryFolderLocal(data.folder);
       setLibraryColumnSelection(parentFolderId(folderId), {type: "folder", id: Number(data.folder?.id || folderId)});
       renderLibrary();
     }
@@ -23385,31 +23523,19 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("this Recycle item", deletePreview))) return;
       return withLibraryActivityStatus("Deleting...", "Delete complete.", async () => {
-        const fastDelete = type === "item" || (type === "folder" && requiresRecycleConfirmation);
         const parentId = type === "item"
           ? Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId)
           : parentFolderId(id);
-        const sourceItem = type === "item" ? libraryItemById(id) : null;
         const deletedEntry = entry;
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastDelete})
+          body: JSON.stringify({type, id, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
-        if (type === "item") {
-          const moved = data.deleted?.moved || {};
-          if (moved?.id) applyLocalLibraryItemMove(id, Number(moved.folder_id || data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
-          else if (data.deleted?.mode === "trashed") applyLocalLibraryItemMove(id, Number(data.deleted?.recycle_folder_id || libraryRecycleFolderId()), moved);
-          else if (sourceItem) removeLibraryItemLocal(sourceItem.id);
-          if (data.deleted?.paper) updateLocalPaperReferences(data.deleted.paper);
-        } else if (fastDelete) {
-          removeLibraryFolderTreeLocal(id);
-        } else {
-          applyLibrarySnapshot(data);
-        }
+        applyLocalLibraryDeleteResult(data.deleted);
         selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
         renderLibrary();
       });
@@ -23570,29 +23696,16 @@ INDEX_HTML = """<!doctype html>
         : {requires_confirmation: false};
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion(`${entriesToDelete.length} selected Recycle items`, deletePreview))) return;
       return withLibraryActivityStatus(`Deleting ${selectedEntries.length} items...`, "Delete complete.", async () => {
-        const fastItemDelete = entriesToDelete.every((entry) => entry.type === "item");
         const parentId = Number(state.libraryRangeFolderId || state.libraryActiveFolderId || state.libraryRootId);
         const entriesBeforeDelete = libraryEntriesForFolder(parentId);
         const res = await fetch("/api/library/delete-batch", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({entries: entriesToDelete, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: !fastItemDelete})
+          body: JSON.stringify({entries: entriesToDelete, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entries");
-        if (fastItemDelete) {
-          (Array.isArray(data.deleted) ? data.deleted : []).forEach((result) => {
-            const originalId = Number(result?.id || 0);
-            const moved = result?.moved || {};
-            if (!originalId) return;
-            if (moved?.id) applyLocalLibraryItemMove(originalId, Number(moved.folder_id || result?.recycle_folder_id || libraryRecycleFolderId()), moved);
-            else if (result?.mode === "trashed") applyLocalLibraryItemMove(originalId, Number(result?.recycle_folder_id || libraryRecycleFolderId()), moved);
-            else removeLibraryItemLocal(originalId);
-            if (result?.paper) updateLocalPaperReferences(result.paper);
-          });
-        } else {
-          applyLibrarySnapshot(data);
-        }
+        (Array.isArray(data.deleted) ? data.deleted : []).forEach(applyLocalLibraryDeleteResult);
         clearLibraryRangeSelection();
         const lastDeleted = selectedEntries[selectedEntries.length - 1];
         selectLibraryDeletionFallback(parentId, lastDeleted, entriesBeforeDelete);
@@ -23622,19 +23735,15 @@ INDEX_HTML = """<!doctype html>
 
     async function recoverLibraryEntry(type, id) {
       if (!type || !id) return;
-      const fastItemRecover = type === "item";
       const res = await fetch("/api/library/recover", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({type, id, snapshot: !fastItemRecover})
+        body: JSON.stringify({type, id, snapshot: false})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not recover library entry");
-      if (fastItemRecover) {
-        applyLocalLibraryItemMove(id, Number(data.recovered?.folder_id || libraryUnsortedFolderId()), data.recovered || null);
-      } else {
-        applyLibrarySnapshot(data);
-      }
+      if (type === "item") applyLocalLibraryItemMove(id, Number(data.recovered?.folder_id || libraryUnsortedFolderId()), data.recovered || null);
+      else upsertLibraryFolderLocal(data.recovered);
       const recoveredId = Number(data.recovered?.id || id);
       if (type === "item") {
         const item = libraryItemById(recoveredId);
@@ -23652,21 +23761,19 @@ INDEX_HTML = """<!doctype html>
       if (!entries.length) return;
       return withLibraryActivityStatus(`Pasting ${entries.length} item${entries.length === 1 ? "" : "s"}...`, "Paste complete.", async () => {
         let lastPasted = null;
-        const fastItemPaste = entries.every((entry) => entry.type === "item");
         const res = await fetch("/api/library/paste-batch", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({entries, target_folder_id: targetFolderId, snapshot: !fastItemPaste})
+          body: JSON.stringify({entries, target_folder_id: targetFolderId, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not paste library entries");
-        if (fastItemPaste) {
-          (Array.isArray(data.pasted) ? data.pasted : []).forEach((pasted, index) => {
+        (Array.isArray(data.pasted) ? data.pasted : []).forEach((pasted, index) => {
+          if (pasted?.type === "folder") applyLibraryTreeSnapshotLocal(pasted.tree);
+          else {
             applyLocalLibraryItemPaste(Number(entries[index]?.id || pasted?.source_id || 0), pasted, targetFolderId);
-          });
-        } else {
-          applyLibrarySnapshot(data);
-        }
+          }
+        });
         const pastedEntries = Array.isArray(data.pasted) ? data.pasted : [];
         const finalPasted = pastedEntries[pastedEntries.length - 1];
         if (finalPasted?.id) {
@@ -23686,11 +23793,12 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/items/rename-pdf", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({item_id: id})
+          body: JSON.stringify({item_id: id, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not rename PDF");
-        applyLibrarySnapshot(data);
+        upsertLibraryItemLocal(data.item);
+        if (data.paper) updatePaperState(data.paper.paper_id || data.renamed?.paper_id, data.paper);
         setLibraryColumnSelection(Number(libraryItemById(id)?.folder_id || state.libraryActiveFolderId || state.libraryRootId), {type: "item", id});
         renderLibrary();
         const name = data.renamed?.filename || "PDF";
@@ -23716,11 +23824,12 @@ INDEX_HTML = """<!doctype html>
           const res = await fetch("/api/library/items/rename-pdf", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({item_id: id})
+            body: JSON.stringify({item_id: id, snapshot: false})
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not rename PDF");
-          applyLibrarySnapshot(data);
+          upsertLibraryItemLocal(data.item);
+          if (data.paper) updatePaperState(data.paper.paper_id || data.renamed?.paper_id, data.paper);
           if (data.renamed?.skipped) skipped += 1;
           else if (data.renamed?.changed) changed += 1;
           lastId = Number(data.renamed?.item_id || id);
@@ -23769,11 +23878,10 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/refresh-metadata", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id, identifier})
+          body: JSON.stringify({paper_id: paper.paper_id, identifier, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        applyLibrarySnapshot(data);
         if (Array.isArray(data.publications)) applyMyPublications(data);
         updatePaperState(paper.paper_id, data.paper);
         state.figureFailures.delete(paper.paper_id);
@@ -23811,11 +23919,10 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/extract-identifier", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id})
+          body: JSON.stringify({paper_id: paper.paper_id, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not extract identifier");
-        applyLibrarySnapshot(data);
         if (Array.isArray(data.publications)) applyMyPublications(data);
         updatePaperState(paper.paper_id, data.paper);
         const input = $("libraryDetailDoiInput");
@@ -25574,7 +25681,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not delete import");
-        applyLibrarySnapshot(data);
+        if (data.refresh_required) await refreshMainLibrarySnapshot("import-deleted");
         const deleted = data.delete_result || {};
         state.libraryImportBusy = false;
         state.libraryImportJobId = "";
@@ -25669,30 +25776,14 @@ INDEX_HTML = """<!doctype html>
 
     async function refreshLibraryAfterImportCompletion() {
       signalLibraryRefresh("loader-completed");
-      const libraryRes = await fetch("/api/library");
-      const libraryData = await libraryRes.json();
-      if (!libraryRes.ok) return;
-      applyLibrarySnapshot(libraryData);
-      if (state.mode === "library") {
-        const wasLoaderOpen = state.libraryLoaderOpen;
-        renderLibrary();
-        state.libraryLoaderOpen = wasLoaderOpen;
-        renderLibraryLoader();
-      }
+      await refreshMainLibrarySnapshot("loader-completed");
+      if (state.libraryLoaderOpen) renderLibraryLoader();
     }
 
     async function refreshLibraryAfterImportReady() {
       signalLibraryRefresh("loader-import-complete");
-      const libraryRes = await fetch("/api/library");
-      const libraryData = await libraryRes.json();
-      if (!libraryRes.ok) return;
-      applyLibrarySnapshot(libraryData);
-      if (state.mode === "library") {
-        const wasLoaderOpen = state.libraryLoaderOpen;
-        renderLibrary();
-        state.libraryLoaderOpen = wasLoaderOpen;
-        renderLibraryLoader();
-      }
+      await refreshMainLibrarySnapshot("loader-import-complete");
+      if (state.libraryLoaderOpen) renderLibraryLoader();
     }
 
     function signalLibraryRefresh(reason = "library-changed") {
@@ -25707,10 +25798,30 @@ INDEX_HTML = """<!doctype html>
       if (IS_STANDALONE_LOADER_WINDOW) return;
       if (state.libraryRefreshPromise) return state.libraryRefreshPromise;
       state.libraryRefreshPromise = (async () => {
-        const res = await fetch("/api/library");
+        const previousTab = state.libraryTab;
+        const res = await fetch("/api/library/bootstrap");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh Library");
-        applyLibrarySnapshot(data);
+        applyLibraryBootstrap(data);
+        if (previousTab?.startsWith("workspace-")) {
+          const index = Number(previousTab.slice("workspace-".length) || 0);
+          const folderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || 0);
+          if (folderId && libraryFolderById(folderId)) {
+            state.libraryTab = previousTab;
+            state.libraryActiveFolderId = folderId;
+            state.libraryCurrentFolderId = folderId;
+            state.librarySelection = {type: "folder", id: folderId};
+          }
+        } else if (previousTab?.startsWith("shortcut-")) {
+          const index = Number(previousTab.slice("shortcut-".length) || 0);
+          const folderId = Number(state.libraryShortcutTabs[index]?.folder_id || 0);
+          if (folderId && libraryFolderById(folderId)) {
+            state.libraryTab = previousTab;
+            state.libraryActiveFolderId = folderId;
+            state.libraryCurrentFolderId = folderId;
+            state.librarySelection = {type: "folder", id: folderId};
+          }
+        }
         if (state.mode === "library") {
           renderActiveLibraryTab();
         } else {
@@ -26330,9 +26441,10 @@ INDEX_HTML = """<!doctype html>
 
     async function openLibraryShortcutTab(index) {
       if (!state.libraryFolders.length) {
-        const res = await fetch("/api/library");
+        const res = await fetch("/api/library/bootstrap");
         const data = await res.json();
-        applyLibrarySnapshot(data);
+        if (!res.ok) throw new Error(data.error || "Could not load Library");
+        applyLibraryBootstrap(data);
       }
       const folderId = Number(state.libraryShortcutTabs[index]?.folder_id || 0);
       if (!folderId || !libraryFolderById(folderId)) return;
@@ -26375,11 +26487,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openLibraryWorkspaceTab(index) {
-      if (!state.libraryWorkspaceTabs.length) {
-        const res = await fetch("/api/library");
+      if (!state.libraryFolders.length) {
+        const res = await fetch("/api/library/bootstrap");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not load Library spaces");
-        applyLibrarySnapshot(data);
+        applyLibraryBootstrap(data);
       }
       const folderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || 0);
       if (!folderId || !libraryFolderById(folderId)) return;
@@ -26683,7 +26795,9 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add paper");
-        applyLibrarySnapshot(data);
+        applyLibraryNavigationSnapshot(data);
+        upsertLibraryItemLocal(data.item);
+        if (data.paper) updatePaperState(data.paper.paper_id || data.paper_id, data.paper);
         const rootFolderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || libraryDisplayRootId());
         const added = state.libraryItems.find((item) => String(item.paper_id || "") === String(data.paper_id || "") && Number(item.folder_id) === rootFolderId);
         if (added) {
@@ -28511,11 +28625,11 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/delete", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({type: "item", id: itemId})
+          body: JSON.stringify({type: "item", id: itemId, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
-        applyLibrarySnapshot(data);
+        applyLocalLibraryDeleteResult(data.deleted);
         const previousItem = previousSelection?.type === "item" ? libraryItemById(previousSelection.id) : null;
         if (previousItem) {
           setLibraryColumnSelection(Number(previousItem.folder_id || state.libraryRootId), previousSelection);

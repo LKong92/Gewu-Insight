@@ -579,11 +579,12 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertTrue(source.exists())
 
     def test_embedded_recycle_item_delete_uses_incremental_state_update(self) -> None:
-        self.assertIn('const fastDelete = type === "item" || (type === "folder" && requiresRecycleConfirmation);', ui_server.INDEX_HTML)
+        self.assertIn("function applyLocalLibraryDeleteResult(result)", ui_server.INDEX_HTML)
+        self.assertIn("applyLocalLibraryDeleteResult(data.deleted);", ui_server.INDEX_HTML)
         self.assertIn('snapshot: false', ui_server.INDEX_HTML)
         self.assertIn("function updateLocalPaperReferences(paper)", ui_server.INDEX_HTML)
         self.assertIn("if (rawMoved?.paper) updateLocalPaperReferences(rawMoved.paper);", ui_server.INDEX_HTML)
-        self.assertIn('const fastItemRecover = type === "item";', ui_server.INDEX_HTML)
+        self.assertIn("else upsertLibraryFolderLocal(data.recovered);", ui_server.INDEX_HTML)
 
 
 if __name__ == "__main__":
