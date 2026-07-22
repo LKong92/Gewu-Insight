@@ -11,6 +11,7 @@ from paper_monitor.ui_server import (
     missing_fetch_journals_for_date,
     missing_theme_group_keys_for_date,
     recommend_theme_keywords,
+    theme_keyword_recommendation_response,
     run_theme_monitor,
     start_fetch_progress,
     start_theme_fetch_progress,
@@ -369,6 +370,30 @@ class ThemeMonitorTest(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 2.0)
         self.assertEqual(result["recommendations"], [])
         self.assertIn("slow_source: timed out", result["errors"])
+
+    def test_large_keyword_candidate_set_is_bounded_before_deduplication(self):
+        candidates = {
+            f"candidate material phase {index}": {
+                "keyword": f"candidate material phase {index}",
+                "score": float(10000 - index),
+                "sources": {"mock_source"},
+            }
+            for index in range(10000)
+        }
+
+        start = time.monotonic()
+        result = theme_keyword_recommendation_response(
+            "Example material",
+            ["Example material"],
+            {"mock_source": 10000},
+            candidates,
+            [],
+            [],
+            24,
+        )
+
+        self.assertLess(time.monotonic() - start, 2.0)
+        self.assertLessEqual(len(result["recommendations"]), 24)
 
 
 if __name__ == "__main__":

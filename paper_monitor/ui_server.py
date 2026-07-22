@@ -108,8 +108,6 @@ JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
-LIBRARY_SHORTCUT_TAB_COUNT = 5
-LIBRARY_WORKSPACE_TAB_COUNT = 3
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
@@ -673,8 +671,29 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/shortcut-tabs":
                 self.handle_set_library_shortcut_tabs(payload)
                 return
+            if parsed.path == "/api/library/shortcut-tabs/add":
+                self.handle_add_library_shortcut_tab(payload)
+                return
+            if parsed.path == "/api/library/shortcut-tabs/remove":
+                self.handle_remove_library_shortcut_tab(payload)
+                return
+            if parsed.path == "/api/library/shortcut-tabs/reorder":
+                self.handle_reorder_library_shortcut_tabs(payload)
+                return
             if parsed.path == "/api/library/shortcut-tabs/rename":
                 self.handle_rename_library_shortcut_tab(payload)
+                return
+            if parsed.path == "/api/library/workspace-tabs/add":
+                self.handle_add_library_workspace_tab(payload)
+                return
+            if parsed.path == "/api/library/workspace-tabs/remove":
+                self.handle_remove_library_workspace_tab(payload)
+                return
+            if parsed.path == "/api/library/workspace-tabs/reorder":
+                self.handle_reorder_library_workspace_tabs(payload)
+                return
+            if parsed.path == "/api/library/workspace-tabs/move-to-library":
+                self.handle_move_library_workspace_to_library(payload)
                 return
             if parsed.path == "/api/library/workspace-tabs/rename":
                 self.handle_rename_library_workspace_tab(payload)
@@ -1025,7 +1044,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_library(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
         try:
-            snapshot = library_snapshot(storage)
+            snapshot = library_navigation_snapshot(storage)
         finally:
             storage.close()
         self.send_json(snapshot)
@@ -1524,54 +1543,171 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"paper_ids": clean_ids})
 
     def handle_set_library_shortcut_tabs(self, payload: dict[str, Any]) -> None:
-        index = int(payload.get("index") or 0)
         folder_id = int(payload.get("folder_id") or 0)
-        if index < 0 or index >= LIBRARY_SHORTCUT_TAB_COUNT:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "shortcut index is out of range")
-            return
         storage = Storage(self.configured_db_path)
         try:
             folder = storage.get_library_folder(folder_id) if folder_id else None
-            if folder_id and (not folder or int(folder.get("id") or 0) == 1):
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "Drop a Library folder onto this shortcut")
-                return
             shortcuts = library_shortcut_tabs(storage)
-            shortcuts[index] = {"folder_id": folder_id, "label": str(folder.get("name") or "") if folder else ""}
-            storage.set_setting("library_shortcut_tabs", json.dumps(shortcuts, ensure_ascii=False))
-            snapshot = library_snapshot(storage)
+            index = library_navigation_tab_index(shortcuts, payload)
+            if not folder or folder_id == 1 or not library_folder_is_within(storage, folder_id, 1):
+                raise ValueError("Drop a main Library folder onto this shortcut")
+            duplicate = next(
+                (tab for tab in shortcuts if int(tab.get("folder_id") or 0) == folder_id and tab is not shortcuts[index]),
+                None,
+            )
+            if duplicate:
+                raise ValueError("This Library folder already has a shortcut")
+            shortcuts[index] = {
+                **shortcuts[index],
+                "folder_id": folder_id,
+                "label": str(folder.get("name") or "Shortcut")[:80],
+            }
+            save_library_shortcut_tabs(storage, shortcuts)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_add_library_shortcut_tab(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            tab = add_library_shortcut_tab(
+                storage,
+                folder_id=int(payload.get("folder_id") or 0),
+                label=str(payload.get("label") or ""),
+            )
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"tab": tab, **snapshot})
+
+    def handle_remove_library_shortcut_tab(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            removed = remove_library_shortcut_tab(storage, payload)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"removed": removed, **snapshot})
+
+    def handle_reorder_library_shortcut_tabs(self, payload: dict[str, Any]) -> None:
+        ordered_tab_ids = payload.get("tab_ids")
+        if not isinstance(ordered_tab_ids, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "tab_ids must be a list")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            tabs = reorder_library_navigation_tabs(library_shortcut_tabs(storage), ordered_tab_ids)
+            save_library_shortcut_tabs(storage, tabs)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
         self.send_json(snapshot)
 
     def handle_rename_library_shortcut_tab(self, payload: dict[str, Any]) -> None:
-        index = int(payload.get("index") or 0)
-        if index < 0 or index >= LIBRARY_SHORTCUT_TAB_COUNT:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "shortcut index is out of range")
-            return
-        label = " ".join(str(payload.get("label") or "").split()) or f"Shortcut {index + 1}"
         storage = Storage(self.configured_db_path)
         try:
             shortcuts = library_shortcut_tabs(storage)
-            current = shortcuts[index] if index < len(shortcuts) else {}
+            index = library_navigation_tab_index(shortcuts, payload)
+            current = shortcuts[index]
+            label = " ".join(str(payload.get("label") or "").split()) or str(current.get("label") or f"Shortcut {index + 1}")
             shortcuts[index] = {
+                "tab_id": str(current.get("tab_id") or new_library_navigation_tab_id("shortcut")),
                 "folder_id": int(current.get("folder_id") or 0),
                 "label": label[:80],
             }
-            storage.set_setting("library_shortcut_tabs", json.dumps(shortcuts, ensure_ascii=False))
-            snapshot = library_snapshot(storage)
+            save_library_shortcut_tabs(storage, shortcuts)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
         self.send_json(snapshot)
 
-    def handle_rename_library_workspace_tab(self, payload: dict[str, Any]) -> None:
-        index = int(payload.get("index") or 0)
-        if index < 0 or index >= LIBRARY_WORKSPACE_TAB_COUNT:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "space index is out of range")
-            return
-        label = " ".join(str(payload.get("label") or "").split()) or f"Space {index + 1}"
+    def handle_add_library_workspace_tab(self, payload: dict[str, Any]) -> None:
         storage = Storage(self.configured_db_path)
         try:
+            tab = add_library_workspace_tab(storage, name=str(payload.get("name") or ""))
+            folder = storage.get_library_folder(int(tab.get("root_folder_id") or 0))
+            snapshot = library_navigation_snapshot(storage)
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"tab": tab, "folder": library_folder_to_api(folder, storage=None, include_native_path=False) if folder else {}, **snapshot})
+
+    def handle_remove_library_workspace_tab(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            removed = remove_library_workspace_tab(storage, payload)
+            snapshot = library_navigation_snapshot(storage)
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"removed": removed, "removed_root_folder_id": int(removed.get("root_folder_id") or 0), **snapshot})
+
+    def handle_reorder_library_workspace_tabs(self, payload: dict[str, Any]) -> None:
+        ordered_tab_ids = payload.get("tab_ids")
+        if not isinstance(ordered_tab_ids, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "tab_ids must be a list")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            tabs = reorder_library_navigation_tabs(library_workspace_tabs(storage), ordered_tab_ids)
+            save_library_workspace_tabs(storage, tabs)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_move_library_workspace_to_library(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            moved = move_library_workspace_to_library(
+                storage,
+                payload,
+                target_folder_id=int(payload.get("target_folder_id") or 1),
+            )
+            folder_api = library_folder_to_api(moved, storage=None, include_native_path=False)
+            snapshot = library_navigation_snapshot(storage)
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({
+            "folder": folder_api,
+            "moved_root_folder_id": int(moved.get("id") or 0),
+            "target_folder_id": int(moved.get("parent_id") or 1),
+            **snapshot,
+        })
+
+    def handle_rename_library_workspace_tab(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            folder_api: dict[str, Any] = {}
             tabs = library_workspace_tabs(storage)
+            index = library_navigation_tab_index(tabs, payload)
+            label = " ".join(str(payload.get("label") or "").split()) or str(tabs[index].get("label") or f"Space {index + 1}")
             tabs[index]["label"] = label[:80]
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if root_folder_id:
@@ -1580,17 +1716,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 apply_folder_tree_pdf_move_plan(storage, pdf_move_plan)
                 tabs[index]["root_folder_id"] = int(folder.get("id") or root_folder_id)
                 tabs[index]["label"] = str(folder.get("name") or label)[:80]
-            storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(tabs), ensure_ascii=False))
-            snapshot = library_snapshot(storage)
+                folder_api = library_folder_to_api(folder, storage=None, include_native_path=False)
+            save_library_workspace_tabs(storage, tabs)
+            snapshot = library_navigation_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
-        self.send_json(snapshot)
+        self.send_json({"folder": folder_api, **snapshot})
 
     def handle_add_library_workspace_doi(self, payload: dict[str, Any]) -> None:
-        index = int(payload.get("index") or 0)
-        if index < 0 or index >= LIBRARY_WORKSPACE_TAB_COUNT:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "space index is out of range")
-            return
         identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
         doi = normalize_publication_doi(identifier)
         arxiv_id = normalize_arxiv_identifier(identifier)
@@ -1613,13 +1749,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            tabs = library_workspace_tabs(storage)
+            index = library_navigation_tab_index(tabs, payload)
             storage.upsert_paper(paper)
             paper_id = str(paper.get("paper_id") or "")
             stored_paper = storage.get_paper(paper_id)
             stored_paper = refresh_pubmed_if_possible(storage, stored_paper, doi=doi, timeout=8, max_retries=1) or stored_paper
             refreshed = refresh_semantic_scholar_if_possible(storage, stored_paper, timeout=8, max_retries=1)
             refresh_ads_if_possible(storage, refreshed or stored_paper or storage.get_paper(paper_id), timeout=8, max_retries=1)
-            tabs = library_workspace_tabs(storage)
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
                 raise ValueError("Space root folder not found")
@@ -1631,7 +1768,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     target_dir=local_copy_dir_for_library_folder(storage, root_folder_id),
                 )
                 sync_alias_for_library_item(storage, paper_id, root_folder_id)
-            storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(tabs), ensure_ascii=False))
+            save_library_workspace_tabs(storage, tabs)
             snapshot = library_snapshot(storage)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -3905,6 +4042,7 @@ INTERMEDIATE_BAND_SOLAR_CELL_RECOMMENDED_KEYWORDS = [
 ]
 
 THEME_KEYWORD_RECOMMENDATION_TIMEOUT_SECONDS = 12
+THEME_KEYWORD_RECOMMENDATION_CANDIDATE_POOL = 288
 THEME_KEYWORD_FETCHER_SUBPROCESS_NAMES = {
     "openalex": "fetch_openalex_keyword_records",
     "crossref": "fetch_crossref_keyword_records",
@@ -4093,6 +4231,8 @@ def theme_keyword_recommendation_response(
             }
         )
     if not curated_only:
+        recommendations.sort(key=lambda item: (-float(item["score"]), len(item["keyword"]), item["keyword"].lower()))
+        recommendations = recommendations[:max(limit * 12, THEME_KEYWORD_RECOMMENDATION_CANDIDATE_POOL)]
         recommendations = remove_redundant_theme_keyword_recommendations(recommendations, existing_keywords)
     recommendations.sort(key=lambda item: (-float(item["score"]), len(item["keyword"]), item["keyword"].lower()))
     return {
@@ -6105,6 +6245,13 @@ def library_snapshot(storage: Storage) -> dict[str, Any]:
     }
 
 
+def library_navigation_snapshot(storage: Storage) -> dict[str, Any]:
+    return {
+        "shortcut_tabs": library_shortcut_tabs(storage),
+        "workspace_tabs": library_workspace_tabs(storage),
+    }
+
+
 def library_folder_children_snapshot(storage: Storage, folder_id: int) -> dict[str, Any]:
     ensure_library_special_folders(storage)
     folder = storage.get_library_folder(int(folder_id))
@@ -7593,60 +7740,389 @@ def run_library_metadata_refresh_job(*, job_id: str, db_path: Path, metadata_mod
         storage.close()
 
 
-def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
-    raw = storage.get_setting("library_shortcut_tabs", "[]")
+def new_library_navigation_tab_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def library_navigation_setting_list(storage: Storage, key: str) -> list[dict[str, Any]]:
+    raw = storage.get_setting(key, "[]")
     try:
         values = json.loads(raw)
     except json.JSONDecodeError:
         values = []
+    if not isinstance(values, list):
+        return []
+    return [dict(item) for item in values if isinstance(item, dict)]
+
+
+def library_shortcut_tabs_to_setting(tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-    for index in range(LIBRARY_SHORTCUT_TAB_COUNT):
-        item = values[index] if isinstance(values, list) and index < len(values) and isinstance(values[index], dict) else {}
+    for tab in tabs:
+        if not isinstance(tab, dict):
+            continue
+        folder_id = int(tab.get("folder_id") or 0)
+        if not folder_id:
+            continue
+        result.append({
+            "tab_id": str(tab.get("tab_id") or new_library_navigation_tab_id("shortcut")),
+            "folder_id": folder_id,
+            "label": " ".join(str(tab.get("label") or "").split())[:80],
+        })
+    return result
+
+
+def library_shortcut_tabs(storage: Storage) -> list[dict[str, Any]]:
+    values = library_navigation_setting_list(storage, "library_shortcut_tabs")
+    result: list[dict[str, Any]] = []
+    seen_tab_ids: set[str] = set()
+    for item in values:
         folder_id = int(item.get("folder_id") or 0)
         folder = storage.get_library_folder(folder_id) if folder_id else None
+        if not folder or folder_id == 1 or not library_folder_is_within(storage, folder_id, 1):
+            continue
+        tab_id = str(item.get("tab_id") or "").strip()
+        if not tab_id or tab_id in seen_tab_ids:
+            tab_id = new_library_navigation_tab_id("shortcut")
+        seen_tab_ids.add(tab_id)
+        label = " ".join(str(item.get("label") or folder.get("name") or "Shortcut").split())
+        result.append({"tab_id": tab_id, "folder_id": folder_id, "label": label[:80]})
+    normalized = library_shortcut_tabs_to_setting(result)
+    if normalized != values:
+        storage.set_setting("library_shortcut_tabs", json.dumps(normalized, ensure_ascii=False))
+    return normalized
+
+
+def workspace_tabs_to_setting(tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for tab in tabs:
+        if not isinstance(tab, dict):
+            continue
+        root_folder_id = int(tab.get("root_folder_id") or 0)
+        if not root_folder_id:
+            continue
+        label = " ".join(str(tab.get("label") or "Space").split()) or "Space"
         result.append({
-            "folder_id": int(folder.get("id") or 0) if folder else 0,
-            "label": str(folder.get("name") or item.get("label") or "") if folder else "",
+            "tab_id": str(tab.get("tab_id") or f"space-{root_folder_id}"),
+            "label": label[:80],
+            "root_folder_id": root_folder_id,
         })
     return result
 
 
 def library_workspace_tabs(storage: Storage) -> list[dict[str, Any]]:
-    raw = storage.get_setting("library_workspace_tabs", "[]")
-    try:
-        values = json.loads(raw)
-    except json.JSONDecodeError:
-        values = []
+    values = library_navigation_setting_list(storage, "library_workspace_tabs")
     result: list[dict[str, Any]] = []
+    seen_root_ids: set[int] = set()
+    seen_tab_ids: set[str] = set()
     changed = False
-    for index in range(LIBRARY_WORKSPACE_TAB_COUNT):
-        item = values[index] if isinstance(values, list) and index < len(values) and isinstance(values[index], dict) else {}
-        label = " ".join(str(item.get("label") or f"Space {index + 1}").split()) or f"Space {index + 1}"
+    for item in values:
         root_folder_id = int(item.get("root_folder_id") or 0)
         folder = storage.get_library_folder(root_folder_id) if root_folder_id else None
-        if not folder:
-            folder = storage.create_library_root_folder(name=label[:80])
-            root_folder_id = int(folder.get("id") or 0)
+        if not folder or folder.get("parent_id") is not None or root_folder_id == 1 or root_folder_id in seen_root_ids:
             changed = True
+            continue
+        tab_id = str(item.get("tab_id") or "").strip() or f"space-{root_folder_id}"
+        if tab_id in seen_tab_ids:
+            tab_id = new_library_navigation_tab_id("space")
+            changed = True
+        seen_tab_ids.add(tab_id)
+        seen_root_ids.add(root_folder_id)
         legacy_paper_ids = [str(paper_id) for paper_id in item.get("paper_ids", []) if paper_id] if isinstance(item.get("paper_ids"), list) else []
         for paper_id in legacy_paper_ids:
             if storage.get_paper(paper_id):
                 storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
                 changed = True
-        result.append({"label": str(folder.get("name") or label)[:80], "root_folder_id": root_folder_id})
-    if changed:
-        storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(result), ensure_ascii=False))
-    return result
+        result.append({
+            "tab_id": tab_id,
+            "label": str(folder.get("name") or item.get("label") or "Space")[:80],
+            "root_folder_id": root_folder_id,
+        })
+    for folder in storage.list_library_folders():
+        root_folder_id = int(folder.get("id") or 0)
+        if root_folder_id == 1 or folder.get("parent_id") is not None or root_folder_id in seen_root_ids:
+            continue
+        result.append({
+            "tab_id": f"space-{root_folder_id}",
+            "label": str(folder.get("name") or "Space")[:80],
+            "root_folder_id": root_folder_id,
+        })
+        seen_root_ids.add(root_folder_id)
+        changed = True
+    normalized = workspace_tabs_to_setting(result)
+    if changed or normalized != values:
+        storage.set_setting("library_workspace_tabs", json.dumps(normalized, ensure_ascii=False))
+    return normalized
 
 
-def workspace_tabs_to_setting(tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for index in range(LIBRARY_WORKSPACE_TAB_COUNT):
-        tab = tabs[index] if index < len(tabs) and isinstance(tabs[index], dict) else {}
-        label = " ".join(str(tab.get("label") or f"Space {index + 1}").split()) or f"Space {index + 1}"
-        root_folder_id = int(tab.get("root_folder_id") or 0)
-        result.append({"label": label[:80], "root_folder_id": root_folder_id})
-    return result
+def library_navigation_tab_index(tabs: list[dict[str, Any]], payload: dict[str, Any]) -> int:
+    tab_id = str(payload.get("tab_id") or "").strip()
+    if tab_id:
+        for index, tab in enumerate(tabs):
+            if str(tab.get("tab_id") or "") == tab_id:
+                return index
+        raise ValueError("Navigation tab not found")
+    try:
+        index = int(payload.get("index"))
+    except (TypeError, ValueError):
+        raise ValueError("Navigation tab is required")
+    if index < 0 or index >= len(tabs):
+        raise ValueError("Navigation tab is out of range")
+    return index
+
+
+def save_library_shortcut_tabs(storage: Storage, tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = library_shortcut_tabs_to_setting(tabs)
+    storage.set_setting("library_shortcut_tabs", json.dumps(normalized, ensure_ascii=False))
+    return normalized
+
+
+def save_library_workspace_tabs(storage: Storage, tabs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = workspace_tabs_to_setting(tabs)
+    storage.set_setting("library_workspace_tabs", json.dumps(normalized, ensure_ascii=False))
+    return normalized
+
+
+def add_library_shortcut_tab(storage: Storage, *, folder_id: int, label: str = "") -> dict[str, Any]:
+    folder_id = int(folder_id or 0)
+    folder = storage.get_library_folder(folder_id) if folder_id else None
+    if not folder or folder_id == 1 or not library_folder_is_within(storage, folder_id, 1):
+        raise ValueError("Choose a folder inside the main Library")
+    tabs = library_shortcut_tabs(storage)
+    if any(int(tab.get("folder_id") or 0) == folder_id for tab in tabs):
+        raise ValueError("This Library folder already has a shortcut")
+    clean_label = " ".join(str(label or folder.get("name") or "Shortcut").split()) or "Shortcut"
+    tab = {
+        "tab_id": new_library_navigation_tab_id("shortcut"),
+        "folder_id": folder_id,
+        "label": clean_label[:80],
+    }
+    tabs.append(tab)
+    save_library_shortcut_tabs(storage, tabs)
+    return tab
+
+
+def remove_library_shortcut_tab(storage: Storage, payload: dict[str, Any]) -> dict[str, Any]:
+    tabs = library_shortcut_tabs(storage)
+    index = library_navigation_tab_index(tabs, payload)
+    removed = tabs.pop(index)
+    save_library_shortcut_tabs(storage, tabs)
+    return removed
+
+
+def reorder_library_navigation_tabs(tabs: list[dict[str, Any]], ordered_tab_ids: list[Any]) -> list[dict[str, Any]]:
+    requested = [str(tab_id) for tab_id in ordered_tab_ids if str(tab_id or "").strip()]
+    existing = [str(tab.get("tab_id") or "") for tab in tabs]
+    if len(requested) != len(existing) or set(requested) != set(existing):
+        raise ValueError("Tab order does not match the current tabs")
+    by_id = {str(tab.get("tab_id") or ""): tab for tab in tabs}
+    return [by_id[tab_id] for tab_id in requested]
+
+
+def add_library_workspace_tab(storage: Storage, *, name: str) -> dict[str, Any]:
+    base_name = " ".join(str(name or "").split()) or "Space"
+    tabs = library_workspace_tabs(storage)
+    SPACES_LOCAL_COPY_ROOT.mkdir(parents=True, exist_ok=True)
+    folder: dict[str, Any] | None = None
+    target_dir: Path | None = None
+    for suffix in range(0, 1000):
+        candidate = base_name if suffix == 0 else f"{base_name} {suffix + 1}"
+        candidate_path = SPACES_LOCAL_COPY_ROOT / finder_safe_name(candidate)
+        if candidate_path.exists():
+            continue
+        created = storage.create_library_root_folder(name=candidate[:80])
+        created_path = SPACES_LOCAL_COPY_ROOT / finder_safe_name(created.get("name") or candidate)
+        if created_path.exists():
+            storage.delete_library_folder(folder_id=int(created.get("id") or 0))
+            continue
+        try:
+            created_path.mkdir(parents=True, exist_ok=False)
+        except Exception:
+            storage.delete_library_folder(folder_id=int(created.get("id") or 0))
+            raise
+        folder = created
+        target_dir = created_path
+        break
+    if not folder or not target_dir:
+        raise ValueError("Could not create a unique Space folder")
+    tab = {
+        "tab_id": f"space-{int(folder.get('id') or 0)}",
+        "label": str(folder.get("name") or base_name)[:80],
+        "root_folder_id": int(folder.get("id") or 0),
+    }
+    tabs.append(tab)
+    save_library_workspace_tabs(storage, tabs)
+    return tab
+
+
+def remove_library_workspace_tab(storage: Storage, payload: dict[str, Any]) -> dict[str, Any]:
+    tabs = library_workspace_tabs(storage)
+    index = library_navigation_tab_index(tabs, payload)
+    removed = tabs[index]
+    root_folder_id = int(removed.get("root_folder_id") or 0)
+    folder = storage.get_library_folder(root_folder_id)
+    if not folder or root_folder_id == 1 or folder.get("parent_id") is not None:
+        raise ValueError("Space root folder not found")
+    child_count = storage.conn.execute(
+        "SELECT COUNT(*) AS count FROM library_folders WHERE parent_id = ?",
+        (root_folder_id,),
+    ).fetchone()
+    item_count = storage.conn.execute(
+        "SELECT COUNT(*) AS count FROM library_items WHERE folder_id = ?",
+        (root_folder_id,),
+    ).fetchone()
+    if int(child_count["count"] or 0) or int(item_count["count"] or 0):
+        raise ValueError("This Space is not empty. Move or delete its contents before removing it")
+    target_dir = local_copy_dir_for_library_folder(storage, root_folder_id)
+    if target_dir.exists():
+        if not target_dir.is_dir() or any(target_dir.iterdir()):
+            raise ValueError("This Space still contains files in Finder and cannot be removed")
+        target_dir.rmdir()
+    try:
+        storage.delete_library_folder(folder_id=root_folder_id)
+        tabs.pop(index)
+        save_library_workspace_tabs(storage, tabs)
+    except Exception:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        raise
+    return removed
+
+
+def remap_managed_path(value: Any, source_root: Path, target_root: Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+    try:
+        relative = Path(text).expanduser().resolve().relative_to(source_root.resolve())
+    except (OSError, ValueError):
+        return text
+    return str(target_root.resolve() / relative)
+
+
+def remap_space_managed_paths(
+    storage: Storage,
+    *,
+    paper_ids: list[str],
+    source_root: Path,
+    target_root: Path,
+) -> None:
+    for paper_id in dict.fromkeys(str(value) for value in paper_ids if str(value or "").strip()):
+        paper = storage.get_paper(paper_id)
+        if not paper:
+            continue
+        updates: dict[str, Any] = {}
+        for key in ("main_pdf_path", "merged_pdf_path", "source_path"):
+            current = str(paper.get(key) or "")
+            remapped = remap_managed_path(current, source_root, target_root)
+            if remapped != current:
+                updates[key] = remapped
+        try:
+            supplements = json.loads(paper.get("supplement_pdf_paths") or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            supplements = []
+        if isinstance(supplements, list):
+            remapped_supplements = [remap_managed_path(path, source_root, target_root) for path in supplements]
+            if remapped_supplements != supplements:
+                updates["supplement_pdf_paths"] = json.dumps(remapped_supplements, ensure_ascii=False)
+        if updates:
+            columns = ", ".join(f"{key} = ?" for key in updates)
+            storage.conn.execute(
+                f"UPDATE papers SET {columns} WHERE paper_id = ?",
+                (*updates.values(), paper_id),
+            )
+        resource_rows = storage.conn.execute(
+            "SELECT id, source_path, stored_path FROM resources WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchall()
+        for row in resource_rows:
+            resource_updates: dict[str, str] = {}
+            for key in ("source_path", "stored_path"):
+                current = str(row[key] or "")
+                remapped = remap_managed_path(current, source_root, target_root)
+                if remapped != current:
+                    resource_updates[key] = remapped
+            if resource_updates:
+                columns = ", ".join(f"{key} = ?" for key in resource_updates)
+                storage.conn.execute(
+                    f"UPDATE resources SET {columns}, updated_at = ? WHERE id = ?",
+                    (*resource_updates.values(), now_iso(), int(row["id"])),
+                )
+    storage.conn.commit()
+
+
+def move_library_workspace_to_library(
+    storage: Storage,
+    payload: dict[str, Any],
+    *,
+    target_folder_id: int,
+) -> dict[str, Any]:
+    tabs = library_workspace_tabs(storage)
+    original_tabs = [dict(tab) for tab in tabs]
+    index = library_navigation_tab_index(tabs, payload)
+    tab = tabs[index]
+    root_folder_id = int(tab.get("root_folder_id") or 0)
+    root_folder = storage.get_library_folder(root_folder_id)
+    target_folder_id = int(target_folder_id or 1)
+    target_folder = storage.get_library_folder(target_folder_id)
+    if not root_folder or root_folder_id == 1 or root_folder.get("parent_id") is not None:
+        raise ValueError("Space root folder not found")
+    if not target_folder or not library_folder_is_within(storage, target_folder_id, 1):
+        raise ValueError("Choose a destination inside the main Library")
+    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+    if recycle_id and library_folder_is_within(storage, target_folder_id, recycle_id):
+        raise ValueError("Recycle cannot be used as the destination")
+    duplicate = storage.conn.execute(
+        "SELECT id FROM library_folders WHERE parent_id = ? AND lower(name) = lower(?)",
+        (target_folder_id, str(root_folder.get("name") or "Space")),
+    ).fetchone()
+    if duplicate:
+        raise ValueError("A folder with this Space name already exists at the selected destination")
+
+    source_dir = local_copy_dir_for_library_folder(storage, root_folder_id).expanduser().resolve()
+    target_parent_dir = local_copy_dir_for_library_folder(storage, target_folder_id).expanduser().resolve()
+    target_dir = target_parent_dir / finder_safe_name(str(root_folder.get("name") or "Space"))
+    if target_dir.exists():
+        raise ValueError("A Finder folder with this Space name already exists at the selected destination")
+    paper_ids = [str(item.get("paper_id") or "") for item in library_items_in_folder_tree(storage, root_folder_id)]
+    moved_native_dir = False
+    moved_database_folder = False
+    try:
+        if source_dir.exists():
+            target_parent_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source_dir), str(target_dir))
+            moved_native_dir = True
+        moved = storage.move_library_folder(folder_id=root_folder_id, parent_id=target_folder_id)
+        moved_database_folder = True
+        if moved_native_dir:
+            remap_space_managed_paths(
+                storage,
+                paper_ids=paper_ids,
+                source_root=source_dir,
+                target_root=target_dir,
+            )
+        tabs.pop(index)
+        save_library_workspace_tabs(storage, tabs)
+        for paper_id in dict.fromkeys(paper_ids):
+            if paper_id:
+                sync_all_pdf_aliases_for_paper(storage, paper_id)
+        return moved
+    except Exception:
+        save_library_workspace_tabs(storage, original_tabs)
+        if moved_database_folder:
+            storage.conn.execute(
+                "UPDATE library_folders SET parent_id = NULL, updated_at = ? WHERE id = ?",
+                (now_iso(), root_folder_id),
+            )
+            storage.conn.commit()
+        if moved_native_dir and target_dir.exists() and not source_dir.exists():
+            source_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(target_dir), str(source_dir))
+            remap_space_managed_paths(
+                storage,
+                paper_ids=paper_ids,
+                source_root=target_dir,
+                target_root=source_dir,
+            )
+        raise
 
 
 def ensure_library_special_folders(storage: Storage) -> dict[str, dict[str, Any]]:
@@ -15246,8 +15722,8 @@ INDEX_HTML = """<!doctype html>
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .theme-sidebar-filter,
     .theme-sidebar-fetch { display: none; }
-    .app.theme-mode .theme-sidebar-filter { display: flex; }
-    .app.theme-mode .theme-sidebar-fetch { display: block; }
+    .app.theme-mode .theme-sidebar-filter,
+    .app.theme-mode .theme-sidebar-fetch { display: none; }
     .app.theme-mode .journal-sidebar-filter { display: none; }
     .theme-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .theme-add-btn {
@@ -16037,6 +16513,21 @@ INDEX_HTML = """<!doctype html>
     .journal-tab img { max-width: 128px; max-height: 16px; object-fit: contain; display: block; }
     .journal-tab-label { min-width: 0; font-size: 15px; font-weight: 650; line-height: 1.12; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .journal-tab-count { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .journal-tab.subject-tab { cursor: grab; }
+    .journal-tab.subject-tab:active { cursor: grabbing; }
+    .journal-tab.subject-tab.dragging { opacity: 0.48; background: #f3fbfb; }
+    .journal-tab.subject-tab.drag-over-before { box-shadow: inset 3px 0 0 var(--accent); }
+    .journal-tab.subject-tab.drag-over-after { box-shadow: inset -3px 0 0 var(--accent); }
+    .journal-tab.subject-add-tab {
+      min-width: 46px;
+      width: 46px;
+      display: grid;
+      place-items: center;
+      padding: 8px;
+      font-size: 20px;
+      color: var(--muted);
+    }
+    .journal-tab.subject-add-tab:hover { color: var(--accent); border-color: var(--accent); }
     .late-arrivals {
       display: flex;
       flex-wrap: wrap;
@@ -16239,26 +16730,119 @@ INDEX_HTML = """<!doctype html>
       background: transparent;
       padding: 0;
       overflow-x: visible;
-      overflow-y: auto;
-      scrollbar-width: none;
+      overflow-y: hidden;
     }
     .library-tab-rail::after {
       display: none;
     }
-    .library-tab-rail::-webkit-scrollbar {
-      width: 0;
-      height: 0;
-    }
     .library-tab-rail-inner {
+      display: flex;
+      flex-direction: column;
+      width: 30px;
+      height: 100%;
+      min-height: 0;
+    }
+    .library-tab-root-host {
+      position: relative;
+      flex: 0 0 var(--library-tab-root-stack-height, 92px);
+      width: 30px;
+    }
+    .library-tab-sections {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    .library-tab-section {
+      position: relative;
+      display: grid;
+      grid-template-rows: 24px minmax(0, 1fr);
+      flex: 0 0 auto;
+      width: 30px;
+      min-height: 24px;
+      overflow: visible;
+    }
+    .library-tab-section-tools {
+      display: grid;
+      grid-template-columns: 15px 15px;
+      width: 30px;
+      height: 24px;
+      border: 1px solid #d8dee8;
+      border-radius: 7px 7px 0 0;
+      background: #f7f8fa;
+      overflow: hidden;
+      box-sizing: border-box;
+      opacity: 0.34;
+      filter: saturate(0.3) brightness(1.08);
+      transition: opacity 140ms ease, filter 140ms ease;
+    }
+    .library-tab-section.workspace-section .library-tab-section-tools {
+      grid-template-columns: 30px;
+      border-color: #c9ddc0;
+      background: #f2f9ef;
+    }
+    .library-tab-section.workspace-section .library-tab-section-tools button { width: 30px; }
+    .library-tab-section-tools:hover,
+    .library-tab-section-tools:focus-within {
+      opacity: 0.7;
+      filter: saturate(0.7) brightness(1.02);
+    }
+    .library-tab-section-tools button {
+      min-width: 0;
+      width: 15px;
+      height: 22px;
+      border: 0;
+      border-right: 1px solid rgba(148, 163, 184, 0.24);
+      background: transparent;
+      color: #667085;
+      padding: 0;
+      font-size: 15px;
+      line-height: 20px;
+      cursor: pointer;
+    }
+    .library-tab-section-tools button:last-child { border-right: 0; }
+    .library-tab-section-tools button:hover:not(:disabled) { color: var(--accent); background: rgba(15, 107, 110, 0.08); }
+    .library-tab-section-tools button:disabled { color: #c5cbd4; cursor: default; }
+    .library-tab-scroll {
       position: relative;
       width: 30px;
-      height: var(--library-rail-height, 900px);
+      min-height: 0;
+      overflow-x: visible;
+      overflow-y: auto;
+      scrollbar-width: none;
+      overscroll-behavior: contain;
+    }
+    .library-tab-scroll::-webkit-scrollbar { width: 0; height: 0; }
+    .library-tab-scroll-inner {
+      position: relative;
+      width: 30px;
+      min-height: 1px;
+      height: var(--library-tab-stack-height, 1px);
+    }
+    .library-tab-section.can-scroll-up::before,
+    .library-tab-section.can-scroll-down::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      z-index: 4;
+      width: 30px;
+      height: 13px;
+      pointer-events: none;
+    }
+    .library-tab-section.can-scroll-up::before {
+      top: 24px;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.96), rgba(255,255,255,0));
+    }
+    .library-tab-section.can-scroll-down::after {
+      bottom: 0;
+      background: linear-gradient(to top, rgba(255,255,255,0.96), rgba(255,255,255,0));
     }
     .library-tab-rail .library-tab {
       position: absolute;
       left: 0;
-      top: calc(var(--tab-top, 0px) + var(--library-vertical-tab-length));
-      width: var(--library-vertical-tab-length);
+      top: calc(var(--tab-top, 0px) + var(--library-tab-length, var(--library-vertical-tab-length)));
+      width: var(--library-tab-length, var(--library-vertical-tab-length));
       height: var(--library-vertical-tab-thickness);
       box-sizing: border-box;
       min-height: var(--library-vertical-tab-thickness);
@@ -16274,7 +16858,20 @@ INDEX_HTML = """<!doctype html>
       border-radius: 13px 13px 0 0;
       border: 1px solid var(--library-tab-border);
       border-bottom: 0;
+      transition: opacity 150ms ease, filter 150ms ease, background-color 150ms ease, border-color 150ms ease, color 150ms ease;
     }
+    .library-tab-rail .library-tab:not(.active) {
+      opacity: 0.34;
+      filter: saturate(0.28) brightness(1.12);
+    }
+    .library-tab-rail .library-tab:not(.active):hover,
+    .library-tab-rail .library-tab:not(.active):focus-visible {
+      opacity: 0.62;
+      filter: saturate(0.65) brightness(1.04);
+    }
+    .library-tab-rail .library-tab.nav-dragging { opacity: 0.46; }
+    .library-tab-rail .library-tab.drag-over-before { box-shadow: inset -3px 0 0 var(--accent); }
+    .library-tab-rail .library-tab.drag-over-after { box-shadow: inset 3px 0 0 var(--accent); }
     .library-tab-label {
       min-width: 0;
       flex: 1 1 auto;
@@ -16385,7 +16982,7 @@ INDEX_HTML = """<!doctype html>
       padding: 8px 16px 9px;
       border-bottom: 1px solid var(--line);
       margin: 0;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       grid-column: 1 / -1;
       background: #f7f8fa;
       min-width: 0;
@@ -16395,7 +16992,7 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       gap: 8px;
       min-width: 0;
-      flex: 0 0 auto;
+      flex: 0 1 auto;
     }
     .workspace-tools input.search {
       min-height: 28px;
@@ -16414,12 +17011,12 @@ INDEX_HTML = """<!doctype html>
       box-shadow: inset 0 0 0 1px rgba(15, 107, 110, 0.64), 0 0 0 3px rgba(15, 107, 110, 0.08);
     }
     #workspaceNameInput {
-      width: 230px;
-      max-width: min(230px, 30vw);
+      width: 200px;
+      max-width: min(200px, 24vw);
     }
     #workspaceDoiInput {
-      width: 300px;
-      max-width: min(300px, 34vw);
+      width: 250px;
+      max-width: min(250px, 28vw);
     }
     .workspace-tools .smallbtn {
       min-height: 28px;
@@ -16438,6 +17035,16 @@ INDEX_HTML = """<!doctype html>
       background: #d9d9d9;
       color: var(--accent);
       box-shadow: none;
+    }
+    .workspace-tools .workspace-move-library-button {
+      margin-left: auto;
+      flex: 0 0 auto;
+      background: #e6ecef;
+      color: #344054;
+    }
+    .workspace-tools .workspace-move-library-button:hover {
+      background: #dce7e9;
+      color: var(--accent);
     }
     .library-tab.drag-over {
       border-color: var(--accent);
@@ -19706,6 +20313,7 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
     }
+    .settings-modal.library-nav-modal { width: min(780px, calc(100vw - 40px)); }
     .settings-modal-head {
       display: flex;
       align-items: flex-start;
@@ -19718,6 +20326,41 @@ INDEX_HTML = """<!doctype html>
     .settings-modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
     .settings-modal-close { min-width: 30px; min-height: 30px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
     .settings-modal-body { padding: 16px 18px 18px; }
+    .library-nav-form { display: grid; gap: 12px; }
+    .library-nav-form label,
+    .library-nav-form-field { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .library-nav-form select,
+    .library-nav-form input {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 10px;
+      box-sizing: border-box;
+    }
+    .library-nav-form-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .library-nav-form-field.hidden { display: none; }
+    .library-nav-folder-picker {
+      height: min(330px, calc(100vh - 330px));
+      min-height: 220px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .library-nav-folder-picker .library-add-columns { height: 100%; }
+    .library-nav-folder-picker .library-add-column { min-width: 220px; }
+    .library-nav-folder-picker .library-add-folder-option { grid-template-columns: 18px minmax(0, 1fr) auto; }
+    .library-nav-picker-path {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .theme-form { display: grid; gap: 12px; }
     .theme-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
     .theme-keyword-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -20011,7 +20654,6 @@ INDEX_HTML = """<!doctype html>
         <button class="iconbtn" id="nextMonth" title="Next month">›</button>
       </div>
       <div class="calendar" id="calendar"></div>
-      <button class="smallbtn theme-sidebar-fetch" id="forceThemeFetch" type="button" title="Fetch the selected date again, ignoring previous cached results">Fetch selected date</button>
       <button class="smallbtn" id="jumpToday">Today</button>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
@@ -20054,10 +20696,8 @@ INDEX_HTML = """<!doctype html>
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
             </div>
             <div class="toolbar-actions hidden theme-toolbar-actions" id="themeToolbarActions">
-              <select class="search" id="themeGroupSelect" title="Subject group"></select>
-              <input class="search" id="themeFromDate" type="date" title="From date">
-              <input class="search" id="themeUntilDate" type="date" title="Until date">
-              <button class="smallbtn" id="runThemeSearch" type="button" title="Search OpenAlex, Crossref, Semantic Scholar, arXiv, and PubMed by subject">Search</button>
+              <button class="smallbtn" id="forceThemeFetch" type="button" title="Refresh all subjects for this date">Refresh</button>
+              <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle"> arXiv</label>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
@@ -20128,6 +20768,36 @@ INDEX_HTML = """<!doctype html>
           <div class="library-quicklook-pages" id="libraryQuickLookPages" tabindex="-1"></div>
         </div>
         <div class="library-quicklook-resize" id="libraryQuickLookResize" title="Resize preview"></div>
+      </div>
+      <div class="settings-backdrop" id="libraryNavBackdrop" aria-hidden="true">
+        <section class="settings-modal library-nav-modal" role="dialog" aria-modal="true" aria-labelledby="libraryNavTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="libraryNavTitle">Add Shortcut</h2>
+              <p id="libraryNavDescription">Choose a folder inside the main Library.</p>
+            </div>
+            <button class="settings-modal-close" id="closeLibraryNav" type="button" title="Close">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="library-nav-form">
+              <div class="library-nav-form-field" id="libraryShortcutFolderField">
+                <span id="libraryNavFolderLabel">Library folder</span>
+                <div class="library-nav-folder-picker" id="libraryNavFolderPicker" tabindex="0"></div>
+                <div class="library-nav-picker-path" id="libraryNavSelectedPath">Choose a folder.</div>
+              </div>
+              <label class="library-nav-form-field hidden" id="librarySpaceNameField">
+                <span>Space name</span>
+                <input id="librarySpaceName" type="text" autocomplete="off" placeholder="New Space">
+              </label>
+              <p class="library-nav-form-note" id="libraryNavNote"></p>
+              <div class="citation-settings-status" id="libraryNavStatus"></div>
+              <div class="theme-dialog-actions">
+                <button class="smallbtn" id="cancelLibraryNav" type="button">Cancel</button>
+                <button class="smallbtn" id="saveLibraryNav" type="button">Add</button>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
       <div class="settings-backdrop" id="themeGroupBackdrop" aria-hidden="true">
         <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="themeGroupTitle">
@@ -20287,8 +20957,6 @@ INDEX_HTML = """<!doctype html>
       {key: "date", label: "Date", defaultWidth: 116, minWidth: 92, maxWidth: 150, sortable: true, defaultSortDir: "desc"},
       {key: "citations", label: "Cites", defaultWidth: 66, minWidth: 56, maxWidth: 110, sortable: true, defaultSortDir: "desc"}
     ];
-    const LIBRARY_SHORTCUT_TAB_COUNT = 5;
-    const LIBRARY_WORKSPACE_TAB_COUNT = 3;
     let librarySearchTimer = 0;
     const state = {
       selectedDate: initialToday,
@@ -20315,6 +20983,8 @@ INDEX_HTML = """<!doctype html>
       themeGroups: [],
       themeGroupsLoaded: false,
       selectedThemeGroups: new Set(),
+      activeThemeGroupKey: "",
+      showThemeArxiv: false,
       themeGroup: "ALL",
       themeFromDate: initialToday,
       themeUntilDate: initialToday,
@@ -20349,6 +21019,17 @@ INDEX_HTML = """<!doctype html>
       libraryTab: "library",
       libraryShortcutTabs: [],
       libraryWorkspaceTabs: [],
+      libraryShortcutRailScrollTop: 0,
+      libraryWorkspaceRailScrollTop: 0,
+      libraryNavDialogMode: "shortcut",
+      libraryNavSelectedFolderId: 0,
+      libraryNavPickerPathIds: [],
+      libraryNavWorkspaceTabId: "",
+      libraryNavDragType: "",
+      libraryNavDragTabId: "",
+      libraryNavDropTargetId: "",
+      libraryNavDropAfter: false,
+      libraryNavDropCommitted: false,
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
@@ -21215,6 +21896,14 @@ INDEX_HTML = """<!doctype html>
       state.libraryLoaded = true;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
+      if (state.libraryTab?.startsWith("shortcut-")) {
+        const index = Number(state.libraryTab.slice("shortcut-".length) || 0);
+        if (!state.libraryShortcutTabs[index]) state.libraryTab = "library";
+      }
+      if (state.libraryTab?.startsWith("workspace-")) {
+        const index = Number(state.libraryTab.slice("workspace-".length) || 0);
+        if (!state.libraryWorkspaceTabs[index]) state.libraryTab = "library";
+      }
       const displayRootId = libraryDisplayRootId();
       if (!libraryFolderById(state.libraryCurrentFolderId)) state.libraryCurrentFolderId = displayRootId;
       if (!libraryFolderById(state.libraryActiveFolderId)) state.libraryActiveFolderId = displayRootId;
@@ -21231,6 +21920,26 @@ INDEX_HTML = """<!doctype html>
       ensureLibraryColumnSelection(displayRootId);
     }
 
+    function applyLibraryNavigationSnapshot(data) {
+      state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
+      state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
+      const changedFolder = data.folder && Number(data.folder.id || 0) ? data.folder : null;
+      const removedRootId = Number(data.removed_root_folder_id || 0);
+      if (changedFolder) {
+        const folderId = Number(changedFolder.id);
+        const index = state.libraryFolders.findIndex((folder) => Number(folder.id) === folderId);
+        if (index >= 0) state.libraryFolders[index] = changedFolder;
+        else state.libraryFolders.push(changedFolder);
+      }
+      if (removedRootId) {
+        state.libraryFolders = state.libraryFolders.filter((folder) => Number(folder.id) !== removedRootId);
+        state.libraryLoadedFolderIds.delete(removedRootId);
+        delete state.libraryFolderLoadPromises[removedRootId];
+        delete state.libraryColumnSelections[removedRootId];
+      }
+      if (changedFolder || removedRootId) rebuildLibraryIndexes();
+    }
+
     function applyLibraryBootstrap(data) {
       state.libraryRootId = Number(data.root_id || 1);
       state.libraryFolders = Array.isArray(data.folders) ? data.folders : [];
@@ -21241,6 +21950,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryLoaded = true;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
       state.libraryWorkspaceTabs = Array.isArray(data.workspace_tabs) ? data.workspace_tabs : state.libraryWorkspaceTabs;
+      if (state.libraryTab?.startsWith("shortcut-") && !state.libraryShortcutTabs[Number(state.libraryTab.slice("shortcut-".length) || 0)]) state.libraryTab = "library";
+      if (state.libraryTab?.startsWith("workspace-") && !state.libraryWorkspaceTabs[Number(state.libraryTab.slice("workspace-".length) || 0)]) state.libraryTab = "library";
       if (data.children) applyLibraryFolderChildren(data.children, {rebuild: true});
       const displayRootId = libraryDisplayRootId();
       state.libraryCurrentFolderId = displayRootId;
@@ -22307,7 +23018,7 @@ INDEX_HTML = """<!doctype html>
     function libraryAddWorkspaceRoots() {
       const mainRootId = Number(state.libraryRootId || 1);
       const roots = [{key: "library", label: "My Library", root_folder_id: mainRootId, main_library: true}];
-      state.libraryWorkspaceTabs.slice(0, LIBRARY_WORKSPACE_TAB_COUNT).forEach((tab, index) => {
+      state.libraryWorkspaceTabs.forEach((tab, index) => {
         const rootFolderId = Number(tab?.root_folder_id || 0);
         const rootFolder = libraryFolderById(rootFolderId);
         if (!rootFolderId || !rootFolder) return;
@@ -23587,6 +24298,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function activeReportPapers() {
+      if (state.mode === "theme") return activeThemePapers();
       const groups = groupedReportPapers(reportVisiblePapers());
       if (!groups.length) return [];
       const group = groups.find((item) => item.journal === state.activeReportJournal) || groups[0];
@@ -23629,6 +24341,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function switchReportJournalTab(delta) {
+      if (state.mode === "theme") return switchThemeSubjectTab(delta);
       const groups = groupedReportPapers(reportVisiblePapers()).filter((group) => group.papers.length);
       if (!groups.length) return true;
       const currentIndex = groups.findIndex((group) => group.journal === state.activeReportJournal);
@@ -23667,7 +24380,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function handleReportKeydown(event) {
-      if (state.mode !== "report") return false;
+      if (!['report', 'theme'].includes(state.mode)) return false;
       const keyAliases = {
         "Up": "ArrowUp",
         "Down": "ArrowDown",
@@ -24371,6 +25084,7 @@ INDEX_HTML = """<!doctype html>
       $("reportTitle").textContent = libraryViewTitle();
       const root = $("papers");
       captureLibraryColumnScrollTops();
+      captureLibraryNavigationScroll();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
       $("summary").textContent = "";
       root.classList.remove("deep-survey-view");
@@ -24401,6 +25115,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-tab-context-menu" id="libraryTabContextMenu">
           <button type="button" data-action="rename-tab">Rename</button>
+          <button type="button" data-action="remove-tab">Remove Shortcut</button>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
@@ -24585,6 +25300,7 @@ INDEX_HTML = """<!doctype html>
             <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
           </div>
           ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
+          <button class="smallbtn workspace-move-library-button" id="workspaceMoveToLibraryButton" type="button">Move Space to Library</button>
         </div>
       `;
     }
@@ -25336,30 +26052,84 @@ INDEX_HTML = """<!doctype html>
       librarySearchTimer = window.setTimeout(() => commitLibrarySearch(value), 450);
     }
 
+    function libraryNavigationTabLength(label) {
+      const text = String(label || "").trim() || "Tab";
+      let measured = 0;
+      try {
+        const context = document.createElement("canvas").getContext("2d");
+        if (context) {
+          context.font = '650 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          measured = context.measureText(text).width;
+        }
+      } catch (_error) {
+        measured = 0;
+      }
+      if (!measured) {
+        measured = Array.from(text).reduce((width, character) => width + ((character.codePointAt(0) || 0) > 255 ? 12 : 7), 0);
+      }
+      return Math.max(58, Math.min(220, Math.ceil(measured + 26)));
+    }
+
+    function libraryNavigationTabLayout(tabs, labelForTab) {
+      let offset = 0;
+      const gap = 10;
+      const entries = (Array.isArray(tabs) ? tabs : []).map((tab, index) => {
+        const length = libraryNavigationTabLength(labelForTab(tab, index));
+        const entry = {top: offset, length};
+        offset += length + gap;
+        return entry;
+      });
+      return {entries, stackHeight: entries.length ? Math.max(1, offset - gap) : 1};
+    }
+
     function renderLibraryShortcutTabs() {
       const root = $("libraryShortcutTabs");
       if (!root) return;
-      const rootTab = `<button class="library-tab root-tab${state.libraryTab === "library" ? " active" : ""}" style="--tab-top:0px" type="button" data-root-tab="library" title="Library"><span class="library-tab-label">Library</span></button>`;
-      const shortcutTabs = Array.from({length: LIBRARY_SHORTCUT_TAB_COUNT}, (_, index) => {
-        const assigned = Boolean(Number(state.libraryShortcutTabs[index]?.folder_id || 0));
-        const label = libraryShortcutLabel(index);
-        return `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${(index + 1) * 92}px" type="button" data-shortcut-tab="${index}" title="${assigned ? "Folder shortcut" : "Drop a Library folder here"}"><span class="library-tab-label">${escapeHtml(label)}</span></button>`;
-      }).join("");
-      const workspaceTabs = Array.from({length: LIBRARY_WORKSPACE_TAB_COUNT}, (_, index) => (
-        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${(LIBRARY_SHORTCUT_TAB_COUNT + 1 + index) * 92 + 14}px" type="button" data-workspace-tab="${index}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
+      const rootLength = libraryNavigationTabLength("Library");
+      const shortcutLayout = libraryNavigationTabLayout(state.libraryShortcutTabs, (_tab, index) => libraryShortcutLabel(index));
+      const workspaceLayout = libraryNavigationTabLayout(state.libraryWorkspaceTabs, (_tab, index) => libraryWorkspaceLabel(index));
+      const rootTab = `<button class="library-tab root-tab${state.libraryTab === "library" ? " active" : ""}" style="--tab-top:0px;--library-tab-length:${rootLength}px" type="button" data-root-tab="library" title="Library"><span class="library-tab-label">Library</span></button>`;
+      const shortcutTabs = state.libraryShortcutTabs.map((tab, index) => (
+        `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${shortcutLayout.entries[index].top}px;--library-tab-length:${shortcutLayout.entries[index].length}px" type="button" draggable="true" data-shortcut-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryShortcutLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryShortcutLabel(index))}</span></button>`
       )).join("");
-      const railHeight = (LIBRARY_SHORTCUT_TAB_COUNT + LIBRARY_WORKSPACE_TAB_COUNT + 1) * 92 + 14;
+      const workspaceTabs = state.libraryWorkspaceTabs.map((tab, index) => (
+        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${workspaceLayout.entries[index].top}px;--library-tab-length:${workspaceLayout.entries[index].length}px" type="button" draggable="true" data-workspace-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
+      )).join("");
+      const shortcutRemoveDisabled = state.libraryTab?.startsWith("shortcut-") ? "" : " disabled";
       root.innerHTML = `
-        <div class="library-tab-rail-inner" style="--library-rail-height:${railHeight}px">
-          ${rootTab}
-          ${shortcutTabs}
-          ${workspaceTabs}
+        <div class="library-tab-rail-inner" style="--library-tab-root-stack-height:${rootLength + 10}px">
+          <div class="library-tab-root-host">${rootTab}</div>
+          <div class="library-tab-sections">
+            <section class="library-tab-section shortcut-section" data-library-tab-section="shortcut">
+              <div class="library-tab-section-tools">
+                <button type="button" data-nav-add="shortcut" title="Add Shortcut" aria-label="Add Shortcut">+</button>
+                <button type="button" data-nav-remove="shortcut" title="Remove selected Shortcut" aria-label="Remove selected Shortcut"${shortcutRemoveDisabled}>−</button>
+              </div>
+              <div class="library-tab-scroll" data-library-tab-scroll="shortcut">
+                <div class="library-tab-scroll-inner" style="--library-tab-stack-height:${shortcutLayout.stackHeight}px">${shortcutTabs}</div>
+              </div>
+            </section>
+            <section class="library-tab-section workspace-section" data-library-tab-section="workspace">
+              <div class="library-tab-section-tools">
+                <button type="button" data-nav-add="workspace" title="Add Space" aria-label="Add Space">+</button>
+              </div>
+              <div class="library-tab-scroll" data-library-tab-scroll="workspace">
+                <div class="library-tab-scroll-inner" style="--library-tab-stack-height:${workspaceLayout.stackHeight}px">${workspaceTabs}</div>
+              </div>
+            </section>
+          </div>
         </div>
       `;
       root.querySelector("[data-root-tab]")?.addEventListener("click", () => {
         loadLibrary().catch((error) => {
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         });
+      });
+      root.querySelectorAll("[data-nav-add]").forEach((button) => {
+        button.addEventListener("click", () => openLibraryNavigationDialog(button.dataset.navAdd || "shortcut"));
+      });
+      root.querySelectorAll("[data-nav-remove]").forEach((button) => {
+        button.addEventListener("click", () => runLibraryMenuAction(() => removeActiveLibraryNavigationTab(button.dataset.navRemove || "shortcut")));
       });
       root.querySelectorAll("[data-shortcut-tab]").forEach((button) => {
         button.addEventListener("click", () => openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
@@ -25369,14 +26139,25 @@ INDEX_HTML = """<!doctype html>
           showLibraryTabContextMenu(event, "shortcut", Number(button.dataset.shortcutTab || 0));
         });
         button.addEventListener("dragover", (event) => {
+          if (state.libraryNavDragType === "shortcut") {
+            markLibraryNavigationDrop(event, button, "shortcut");
+            return;
+          }
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
           event.preventDefault();
           event.dataTransfer.dropEffect = "copy";
           button.classList.add("drag-over");
         });
-        button.addEventListener("dragleave", () => button.classList.remove("drag-over"));
+        button.addEventListener("dragleave", (event) => {
+          if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+          button.classList.remove("drag-over", "drag-over-before", "drag-over-after");
+        });
         button.addEventListener("drop", async (event) => {
+          if (state.libraryNavDragType === "shortcut") {
+            await dropLibraryNavigationTab(event, button, "shortcut");
+            return;
+          }
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
           event.preventDefault();
@@ -25384,6 +26165,7 @@ INDEX_HTML = """<!doctype html>
           state.libraryDragPayload = null;
           await runLibraryMenuAction(() => assignLibraryShortcutTab(Number(button.dataset.shortcutTab || 0), Number(payload.id || 0)));
         });
+        wireLibraryNavigationTabDrag(button, "shortcut");
       });
       root.querySelectorAll("[data-workspace-tab]").forEach((button) => {
         button.addEventListener("click", () => openLibraryWorkspaceTab(Number(button.dataset.workspaceTab || 0)));
@@ -25392,7 +26174,158 @@ INDEX_HTML = """<!doctype html>
           event.stopPropagation();
           showLibraryTabContextMenu(event, "workspace", Number(button.dataset.workspaceTab || 0));
         });
+        button.addEventListener("dragover", (event) => markLibraryNavigationDrop(event, button, "workspace"));
+        button.addEventListener("dragleave", (event) => {
+          if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+          button.classList.remove("drag-over-before", "drag-over-after");
+        });
+        button.addEventListener("drop", (event) => dropLibraryNavigationTab(event, button, "workspace"));
+        wireLibraryNavigationTabDrag(button, "workspace");
       });
+      restoreLibraryNavigationScroll();
+      window.requestAnimationFrame(() => {
+        updateLibraryNavigationRailLayout();
+        revealActiveLibraryNavigationTab();
+      });
+    }
+
+    function captureLibraryNavigationScroll() {
+      const shortcut = document.querySelector('[data-library-tab-scroll="shortcut"]');
+      const workspace = document.querySelector('[data-library-tab-scroll="workspace"]');
+      if (shortcut) state.libraryShortcutRailScrollTop = shortcut.scrollTop;
+      if (workspace) state.libraryWorkspaceRailScrollTop = workspace.scrollTop;
+    }
+
+    function restoreLibraryNavigationScroll() {
+      ["shortcut", "workspace"].forEach((type) => {
+        const scroller = document.querySelector(`[data-library-tab-scroll="${type}"]`);
+        if (!scroller) return;
+        scroller.scrollTop = type === "shortcut" ? state.libraryShortcutRailScrollTop : state.libraryWorkspaceRailScrollTop;
+        scroller.addEventListener("scroll", () => {
+          if (type === "shortcut") state.libraryShortcutRailScrollTop = scroller.scrollTop;
+          else state.libraryWorkspaceRailScrollTop = scroller.scrollTop;
+          updateLibraryNavigationScrollEdges(type);
+        });
+        updateLibraryNavigationScrollEdges(type);
+      });
+    }
+
+    function updateLibraryNavigationScrollEdges(type) {
+      const section = document.querySelector(`[data-library-tab-section="${type}"]`);
+      const scroller = document.querySelector(`[data-library-tab-scroll="${type}"]`);
+      if (!section || !scroller) return;
+      section.classList.toggle("can-scroll-up", scroller.scrollTop > 2);
+      section.classList.toggle("can-scroll-down", scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2);
+    }
+
+    function updateLibraryNavigationRailLayout() {
+      const root = $("libraryShortcutTabs");
+      const sectionsRoot = root?.querySelector(".library-tab-sections");
+      const shortcutSection = root?.querySelector('[data-library-tab-section="shortcut"]');
+      const workspaceSection = root?.querySelector('[data-library-tab-section="workspace"]');
+      if (!root || !sectionsRoot || !shortcutSection || !workspaceSection) return;
+      const gap = 8;
+      const available = Math.max(80, sectionsRoot.clientHeight - gap);
+      const shortcutNatural = 24 + libraryNavigationTabLayout(state.libraryShortcutTabs, (_tab, index) => libraryShortcutLabel(index)).stackHeight;
+      const workspaceNatural = 24 + libraryNavigationTabLayout(state.libraryWorkspaceTabs, (_tab, index) => libraryWorkspaceLabel(index)).stackHeight;
+      const half = Math.floor(available / 2);
+      let shortcutHeight;
+      let workspaceHeight;
+      if (shortcutNatural + workspaceNatural <= available) {
+        shortcutHeight = shortcutNatural;
+        workspaceHeight = workspaceNatural;
+      } else if (shortcutNatural <= half) {
+        shortcutHeight = shortcutNatural;
+        workspaceHeight = available - shortcutHeight;
+      } else if (workspaceNatural <= half) {
+        workspaceHeight = workspaceNatural;
+        shortcutHeight = available - workspaceHeight;
+      } else {
+        shortcutHeight = half;
+        workspaceHeight = available - half;
+      }
+      shortcutSection.style.height = `${Math.max(24, shortcutHeight)}px`;
+      workspaceSection.style.height = `${Math.max(24, workspaceHeight)}px`;
+      updateLibraryNavigationScrollEdges("shortcut");
+      updateLibraryNavigationScrollEdges("workspace");
+    }
+
+    function revealActiveLibraryNavigationTab() {
+      const active = $("libraryShortcutTabs")?.querySelector(".library-tab.active");
+      if (!active || active.matches("[data-root-tab]")) return;
+      active.scrollIntoView({block: "nearest", inline: "nearest"});
+    }
+
+    function clearLibraryNavigationDragMarkers() {
+      document.querySelectorAll(".library-tab.nav-dragging, .library-tab.drag-over-before, .library-tab.drag-over-after").forEach((button) => {
+        button.classList.remove("nav-dragging", "drag-over-before", "drag-over-after");
+      });
+    }
+
+    function wireLibraryNavigationTabDrag(button, type) {
+      button.addEventListener("dragstart", (event) => {
+        state.libraryNavDragType = type;
+        state.libraryNavDragTabId = button.dataset.navTabId || "";
+        state.libraryNavDropTargetId = "";
+        state.libraryNavDropAfter = false;
+        state.libraryNavDropCommitted = false;
+        button.classList.add("nav-dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", state.libraryNavDragTabId);
+      });
+      button.addEventListener("dragend", () => {
+        const dragType = state.libraryNavDragType;
+        const dragTabId = state.libraryNavDragTabId;
+        const targetTabId = state.libraryNavDropTargetId;
+        const placeAfter = state.libraryNavDropAfter;
+        const shouldCommit = !state.libraryNavDropCommitted && dragType === type && dragTabId && targetTabId && dragTabId !== targetTabId;
+        state.libraryNavDragType = "";
+        state.libraryNavDragTabId = "";
+        state.libraryNavDropTargetId = "";
+        state.libraryNavDropAfter = false;
+        state.libraryNavDropCommitted = false;
+        clearLibraryNavigationDragMarkers();
+        if (shouldCommit) {
+          runLibraryMenuAction(() => moveLibraryNavigationTab(dragType, dragTabId, targetTabId, placeAfter));
+        }
+      });
+    }
+
+    function markLibraryNavigationDrop(event, button, type) {
+      if (state.libraryNavDragType !== type || !state.libraryNavDragTabId || state.libraryNavDragTabId === button.dataset.navTabId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      document.querySelectorAll(".library-tab.drag-over-before, .library-tab.drag-over-after").forEach((candidate) => {
+        if (candidate !== button) candidate.classList.remove("drag-over-before", "drag-over-after");
+      });
+      const rect = button.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      state.libraryNavDropTargetId = button.dataset.navTabId || "";
+      state.libraryNavDropAfter = after;
+      button.classList.toggle("drag-over-before", !after);
+      button.classList.toggle("drag-over-after", after);
+      const scroller = button.closest(".library-tab-scroll");
+      if (scroller) {
+        const scrollRect = scroller.getBoundingClientRect();
+        if (event.clientY < scrollRect.top + 28) scroller.scrollTop -= 10;
+        if (event.clientY > scrollRect.bottom - 28) scroller.scrollTop += 10;
+      }
+    }
+
+    async function dropLibraryNavigationTab(event, button, type) {
+      if (state.libraryNavDragType !== type || !state.libraryNavDragTabId || state.libraryNavDragTabId === button.dataset.navTabId) return;
+      event.preventDefault();
+      const rect = button.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      const dragTabId = state.libraryNavDragTabId;
+      const targetTabId = button.dataset.navTabId || "";
+      state.libraryNavDropCommitted = true;
+      state.libraryNavDragType = "";
+      state.libraryNavDragTabId = "";
+      state.libraryNavDropTargetId = "";
+      state.libraryNavDropAfter = false;
+      clearLibraryNavigationDragMarkers();
+      await runLibraryMenuAction(() => moveLibraryNavigationTab(type, dragTabId, targetTabId, after));
     }
 
     async function openLibraryShortcutTab(index) {
@@ -25412,15 +26345,17 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function assignLibraryShortcutTab(index, folderId) {
+      const tabId = String(state.libraryShortcutTabs[index]?.tab_id || "");
       const res = await fetch("/api/library/shortcut-tabs", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({index, folder_id: folderId})
+        body: JSON.stringify({tab_id: tabId, index, folder_id: folderId})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not assign shortcut");
-      applyLibrarySnapshot(data);
-      await openLibraryShortcutTab(index);
+      applyLibraryNavigationSnapshot(data);
+      const nextIndex = state.libraryShortcutTabs.findIndex((tab) => String(tab.tab_id || "") === tabId);
+      await openLibraryShortcutTab(nextIndex >= 0 ? nextIndex : index);
     }
 
     async function renameLibraryShortcutTab(index) {
@@ -25430,11 +26365,11 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/library/shortcut-tabs/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({index, label})
+        body: JSON.stringify({tab_id: state.libraryShortcutTabs[index]?.tab_id || "", index, label})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename shortcut");
-      applyLibrarySnapshot(data);
+      applyLibraryNavigationSnapshot(data);
       if (state.libraryTab === `shortcut-${index}`) state.libraryTab = `shortcut-${index}`;
       renderLibrary();
     }
@@ -25462,11 +26397,11 @@ INDEX_HTML = """<!doctype html>
       const res = await fetch("/api/library/workspace-tabs/rename", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({index, label})
+        body: JSON.stringify({tab_id: state.libraryWorkspaceTabs[index]?.tab_id || "", index, label})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not rename space");
-      applyLibrarySnapshot(data);
+      applyLibraryNavigationSnapshot(data);
       state.workspaceStatus = "Space renamed.";
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
@@ -25479,6 +26414,261 @@ INDEX_HTML = """<!doctype html>
       await renameLibraryWorkspace(index, label);
     }
 
+    function libraryMainFolderPath(folderId) {
+      const parts = [];
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        if (Number(current.id) === Number(state.libraryRootId || 1)) break;
+        parts.push(current.name || "Folder");
+        if (current.parent_id === null) return "";
+        current = libraryFolderById(current.parent_id);
+      }
+      if (!current || Number(current.id) !== Number(state.libraryRootId || 1)) return "";
+      return ["Library", ...parts.reverse()].join(" / ");
+    }
+
+    function renderLibraryNavigationFolderPicker(pathIds = [], selectedFolderId = 0) {
+      const picker = $("libraryNavFolderPicker");
+      if (!picker) return;
+      const rootId = Number(state.libraryRootId || 1);
+      const mode = state.libraryNavDialogMode || "shortcut";
+      const rootSelectable = mode === "move-workspace";
+      const selectedId = Number(selectedFolderId || 0);
+      state.libraryNavSelectedFolderId = selectedId;
+      state.libraryNavPickerPathIds = pathIds.map(Number).filter(Boolean);
+      const columns = [rootId, ...state.libraryNavPickerPathIds];
+      const rootSelected = rootSelectable && selectedId === rootId;
+      const workspaceColumn = `
+        <section class="library-add-column" data-add-column-depth="workspace">
+          <div class="library-add-column-head">Workspace</div>
+          <div class="library-add-column-body">
+            <div class="library-add-folder-row active${rootSelected ? " selected" : ""}">
+              <button class="library-add-folder-option workspace-root main-library" type="button" data-nav-root-folder-id="${rootId}" title="My Library">
+                <span class="library-add-folder-icon" aria-hidden="true"></span>
+                <span class="library-add-folder-name">My Library</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      `;
+      const folderColumns = columns.map((parentId, depth) => {
+        const activeId = Number(state.libraryNavPickerPathIds[depth] || 0);
+        const rows = libraryAddChildFolders(parentId);
+        return `
+          <section class="library-add-column" data-add-column-depth="${depth}">
+            <div class="library-add-column-head">${escapeHtml(libraryAddColumnTitle(parentId, rootId))}</div>
+            <div class="library-add-column-body">
+              ${rows.length ? rows.map((folder) => {
+                const folderId = Number(folder.id || 0);
+                const hasChildren = libraryAddFolderHasChildren(folderId);
+                return `
+                  <div class="library-add-folder-row${folderId === activeId ? " active" : ""}${folderId === selectedId ? " selected" : ""}">
+                    <button class="library-add-folder-option${folder.is_unsorted ? " unsorted" : ""}" type="button" data-nav-folder-id="${folderId}" data-nav-depth="${depth}" title="${escapeAttr(libraryMainFolderPath(folderId))}">
+                      <span class="library-add-folder-icon" aria-hidden="true"></span>
+                      <span class="library-add-folder-name">${escapeHtml(folder.name || "Folder")}</span>
+                      ${hasChildren ? `<span aria-hidden="true">›</span>` : ""}
+                    </button>
+                  </div>
+                `;
+              }).join("") : `<div class="library-add-menu-status">No subfolders.</div>`}
+            </div>
+          </section>
+        `;
+      }).join("");
+      picker.innerHTML = `<div class="library-add-columns">${workspaceColumn}${folderColumns}</div>`;
+      const selectedPath = selectedId ? libraryMainFolderPath(selectedId) : "Choose a folder.";
+      $("libraryNavSelectedPath").textContent = selectedPath || "Choose a folder.";
+      $("libraryNavSelectedPath").title = selectedPath || "";
+      $("saveLibraryNav").disabled = !selectedId || (!rootSelectable && selectedId === rootId);
+      picker.querySelector("[data-nav-root-folder-id]")?.addEventListener("click", () => {
+        renderLibraryNavigationFolderPicker([], rootSelectable ? rootId : 0);
+      });
+      picker.querySelectorAll("[data-nav-folder-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const folderId = Number(button.dataset.navFolderId || 0);
+          const depth = Number(button.dataset.navDepth || 0);
+          const nextPath = state.libraryNavPickerPathIds.slice(0, depth);
+          if (folderId && libraryAddFolderHasChildren(folderId)) nextPath[depth] = folderId;
+          renderLibraryNavigationFolderPicker(nextPath, folderId);
+        });
+      });
+      window.requestAnimationFrame(() => {
+        const selected = picker.querySelector(".library-add-folder-row.selected");
+        selected?.scrollIntoView({block: "nearest", inline: "nearest"});
+      });
+    }
+
+    async function openLibraryNavigationDialog(mode = "shortcut") {
+      await ensureLibrarySnapshotForAddMenu();
+      state.libraryNavDialogMode = ["workspace", "move-workspace"].includes(mode) ? mode : "shortcut";
+      const isWorkspace = state.libraryNavDialogMode === "workspace";
+      const isMoveWorkspace = state.libraryNavDialogMode === "move-workspace";
+      if (!isMoveWorkspace) state.libraryNavWorkspaceTabId = "";
+      $("libraryNavTitle").textContent = isWorkspace ? "Add Space" : (isMoveWorkspace ? "Move Space to Library" : "Add Shortcut");
+      $("libraryNavDescription").textContent = isWorkspace
+        ? "Create an independent Space beside the main Library."
+        : (isMoveWorkspace
+          ? "Choose where the Space folder should be placed inside My Library."
+          : "Choose an existing folder inside the main Library.");
+      $("libraryShortcutFolderField").classList.toggle("hidden", isWorkspace);
+      $("librarySpaceNameField").classList.toggle("hidden", !isWorkspace);
+      $("libraryNavFolderLabel").textContent = isMoveWorkspace ? "Destination in My Library" : "Library folder";
+      $("libraryNavStatus").textContent = "";
+      $("libraryNavNote").textContent = isWorkspace
+        ? "A matching folder will be created immediately under data/Spaces."
+        : (isMoveWorkspace
+          ? "The Space becomes a normal folder with the same name; its files and subfolders move with it."
+          : "Removing this Shortcut later will not change the Library folder or its files.");
+      $("saveLibraryNav").textContent = isMoveWorkspace ? "Move" : "Add";
+      $("librarySpaceName").value = "";
+      state.libraryNavSelectedFolderId = isMoveWorkspace ? Number(state.libraryRootId || 1) : 0;
+      state.libraryNavPickerPathIds = [];
+      if (!isWorkspace) renderLibraryNavigationFolderPicker([], state.libraryNavSelectedFolderId);
+      const backdrop = $("libraryNavBackdrop");
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      window.setTimeout(() => (isWorkspace ? $("librarySpaceName") : $("libraryNavFolderPicker"))?.focus(), 0);
+    }
+
+    function closeLibraryNavigationDialog() {
+      const backdrop = $("libraryNavBackdrop");
+      backdrop.classList.remove("open");
+      backdrop.setAttribute("aria-hidden", "true");
+      $("libraryNavStatus").textContent = "";
+      $("saveLibraryNav").disabled = false;
+      $("saveLibraryNav").textContent = "Add";
+    }
+
+    async function saveLibraryNavigationDialog() {
+      const mode = state.libraryNavDialogMode || "shortcut";
+      const button = $("saveLibraryNav");
+      button.disabled = true;
+      $("libraryNavStatus").textContent = mode === "workspace"
+        ? "Creating Space..."
+        : (mode === "move-workspace" ? "Moving Space..." : "Adding Shortcut...");
+      try {
+        if (mode === "move-workspace") {
+          const tabId = String(state.libraryNavWorkspaceTabId || "");
+          const targetFolderId = Number(state.libraryNavSelectedFolderId || 0);
+          const sourceTab = state.libraryWorkspaceTabs.find((tab) => String(tab.tab_id || "") === tabId);
+          const movedRootId = Number(sourceTab?.root_folder_id || 0);
+          if (!tabId || !movedRootId) throw new Error("Space not found");
+          if (!targetFolderId) throw new Error("Choose a destination in My Library");
+          const movedTreeIds = libraryDescendantFolderIds(movedRootId);
+          const res = await fetch("/api/library/workspace-tabs/move-to-library", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({tab_id: tabId, target_folder_id: targetFolderId})
+          });
+          const data = await parseJsonResponse(res);
+          if (!res.ok) throw new Error(data.error || "Could not move Space to Library");
+          applyLibraryNavigationSnapshot(data);
+          movedTreeIds.forEach((folderId) => {
+            state.libraryLoadedFolderIds.delete(Number(folderId));
+            delete state.libraryFolderLoadPromises[Number(folderId)];
+          });
+          state.libraryItems = state.libraryItems.filter((item) => !movedTreeIds.has(Number(item.folder_id || 0)));
+          rebuildLibraryIndexes();
+          closeLibraryNavigationDialog();
+          state.libraryTab = "library";
+          state.libraryActiveFolderId = targetFolderId;
+          state.libraryCurrentFolderId = targetFolderId;
+          state.librarySelection = {type: "folder", id: movedRootId};
+          setLibraryColumnSelection(targetFolderId, state.librarySelection);
+          await ensureLibraryFolderLoaded(targetFolderId, {force: true});
+          renderLibrary();
+          updateLibraryActivityStatus("Space moved to My Library.", {delay: 3200});
+          return;
+        }
+        const payload = mode === "workspace"
+          ? {name: $("librarySpaceName").value || ""}
+          : {folder_id: Number(state.libraryNavSelectedFolderId || 0)};
+        if (mode === "workspace" && !String(payload.name || "").trim()) throw new Error("Enter a Space name");
+        if (mode === "shortcut" && !payload.folder_id) throw new Error("Choose a Library folder");
+        const res = await fetch(`/api/library/${mode === "workspace" ? "workspace" : "shortcut"}-tabs/add`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || `Could not add ${mode === "workspace" ? "Space" : "Shortcut"}`);
+        const tabId = String(data.tab?.tab_id || "");
+        applyLibraryNavigationSnapshot(data);
+        closeLibraryNavigationDialog();
+        if (mode === "workspace") {
+          const index = state.libraryWorkspaceTabs.findIndex((tab) => String(tab.tab_id || "") === tabId);
+          if (index >= 0) await openLibraryWorkspaceTab(index);
+        } else {
+          const index = state.libraryShortcutTabs.findIndex((tab) => String(tab.tab_id || "") === tabId);
+          if (index >= 0) await openLibraryShortcutTab(index);
+        }
+      } catch (error) {
+        $("libraryNavStatus").textContent = error.message || "Could not add navigation tab";
+      } finally {
+        if ($("libraryNavBackdrop").classList.contains("open")) button.disabled = false;
+      }
+    }
+
+    async function removeLibraryNavigationTab(type, requestedIndex = null) {
+      const isWorkspace = type === "workspace";
+      const prefix = isWorkspace ? "workspace-" : "shortcut-";
+      const index = requestedIndex === null
+        ? (state.libraryTab?.startsWith(prefix) ? Number(state.libraryTab.slice(prefix.length) || 0) : -1)
+        : Number(requestedIndex);
+      const tabs = isWorkspace ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+      const tab = tabs[index];
+      if (!tab) return;
+      const res = await fetch(`/api/library/${isWorkspace ? "workspace" : "shortcut"}-tabs/remove`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({tab_id: tab.tab_id || "", index})
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || `Could not remove ${isWorkspace ? "Space" : "Shortcut"}`);
+      applyLibraryNavigationSnapshot(data);
+      state.libraryTab = "library";
+      state.libraryActiveFolderId = Number(state.libraryRootId || 1);
+      state.libraryCurrentFolderId = Number(state.libraryRootId || 1);
+      state.librarySelection = {type: "folder", id: Number(state.libraryRootId || 1)};
+      renderLibrary();
+      updateLibraryActivityStatus(isWorkspace ? "Empty Space removed." : "Shortcut removed.", {delay: 2600});
+    }
+
+    async function removeActiveLibraryNavigationTab(type) {
+      return removeLibraryNavigationTab(type, null);
+    }
+
+    async function moveLibraryNavigationTab(type, dragTabId, targetTabId, placeAfter) {
+      const isWorkspace = type === "workspace";
+      const tabs = isWorkspace ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+      const ids = tabs.map((tab) => String(tab.tab_id || ""));
+      const fromIndex = ids.indexOf(String(dragTabId || ""));
+      const targetIndex = ids.indexOf(String(targetTabId || ""));
+      if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return;
+      const activePrefix = isWorkspace ? "workspace-" : "shortcut-";
+      const activeIndex = state.libraryTab?.startsWith(activePrefix) ? Number(state.libraryTab.slice(activePrefix.length) || 0) : -1;
+      const activeTabId = activeIndex >= 0 ? String(tabs[activeIndex]?.tab_id || "") : "";
+      ids.splice(fromIndex, 1);
+      const adjustedTarget = ids.indexOf(String(targetTabId || ""));
+      ids.splice(adjustedTarget + (placeAfter ? 1 : 0), 0, String(dragTabId));
+      const res = await fetch(`/api/library/${isWorkspace ? "workspace" : "shortcut"}-tabs/reorder`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({tab_ids: ids})
+      });
+      const data = await parseJsonResponse(res);
+      if (!res.ok) throw new Error(data.error || "Could not reorder tabs");
+      applyLibraryNavigationSnapshot(data);
+      if (activeTabId) {
+        const nextTabs = isWorkspace ? state.libraryWorkspaceTabs : state.libraryShortcutTabs;
+        const nextIndex = nextTabs.findIndex((tab) => String(tab.tab_id || "") === activeTabId);
+        if (nextIndex >= 0) state.libraryTab = `${activePrefix}${nextIndex}`;
+      }
+      renderLibrary();
+    }
+
     async function addLibraryWorkspaceDoi(index) {
       const identifier = $("workspaceDoiInput")?.value || "";
       if (!identifier.trim()) return;
@@ -25489,7 +26679,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/workspace-tabs/add-doi", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({index, identifier})
+          body: JSON.stringify({tab_id: state.libraryWorkspaceTabs[index]?.tab_id || "", index, identifier})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add paper");
@@ -25529,6 +26719,11 @@ INDEX_HTML = """<!doctype html>
       $("workspaceAddDoiButton")?.addEventListener("click", (event) => {
         event.stopPropagation();
         runLibraryMenuAction(() => addLibraryWorkspaceDoi(index));
+      });
+      $("workspaceMoveToLibraryButton")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        state.libraryNavWorkspaceTabId = String(state.libraryWorkspaceTabs[index]?.tab_id || "");
+        runLibraryMenuAction(() => openLibraryNavigationDialog("move-workspace"));
       });
       $("workspaceDoiInput")?.addEventListener("click", (event) => event.stopPropagation());
       $("workspaceDoiInput")?.addEventListener("keydown", (event) => {
@@ -26222,6 +27417,7 @@ INDEX_HTML = """<!doctype html>
         shell.style.height = `${availableHeight}px`;
         shell.style.minHeight = `${availableHeight}px`;
       }
+      updateLibraryNavigationRailLayout();
     }
 
     function captureLibraryColumnScrollTops() {
@@ -30240,7 +31436,12 @@ INDEX_HTML = """<!doctype html>
       try {
         await action();
       } catch (error) {
-        window.alert(error.message || "Library action failed");
+        const message = error.message || "Library action failed";
+        if ($("libraryNavBackdrop")?.classList.contains("open")) {
+          $("libraryNavStatus").textContent = message;
+        }
+        updateLibraryActivityStatus(message, {delay: 4600});
+        console.error(error);
       }
     }
 
@@ -30595,6 +31796,8 @@ INDEX_HTML = """<!doctype html>
       menu.classList.add("open");
       menu.onclick = (clickEvent) => clickEvent.stopPropagation();
       const renameButton = menu.querySelector('[data-action="rename-tab"]');
+      const removeButton = menu.querySelector('[data-action="remove-tab"]');
+      if (removeButton) removeButton.textContent = tabType === "workspace" ? "Remove Empty Space" : "Remove Shortcut";
       if (renameButton) {
         renameButton.onclick = async () => {
           const type = menu.dataset.tabType || "";
@@ -30602,6 +31805,14 @@ INDEX_HTML = """<!doctype html>
           hideLibraryTabContextMenu();
           if (type === "shortcut") await runLibraryMenuAction(() => renameLibraryShortcutTab(tabIndex));
           if (type === "workspace") await runLibraryMenuAction(() => renameLibraryWorkspaceFromTab(tabIndex));
+        };
+      }
+      if (removeButton) {
+        removeButton.onclick = async () => {
+          const type = menu.dataset.tabType || "shortcut";
+          const tabIndex = Number(menu.dataset.tabIndex || 0);
+          hideLibraryTabContextMenu();
+          await runLibraryMenuAction(() => removeLibraryNavigationTab(type, tabIndex));
         };
       }
     }
@@ -31993,7 +33204,10 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Could not save subject");
 	        state.themeGroups = data.groups || [];
 	        state.themeGroupsLoaded = true;
-	        if (data.group?.key) state.selectedThemeGroups.add(data.group.key);
+	        if (data.group?.key) {
+	          state.selectedThemeGroups.add(data.group.key);
+	          state.activeThemeGroupKey = data.group.key;
+	        }
 	        saveSelectedThemeGroups();
 	        closeThemeGroupDialog();
         renderThemeFilters();
@@ -32096,6 +33310,7 @@ INDEX_HTML = """<!doctype html>
       }
       state.themeGroups = data.groups || [];
       state.themeGroupsLoaded = true;
+      if (state.activeThemeGroupKey === group.key) state.activeThemeGroupKey = "";
       state.selectedThemeGroups.delete(group.key);
       const known = new Set(knownThemeGroupKeys());
       state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
@@ -32110,13 +33325,13 @@ INDEX_HTML = """<!doctype html>
     }
 
     function clearThemeDragMarkers() {
-      document.querySelectorAll(".theme-toggle.dragging, .theme-toggle.drag-over-before, .theme-toggle.drag-over-after").forEach((element) => {
+      document.querySelectorAll(".theme-toggle.dragging, .theme-toggle.drag-over-before, .theme-toggle.drag-over-after, .subject-tab.dragging, .subject-tab.drag-over-before, .subject-tab.drag-over-after").forEach((element) => {
         element.classList.remove("dragging", "drag-over-before", "drag-over-after");
       });
     }
 
     function clearThemeDropMarkers() {
-      document.querySelectorAll(".theme-toggle.drag-over-before, .theme-toggle.drag-over-after").forEach((element) => {
+      document.querySelectorAll(".theme-toggle.drag-over-before, .theme-toggle.drag-over-after, .subject-tab.drag-over-before, .subject-tab.drag-over-after").forEach((element) => {
         element.classList.remove("drag-over-before", "drag-over-after");
       });
     }
@@ -32138,6 +33353,7 @@ INDEX_HTML = """<!doctype html>
       state.themeGroupsLoaded = true;
       renderThemeFilters();
       renderThemeGroupSelect();
+      if (state.mode === "theme") renderThemeMonitor();
     }
 
     async function moveThemeGroup(dragKey, targetKey, placeAfter) {
@@ -32153,11 +33369,13 @@ INDEX_HTML = """<!doctype html>
       const previousGroups = state.themeGroups;
       state.themeGroups = orderedThemeGroups(next);
       renderThemeFilters();
+      if (state.mode === "theme") renderThemeMonitor();
       try {
         await saveThemeGroupOrder(next);
       } catch (error) {
         state.themeGroups = previousGroups;
         renderThemeFilters();
+        if (state.mode === "theme") renderThemeMonitor();
         window.alert(error.message || "Could not reorder subjects");
       }
     }
@@ -32224,10 +33442,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function selectedThemeGroupKeys() {
-      const known = knownThemeGroupKeys();
-      const knownSet = new Set(known);
-      const keys = [...state.selectedThemeGroups].filter((key) => knownSet.has(key));
-      return keys.length ? keys : known.slice(0, 1);
+      return knownThemeGroupKeys();
     }
 
 	    function selectedThemeGroupParam() {
@@ -32828,6 +34043,123 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function themePaperIsArxiv(paper) {
+      const journal = String(paper?.journal || "").trim().toLowerCase();
+      const source = String(paper?.source || "").trim().toLowerCase();
+      return journal === "arxiv" || journal.startsWith("arxiv ") || journal.startsWith("arxiv (") || source === "arxiv";
+    }
+
+    function themeVisiblePapers() {
+      return (state.themePapers || []).filter((paper) => state.showThemeArxiv || !themePaperIsArxiv(paper));
+    }
+
+    function themePaperMatchesGroup(paper, key) {
+      return (paper?.theme_groups || []).some((group) => String(group?.key || "") === String(key || ""));
+    }
+
+    function groupedThemePapers(papers = themeVisiblePapers()) {
+      return state.themeGroups.map((group) => ({
+        key: group.key,
+        name: group.name || group.key,
+        group,
+        papers: papers.filter((paper) => themePaperMatchesGroup(paper, group.key))
+      }));
+    }
+
+    function renderThemeTabs(groups) {
+      const root = $("reportTabs");
+      root.innerHTML = "";
+      root.classList.add("open");
+      const addButton = document.createElement("button");
+      addButton.className = "journal-tab subject-add-tab";
+      addButton.type = "button";
+      addButton.title = "Add subject";
+      addButton.setAttribute("aria-label", "Add subject");
+      addButton.textContent = "+";
+      addButton.addEventListener("click", () => openThemeGroupDialog());
+      root.appendChild(addButton);
+      groups.forEach((entry) => {
+        const button = document.createElement("button");
+        button.className = `journal-tab subject-tab${entry.key === state.activeThemeGroupKey ? " active" : ""}`;
+        button.type = "button";
+        button.title = entry.name;
+        button.dataset.themeKey = entry.key;
+        button.draggable = true;
+        button.innerHTML = `
+          <span class="journal-tab-label">${escapeHtml(entry.name)}</span>
+          <span class="journal-tab-count">${entry.papers.length}</span>
+        `;
+        button.addEventListener("click", () => {
+          if (state.themeSuppressNextClick) return;
+          state.activeThemeGroupKey = entry.key;
+          state.reportSelectedPaperId = entry.papers[0]?.paper_id || "";
+          renderThemeMonitor();
+        });
+        button.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showThemeContextMenu(event, entry.group);
+        });
+        button.addEventListener("dragstart", (event) => {
+          hideThemeContextMenu();
+          state.themeDragKey = entry.key;
+          button.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", entry.key);
+        });
+        button.addEventListener("dragover", (event) => {
+          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
+          if (!dragKey || dragKey === entry.key) return;
+          event.preventDefault();
+          const rect = button.getBoundingClientRect();
+          const after = event.clientX > rect.left + rect.width / 2;
+          button.classList.toggle("drag-over-before", !after);
+          button.classList.toggle("drag-over-after", after);
+        });
+        button.addEventListener("dragleave", () => {
+          button.classList.remove("drag-over-before", "drag-over-after");
+        });
+        button.addEventListener("drop", (event) => {
+          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
+          if (!dragKey || dragKey === entry.key) return;
+          event.preventDefault();
+          const rect = button.getBoundingClientRect();
+          const after = event.clientX > rect.left + rect.width / 2;
+          clearThemeDragMarkers();
+          moveThemeGroup(dragKey, entry.key, after);
+        });
+        button.addEventListener("dragend", () => {
+          state.themeDragKey = "";
+          clearThemeDragMarkers();
+        });
+        root.appendChild(button);
+      });
+      root.onscroll = () => updateReportTabsOverflow();
+      window.requestAnimationFrame(() => {
+        updateReportTabsOverflow();
+        revealActiveReportTab();
+      });
+    }
+
+    function activeThemePapers() {
+      const groups = groupedThemePapers();
+      return groups.find((group) => group.key === state.activeThemeGroupKey)?.papers || [];
+    }
+
+    function switchThemeSubjectTab(delta) {
+      const groups = groupedThemePapers().filter((group) => group.papers.length);
+      if (!groups.length) return true;
+      const currentIndex = groups.findIndex((group) => group.key === state.activeThemeGroupKey);
+      const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+      const next = groups[(baseIndex + delta + groups.length) % groups.length];
+      state.activeThemeGroupKey = next.key;
+      state.reportSelectedPaperId = next.papers[0]?.paper_id || "";
+      renderThemeMonitor();
+      revealActiveReportTab({smooth: true});
+      updateReportPaperSelectionDom({scroll: true});
+      return true;
+    }
+
     function renderThemeMonitor() {
       if (state.mode !== "theme") return;
       state.papers = state.themePapers;
@@ -32837,8 +34169,6 @@ INDEX_HTML = """<!doctype html>
       clearFetchProgressDisplay();
       $("libraryControls").classList.remove("open");
       $("reportTitle").textContent = "Subject Monitor";
-      $("reportTabs").classList.remove("open");
-      $("reportTabs").innerHTML = "";
       const root = $("papers");
       root.classList.remove("library-view", "deep-survey-view");
       root.style.height = "";
@@ -32859,6 +34189,16 @@ INDEX_HTML = """<!doctype html>
         button.textContent = state.themeSearchRunning ? "Searching..." : "Search";
       }
       updateThemeFetchButton(currentThemeBusy, selectedDateFetching);
+      const visiblePapers = themeVisiblePapers();
+      const groups = groupedThemePapers(visiblePapers);
+      const currentGroup = groups.find((group) => group.key === state.activeThemeGroupKey);
+      const firstNonEmptyGroup = groups.find((group) => group.papers.length);
+      if (!currentGroup) {
+        state.activeThemeGroupKey = firstNonEmptyGroup?.key || groups[0]?.key || "";
+      }
+      renderThemeTabs(groups);
+      const activeGroup = groups.find((group) => group.key === state.activeThemeGroupKey) || groups[0] || null;
+      const activePapers = activeGroup?.papers || [];
       const groupLabel = selectedThemeGroupLabel();
       const saved = Number(summary.saved || 0);
       const raw = Number(summary.raw_results || 0);
@@ -32866,7 +34206,7 @@ INDEX_HTML = """<!doctype html>
       const dateLabel = windowStart === windowEnd ? windowStart : `${windowStart} to ${windowEnd}`;
       const lastFetchLabel = themeLastFetchLabel(summary.last_fetch);
       $("summary").textContent = state.themeSearched
-        ? `${dateLabel} · ${groupLabel} · ${state.themePapers.length} shown · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
+        ? `${dateLabel} · ${groupLabel} · ${activePapers.length} shown in ${activeGroup?.name || "Subject"} · ${visiblePapers.length} visible · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
         : "Choose a date on the calendar to fetch subject-matched papers from multiple metadata sources.";
       if (currentThemeBusy) {
         root.insertAdjacentHTML("beforeend", themeFetchProgressMarkup(state.selectedDate, summary.last_fetch));
@@ -32885,8 +34225,19 @@ INDEX_HTML = """<!doctype html>
         root.innerHTML = `<div class="empty">No subject-matched papers for this window.</div>`;
         return;
       }
-      ensureReportPaperSelection(state.themePapers);
-      state.themePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      if (!activeGroup) {
+        root.innerHTML = `<div class="empty">Add a subject to start monitoring papers.</div>`;
+        return;
+      }
+      requestKatexForPapers(activePapers);
+      ensureReportPaperSelection(activePapers);
+      activePapers.forEach((paper) => root.appendChild(renderPaper(paper)));
+      if (!activePapers.length) {
+        const hiddenArxivCount = state.showThemeArxiv
+          ? 0
+          : state.themePapers.filter((paper) => themePaperMatchesGroup(paper, activeGroup.key) && themePaperIsArxiv(paper)).length;
+        root.insertAdjacentHTML("beforeend", `<div class="empty">${hiddenArxivCount ? "No non-arXiv papers in this subject for this date." : "No papers in this subject for this date."}</div>`);
+      }
     }
 
 	    function themeLastFetchLabel(lastFetch) {
@@ -32902,11 +34253,17 @@ INDEX_HTML = """<!doctype html>
 	      if (!forceButton) return;
 	      if (state.mode !== "theme") {
 	        forceButton.disabled = false;
-	        forceButton.textContent = "Fetch selected date";
+	        forceButton.textContent = "Refresh";
 	        return;
 	      }
-	      forceButton.disabled = Boolean(currentThemeBusy);
-	      forceButton.textContent = selectedDateFetching ? "Fetching..." : "Fetch selected date";
+	      const futureDate = isFutureDateIso(state.selectedDate);
+	      forceButton.disabled = Boolean(currentThemeBusy) || futureDate;
+	      forceButton.textContent = selectedDateFetching ? "Refreshing..." : "Refresh";
+	      forceButton.title = futureDate
+	        ? "Future dates cannot be refreshed"
+	        : "Refresh all subjects for this date";
+	      const arxivToggle = $("themeArxivToggle");
+	      if (arxivToggle) arxivToggle.checked = Boolean(state.showThemeArxiv);
 	    }
 
     function formatThemeFetchTime(value) {
@@ -33038,7 +34395,7 @@ INDEX_HTML = """<!doctype html>
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-	      $("themeToolbarActions")?.classList.add("hidden");
+	      $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
 	      updateLibrarySearchTools();
 	      updateReportRefreshButton();
 	      updateThemeFetchButton();
@@ -33153,6 +34510,10 @@ INDEX_HTML = """<!doctype html>
     $("forceThemeFetch")?.addEventListener("click", () => {
       forceFetchSelectedThemeDate().catch((error) => handleThemeLoadFailure(error, state.selectedDate));
     });
+    $("themeArxivToggle")?.addEventListener("change", (event) => {
+      state.showThemeArxiv = Boolean(event.target.checked);
+      renderThemeMonitor();
+    });
     $("recommendThemeKeywords")?.addEventListener("click", recommendThemeKeywords);
     $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
     $("themeFromDate")?.addEventListener("change", (event) => { state.themeFromDate = event.target.value || state.themeFromDate; });
@@ -33229,6 +34590,12 @@ INDEX_HTML = """<!doctype html>
       closePublicationAuthorMenu();
       closePublicationExportMenu();
       closeAuthorAffiliationTooltip();
+      if ($("libraryNavBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryNavigationDialog();
+        return;
+      }
       if ($("citationSettingsBackdrop").classList.contains("open")) {
         event.preventDefault();
         event.stopPropagation();
@@ -33273,6 +34640,10 @@ INDEX_HTML = """<!doctype html>
       if (!event.target.closest?.(".theme-context-menu")) hideThemeContextMenu();
       if (event.target === $("themeGroupBackdrop")) {
         closeThemeGroupDialog();
+        return;
+      }
+      if (event.target === $("libraryNavBackdrop")) {
+        closeLibraryNavigationDialog();
         return;
       }
       if (event.target.closest?.('[data-action="open-scholar-profile"]')) {
@@ -33362,6 +34733,15 @@ INDEX_HTML = """<!doctype html>
     });
     wireWindowDragRegion();
     $("addThemeGroup")?.addEventListener("click", openThemeGroupDialog);
+    $("closeLibraryNav")?.addEventListener("click", closeLibraryNavigationDialog);
+    $("cancelLibraryNav")?.addEventListener("click", closeLibraryNavigationDialog);
+    $("saveLibraryNav")?.addEventListener("click", saveLibraryNavigationDialog);
+    $("librarySpaceName")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveLibraryNavigationDialog();
+      }
+    });
     $("closeThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
     $("cancelThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
     $("saveThemeGroup")?.addEventListener("click", saveThemeGroup);
@@ -33389,7 +34769,7 @@ INDEX_HTML = """<!doctype html>
       renderLibraryLoader();
     } else {
       Promise.resolve().then(loadLibrary).catch((error) => {
-        $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        showBootError(error);
       });
       window.setInterval(() => {
         const currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";

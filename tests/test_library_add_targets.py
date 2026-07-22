@@ -7,10 +7,13 @@ from paper_monitor.ui_server import library_add_targets_snapshot, library_worksp
 
 
 class LibraryAddTargetsTests(unittest.TestCase):
-    def test_snapshot_lists_library_and_three_named_space_roots(self):
+    def test_snapshot_lists_dynamic_named_space_roots(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
             try:
+                storage.create_library_root_folder(name="Space 1")
+                storage.create_library_root_folder(name="Space 2")
+                storage.create_library_root_folder(name="Space 3")
                 tabs = library_workspace_tabs(storage)
                 self.assertEqual(len(tabs), 3)
                 renamed = storage.rename_library_folder(folder_id=int(tabs[1]["root_folder_id"]), name="Quantum Lab")
