@@ -240,6 +240,120 @@ class ThemeMonitorTest(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_latest_theme_error_remains_missing_even_with_saved_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.upsert_paper(
+                    {
+                        "paper_id": "doi_partial",
+                        "doi": "10.1000/partial",
+                        "title": "Partially fetched subject result",
+                        "journal": "Example Journal",
+                        "publication_date": "2026-06-02",
+                        "abstract": "alpha",
+                        "url": "https://doi.org/10.1000/partial",
+                        "source": "crossref",
+                        "type_crossref": "journal-article",
+                        "section_allowed": True,
+                    }
+                )
+                storage.record_theme_result(
+                    paper_id="doi_partial",
+                    group_key="partial",
+                    group_name="Partial",
+                    query="alpha",
+                    score=2,
+                    hits=["alpha"],
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                )
+                storage.record_fetch_run(
+                    monitor_type="theme",
+                    source="multi",
+                    journal="theme:partial",
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                    status="success",
+                    records_found=1,
+                    started_at="2026-06-02T09:00:00+09:00",
+                )
+                storage.record_fetch_run(
+                    monitor_type="theme",
+                    source="multi",
+                    journal="theme:partial",
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                    status="error",
+                    records_found=1,
+                    message="one source failed",
+                    started_at="2026-06-02T10:00:00+09:00",
+                )
+                self.assertEqual(
+                    missing_theme_group_keys_for_date(storage, "2026-06-02", ["partial"]),
+                    ["partial"],
+                )
+            finally:
+                storage.close()
+
+    def test_theme_retry_runs_only_failed_query_source_tasks(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"partial": {"name": "Partial", "queries": ["alpha"]}}
+        calls = []
+
+        def successful_source(query, start_date, end_date):
+            calls.append(("successful", query))
+            return []
+
+        def failing_source(query, start_date, end_date):
+            calls.append(("failing", query))
+            raise RuntimeError("temporary failure")
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [
+                ("successful", successful_source),
+                ("failing", failing_source),
+            ]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    first = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["partial"],
+                        theme_groups=groups,
+                    )
+                    self.assertIn(
+                        {"query": "alpha", "source": "failing"},
+                        first["groups"]["partial"]["failed_tasks"],
+                    )
+                    calls.clear()
+                    ui_server.theme_source_fetchers = lambda: [
+                        ("successful", successful_source),
+                        ("failing", successful_source),
+                    ]
+                    second = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["partial"],
+                        theme_groups=groups,
+                        retry_tasks_by_group={
+                            "partial": [{"query": "alpha", "source": "failing"}],
+                        },
+                    )
+                    self.assertEqual(calls, [("successful", "alpha")])
+                    self.assertEqual(second["groups"]["partial"]["failed_tasks"], [])
+                    self.assertEqual(missing_theme_group_keys_for_date(storage, selected.isoformat(), ["partial"]), [])
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
     def test_theme_hit_chips_omit_group_name_duplicates(self):
         paper = {
             "paper_id": "p1",

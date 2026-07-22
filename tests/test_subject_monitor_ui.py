@@ -127,6 +127,49 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('refreshJournal: journalName', refresh)
         self.assertIn('refresh_journal=${encodeURIComponent(refreshJournal)}', INDEX_HTML)
 
+    def test_monitor_status_and_progress_stay_outside_the_scrolling_paper_list(self):
+        layout = INDEX_HTML.split('<section class="report-column">', 1)[1].split(
+            '</section>', 1
+        )[0]
+        theme_render = INDEX_HTML.split('function renderThemeMonitor', 1)[1].split(
+            'function themeLastFetchLabel', 1
+        )[0]
+        theme_progress = INDEX_HTML.split('function updateThemeFetchProgressDisplay', 1)[1].split(
+            'function themeFetchProgressMarkup', 1
+        )[0]
+        journal_render = INDEX_HTML.split('function renderReport()', 1)[1].split(
+            'function renderLateArrivalsBanner', 1
+        )[0]
+
+        self.assertLess(layout.index('id="autoUpdateStatus"'), layout.index('id="reportTabs"'))
+        self.assertLess(layout.index('id="reportTabs"'), layout.index('id="fetchProgressHost"'))
+        self.assertLess(layout.index('id="fetchProgressHost"'), layout.index('id="monitorStatusHost"'))
+        self.assertLess(layout.index('id="monitorStatusHost"'), layout.index('id="papers"'))
+        self.assertIn('const root = $("fetchProgressHost")', theme_progress)
+        self.assertNotIn('$("papers")?.querySelector("[data-theme-fetch-progress]")', theme_progress)
+        self.assertIn('updateThemeFetchProgressDisplay(state.selectedDate)', theme_render)
+        self.assertNotIn('root.insertAdjacentHTML("beforeend", themeFetchProgressMarkup', theme_render)
+        self.assertIn('renderLateArrivalsBanner(statusRoot)', journal_render)
+        self.assertIn('renderArxivUpdateCountdown(statusRoot', journal_render)
+        self.assertIn('renderMonitorPaperList(root, activePapers, "report")', journal_render)
+
+    def test_automatic_update_status_is_polled_and_failed_subject_fetches_are_incomplete(self):
+        completeness = INDEX_HTML.split('function themeFetchRecordIsComplete', 1)[1].split(
+            'function themePapersCacheKey', 1
+        )[0]
+        polling = INDEX_HTML.split('function refreshAutoMonitorStatus', 1)[1].split(
+            'function setPrimaryView', 1
+        )[0]
+        load_report = INDEX_HTML.split('async function loadThemeReportForDate', 1)[1].split(
+            'async function loadThemeCachedReportAfterFailure', 1
+        )[0]
+
+        self.assertIn('["success", "empty"]', completeness)
+        self.assertIn('themeFetchRecordIsComplete(lastFetch, requestedGroupParam)', load_report)
+        self.assertIn('fetchJson("/api/monitor-auto-status"', polling)
+        self.assertIn('window.setInterval(refreshAutoMonitorStatus, 60000)', polling)
+        self.assertIn('still incomplete after 3 retries', INDEX_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

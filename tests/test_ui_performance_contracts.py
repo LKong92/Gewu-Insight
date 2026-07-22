@@ -72,6 +72,66 @@ class UiPerformanceContractTests(unittest.TestCase):
             self.assertIn('"publication":', source, handler_name)
             self.assertNotIn("list_my_publications", source, handler_name)
 
+    def test_journal_monitor_renders_before_independent_month_refresh(self) -> None:
+        open_monitor = self.js_function("openJournalMonitor")
+
+        self.assertIn("loadReport({showLoading: true})", open_monitor)
+        self.assertIn("const monthPromise = loadMonth()", open_monitor)
+        self.assertIn("Promise.all([reportPromise, monthPromise])", open_monitor)
+        self.assertLess(open_monitor.index("loadReport({showLoading: true})"), open_monitor.index("loadMonth()"))
+
+    def test_subject_monitor_replaces_old_surface_before_network_wait(self) -> None:
+        open_monitor = self.js_function("openThemeMonitor")
+        transition = self.js_function("renderThemeTransitionSurface")
+
+        self.assertLess(open_monitor.index("renderThemeTransitionSurface()"), open_monitor.index("await ensureThemeGroupsLoaded()"))
+        self.assertIn("const monthPromise = loadThemeMonth()", open_monitor)
+        self.assertIn("Promise.all([monthPromise, reportPromise])", open_monitor)
+        self.assertNotIn("loadThemeMonth({force: true})", open_monitor)
+        self.assertIn('showMonitorStatusMessage("Loading subject papers for this date...")', transition)
+
+    def test_my_publications_uses_one_background_load_and_stable_skeleton(self) -> None:
+        loader = self.js_function("loadMyPublications")
+        ensure = self.js_function("ensureMyPublicationsLoaded")
+        renderer = self.js_function("renderMyPublications")
+
+        self.assertLess(loader.index("renderMyPublications({loading:"), loader.index("await ensureMyPublicationsLoaded()"))
+        self.assertIn("state.myPublicationsLoadingPromise", ensure)
+        self.assertIn('fetch("/api/my-publications")', ensure)
+        self.assertIn("myPublicationsLoadingRowsMarkup()", renderer)
+        self.assertIn("myPublicationsLoadingStatsMarkup()", renderer)
+        self.assertIn("myPublicationsLoadingDetailMarkup()", renderer)
+        self.assertIn("scheduleMyPublicationsPrefetch();", ui_server.INDEX_HTML)
+
+    def test_monitor_switch_preserves_loaded_paper_images(self) -> None:
+        stasher = self.js_function("stashCurrentMonitorPaperSurface")
+        renderer = self.js_function("renderMonitorPaperList")
+        primary_view = self.js_function("setPrimaryView")
+        journal_render = self.js_function("renderReport()")
+        subject_render = self.js_function("renderThemeMonitor")
+
+        self.assertIn("document.createDocumentFragment()", stasher)
+        self.assertIn("state.monitorPaperDomCache[mode]", stasher)
+        self.assertIn("cached.fragment", renderer)
+        self.assertIn("root.dataset.monitorSignature === signature", renderer)
+        self.assertIn("stashCurrentMonitorPaperSurface(paperRoot)", primary_view)
+        self.assertIn('renderMonitorPaperList(root, activePapers, "report")', journal_render)
+        self.assertIn('renderMonitorPaperList(root, activePapers, "theme")', subject_render)
+
+    def test_monitor_sidebar_reserves_the_same_scrollbar_width(self) -> None:
+        self.assertIn("scrollbar-gutter: stable;", ui_server.INDEX_HTML)
+        self.assertIn("overflow-x: hidden;", ui_server.INDEX_HTML)
+        self.assertIn("--monitor-calendar-width: 280px;", ui_server.INDEX_HTML)
+        self.assertIn("width: var(--monitor-calendar-width);", ui_server.INDEX_HTML)
+
+    def test_monitor_calendars_always_render_six_week_rows(self) -> None:
+        calendar = self.js_function("renderCalendar")
+        primary_view = self.js_function("setPrimaryView")
+
+        self.assertIn("const trailingBlanks = 42 - startOffset - days", calendar)
+        self.assertIn('blank.setAttribute("aria-hidden", "true")', calendar)
+        self.assertIn("if (sidebar) sidebar.scrollTop = 0", primary_view)
+
 
 if __name__ == "__main__":
     unittest.main()
