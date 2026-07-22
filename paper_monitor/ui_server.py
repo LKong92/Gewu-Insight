@@ -915,9 +915,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             target_dir = local_copy_dir_for_download_context(storage, payload)
-            if target_dir and not bool(payload.get("force")):
-                move_monitor_pdf_into_context_if_needed(storage, paper_id, target_dir)
+            if target_dir is None:
+                target_dir = preferred_local_pdf_dir_for_paper(storage, paper_id)
+            if target_dir:
+                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
             result = download_paper(storage=storage, paper_id=paper_id, target_dir=target_dir, force=bool(payload.get("force")))
+            if target_dir:
+                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
             if target_dir:
                 context = clean_text(str(payload.get("context") or "")).lower()
                 if context == "my-publications":
@@ -1412,7 +1416,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if use_requested_order:
                 rows_by_id = {int(row["id"]): row for row in rows}
                 rows = [rows_by_id[publication_id] for publication_id in requested_order if publication_id in rows_by_id]
-            my_name = storage.get_setting("my_publications_name", "")
+            my_name = effective_my_publication_name(storage)
         finally:
             storage.close()
         try:
@@ -1621,7 +1625,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 raise ValueError("Space root folder not found")
             if paper_id:
                 storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
-                move_monitor_pdf_into_context_if_needed(storage, paper_id, local_copy_dir_for_library_folder(storage, root_folder_id))
+                reconcile_paper_pdf_storage(
+                    storage,
+                    paper_id,
+                    target_dir=local_copy_dir_for_library_folder(storage, root_folder_id),
+                )
                 sync_alias_for_library_item(storage, paper_id, root_folder_id)
             storage.set_setting("library_workspace_tabs", json.dumps(workspace_tabs_to_setting(tabs), ensure_ascii=False))
             snapshot = library_snapshot(storage)
@@ -2035,7 +2043,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     name=default_library_item_display_name(paper, rule=naming_rule),
                 )
             if item:
-                move_monitor_pdf_into_context_if_needed(storage, paper_id, local_copy_dir_for_library_folder(storage, folder_id))
+                reconcile_paper_pdf_storage(
+                    storage,
+                    paper_id,
+                    target_dir=local_copy_dir_for_library_folder(storage, folder_id),
+                )
                 sync_alias_for_library_item(storage, paper_id, folder_id)
             target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
             updated_paper = storage.get_paper(paper_id) or paper
@@ -7876,6 +7888,13 @@ def load_my_publications_scholar_profile(storage: Storage) -> dict[str, Any]:
         return {}
 
 
+def effective_my_publication_name(storage: Storage) -> str:
+    saved_name = clean_text(storage.get_setting("my_publications_name", ""))
+    if saved_name:
+        return saved_name
+    return clean_text(load_my_publications_scholar_profile(storage).get("name") or "")
+
+
 def save_my_publications_scholar_profile(storage: Storage, profile: Any) -> dict[str, Any]:
     sanitized = sanitize_google_scholar_profile(profile)
     storage.set_setting(
@@ -12749,6 +12768,53 @@ def local_copy_dir_for_download_context(storage: Storage, payload: dict[str, Any
     return None
 
 
+def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Path]:
+    if not paper_id:
+        return []
+    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+    rows = storage.conn.execute(
+        """
+        SELECT id, folder_id, trashed_at
+        FROM library_items
+        WHERE paper_id = ?
+        ORDER BY id ASC
+        """,
+        (str(paper_id),),
+    ).fetchall()
+    directories: list[Path] = []
+    for row in rows:
+        folder_id = int(row["folder_id"] or 0)
+        if not folder_id or row["trashed_at"]:
+            continue
+        if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
+            continue
+        directories.append(local_copy_dir_for_library_folder(storage, folder_id))
+    if paper_has_my_publication_reference(storage, paper_id):
+        directories.append(MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for directory in directories:
+        key = str(directory.expanduser().resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(directory)
+    return unique
+
+
+def preferred_local_pdf_dir_for_paper(storage: Storage, paper_id: str) -> Path | None:
+    directories = active_local_pdf_dirs_for_paper(storage, paper_id)
+    if not directories:
+        return None
+    canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
+    if canonical:
+        canonical_parent = canonical.parent.resolve()
+        for directory in directories:
+            if directory.expanduser().resolve() == canonical_parent:
+                return directory
+    return directories[0]
+
+
 def attach_manual_pdf_to_paper(
     storage: Storage,
     *,
@@ -13285,7 +13351,11 @@ def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
 
 def sync_all_pdf_aliases_for_paper(storage: Storage, paper_id: str, *, old_target: Path | None = None) -> None:
     if old_target:
-        remove_symlinks_to(old_target, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
+        removed = remove_symlinks_to(
+            old_target,
+            [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT],
+        )
+        cleanup_local_copy_empty_parents(removed)
     rows = storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id = ?", (str(paper_id),)).fetchall()
     for row in rows:
         sync_alias_for_library_item(storage, paper_id, int(row["folder_id"] or 0))
@@ -13319,6 +13389,9 @@ def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, tar
     except ValueError:
         return False
     target_dir.mkdir(parents=True, exist_ok=True)
+    removed = remove_direct_symlinks_to(canonical, [target_dir])
+    cleanup_local_copy_empty_parents(removed)
+    target_dir.mkdir(parents=True, exist_ok=True)
     target_path = unique_path_in_dir(target_dir / paper_pdf_basename(paper, canonical))
     old_path = canonical
     shutil.move(str(canonical), str(target_path))
@@ -13326,6 +13399,31 @@ def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, tar
     cleanup_empty_parents([str(old_path)], DEFAULT_PDF_DIR.resolve())
     sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
     return True
+
+
+def reconcile_paper_pdf_storage(
+    storage: Storage,
+    paper_id: str,
+    *,
+    target_dir: Path | None = None,
+) -> bool:
+    target = target_dir or preferred_local_pdf_dir_for_paper(storage, paper_id)
+    if not target:
+        return False
+    changed = move_monitor_pdf_into_context_if_needed(storage, paper_id, target)
+    paper = storage.get_paper(paper_id)
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not paper or not canonical:
+        return changed
+    if canonical.parent.resolve() != target.expanduser().resolve():
+        return changed
+    canonical_value = str(canonical)
+    stored_paths = [str(paper.get(key) or "") for key in ("main_pdf_path", "merged_pdf_path")]
+    if any(path and str(Path(path).expanduser().absolute()) != canonical_value for path in stored_paths):
+        update_paper_pdf_paths(storage, paper_id, canonical, message="PDF path normalized to local Library storage")
+        changed = True
+    sync_all_pdf_aliases_for_paper(storage, paper_id)
+    return changed
 
 
 def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], target_folder_id: int) -> None:
@@ -13408,11 +13506,13 @@ def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str
 
 
 def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]) -> None:
+    paper_ids: set[str] = set()
     for entry in plan:
         item = storage.get_library_item(int(entry.get("item_id") or 0))
         paper_id = str(entry.get("paper_id") or "")
         if not item or not paper_id:
             continue
+        paper_ids.add(paper_id)
         target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
         old_path = entry.get("old_path")
         if isinstance(old_path, Path) and entry.get("is_canonical_here") and old_path.exists():
@@ -13425,6 +13525,8 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
                 cleanup_local_copy_empty_parents([str(old_path)])
             continue
         sync_alias_for_library_item(storage, paper_id, int(item.get("folder_id") or 1))
+    for paper_id in paper_ids:
+        reconcile_paper_pdf_storage(storage, paper_id)
 
 
 def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
@@ -13942,8 +14044,9 @@ def unique_trash_path(target: Path) -> Path:
 
 
 def cleanup_empty_parents(deleted_paths: list[str], root: Path) -> None:
+    root = root.expanduser().resolve()
     for raw_path in deleted_paths:
-        current = Path(raw_path).parent
+        current = Path(raw_path).expanduser().absolute().parent.resolve()
         while is_relative_to(current, root) and current != root:
             try:
                 current.rmdir()
@@ -26996,7 +27099,8 @@ INDEX_HTML = """<!doctype html>
 
     function currentMyPublicationName() {
       const input = $("myPublicationName");
-      return (input?.value || state.myPublicationName || "").split(/[;；]/)[0].trim();
+      const profileName = state.myPublicationScholarProfile?.name || "";
+      return (input?.value || state.myPublicationName || profileName).split(/[;；]/)[0].trim();
     }
 
     function authorSignaturesMatch(target, candidate) {
@@ -27019,7 +27123,6 @@ INDEX_HTML = """<!doctype html>
         .trim()
         .toLowerCase();
       const parts = clean.split(" ").filter(Boolean);
-      if (!parts.length) return [];
       const variants = [];
       const addVariant = (family, given) => {
         const signature = {
@@ -28443,6 +28546,9 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function updateSelectedMyPublicationAuthorMark(publication, index, authorName, menu) {
+      const detailRoot = $("libraryDetail");
+      const detailScrollTop = detailRoot?.scrollTop || 0;
+      const cachedPaperDetail = publication?.paper?.full_detail ? publication.paper : null;
       const status = $("libraryDetailStatus");
       const payload = {
         publication_id: publication.id,
@@ -28467,7 +28573,18 @@ INDEX_HTML = """<!doctype html>
         closePublicationAuthorMenu();
         applyMyPublications(data);
         state.myPublicationSelectionId = Number(data.publication?.id || publication.id);
-        renderMyPublications();
+        const updatedPublication = myPublicationById(state.myPublicationSelectionId);
+        if (cachedPaperDetail && updatedPublication
+            && String(updatedPublication.paper_id || updatedPublication.paper?.paper_id || "") === String(cachedPaperDetail.paper_id || "")) {
+          updatedPublication.paper = {...(updatedPublication.paper || {}), ...cachedPaperDetail, full_detail: true};
+        }
+        renderMyPublications({detailScrollTop});
+        const restoredPublicationId = state.myPublicationSelectionId;
+        window.requestAnimationFrame(() => {
+          if (Number(state.myPublicationSelectionId) !== Number(restoredPublicationId)) return;
+          const restoredDetail = $("libraryDetail");
+          if (restoredDetail) restoredDetail.scrollTop = detailScrollTop;
+        });
       } catch (error) {
         if (status) {
           status.textContent = error.message || "Could not update author marker";

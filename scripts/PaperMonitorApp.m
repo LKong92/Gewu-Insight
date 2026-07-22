@@ -176,6 +176,14 @@
     return YES;
 }
 
+- (void)closeActiveWindow:(id)sender {
+    NSWindow *activeWindow = NSApp.keyWindow ?: NSApp.mainWindow;
+    if (!activeWindow || !activeWindow.isVisible) {
+        return;
+    }
+    [activeWindow performClose:sender];
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     if (self.ownedServerTask && self.ownedServerTask.isRunning) {
         [self.ownedServerTask terminate];
@@ -305,6 +313,14 @@
     NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Daiqo"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
+
+    NSMenuItem *fileMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    [mainMenu addItem:fileMenuItem];
+    NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+    NSMenuItem *closeWindowItem = [fileMenu addItemWithTitle:@"Close Window" action:@selector(closeActiveWindow:) keyEquivalent:@"w"];
+    closeWindowItem.target = self;
+    closeWindowItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    fileMenuItem.submenu = fileMenu;
 
     NSMenuItem *editMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:editMenuItem];

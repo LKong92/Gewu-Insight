@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,6 +94,77 @@ class LibraryFileOperationTests(unittest.TestCase):
             moved_path.parent.resolve(),
             ui_server.local_copy_dir_for_library_folder(self.storage, int(target_folder["id"])).resolve(),
         )
+
+    def test_journal_download_infers_existing_space_as_real_pdf_target(self) -> None:
+        space = self.storage.create_library_root_folder(name="Wigner Crystal")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "space-download-paper",
+                "doi": "10.1234/space-download",
+                "title": "Space Download Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-07-17",
+                "abstract": "",
+                "source": "arxiv",
+                "type": "article",
+            }
+        )
+        self.storage.add_library_item(paper_id="space-download-paper", folder_id=int(space["id"]))
+
+        target = ui_server.preferred_local_pdf_dir_for_paper(self.storage, "space-download-paper")
+
+        self.assertIsNotNone(target)
+        self.assertEqual(
+            target.resolve(),
+            (ui_server.SPACES_LOCAL_COPY_ROOT / "Wigner Crystal").resolve(),
+        )
+        handler = inspect.getsource(ui_server.PaperMonitorUiHandler.handle_download)
+        self.assertIn("preferred_local_pdf_dir_for_paper(storage, paper_id)", handler)
+        self.assertIn("reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)", handler)
+
+    def test_reconcile_moves_cache_pdf_into_space_and_replaces_alias_path(self) -> None:
+        space = self.storage.create_library_root_folder(name="Wigner Crystal")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "cached-space-paper",
+                "doi": "10.1234/cached-space",
+                "title": "Cached Space Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-07-17",
+                "abstract": "",
+                "source": "arxiv",
+                "type": "article",
+            }
+        )
+        self.storage.add_library_item(paper_id="cached-space-paper", folder_id=int(space["id"]))
+        cached_dir = ui_server.DEFAULT_PDF_DIR / "cached-space-paper"
+        cached_dir.mkdir(parents=True)
+        cached_pdf = cached_dir / "cached-space-paper.pdf"
+        cached_pdf.write_bytes(b"%PDF fixture")
+        stale_dir = ui_server.SPACES_LOCAL_COPY_ROOT / "Wigner C"
+        stale_dir.mkdir(parents=True)
+        stale_alias = stale_dir / cached_pdf.name
+        stale_alias.symlink_to(cached_pdf)
+        self.storage.update_download_status(
+            "cached-space-paper",
+            status="success",
+            main_pdf_path=str(stale_alias),
+            merged_pdf_path=str(stale_alias),
+            supplement_pdf_paths=[],
+        )
+
+        changed = ui_server.reconcile_paper_pdf_storage(self.storage, "cached-space-paper")
+        paper = self.storage.get_paper("cached-space-paper") or {}
+        stored_pdf = Path(paper["merged_pdf_path"])
+
+        self.assertTrue(changed)
+        self.assertFalse(cached_pdf.exists())
+        self.assertFalse(stale_alias.is_symlink(), list(stale_dir.iterdir()) if stale_dir.exists() else [])
+        self.assertFalse(stale_dir.exists(), list(stale_dir.iterdir()) if stale_dir.exists() else [])
+        self.assertTrue(stored_pdf.exists())
+        self.assertFalse(stored_pdf.is_symlink())
+        self.assertEqual(stored_pdf.parent.resolve(), (ui_server.SPACES_LOCAL_COPY_ROOT / "Wigner Crystal").resolve())
+        self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
 
     def test_delete_hands_pdf_to_earliest_remaining_non_recycle_link(self) -> None:
         folder_a = self.storage.create_library_folder(parent_id=1, name="A")
