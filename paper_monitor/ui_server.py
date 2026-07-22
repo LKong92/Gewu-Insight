@@ -4,7 +4,6 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 import html
 import hashlib
-import atexit
 from io import BytesIO
 import json
 import mimetypes
@@ -12,8 +11,8 @@ import os
 import queue
 import re
 import shutil
-import socket
 import socketserver
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -203,122 +202,8 @@ COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
-DEEP_SURVEY_DIR = ROOT / "deep_survey"
-DEEP_SURVEY_APP_DIR = DEEP_SURVEY_DIR / "app"
-DEEP_SURVEY_TEMPLATE_DIR = DEEP_SURVEY_DIR / "workspace-template"
-DEEP_SURVEY_WORKSPACE_DIR = ROOT / "data" / "deep_survey_workspace"
-DEEP_SURVEY_LOCK = threading.Lock()
-DEEP_SURVEY_PROCESS: subprocess.Popen | None = None
-DEEP_SURVEY_PORT: int | None = None
-
 SUBJECTS_CONFIG_PATH = ROOT / "config" / "subjects.json"
 THEME_GROUPS: dict[str, dict[str, Any]] = {}
-
-
-def find_free_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-def deep_survey_node_binary() -> str | None:
-    candidates = [
-        os.environ.get("DEEP_SURVEY_NODE"),
-        "/Applications/Codex.app/Contents/Resources/cua_node/bin/node",
-        "/Applications/Codex.app/Contents/Resources/node",
-        shutil.which("node"),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).exists():
-            return str(candidate)
-    return None
-
-
-def ensure_deep_survey_workspace() -> None:
-    DEEP_SURVEY_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    plugin_source = DEEP_SURVEY_TEMPLATE_DIR / "plugins" / "deep-literature-workflow"
-    plugin_target = DEEP_SURVEY_WORKSPACE_DIR / "plugins" / "deep-literature-workflow"
-    if plugin_source.exists() and not plugin_target.exists():
-        plugin_target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(plugin_source, plugin_target)
-
-
-def wait_for_deep_survey_port(port: int, timeout: float = 4.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return True
-        except OSError:
-            time.sleep(0.1)
-    return False
-
-
-def ensure_deep_survey_server() -> dict[str, Any]:
-    global DEEP_SURVEY_PROCESS, DEEP_SURVEY_PORT
-    with DEEP_SURVEY_LOCK:
-        if DEEP_SURVEY_PROCESS and DEEP_SURVEY_PROCESS.poll() is None and DEEP_SURVEY_PORT:
-            return {
-                "ok": True,
-                "url": f"http://127.0.0.1:{DEEP_SURVEY_PORT}/",
-                "port": DEEP_SURVEY_PORT,
-                "workspace": str(DEEP_SURVEY_WORKSPACE_DIR),
-            }
-
-        server_path = DEEP_SURVEY_APP_DIR / "server.mjs"
-        node_binary = deep_survey_node_binary()
-        if not server_path.exists():
-            return {"ok": False, "error": "Deep Survey server.mjs is missing."}
-        if not node_binary:
-            return {"ok": False, "error": "Node.js was not found. Install Codex.app or Node.js."}
-
-        ensure_deep_survey_workspace()
-        DEEP_SURVEY_PORT = find_free_local_port()
-        env = os.environ.copy()
-        env["CODEX_DLW_APP_PORT"] = str(DEEP_SURVEY_PORT)
-        env["CODEX_DLW_WORKSPACE_ROOT"] = str(DEEP_SURVEY_WORKSPACE_DIR)
-        env.setdefault("CODEX_DLW_SANDBOX", "danger-full-access")
-        env.setdefault("CODEX_DLW_APPROVAL_POLICY", "never")
-        env["PATH"] = ":".join([
-            "/Applications/Codex.app/Contents/Resources/cua_node/bin",
-            "/Applications/Codex.app/Contents/Resources",
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-            env.get("PATH", ""),
-        ])
-        log_dir = ROOT / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_dir / "deep_survey.log", "a", encoding="utf-8")
-        DEEP_SURVEY_PROCESS = subprocess.Popen(
-            [node_binary, str(server_path)],
-            cwd=str(DEEP_SURVEY_APP_DIR),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        ready = wait_for_deep_survey_port(DEEP_SURVEY_PORT)
-        if not ready and DEEP_SURVEY_PROCESS.poll() is not None:
-            return {"ok": False, "error": "Deep Survey server exited during startup."}
-        return {
-            "ok": ready,
-            "url": f"http://127.0.0.1:{DEEP_SURVEY_PORT}/",
-            "port": DEEP_SURVEY_PORT,
-            "workspace": str(DEEP_SURVEY_WORKSPACE_DIR),
-            "error": None if ready else "Deep Survey server is still starting.",
-        }
-
-
-def stop_deep_survey_server() -> None:
-    global DEEP_SURVEY_PROCESS
-    if DEEP_SURVEY_PROCESS and DEEP_SURVEY_PROCESS.poll() is None:
-        DEEP_SURVEY_PROCESS.terminate()
-
-
-atexit.register(stop_deep_survey_server)
 
 
 class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
@@ -375,9 +260,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/user-guide":
                 self.send_text(USER_GUIDE_HTML, content_type="text/html; charset=utf-8")
                 return
-            if parsed.path == "/about-deep-survey":
-                self.send_text(ABOUT_DEEP_SURVEY_HTML, content_type="text/html; charset=utf-8")
-                return
             if parsed.path == "/api/month":
                 self.handle_month(parse_qs(parsed.query))
                 return
@@ -398,9 +280,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/theme-report":
                 self.handle_theme_report(parse_qs(parsed.query))
-                return
-            if parsed.path == "/api/deep-survey/status":
-                self.handle_deep_survey_status()
                 return
             if parsed.path == "/api/library/import-folder/progress":
                 self.handle_library_import_folder_progress(parse_qs(parsed.query))
@@ -741,9 +620,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def handle_deep_survey_status(self) -> None:
-        self.send_json(ensure_deep_survey_server())
-
     def handle_month(self, query: dict[str, list[str]]) -> None:
         self.refresh_journals()
         year = int(first(query, "year") or today_local().year)
@@ -784,13 +660,30 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         selected = first(query, "date") or today_local().isoformat()
         auto_fetch = first(query, "auto_fetch") != "0"
         force_fetch = first(query, "force_fetch") == "1"
+        requested_refresh_journal = clean_text(first(query, "refresh_journal") or "")
+        refresh_journal = ""
+        if requested_refresh_journal:
+            refresh_journal = next(
+                (
+                    journal
+                    for journal in self.configured_journals
+                    if journal.casefold() == requested_refresh_journal.casefold()
+                ),
+                "",
+            )
+            if not refresh_journal:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown journal")
+                return
         fetched = False
         missing_journals: list[str] = []
         storage = Storage(self.configured_db_path)
         try:
             selected_date = date.fromisoformat(selected)
             missing_journals = missing_fetch_journals_for_date(storage, selected, self.configured_journals)
-            sources_to_fetch = manual_refresh_journals_for_date(selected, self.configured_journals) if force_fetch else missing_journals
+            if force_fetch and refresh_journal:
+                sources_to_fetch = manual_refresh_journals_for_date(selected, [refresh_journal])
+            else:
+                sources_to_fetch = manual_refresh_journals_for_date(selected, self.configured_journals) if force_fetch else missing_journals
             if (force_fetch or auto_fetch) and selected_date <= today_local() and sources_to_fetch and try_start_fetch(selected):
                 storage.close()
                 fetch_storage = None
@@ -837,6 +730,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "lateArrivals": late_arrival_summaries(late_arrivals),
                 "fetched": fetched,
                 "forcedFetch": force_fetch,
+                "refreshedJournal": refresh_journal,
                 "missingJournals": missing_journals,
                 "fetchActive": is_fetch_active(selected),
             }
@@ -13367,6 +13261,111 @@ def preferred_local_pdf_dir_for_paper(storage: Storage, paper_id: str) -> Path |
     return directories[0]
 
 
+def paper_pdf_paths(paper: dict[str, Any] | None) -> list[Path]:
+    if not paper:
+        return []
+    raw_paths: list[Any] = [paper.get("merged_pdf_path"), paper.get("main_pdf_path")]
+    raw_supplements = paper.get("supplement_pdf_paths") or ""
+    if isinstance(raw_supplements, list):
+        raw_paths.extend(raw_supplements)
+    elif raw_supplements:
+        try:
+            supplements = json.loads(raw_supplements)
+        except (TypeError, json.JSONDecodeError):
+            supplements = []
+        if isinstance(supplements, list):
+            raw_paths.extend(supplements)
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for raw_path in raw_paths:
+        if not raw_path:
+            continue
+        try:
+            path = Path(str(raw_path)).expanduser().resolve()
+        except OSError:
+            continue
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+    return paths
+
+
+def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: str) -> bool:
+    requested = path.expanduser().resolve()
+    rows = storage.conn.execute(
+        """
+        SELECT paper_id, main_pdf_path, merged_pdf_path, supplement_pdf_paths, source_path
+        FROM papers
+        WHERE paper_id != ?
+        """,
+        (str(paper_id),),
+    ).fetchall()
+    for row in rows:
+        other = dict(row)
+        candidates = paper_pdf_paths(other)
+        raw_source = str(other.get("source_path") or "")
+        if raw_source:
+            try:
+                candidates.append(Path(raw_source).expanduser().resolve())
+            except OSError:
+                pass
+        if any(candidate == requested for candidate in candidates):
+            return True
+    resource_rows = storage.conn.execute(
+        """
+        SELECT source_path, stored_path
+        FROM resources
+        WHERE paper_id IS NULL OR paper_id != ?
+        """,
+        (str(paper_id),),
+    ).fetchall()
+    for row in resource_rows:
+        for raw_path in (row["source_path"], row["stored_path"]):
+            if not raw_path:
+                continue
+            try:
+                if Path(str(raw_path)).expanduser().resolve() == requested:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def retire_replaced_managed_pdf_paths(
+    storage: Storage,
+    *,
+    paper_id: str,
+    old_paths: list[Path],
+    new_path: Path,
+) -> tuple[list[str], list[str]]:
+    managed_roots = allowed_pdf_roots()
+    replacement = new_path.expanduser().resolve()
+    trashed: list[str] = []
+    warnings: list[str] = []
+    for old_path in old_paths:
+        requested = old_path.expanduser().resolve()
+        if requested == replacement or not requested.exists() or not requested.is_file():
+            continue
+        # A dragged external source is never Daiqo's file to remove. Shared managed
+        # files also remain until every paper has stopped referencing them.
+        if not is_allowed_file(requested, managed_roots):
+            continue
+        if pdf_path_referenced_by_other_paper(storage, requested, str(paper_id)):
+            continue
+        try:
+            move_path_to_macos_trash(requested)
+            trashed.append(str(requested))
+        except (OSError, subprocess.SubprocessError) as exc:
+            warnings.append(f"old PDF retained: {clean_text(str(exc)) or requested.name}")
+    if trashed:
+        clear_deleted_library_file_references(storage, trashed)
+        for root in managed_roots:
+            cleanup_empty_parents(trashed, root)
+    return trashed, warnings
+
+
 def attach_manual_pdf_to_paper(
     storage: Storage,
     *,
@@ -13380,6 +13379,13 @@ def attach_manual_pdf_to_paper(
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
+    old_canonical = canonical_pdf_path_for_paper(paper)
+    old_pdf_paths = paper_pdf_paths(paper)
+    replacing = bool(old_pdf_paths)
+    old_canonical_is_shared = bool(
+        old_canonical
+        and pdf_path_referenced_by_other_paper(storage, old_canonical, str(paper_id))
+    )
     original_name = Path(str(filename or "")).name
     if not original_name.lower().endswith(".pdf"):
         raise ValueError("Dropped file must be a PDF")
@@ -13412,7 +13418,7 @@ def attach_manual_pdf_to_paper(
         storage.update_download_status(
             str(paper_id),
             status="success",
-            message=f"manual PDF imported: {original_name}",
+            message=f"manual PDF {'replaced' if replacing else 'imported'}: {original_name}",
             main_pdf_path=str(target_path),
             supplement_pdf_paths=[],
             merged_pdf_path=str(target_path),
@@ -13423,7 +13429,33 @@ def attach_manual_pdf_to_paper(
         except OSError:
             pass
         raise
-    sync_all_pdf_aliases_for_paper(storage, str(paper_id))
+    warnings: list[str] = []
+    try:
+        sync_all_pdf_aliases_for_paper(
+            storage,
+            str(paper_id),
+            old_target=None if old_canonical_is_shared else old_canonical,
+        )
+    except (OSError, sqlite3.Error) as exc:
+        warnings.append(f"shortcut sync incomplete: {clean_text(str(exc)) or type(exc).__name__}")
+    else:
+        _, retirement_warnings = retire_replaced_managed_pdf_paths(
+            storage,
+            paper_id=str(paper_id),
+            old_paths=old_pdf_paths,
+            new_path=target_path,
+        )
+        warnings.extend(retirement_warnings)
+    if warnings:
+        storage.conn.execute(
+            "UPDATE papers SET download_message = ? WHERE paper_id = ?",
+            (
+                f"manual PDF {'replaced' if replacing else 'imported'}: {original_name}; "
+                + "; ".join(warnings),
+                str(paper_id),
+            ),
+        )
+        storage.conn.commit()
     updated = storage.get_paper(str(paper_id))
     if not updated:
         raise KeyError(str(paper_id))
@@ -15007,242 +15039,6 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
-ABOUT_DEEP_SURVEY_HTML = """<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>About Deep Survey</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #fbfcfd;
-        --ink: #17202a;
-        --muted: #687385;
-        --line: #d8dee8;
-        --accent: #1f7a8c;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font: 15px/1.72 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      main {
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 42px 42px 56px;
-      }
-      h1 {
-        margin: 0 0 24px;
-        font-size: 34px;
-        line-height: 1.12;
-        letter-spacing: 0;
-      }
-      h2 {
-        margin: 34px 0 12px;
-        padding-top: 22px;
-        border-top: 1px solid var(--line);
-        font-size: 20px;
-        line-height: 1.28;
-        letter-spacing: 0;
-      }
-      p { margin: 0 0 14px; }
-      ol, ul { margin: 8px 0 18px; padding-left: 24px; }
-      li { margin: 5px 0; }
-      code {
-        padding: 1px 5px;
-        border: 1px solid #dfe4ec;
-        border-radius: 5px;
-        background: #f3f5f7;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 0.92em;
-      }
-      .file-list li { margin-bottom: 10px; }
-      .file-list code { color: var(--accent); }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>About Deep Survey</h1>
-
-      <p>Deep Survey 是一个面向深度文献调研的分阶段工作流。它的目标不是简单收集论文列表，而是把一个研究问题逐步转化为一个可阅读、可追溯、可继续扩展的知识库。</p>
-
-      <p>整个流程把文献调研拆成几个明确阶段：先广泛发现候选文献，再筛选核心论文，再获取合法 PDF，再逐篇深读，最后整理成概念笔记和综述文章。这样做的好处是避免一开始就陷入少数论文的细节，也避免最后只得到一堆没有结构的摘要。每个阶段都会留下可检查的中间产物，因此用户可以随时知道当前进度、依据和下一步应该做什么。</p>
-
-      <p>Deep Survey 默认生成 Obsidian 兼容的 Markdown vault。论文、概念、证据表、PDF 和项目状态会被分别保存，便于后续阅读、修改、扩展和人工审查。</p>
-
-      <h2>Workflow Overview</h2>
-
-      <p>Deep Survey 的主流程包括：</p>
-
-      <ol>
-        <li>Stage 1 Discovery：发现候选文献</li>
-        <li>Stage 2 Screening：筛选核心阅读队列</li>
-        <li>Stage 3 PDF Acquisition：手动获取并导入 PDF</li>
-        <li>Stage 4 Paper Deep Reading：逐篇深度阅读</li>
-        <li>Stage 5A Concept Notes：生成概念知识笔记</li>
-        <li>Stage 5B Review Synthesis：写出领域综述</li>
-      </ol>
-
-      <p>每个阶段都有自己的任务边界。前一阶段的产物会成为后一阶段的输入，因此工作流强调“先建立候选池，再精读，再综合”，而不是直接让 AI 随机写一篇综述。</p>
-
-      <h2>Stage 1: Discovery</h2>
-
-      <p>Stage 1 的任务是从合法的文献元数据来源中广泛发现候选论文，例如 OpenAlex、Semantic Scholar 或其他可访问的学术索引。这个阶段通常会建立一个较大的候选池，理想情况下包含 200 到 500 篇相关论文。</p>
-
-      <p>Stage 1 会做几件事：</p>
-
-      <ul>
-        <li>根据研究主题设计检索方向和关键词。</li>
-        <li>收集候选论文的标题、作者、年份、期刊、DOI、摘要、引用量等元数据。</li>
-        <li>去除重复记录。</li>
-        <li>对候选论文进行初步评分，例如主题相关性、引用影响、时间新旧、方法重要性、是否适合作为综述材料。</li>
-        <li>从大候选池中提炼出约 40 到 80 篇核心候选论文。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：真正可靠的文献调研不能从一开始就只看几篇最显眼的论文。先建立一个足够宽的候选池，可以减少遗漏重要方向的风险，也能让后续筛选有依据。Stage 1 不是为了深读，而是为了形成一张领域地图。</p>
-
-      <p>典型产物包括候选文献表、检索日志、去重后的核心候选表和初步评分字段。</p>
-
-      <h2>Stage 2: Screening</h2>
-
-      <p>Stage 2 的任务是审查 Stage 1 得到的核心候选论文，并选出真正值得深度阅读的论文队列。这个阶段通常会把 40 到 80 篇核心候选进一步压缩到 15 到 25 篇深读论文。</p>
-
-      <p>Stage 2 会做几件事：</p>
-
-      <ul>
-        <li>审查每篇核心候选论文。</li>
-        <li>给出 keep、background 或 exclude 判断。</li>
-        <li>记录排除理由，例如主题太宽泛、只是背景材料、方法不相关、与研究问题距离较远。</li>
-        <li>选出深读论文队列，并按推荐阅读顺序编号。</li>
-        <li>在 <code>05_Papers/</code> 中建立 starter paper notes。</li>
-        <li>为每篇深读论文准备期望的 PDF 文件名。</li>
-        <li>生成手动 PDF 下载队列，通常保存在 <code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code>。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：不是所有相关论文都值得深读。有些论文适合作背景，有些只是检索噪声，有些虽然引用高但不服务于当前问题。Stage 2 把“广泛发现”转化为“有限但高质量的深读任务”，使后续精读成本可控，也让每篇被选中的论文都有理由。</p>
-
-      <p>典型产物包括筛选审计表、排除理由、深读队列、starter notes 和 PDF 下载清单。</p>
-
-      <h2>Stage 3: Manual PDF Acquisition And Import</h2>
-
-      <p>Stage 3 的任务是获取并导入深读论文的 PDF。Deep Survey 中的 Stage 3 是手动下载优先的流程：软件提供下载队列和文件导入工具，用户从合法来源下载 PDF，然后在 Deep Survey 中选择这些 PDF 文件，系统再把它们匹配、验证并移动到 vault 的 <code>06_PDFs/</code> 文件夹。</p>
-
-      <p>Stage 3 会做几件事：</p>
-
-      <ul>
-        <li>打开 Stage 2 生成的 PDF 下载队列。</li>
-        <li>为每篇论文提供 DOI、出版社页面、开放获取链接或其他合法来源提示。</li>
-        <li>用户手动下载主论文 PDF。</li>
-        <li>用户通过 Deep Survey 选择下载好的 PDF 文件。</li>
-        <li>软件尝试把 PDF 匹配到深读队列中的论文。</li>
-        <li>将匹配成功的 PDF 移动到 <code>06_PDFs/</code>，并改成预期文件名。</li>
-        <li>检查 PDF 文件是否有效。</li>
-        <li>更新 PDF inventory 和导入记录。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：PDF 获取涉及版权、机构访问和出版社权限。Deep Survey 不应该自动绕过访问控制，也不应该使用未授权来源。手动下载加软件导入的方式，把合法访问和文件整理分开：用户负责从自己有权访问的来源下载，软件负责后续命名、验证、归档和状态管理。</p>
-
-      <p>如果某个 PDF 无法被可靠匹配，Deep Survey 应该报告不确定性，而不是猜测导入。这样可以避免论文和 PDF 对错号，保护后续深读质量。</p>
-
-      <p>典型产物包括 <code>08_stage3_pdf_inventory.csv</code>、<code>09_manual_pdf_download_queue.md</code> 和导入日志。</p>
-
-      <h2>Stage 4: Paper Deep Reading</h2>
-
-      <p>Stage 4 是整个 Deep Survey 中最重要的深读阶段。它的任务不是批量抽取摘要，而是逐篇阅读 PDF，并为每篇论文重建一份真正有信息量的 paper note。</p>
-
-      <p>Stage 4 会做几件事：</p>
-
-      <ul>
-        <li>按 Stage 2 确定的顺序逐篇处理论文。</li>
-        <li>每次只完整处理一篇论文。</li>
-        <li>检查 PDF 的结构、图表、表格和正文。</li>
-        <li>重建论文的核心问题、主要贡献、方法、关键结果、定量信息、局限性和证据链。</li>
-        <li>更新 <code>05_Papers/</code> 中对应的论文笔记。</li>
-        <li>记录每篇论文的深读状态。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：高质量综述不能建立在批量摘要或抽取片段上。论文的真正价值通常存在于问题设置、实验设计、方法假设、图表证据和局限性之间的关系中。只有逐篇完整阅读，才能知道一篇论文到底在证明什么、没有证明什么，以及它与其他论文如何连接。</p>
-
-      <p>Stage 4 特别强调顺序处理，而不是批量处理。批量提取可能看起来更快，但容易得到模板化、浅层、上下文断裂的笔记。Deep Survey 的目标是让每篇 paper note 都能独立支持后续概念整理和综述写作。</p>
-
-      <p>一篇论文只有在笔记足够具体、没有占位内容、能解释核心问题和证据链时，才应被认为完成深读。</p>
-
-      <h2>Stage 5A: Concept Notes</h2>
-
-      <p>Stage 5A 的任务是把 Stage 4 的论文理解转化为概念知识笔记。这里的重点不是继续总结单篇论文，而是整理领域中的关键概念、物理含义、方法边界和阅读路径。</p>
-
-      <p>Stage 5A 会做几件事：</p>
-
-      <ul>
-        <li>在 <code>03_Concepts/</code> 中建立概念索引。</li>
-        <li>创建按推荐阅读顺序编号的概念笔记。</li>
-        <li>解释每个概念的定义和物理意义。</li>
-        <li>整理相关公式、单位和测量假设。</li>
-        <li>说明概念在该领域中的位置。</li>
-        <li>区分相邻概念，指出常见误解。</li>
-        <li>给出代表性论文和继续阅读路线。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：读完论文之后，用户需要的不只是“哪篇论文说了什么”，还需要“这个领域到底有哪些概念，它们之间怎么连接”。概念笔记把论文级别的信息抽象成知识结构，使用户能更快进入领域，也方便之后写论文、做报告或继续扩展调研。</p>
-
-      <p>Stage 5A 不应该把每个概念笔记写成论文深读笔记。它关注知识解释，而不是重复 paper note 的结构。</p>
-
-      <h2>Stage 5B: Review Writing</h2>
-
-      <p>Stage 5B 的任务是写出面向读者的领域综述。它应该是一篇真正的 domain review 或 knowledge synthesis，而不是项目过程报告。</p>
-
-      <p>Stage 5B 会做几件事：</p>
-
-      <ul>
-        <li>整合 Stage 4 的论文深读结果。</li>
-        <li>使用 Stage 5A 的概念结构作为阅读入口。</li>
-        <li>解释领域的基本概念。</li>
-        <li>梳理主要研究方向。</li>
-        <li>比较常用方法、测量体系和评价指标。</li>
-        <li>总结材料、应用或问题 landscape。</li>
-        <li>指出争议、开放问题和边界条件。</li>
-        <li>给出下一轮文献扩展路线。</li>
-        <li>将主综述保存为读者容易找到的 <code>02_Review.md</code>。</li>
-      </ul>
-
-      <p>这个阶段的合理性在于：综述不是把论文摘要拼接起来，而是重新组织一个领域。好的综述应该帮助读者理解“为什么这个领域这样发展”“哪些问题已经清楚”“哪些地方仍然不确定”“下一步应该读什么”。因此 Stage 5B 要把项目管理信息和领域叙事分开：状态、日志、进度应留在 workflow 文件中，主综述只服务于知识表达。</p>
-
-      <h2>Files And Outputs</h2>
-
-      <p>Deep Survey 的输出是一个 Obsidian 兼容的 vault。文件编号同时承担“阅读顺序”的作用：编号越靠前，越适合作为进入该主题的入口。这个编号不是简单的生成顺序，而是根据读者理解路径安排的。</p>
-
-      <p>主要文件和文件夹如下：</p>
-
-      <ul class="file-list">
-        <li><code>02_Review.md</code><br>Stage 5B 的最终主综述。虽然它最后生成，但阅读时通常最先打开。它提供领域全景、主要概念、研究方向、方法体系、争议和后续扩展路线。</li>
-        <li><code>03_Concepts/01_Concept_Index.md</code><br>Stage 5A 的概念索引。它是概念笔记的入口，说明哪些概念应该先读、哪些概念需要依赖前置知识。</li>
-        <li><code>03_Concepts/02_...md</code>, <code>03_Concepts/03_...md</code>, etc.<br>Stage 5A 生成的概念笔记。编号表示推荐概念阅读顺序，通常从基础定义、关键物理图像或核心方法开始，再进入更专门的机制、争议或应用概念。</li>
-        <li><code>04_Evidence_Tables/</code><br>证据表和流程表所在文件夹。它保存 Stage 1 到 Stage 3 的主要中间产物，例如候选文献表、核心候选表、筛选审计表、PDF inventory、手动下载队列和导入日志。这里的文件用于检查“为什么这些论文被选中，哪些被排除，PDF 是否已经就位”。</li>
-        <li><code>04_Evidence_Tables/09_manual_pdf_download_queue.md</code><br>Stage 2 到 Stage 3 之间的用户-facing 下载清单。它列出每篇深读论文的 DOI、出版社页面、开放获取链接或其他合法来源提示，并说明预期文件名。</li>
-        <li><code>05_Papers/01_...md</code>, <code>05_Papers/02_...md</code>, etc.<br>Stage 2 建立 starter notes，Stage 4 完成深读后升级为完整 paper notes。编号表示推荐深读顺序，通常优先放入入门性强、方法基础性强、代表性高或对后续概念理解最关键的论文。</li>
-        <li><code>06_PDFs/01_...pdf</code>, <code>06_PDFs/02_...pdf</code>, etc.<br>Stage 3 导入的论文 PDF。PDF 文件名尽量和 <code>05_Papers/</code> 中的论文笔记编号一致，使每篇 paper note 可以直接对应到原始 PDF。</li>
-        <li><code>07_Templates/</code><br>模板和辅助格式文件。它服务于笔记生成和结构统一，不是主要阅读入口。</li>
-        <li><code>08_Project_Workflow/PROJECT_STATE.md</code><br>项目状态文件。它记录当前 stage、已完成 stage、下一步任务、人工下载队列状态和 workflow handoff。这个文件用于项目管理，不应该替代 <code>02_Review.md</code> 或概念笔记。</li>
-      </ul>
-
-      <p>推荐阅读顺序一般是：</p>
-
-      <ol>
-        <li>先读 <code>02_Review.md</code>，获得领域全景。</li>
-        <li>再读 <code>03_Concepts/01_Concept_Index.md</code>，进入概念路线。</li>
-        <li>按 <code>03_Concepts/02_...</code>, <code>03_Concepts/03_...</code> 的顺序读概念笔记。</li>
-        <li>需要查看证据时，按 <code>05_Papers/01_...</code>, <code>05_Papers/02_...</code> 的顺序读深读论文笔记。</li>
-        <li>需要核查原文时，打开 <code>06_PDFs/</code> 中对应编号的 PDF。</li>
-        <li>需要检查筛选依据、PDF 状态或下载来源时，查看 <code>04_Evidence_Tables/</code>。</li>
-      </ol>
-    </main>
-  </body>
-</html>"""
-
-
 USER_GUIDE_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -15852,6 +15648,11 @@ INDEX_HTML = """<!doctype html>
       color: var(--ink);
     }
     .theme-context-menu button:hover { background: #f3f6fa; }
+    .theme-context-menu button:disabled {
+      cursor: default;
+      color: #98a2b3;
+      background: transparent;
+    }
     .theme-context-menu button.danger { color: var(--accent-2); }
     .filter-title { font-size: 13px; color: var(--muted); }
     .journal-toggle, .preprint-category-toggle {
@@ -15902,62 +15703,6 @@ INDEX_HTML = """<!doctype html>
       padding: 42px 12px 0 30px;
       background: #fff;
     }
-    .app.deep-survey-mode {
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .app.deep-survey-mode .main {
-      position: relative;
-      padding: 38px 0 0;
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .app.deep-survey-mode .main::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 220px;
-      height: 38px;
-      background: #f0f2f5;
-      pointer-events: none;
-    }
-    .app.deep-survey-mode .main::after {
-      content: "";
-      position: absolute;
-      left: 220px;
-      top: 0;
-      width: 1px;
-      height: 38px;
-      background: var(--line);
-      pointer-events: none;
-      z-index: 2;
-    }
-    .app.deep-survey-mode .workspace {
-      height: calc(100vh - 38px);
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .app.deep-survey-mode .report-column {
-      height: 100%;
-      padding-right: 0;
-      grid-template-rows: auto minmax(0, 1fr);
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .app.deep-survey-mode #summary,
-    .app.deep-survey-mode #reportTabs,
-    .app.deep-survey-mode #fetchProgressHost,
-    .app.deep-survey-mode #libraryControls {
-      display: none !important;
-    }
-    .app.deep-survey-mode .toolbar {
-      height: 0;
-      min-height: 0;
-      margin-bottom: 0;
-      padding: 0;
-    }
-    .app.deep-survey-mode #reportTitle,
-    .app.deep-survey-mode #reportToolbarActions,
-    .app.deep-survey-mode #librarySearchTools {
-      display: none !important;
-    }
     .internal-browser {
       position: fixed;
       inset: 0;
@@ -15999,7 +15744,7 @@ INDEX_HTML = """<!doctype html>
     .library-quicklook.compact.open { grid-template-rows: auto minmax(0, 1fr); }
     .library-quicklook-title {
       display: grid;
-      grid-template-columns: 28px minmax(0, 1fr) 28px;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
       min-height: 34px;
@@ -16028,7 +15773,22 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-quicklook-title button:hover { background: #eef2f7; color: var(--ink); }
-    .library-quicklook-title-spacer { width: 24px; height: 24px; }
+    .library-quicklook-title .library-quicklook-open-preview {
+      width: auto;
+      min-height: 26px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .library-quicklook-title .library-quicklook-open-preview:hover {
+      border-color: #9fb5b7;
+      background: #eef7f6;
+    }
     .library-quicklook-body {
       display: grid;
       grid-template-columns: 112px minmax(0, 1fr);
@@ -16849,8 +16609,8 @@ INDEX_HTML = """<!doctype html>
       background: #f7f8fa;
       overflow: hidden;
       box-sizing: border-box;
-      opacity: 0.34;
-      filter: saturate(0.3) brightness(1.08);
+      opacity: 1;
+      filter: none;
       transition: opacity 140ms ease, filter 140ms ease;
     }
     .library-tab-section.workspace-section .library-tab-section-tools {
@@ -16861,8 +16621,8 @@ INDEX_HTML = """<!doctype html>
     .library-tab-section.workspace-section .library-tab-section-tools button { width: 30px; }
     .library-tab-section-tools:hover,
     .library-tab-section-tools:focus-within {
-      opacity: 0.7;
-      filter: saturate(0.7) brightness(1.02);
+      opacity: 1;
+      filter: none;
     }
     .library-tab-section-tools button {
       min-width: 0;
@@ -16879,7 +16639,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-section-tools button:last-child { border-right: 0; }
     .library-tab-section-tools button:hover:not(:disabled) { color: var(--accent); background: rgba(15, 107, 110, 0.08); }
-    .library-tab-section-tools button:disabled { color: #c5cbd4; cursor: default; }
+    .library-tab-section-tools button:disabled { color: #667085; cursor: default; }
     .library-tab-scroll {
       position: relative;
       width: 30px;
@@ -19806,44 +19566,6 @@ INDEX_HTML = """<!doctype html>
       overflow: visible;
       padding-right: 0;
     }
-    .app.deep-survey-mode #papers {
-      display: none;
-    }
-    .papers.deep-survey-view {
-      display: block;
-      height: 100%;
-      min-height: 0;
-      overflow: hidden;
-      padding-right: 0;
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .deep-survey-host {
-      display: none;
-      height: 100%;
-      min-height: 0;
-      overflow: hidden;
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .app.deep-survey-mode .deep-survey-host {
-      display: block;
-      grid-column: 1;
-      grid-row: 1 / -1;
-    }
-    .deep-survey-frame {
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      border: 0;
-      display: block;
-      background: linear-gradient(to right, #f0f2f5 0 220px, #fbfcfd 220px);
-    }
-    .deep-survey-loading {
-      min-height: 220px;
-      display: grid;
-      place-items: center;
-      color: var(--muted);
-      font-size: 14px;
-    }
     .paper {
       position: relative;
       background: var(--panel);
@@ -20030,6 +19752,9 @@ INDEX_HTML = """<!doctype html>
       font-weight: 750;
       white-space: nowrap;
       pointer-events: none;
+    }
+    .action.library-pdf-drop-target[data-pdf-replace="1"].drag-over::after {
+      content: "\\21E9  Replace";
     }
     .action:disabled { opacity: 0.55; cursor: default; }
     .action.is-busy:disabled { cursor: default; }
@@ -20438,41 +20163,39 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .theme-form { display: grid; gap: 12px; }
-    .theme-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+    .theme-form label,
+    .theme-keyword-field { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
     .theme-keyword-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .theme-keyword-head span { color: var(--muted); font-size: 13px; }
-    .theme-keyword-recommend {
-      min-height: 28px;
-      padding: 0 10px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: #fff;
-      color: var(--ink);
-      font-size: 12px;
-      font-weight: 650;
-      cursor: pointer;
+    .theme-keyword-ai-tools {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      min-width: 0;
     }
-    .theme-keyword-recommend:disabled { color: var(--muted); cursor: progress; }
-    .theme-keyword-recommendations {
-      display: none;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: -4px;
+    .theme-keyword-head .theme-keyword-ai-hint {
+      color: #7a8799;
+      font-size: 11px;
+      font-weight: 450;
+      text-align: right;
     }
-    .theme-keyword-recommendations.open { display: flex; }
-    .theme-keyword-chip {
-      min-height: 26px;
-      max-width: 100%;
-      border: 1px solid #cbd5e1;
-      border-radius: 7px;
-      background: #f8fafc;
-      color: #1f2937;
-      padding: 0 9px;
-      font-size: 12px;
-      font-weight: 650;
-      cursor: pointer;
+    .theme-copy-prompt {
+      flex: 0 0 auto;
+      min-width: 144px;
+      min-height: 30px;
+      padding: 5px 9px;
+      font-size: 11px;
     }
-    .theme-keyword-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .theme-copy-prompt.copied {
+      border-color: #9bbeb8;
+      background: #eef7f5;
+      color: #176b61;
+    }
+    .theme-copy-prompt:disabled {
+      cursor: default;
+      opacity: 0.48;
+    }
     .theme-keywords {
       min-height: 150px;
       resize: vertical;
@@ -20714,7 +20437,6 @@ INDEX_HTML = """<!doctype html>
           <button class="view-switch" id="sideLibraryMode" type="button">Library</button>
           <button class="view-switch" id="sideReportMode" type="button">Journal Monitor</button>
           <button class="view-switch" id="sideThemeMode" type="button">Subject Monitor</button>
-          <button class="view-switch" id="sideDeepSurveyMode" type="button">Deep Survey</button>
         </div>
       </div>
       <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
@@ -20762,11 +20484,10 @@ INDEX_HTML = """<!doctype html>
               <button class="view-switch" id="myPublicationsMode" type="button">My Publications</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
               <button class="view-switch" id="themeMode" type="button">Subject Monitor</button>
-              <button class="view-switch" id="deepSurveyMode" type="button">Deep Survey</button>
             </div>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
-              <button class="smallbtn" id="refreshReport" type="button" title="Refresh papers for this date">Refresh</button>
+              <button class="smallbtn" id="refreshReport" type="button" title="Refresh all journals for this date">Refresh</button>
               <button class="smallbtn" id="refreshArxiv" type="button" title="Refresh arXiv for this date">arXiv</button>
               <input class="search" id="searchBox" placeholder="Search title, abstract, DOI">
               <label class="toolbar-toggle"><input type="checkbox" id="figureToggle" checked> Figures</label>
@@ -20809,7 +20530,6 @@ INDEX_HTML = """<!doctype html>
             </div>
           </div>
           <div class="papers" id="papers"></div>
-          <div class="deep-survey-host" id="deepSurveyHost" aria-hidden="true"></div>
         </section>
         <button class="workspace-toggle" id="toggleReportPanel" title="Hide list">&lsaquo;&lsaquo;</button>
         <div class="workspace-resizer" id="workspaceResizer" title="Drag to resize panels"></div>
@@ -20837,7 +20557,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-quicklook-title" id="libraryQuickLookDragHandle">
           <button id="closeLibraryQuickLook" type="button" title="Close preview">×</button>
           <span id="libraryQuickLookTitle"></span>
-          <span class="library-quicklook-title-spacer" aria-hidden="true"></span>
+          <button class="library-quicklook-open-preview" id="openLibraryQuickLookInPreview" type="button" hidden>Open in Preview</button>
         </div>
         <div class="library-quicklook-body">
           <div class="library-quicklook-thumbs" id="libraryQuickLookThumbs"></div>
@@ -20889,14 +20609,16 @@ INDEX_HTML = """<!doctype html>
                 <span>Name</span>
                 <input class="search" id="themeGroupName" type="text" autocomplete="off" placeholder="Topological superconductors">
               </label>
-              <label>
+              <div class="theme-keyword-field">
                 <div class="theme-keyword-head">
-                  <span>Keywords</span>
-                  <button class="theme-keyword-recommend" id="recommendThemeKeywords" type="button">Recommend Keywords</button>
+                  <label for="themeGroupKeywords">Keywords</label>
+                  <div class="theme-keyword-ai-tools">
+                    <span class="theme-keyword-ai-hint">Use Codex AI to generate relevant keywords.</span>
+                    <button class="smallbtn theme-copy-prompt" id="copyThemeKeywordPrompt" type="button" disabled>Copy Suggested Prompt</button>
+                  </div>
                 </div>
                 <textarea class="theme-keywords" id="themeGroupKeywords" placeholder="topological superconductor&#10;Majorana mode&#10;kagome superconductor"></textarea>
-              </label>
-              <div class="theme-keyword-recommendations" id="themeKeywordRecommendations"></div>
+              </div>
               <div class="citation-settings-status" id="themeGroupStatus"></div>
               <div class="theme-dialog-actions">
                 <button class="smallbtn" id="cancelThemeGroup" type="button">Cancel</button>
@@ -21118,6 +20840,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportMetadataMode: "quick",
       libraryImportStatus: "",
       libraryImportBusy: false,
+      libraryImportBackground: false,
       libraryImportLastResult: null,
       libraryImportJobId: "",
       libraryImportJob: null,
@@ -21214,8 +20937,6 @@ INDEX_HTML = """<!doctype html>
       fetchSnapshotPolls: {},
       fetchSnapshotInflight: {},
       fetchCompletionWatchers: new Set(),
-      deepSurveyUrl: "",
-      deepSurveyLoadingPromise: null,
       logoRequests: {},
       figureRequests: {},
       figureQueue: [],
@@ -21297,7 +21018,7 @@ INDEX_HTML = """<!doctype html>
         button.disabled = disabled;
         button.title = isFutureDateIso(state.selectedDate)
           ? "Future dates cannot be refreshed"
-          : "Refresh papers for this date";
+          : "Refresh all journals for this date";
       }
       if (arxivButton) {
         arxivButton.disabled = disabled;
@@ -21500,20 +21221,28 @@ INDEX_HTML = """<!doctype html>
     async function refreshMissingDateInBackground(selectedDate, options = {}) {
       if (state.fetchingDates.has(selectedDate)) return;
       const forceFetch = Boolean(options.forceFetch);
+      const refreshJournal = String(options.refreshJournal || "").trim();
       if (forceFetch) delete state.reportCache[selectedDate];
       setPendingFetchDate(selectedDate, true);
       state.fetchingDates.add(selectedDate);
-      setFetchProgressState(selectedDate, "journal", getFetchProgressState(selectedDate, "journal") || {percent: 0, completed: 0, total: 0, active: true});
+      setFetchProgressState(selectedDate, "journal", getFetchProgressState(selectedDate, "journal") || {
+        percent: 0,
+        completed: 0,
+        total: refreshJournal ? 1 : 0,
+        active: true,
+        currentJournal: refreshJournal
+      });
       updateReportRefreshButton();
       await startProgressPolling(selectedDate, "journal");
       renderCalendar();
       renderReportIfActive(selectedDate);
       try {
         const forceParam = forceFetch ? "&force_fetch=1" : "";
-        const data = await fetchJson(`/api/report?date=${selectedDate}${forceParam}`, 20 * 60 * 1000);
+        const journalParam = refreshJournal ? `&refresh_journal=${encodeURIComponent(refreshJournal)}` : "";
+        const data = await fetchJson(`/api/report?date=${selectedDate}${forceParam}${journalParam}`, 20 * 60 * 1000);
         updateCalendarCountFromReport(selectedDate, data);
         state.reportCache[selectedDate] = data;
-        if (data.fetchActive && (data.missingJournals || []).length) {
+        if (data.fetchActive) {
           await waitForDateFetchToFinish(selectedDate, "journal");
           const finalData = await fetchJson(`/api/report?date=${selectedDate}&auto_fetch=0`);
           setPendingFetchDate(selectedDate, false);
@@ -21525,7 +21254,7 @@ INDEX_HTML = """<!doctype html>
           }
           return;
         }
-        if ((data.missingJournals || []).length) {
+        if (!refreshJournal && (data.missingJournals || []).length) {
           setPendingFetchDate(selectedDate, false);
           if (selectedDate === state.selectedDate) {
             const sequence = ++state.reportSequence;
@@ -21564,6 +21293,16 @@ INDEX_HTML = """<!doctype html>
       state.noMatchDates.delete(selectedDate);
       setFetchProgressState(selectedDate, "journal", {percent: 0, completed: 0, total: 0, active: true, currentJournal: ""});
       refreshMissingDateInBackground(selectedDate, {forceFetch: true});
+    }
+
+    function refreshCurrentJournalDate(journal) {
+      const selectedDate = state.selectedDate;
+      const journalName = String(journal || "").trim();
+      if (!journalName || isFutureDateIso(selectedDate) || state.fetchingDates.has(selectedDate)) return;
+      state.activeReportJournal = journalName;
+      state.noMatchDates.delete(selectedDate);
+      clearFetchProgressState(selectedDate, "journal");
+      refreshMissingDateInBackground(selectedDate, {forceFetch: true, refreshJournal: journalName});
     }
 
     async function refreshCurrentArxivDate() {
@@ -24264,7 +24003,7 @@ INDEX_HTML = """<!doctype html>
         .join(", ");
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
       const root = $("papers");
-      root.classList.remove("library-view", "deep-survey-view");
+      root.classList.remove("library-view");
       root.style.height = "";
       root.style.minHeight = "";
       root.innerHTML = "";
@@ -24363,6 +24102,11 @@ INDEX_HTML = """<!doctype html>
         button.addEventListener("click", () => {
           state.activeReportJournal = group.journal;
           renderReport();
+        });
+        button.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          showJournalContextMenu(event, group.journal);
         });
         root.appendChild(button);
       });
@@ -25194,7 +24938,6 @@ INDEX_HTML = """<!doctype html>
       captureLibraryNavigationScroll();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
       $("summary").textContent = "";
-      root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
@@ -25574,6 +25317,7 @@ INDEX_HTML = """<!doctype html>
       }
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
+      state.libraryImportBackground = false;
       if (path) state.libraryImportPath = path;
       state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode($("libraryImportMetadataMode")?.value || state.libraryImportMetadataMode);
       state.libraryImportStatus = "Starting import loader...";
@@ -25616,6 +25360,7 @@ INDEX_HTML = """<!doctype html>
     async function runLibraryMetadataRefresh() {
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
+      state.libraryImportBackground = false;
       state.libraryTaskMode = "metadata-refresh";
       state.libraryImportMetadataMode = normalizeLibraryImportMetadataMode($("libraryImportMetadataMode")?.value || state.libraryImportMetadataMode);
       if (state.libraryImportMetadataMode === "skip") state.libraryImportMetadataMode = "full";
@@ -25740,6 +25485,40 @@ INDEX_HTML = """<!doctype html>
       startLibraryImportPolling();
     }
 
+    function libraryDroppedImportActivityText(job = {}) {
+      const target = state.libraryImportTargetPath || "Library";
+      const status = String(job.status || "running").toLowerCase();
+      const result = job.result || {};
+      if (status === "completed") {
+        const total = Number(result.library_items_created || 0);
+        return total
+          ? `Loaded ${total} item${total === 1 ? "" : "s"} into ${target}.`
+          : `Finished loading into ${target}.`;
+      }
+      if (status === "failed") {
+        const message = job.error || (Array.isArray(result.errors) ? result.errors[0] : "") || "Unknown error";
+        return `Library load failed for ${target}: ${message}`;
+      }
+      if (status === "cancelled") return `Library load cancelled for ${target}.`;
+      const percent = Number(job.percent);
+      const percentText = Number.isFinite(percent) && percent > 0 ? ` · ${Math.min(100, Math.max(0, Math.round(percent)))}%` : "";
+      const stageText = job.stage ? ` · ${job.stage}` : "";
+      const scanText = job.stage === "scan"
+        ? ` · ${Number(job.scan_files || 0)} files · ${Number(job.scan_dirs || 0)} folders`
+        : "";
+      return `Loading into ${target}${percentText}${stageText}${scanText}`;
+    }
+
+    function updateLibraryDroppedImportActivity(job = {}) {
+      if (!state.libraryImportBackground) return;
+      const terminal = ["completed", "failed", "cancelled"].includes(String(job.status || "").toLowerCase());
+      updateLibraryActivityStatus(libraryDroppedImportActivityText(job), {
+        live: !terminal,
+        clear: terminal,
+        delay: terminal ? 6000 : undefined
+      });
+    }
+
     async function refreshLibraryImportJob() {
       if (!state.libraryImportJobId) return;
       try {
@@ -25749,6 +25528,7 @@ INDEX_HTML = """<!doctype html>
         const job = data.job || {};
         state.libraryImportJob = job;
         state.libraryImportStatus = loaderStatusText(job);
+        updateLibraryDroppedImportActivity(job);
         if (job.result) {
           state.libraryImportLastResult = job.result;
           if (job.result.report_path) state.libraryImportReportPath = job.result.report_path;
@@ -25764,12 +25544,17 @@ INDEX_HTML = """<!doctype html>
             if (job.result?.report_path) state.libraryImportReportsLoaded = false;
             await refreshLibraryAfterImportCompletion();
           }
+          state.libraryImportBackground = false;
         }
         if (state.libraryLoaderOpen) renderLibraryLoader();
       } catch (error) {
         state.libraryImportStatus = error.message || "Could not read loader progress";
         state.libraryImportBusy = false;
         stopLibraryImportPolling();
+        if (state.libraryImportBackground) {
+          updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
+          state.libraryImportBackground = false;
+        }
         if (state.libraryLoaderOpen) renderLibraryLoader();
       }
     }
@@ -25799,6 +25584,9 @@ INDEX_HTML = """<!doctype html>
       if (state.libraryRefreshPromise) return state.libraryRefreshPromise;
       state.libraryRefreshPromise = (async () => {
         const previousTab = state.libraryTab;
+        const previousActiveFolderId = Number(state.libraryActiveFolderId || 0);
+        const previousCurrentFolderId = Number(state.libraryCurrentFolderId || 0);
+        const previousSelection = state.librarySelection ? {...state.librarySelection} : null;
         const res = await fetch("/api/library/bootstrap");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh Library");
@@ -25821,6 +25609,19 @@ INDEX_HTML = """<!doctype html>
             state.libraryCurrentFolderId = folderId;
             state.librarySelection = {type: "folder", id: folderId};
           }
+        } else if (previousTab === "library") {
+          const activeFolderId = libraryFolderById(previousActiveFolderId)
+            ? previousActiveFolderId
+            : Number(state.libraryRootId || 1);
+          const currentFolderId = libraryFolderById(previousCurrentFolderId)
+            ? previousCurrentFolderId
+            : activeFolderId;
+          state.libraryTab = "library";
+          state.libraryActiveFolderId = activeFolderId;
+          state.libraryCurrentFolderId = currentFolderId;
+          state.librarySelection = previousSelection?.type === "folder" && libraryFolderById(previousSelection.id)
+            ? previousSelection
+            : {type: "folder", id: currentFolderId};
         }
         if (state.mode === "library") {
           renderActiveLibraryTab();
@@ -25924,10 +25725,11 @@ INDEX_HTML = """<!doctype html>
           showLibraryPdfDropError("Drop exactly one PDF file here.");
           return;
         }
-        await importDroppedPdfForLibraryPaper(paperId, {sourcePath: droppedPaths[0], button: pdfTarget});
-        return;
-      }
-      if (state.mode === "deep-survey") {
+        await importDroppedPdfForLibraryPaper(paperId, {
+          sourcePath: droppedPaths[0],
+          button: pdfTarget,
+          replacing: pdfTarget.dataset.pdfReplace === "1"
+        });
         return;
       }
       if (state.mode !== "library") {
@@ -25939,21 +25741,8 @@ INDEX_HTML = """<!doctype html>
       }
       const targetFolderId = libraryImportDropTargetFolderId(dropPoint);
       clearLibraryFinderDropTarget();
-      const targetFolder = libraryFolderById(targetFolderId) || libraryFolderById(state.libraryRootId);
       const targetPath = libraryFolderPath(targetFolderId);
-      const finderTarget = targetFolder?.native_folder_path || "";
-      const draft = {
-        source_paths: droppedPaths,
-        target_folder_id: targetFolderId,
-        target_folder_name: targetFolder?.name || "Library",
-        target_library_path: targetPath,
-        finder_target: finderTarget,
-        metadata_mode: state.libraryImportMetadataMode || "quick",
-        status: `Ready to import ${droppedPaths.length === 1 ? "dropped item" : `${droppedPaths.length} dropped items`} into ${targetPath}.`
-      };
-      saveLibraryImportDraft(draft);
-      applyLibraryImportDraft(draft);
-      openLibraryLoaderWindow();
+      await runLibraryDroppedPathsImport(droppedPaths, targetFolderId, targetPath);
     }
 
     function libraryPdfDropTargetFromPoint(dropPoint = null) {
@@ -26067,40 +25856,45 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryDroppedPathsImport(paths, targetFolderId, targetName = "Library") {
+      if (state.libraryImportBusy) {
+        updateLibraryActivityStatus("Could not start Library load: another loader task is already running.", {live: false, delay: 6000});
+        return;
+      }
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
-      state.libraryLoaderOpen = true;
+      state.libraryImportBackground = true;
+      state.libraryTaskMode = "import";
+      state.libraryImportSourcePaths = [...paths];
       state.libraryImportPath = paths.length === 1 ? paths[0] : `${paths.length} dropped items`;
-      state.libraryImportStatus = `Starting dropped import into ${targetName}...`;
+      state.libraryImportTargetFolderId = Number(targetFolderId || state.libraryRootId || 1);
+      state.libraryImportTargetPath = targetName || "Library";
+      state.libraryImportMetadataMode = "skip";
+      state.libraryImportStatus = `Loading into ${state.libraryImportTargetPath}...`;
       state.libraryImportLastResult = null;
       state.libraryImportReportPath = "";
       state.libraryImportReadyRefreshDone = false;
       state.libraryImportJob = {status: "starting", stage: "queued", logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}], percent: 0};
-      renderLibraryLoader();
+      updateLibraryDroppedImportActivity(state.libraryImportJob);
       try {
         const res = await fetch("/api/library/import-folder/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paths, target_folder_id: targetFolderId})
+          body: JSON.stringify({paths, target_folder_id: targetFolderId, metadata_mode: "skip"})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start dropped import");
         state.libraryImportJobId = data.job_id || "";
         state.libraryImportJob = data.job || null;
-        state.libraryImportStatus = "Loader running...";
-        state.libraryTab = "library";
-        requestLibraryColumnReveal(targetFolderId, "nearest");
-        setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
-        renderLibrary();
-        state.libraryLoaderOpen = true;
-        renderLibraryLoader();
+        state.libraryImportStatus = loaderStatusText(state.libraryImportJob);
+        updateLibraryDroppedImportActivity(state.libraryImportJob || {status: "running", stage: "queued"});
         startLibraryImportPolling();
       } catch (error) {
         state.libraryImportBusy = false;
+        state.libraryImportBackground = false;
         state.libraryImportStatus = error.message || "Could not start dropped import";
         state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
         appendLibraryImportLog(state.libraryImportStatus, "error");
-        renderLibraryLoader();
+        updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
       }
     }
 
@@ -26877,7 +26671,6 @@ INDEX_HTML = """<!doctype html>
       pruneMyPublicationSelection();
       $("summary").textContent = "";
       const root = $("papers");
-      root.classList.remove("deep-survey-view");
       root.classList.add("library-view");
       root.innerHTML = `
         <div class="library-shell my-publications-shell" id="libraryShell" tabindex="0">
@@ -28555,9 +28348,8 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
-          ${!paper.merged_pdf_path && isPdfLike ? `<button class="action primary library-pdf-drop-target" data-action="download-library-pdf" data-library-pdf-drop-target data-paper-id="${escapeAttr(paper.paper_id || "")}" title="Download online or drop one PDF here">Download PDF</button>` : ""}
+          ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
-          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
@@ -28742,8 +28534,7 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
-          ${!paper.merged_pdf_path ? `<button class="action primary library-pdf-drop-target" data-action="download-library-pdf" data-library-pdf-drop-target data-paper-id="${escapeAttr(paper.paper_id || "")}" title="Download online or drop one PDF here">Download PDF</button>` : ""}
-          ${paper.merged_pdf_path ? `<button class="action" data-action="refresh-library-pdf">Download</button>` : ""}
+          <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
@@ -30815,6 +30606,28 @@ INDEX_HTML = """<!doctype html>
       return fileNameFromPath(path) || fallback;
     }
 
+    function setNativePdfQuickLookActive(active) {
+      const button = $("openLibraryQuickLookInPreview");
+      if (button) button.hidden = !active;
+      try {
+        window.webkit?.messageHandlers?.pdfPreviewState?.postMessage({active: Boolean(active)});
+      } catch (error) {
+        // The regular browser build has no native WebKit message bridge.
+      }
+    }
+
+    async function openLibraryQuickLookInPreview() {
+      const path = state.libraryQuickLookKind === "pdf" ? state.libraryQuickLookPath : "";
+      if (!path) return;
+      const button = $("openLibraryQuickLookInPreview");
+      if (button) button.disabled = true;
+      try {
+        await openLibraryPdfInPreview({merged_pdf_path: path});
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
     function renderLibraryQuickLookFileThumb(paper) {
       const root = $("libraryQuickLookThumbs");
       if (!root) return;
@@ -30934,6 +30747,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 1;
       state.libraryQuickLookPdfHasFocus = false;
+      setNativePdfQuickLookActive(false);
       if (title) title.textContent = libraryPreviewPathTitle(path, libraryFilePreviewTitle(paper));
       renderLibraryQuickLookFileThumb(paper);
       overlay.classList.remove("compact");
@@ -31050,12 +30864,19 @@ INDEX_HTML = """<!doctype html>
           showLibraryPdfDropError("Drop exactly one PDF file here.");
           return;
         }
-        await importDroppedPdfForLibraryPaper(paper.paper_id, {file, button});
+        await importDroppedPdfForLibraryPaper(paper.paper_id, {
+          file,
+          button,
+          replacing: Boolean(paper.merged_pdf_path)
+        });
       });
     }
 
     async function importDroppedPdfForLibraryPaper(paperId, options = {}) {
       if (!paperId) return;
+      const replacing = Boolean(options.replacing);
+      const progressMessage = replacing ? "Replacing PDF..." : "Importing dropped PDF...";
+      const successMessage = replacing ? "PDF replaced" : "PDF imported";
       const detail = $("libraryDetail");
       const status = $("libraryDetailStatus");
       const buttons = detail?.querySelectorAll("button") || [];
@@ -31064,13 +30885,13 @@ INDEX_HTML = """<!doctype html>
       options.button?.classList.remove("drag-over");
       options.button?.classList.add("is-busy");
       if (status) {
-        status.textContent = "Importing dropped PDF...";
+        status.textContent = progressMessage;
         status.className = "library-detail-status";
       }
       if (state.libraryTab === "my-publications") {
-        setMyPublicationActivity(activityId, "Importing dropped PDF...");
+        setMyPublicationActivity(activityId, progressMessage);
       }
-      updateLibraryActivityStatus("Importing dropped PDF...", {live: true, clear: false});
+      updateLibraryActivityStatus(progressMessage, {live: true, clear: false});
       try {
         const context = libraryPdfContextPayload(paperId);
         let res;
@@ -31094,11 +30915,11 @@ INDEX_HTML = """<!doctype html>
         else renderLibrary();
         const nextStatus = $("libraryDetailStatus");
         if (nextStatus) {
-          nextStatus.textContent = "PDF imported";
+          nextStatus.textContent = successMessage;
           nextStatus.className = "library-detail-status ok";
         }
         refreshLibraryQuickLookForSelection();
-        updateLibraryActivityStatus("PDF imported.", {delay: 2600});
+        updateLibraryActivityStatus(`${successMessage}.`, {delay: 2600});
       } catch (error) {
         const message = error.message || "PDF import failed";
         showLibraryPdfDropError(message);
@@ -31154,6 +30975,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeLibraryQuickLook() {
+      setNativePdfQuickLookActive(false);
       state.libraryQuickLookOpen = false;
       state.libraryQuickLookKind = "";
       state.libraryQuickLookRenderToken += 1;
@@ -31258,6 +31080,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
       state.libraryQuickLookPdfHasFocus = false;
+      setNativePdfQuickLookActive(false);
       if (title) title.textContent = placeholder.type;
       renderLibraryQuickLookThumbs(0);
       pages.onscroll = null;
@@ -31445,6 +31268,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryQuickLookPath = paper.merged_pdf_path;
       state.libraryQuickLookUrl = pdfUrl;
       state.libraryQuickLookPdfHasFocus = false;
+      setNativePdfQuickLookActive(true);
       if (isNewPdf) {
         state.libraryQuickLookPage = 1;
         state.libraryQuickLookPageCount = 0;
@@ -33193,110 +33017,100 @@ INDEX_HTML = """<!doctype html>
       $("themeGroupKeywords").value = (group?.queries || []).join("\\n");
       $("themeGroupStatus").textContent = "";
       $("themeGroupStatus").className = "citation-settings-status";
-      clearThemeKeywordRecommendations();
+      resetThemeKeywordPromptButton();
+      updateThemeKeywordPromptButton();
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       window.setTimeout(() => $("themeGroupName")?.focus(), 0);
+    }
+
+    function normalizedThemeSubjectName() {
+      return String($("themeGroupName")?.value || "").trim().replace(/\\s+/g, " ");
+    }
+
+    function suggestedThemeKeywordPrompt(subjectName) {
+      return [
+        "Create a focused keyword list for Daiqo Subject Monitor.",
+        "",
+        `Subject: "${subjectName}"`,
+        "",
+        "Daiqo searches OpenAlex, Crossref, Semantic Scholar, arXiv, and PubMed using each keyword phrase as a separate query. It then keeps a paper when at least one keyword phrase appears as a literal, case-insensitive match in the paper title or abstract. Therefore, every line acts as an independent OR condition and must be sufficiently specific by itself.",
+        "",
+        "Generate 10–14 English keyword phrases for this subject. Aim for good coverage while avoiding papers from merely adjacent or overly broad fields.",
+        "",
+        "Include, where applicable:",
+        "- the canonical subject name;",
+        "- established alternative names;",
+        "- standard abbreviations or acronyms;",
+        "- distinctive theories, mechanisms, phenomena, quasiparticles, protocols, platforms, material families, or device types strongly associated with the subject;",
+        "- important spelling or hyphenation variants when they are genuinely needed.",
+        "",
+        "Requirements:",
+        "- Prefer specific phrases of 2–5 words.",
+        "- Use a single word only when it uniquely identifies the subject.",
+        "- Do not include broad standalone terms such as physics, quantum, materials, electron, topological, computation, experiment, or theory.",
+        "- Do not include loosely related topics that would produce many irrelevant results.",
+        "- Do not use Boolean operators, regular expressions, wildcard syntax, or search-engine syntax.",
+        "- Do not repeat singular and plural versions of the same phrase; Daiqo handles final-word singular/plural variants automatically.",
+        "- Do not include commas inside a keyword.",
+        "",
+        "Return plain text only:",
+        "one keyword phrase per line",
+        "no heading",
+        "no explanation",
+        "no bullets",
+        "no numbering",
+        "no quotation marks",
+        "no code block",
+        "no blank lines"
+      ].join("\\n");
+    }
+
+    function updateThemeKeywordPromptButton() {
+      const button = $("copyThemeKeywordPrompt");
+      if (!button) return;
+      button.disabled = !normalizedThemeSubjectName();
+    }
+
+    function resetThemeKeywordPromptButton() {
+      const button = $("copyThemeKeywordPrompt");
+      if (!button) return;
+      if (button._copyResetTimer) window.clearTimeout(button._copyResetTimer);
+      button._copyResetTimer = null;
+      button.textContent = "Copy Suggested Prompt";
+      button.classList.remove("copied");
+    }
+
+    async function copySuggestedThemeKeywordPrompt() {
+      const subjectName = normalizedThemeSubjectName();
+      const button = $("copyThemeKeywordPrompt");
+      const status = $("themeGroupStatus");
+      if (!subjectName || !button) return;
+      try {
+        await copyTextToClipboard(suggestedThemeKeywordPrompt(subjectName));
+        resetThemeKeywordPromptButton();
+        button.textContent = "Copied";
+        button.classList.add("copied");
+        button._copyResetTimer = window.setTimeout(resetThemeKeywordPromptButton, 2000);
+        if (status) {
+          status.textContent = "";
+          status.className = "citation-settings-status";
+        }
+      } catch (error) {
+        if (status) {
+          status.textContent = error.message || "Could not copy prompt";
+          status.className = "citation-settings-status err";
+        }
+      }
     }
 
     function closeThemeGroupDialog() {
       const backdrop = $("themeGroupBackdrop");
       if (!backdrop) return;
       state.editingThemeGroupKey = "";
-      clearThemeKeywordRecommendations();
+      resetThemeKeywordPromptButton();
       backdrop.classList.remove("open");
       backdrop.setAttribute("aria-hidden", "true");
-    }
-
-    function clearThemeKeywordRecommendations() {
-      const root = $("themeKeywordRecommendations");
-      if (!root) return;
-      root.innerHTML = "";
-      root.classList.remove("open");
-    }
-
-    async function recommendThemeKeywords() {
-      const subject = $("themeGroupName")?.value.trim() || "";
-      const keywords = $("themeGroupKeywords")?.value || "";
-      const status = $("themeGroupStatus");
-      const button = $("recommendThemeKeywords");
-      const root = $("themeKeywordRecommendations");
-      if (!subject) {
-        status.textContent = "Subject name is required";
-        status.className = "citation-settings-status err";
-        return;
-      }
-      if (!root || !button) return;
-      status.textContent = "Searching literature metadata...";
-      status.className = "citation-settings-status";
-      button.disabled = true;
-      button.textContent = "Searching...";
-      clearThemeKeywordRecommendations();
-      try {
-        const res = await fetch("/api/theme-keyword-recommendations", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({subject, keywords})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not recommend keywords");
-        renderThemeKeywordRecommendations(data.recommendations || []);
-        const count = (data.recommendations || []).length;
-        status.textContent = count ? `${count} recommendations found` : "No new recommendations found";
-        status.className = count ? "citation-settings-status ok" : "citation-settings-status";
-      } catch (error) {
-        status.textContent = keywordRecommendationErrorMessage(error);
-        status.className = "citation-settings-status err";
-      } finally {
-        button.disabled = false;
-        button.textContent = "Recommend Keywords";
-      }
-    }
-
-    function keywordRecommendationErrorMessage(error) {
-      const message = String(error?.message || "").trim();
-      if (!message || message === "Load failed" || message === "Failed to fetch") {
-        return "Keyword recommendation request was interrupted. Try again in a moment.";
-      }
-      return message;
-    }
-
-    function renderThemeKeywordRecommendations(recommendations) {
-      const root = $("themeKeywordRecommendations");
-      if (!root) return;
-      root.innerHTML = "";
-      const items = Array.isArray(recommendations) ? recommendations : [];
-      if (!items.length) {
-        root.classList.remove("open");
-        return;
-      }
-      items.slice(0, 24).forEach((item) => {
-        const keyword = String(item?.keyword || "").trim();
-        if (!keyword) return;
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "theme-keyword-chip";
-        chip.textContent = keyword;
-        const sources = Array.isArray(item?.sources) ? item.sources.join(", ") : "";
-        if (sources) chip.title = sources;
-        chip.addEventListener("click", () => addThemeKeyword(keyword));
-        root.appendChild(chip);
-      });
-      root.classList.toggle("open", Boolean(root.children.length));
-    }
-
-    function addThemeKeyword(keyword) {
-      const textarea = $("themeGroupKeywords");
-      if (!textarea) return;
-      const value = String(keyword || "").trim();
-      if (!value) return;
-      const lines = textarea.value.split(/\\n+/).map((line) => line.trim()).filter(Boolean);
-      const known = new Set(lines.map((line) => line.toLowerCase()));
-      if (!known.has(value.toLowerCase())) {
-        lines.push(value);
-        textarea.value = lines.join("\\n");
-      }
-      textarea.focus();
     }
 
     async function saveThemeGroup() {
@@ -33339,12 +33153,40 @@ INDEX_HTML = """<!doctype html>
       document.querySelector(".theme-context-menu")?.remove();
     }
 
+    function showJournalContextMenu(event, journal) {
+      hideThemeContextMenu();
+      const journalName = String(journal || "").trim();
+      if (!journalName) return;
+      const menu = document.createElement("div");
+      menu.className = "theme-context-menu journal-context-menu";
+      const refreshDisabled = isFutureDateIso(state.selectedDate) || state.fetchingDates.has(state.selectedDate);
+      menu.innerHTML = `
+        <button type="button" data-action="refresh-journal" ${refreshDisabled ? "disabled" : ""}>Refresh This Journal</button>
+      `;
+      document.body.appendChild(menu);
+      menu.addEventListener("mousedown", (menuEvent) => menuEvent.stopPropagation());
+      menu.addEventListener("click", (menuEvent) => {
+        const button = menuEvent.target?.closest?.('[data-action="refresh-journal"]');
+        if (!button || button.disabled) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+        hideThemeContextMenu();
+        refreshCurrentJournalDate(journalName);
+      });
+      const width = menu.offsetWidth || 160;
+      const height = menu.offsetHeight || 42;
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
+    }
+
     function showThemeContextMenu(event, group) {
       hideThemeContextMenu();
       if (!group?.key) return;
       const menu = document.createElement("div");
       menu.className = "theme-context-menu";
+      const refreshDisabled = isFutureDateIso(state.selectedDate) || state.themeFetchingDates.has(state.selectedDate);
       menu.innerHTML = `
+        <button type="button" data-action="refresh" ${refreshDisabled ? "disabled" : ""}>Refresh This Subject</button>
         <button type="button" data-action="edit">Edit</button>
         <button type="button" class="danger" data-action="delete">Delete</button>
       `;
@@ -33361,7 +33203,11 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         const action = button.dataset.action || "";
-        if (action === "edit") {
+        if (button.disabled) return;
+        if (action === "refresh") {
+          hideThemeContextMenu();
+          refreshThemeGroupForDate(group).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
+        } else if (action === "edit") {
           openThemeGroupDialog(group);
         } else if (action === "delete") {
           deleteThemeGroup(group).catch((error) => window.alert(error?.message || "Could not delete subject"));
@@ -33853,17 +33699,24 @@ INDEX_HTML = """<!doctype html>
           if (progress && progress.active !== false) await waitForDateFetchToFinish(selectedDate, "theme");
           await finalizeThemeFetchFromStorage(selectedDate, requestedGroupParam, {render: false});
         }
-        if (state.themeFetchingDates.has(selectedDate)) state.themeFetchingDates.delete(selectedDate);
-        if (state.themeFetchControllers.get(selectedDate) === controller) state.themeFetchControllers.delete(selectedDate);
-        stopProgressPolling(selectedDate, "theme");
-        clearFetchProgressState(selectedDate, "theme");
-        delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
-        delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
-        if (state.mode === "theme") renderCalendar();
-        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
-        if (requestSequence === state.themeRequestSequence && state.mode === "theme" && state.selectedDate === selectedDate) {
-          state.themeSearchRunning = false;
-          renderThemeMonitor();
+        const supersededWhileFetchContinues = shouldFetchRemote
+          && requestSequence !== state.themeRequestSequence
+          && state.themeFetchControllers.get(selectedDate) === controller
+          && state.themeFetchingDates.has(selectedDate)
+          && state.themeFetchCompletionWatchers.has(themeFetchCompletionKey(selectedDate, requestedGroupParam));
+        if (!supersededWhileFetchContinues) {
+          if (state.themeFetchingDates.has(selectedDate)) state.themeFetchingDates.delete(selectedDate);
+          if (state.themeFetchControllers.get(selectedDate) === controller) state.themeFetchControllers.delete(selectedDate);
+          stopProgressPolling(selectedDate, "theme");
+          clearFetchProgressState(selectedDate, "theme");
+          delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
+          delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
+          if (state.mode === "theme") renderCalendar();
+          refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+          if (requestSequence === state.themeRequestSequence && state.mode === "theme" && state.selectedDate === selectedDate) {
+            state.themeSearchRunning = false;
+            renderThemeMonitor();
+          }
         }
       }
     }
@@ -33877,11 +33730,12 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function forceFetchSelectedThemeDate() {
+    async function forceFetchSelectedThemeDate(requestedGroupParam = "ALL") {
       await ensureThemeGroupsLoaded();
       const selectedDate = state.selectedDate;
       if (isFutureDateIso(selectedDate) || state.themeFetchingDates.has(selectedDate)) return;
-      const requestedGroupParam = selectedThemeGroupParam();
+      requestedGroupParam = String(requestedGroupParam || "ALL");
+      const displayGroupParam = selectedThemeGroupParam();
       const requestedViewYear = state.viewYear;
       const requestedViewMonth = state.viewMonth;
       const controller = new AbortController();
@@ -33890,13 +33744,13 @@ INDEX_HTML = """<!doctype html>
       state.themeFetchControllers.set(selectedDate, controller);
       setFetchProgressState(selectedDate, "theme", initialThemeFetchProgress());
       await startProgressPolling(selectedDate, "theme");
-      state.themeSummaryGroupParam = requestedGroupParam;
-      restoreCachedThemePapers(selectedDate, requestedGroupParam);
+      state.themeSummaryGroupParam = displayGroupParam;
+      restoreCachedThemePapers(selectedDate, displayGroupParam);
       if (state.mode === "theme") {
         state.themeSearched = true;
         state.themeFromDate = selectedDate;
         state.themeUntilDate = selectedDate;
-        state.themeSummary = pendingThemeSummaryForDate(selectedDate, requestedGroupParam);
+        state.themeSummary = pendingThemeSummaryForDate(selectedDate, displayGroupParam);
         renderThemeMonitor();
       }
       if (state.mode === "theme") renderCalendar();
@@ -33906,17 +33760,17 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || res.statusText || "Subject fetch failed");
         applyThemeReportData(selectedDate, requestedGroupParam, data, {render: false});
-        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, displayGroupParam).catch(() => {});
       } catch (error) {
         if (error?.name === "AbortError") return;
-        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+        if (state.mode === "theme" && state.selectedDate === selectedDate) {
           state.themeSummary = {
             errors: [themeRequestErrorMessage(error, "Subject fetch failed")],
             window_start: selectedDate,
             window_end: selectedDate,
-            last_fetch: cachedThemeLastFetch(selectedDate, requestedGroupParam)
+            last_fetch: cachedThemeLastFetch(selectedDate, displayGroupParam)
           };
-          state.themeSummaryGroupParam = requestedGroupParam;
+          state.themeSummaryGroupParam = displayGroupParam;
         }
       } finally {
         window.clearTimeout(timeout);
@@ -33924,7 +33778,7 @@ INDEX_HTML = """<!doctype html>
         if (shouldCompleteThemeFetch) {
           const progress = await refreshFetchProgress(selectedDate, "theme");
           if (progress && progress.active !== false) await waitForDateFetchToFinish(selectedDate, "theme");
-          await finalizeThemeFetchFromStorage(selectedDate, requestedGroupParam, {render: false});
+          await finalizeThemeFetchFromStorage(selectedDate, displayGroupParam, {render: false});
         }
         state.themeFetchingDates.delete(selectedDate);
         state.themeFetchControllers.delete(selectedDate);
@@ -33933,11 +33787,17 @@ INDEX_HTML = """<!doctype html>
         delete state.fetchSnapshotPolls[`theme:${selectedDate}`];
         delete state.fetchSnapshotInflight[`theme:${selectedDate}`];
         if (state.mode === "theme") renderCalendar();
-        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, requestedGroupParam).catch(() => {});
-        if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === requestedGroupParam) {
+        refreshThemeMonthCounts(requestedViewYear, requestedViewMonth, displayGroupParam).catch(() => {});
+        if (state.mode === "theme" && state.selectedDate === selectedDate) {
           renderThemeMonitor();
         }
       }
+    }
+
+    async function refreshThemeGroupForDate(group) {
+      if (!group?.key) return;
+      state.activeThemeGroupKey = group.key;
+      await forceFetchSelectedThemeDate(group.key);
     }
 
     function cancelThemeFetch(selectedDate = state.selectedDate) {
@@ -34102,11 +33962,23 @@ INDEX_HTML = """<!doctype html>
       clearFetchProgressDisplay();
       setPrimaryView("theme");
       await ensureThemeGroupsLoaded();
+      await resumeActiveThemeFetch(state.selectedDate);
       state.themeFromDate = state.selectedDate;
       state.themeUntilDate = state.selectedDate;
       renderThemeFilters();
       await loadThemeMonth({force: true});
       await loadThemeReportForDate(state.selectedDate);
+    }
+
+    async function resumeActiveThemeFetch(selectedDate) {
+      const progress = await refreshFetchProgress(selectedDate, "theme");
+      if (!progress || progress.kind !== "theme" || progress.active === false) return false;
+      state.themeFetchingDates.add(selectedDate);
+      state.themeSearchRunning = true;
+      setFetchProgressState(selectedDate, "theme", progress);
+      await startProgressPolling(selectedDate, "theme");
+      watchThemeFetchCompletion(selectedDate, selectedThemeGroupParam());
+      return true;
     }
 
     async function runThemeSearch() {
@@ -34284,7 +34156,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryControls").classList.remove("open");
       $("reportTitle").textContent = "Subject Monitor";
       const root = $("papers");
-      root.classList.remove("library-view", "deep-survey-view");
+      root.classList.remove("library-view");
       root.style.height = "";
       root.style.minHeight = "";
       root.innerHTML = "";
@@ -34446,66 +34318,19 @@ INDEX_HTML = """<!doctype html>
       await loadReport({showLoading: false});
     }
 
-    async function openDeepSurvey() {
-      state.mode = "deep-survey";
-      closeLibraryQuickLook();
-      closeAnalysis();
-      stopArxivUpdateCountdown();
-      clearFetchProgressDisplay();
-      setPrimaryView("deep-survey");
-      $("summary").textContent = "";
-      $("reportTabs").classList.remove("open");
-      $("reportTabs").innerHTML = "";
-      $("libraryControls").classList.remove("open");
-      const root = $("papers");
-      const host = $("deepSurveyHost");
-      root.classList.remove("library-view", "deep-survey-view");
-      root.style.height = "";
-      root.style.minHeight = "";
-      if (!host) return;
-      host.setAttribute("aria-hidden", "false");
-      if (!state.deepSurveyLoadingPromise) {
-        const existingFrame = host.querySelector(".deep-survey-frame");
-        if (!existingFrame) {
-          host.innerHTML = `<div class="deep-survey-loading">Starting Deep Survey...</div>`;
-        }
-        state.deepSurveyLoadingPromise = (async () => {
-          try {
-            const data = await fetchJson("/api/deep-survey/status");
-            if (!data.ok || !data.url) throw new Error(data.error || "Deep Survey could not start");
-            if (existingFrame && state.deepSurveyUrl === data.url && existingFrame.getAttribute("src") === data.url) {
-              return;
-            }
-            state.deepSurveyUrl = data.url;
-            host.innerHTML = `<iframe class="deep-survey-frame" title="Deep Survey" src="${escapeAttr(data.url)}"></iframe>`;
-          } catch (error) {
-            state.deepSurveyUrl = "";
-            host.innerHTML = `<div class="empty">${escapeHtml(error.message || "Deep Survey could not start")}</div>`;
-          } finally {
-            state.deepSurveyLoadingPromise = null;
-          }
-        })();
-      }
-      await state.deepSurveyLoadingPromise;
-    }
-
     function setPrimaryView(view) {
-      const isLibrarySurface = view === "library" || view === "my-publications" || view === "deep-survey";
+      const isLibrarySurface = view === "library" || view === "my-publications";
       const app = document.querySelector(".app");
       app?.classList.toggle("library-mode", isLibrarySurface);
       app?.classList.toggle("report-mode", view === "report");
-      app?.classList.toggle("deep-survey-mode", view === "deep-survey");
       app?.classList.toggle("theme-mode", view === "theme");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
       $("themeMode")?.classList.toggle("active", view === "theme");
-      $("deepSurveyMode")?.classList.toggle("active", view === "deep-survey");
       $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
       $("sideThemeMode")?.classList.toggle("active", view === "theme");
-      $("sideDeepSurveyMode")?.classList.toggle("active", view === "deep-survey");
-      $("deepSurveyHost")?.setAttribute("aria-hidden", view === "deep-survey" ? "false" : "true");
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
@@ -34543,6 +34368,13 @@ INDEX_HTML = """<!doctype html>
       };
       region.addEventListener("pointerup", stop);
       region.addEventListener("pointercancel", stop);
+      region.addEventListener("dblclick", (event) => {
+        if (event.button !== 0) return;
+        dragging = false;
+        post("toggleFill", event);
+        event.preventDefault();
+        event.stopPropagation();
+      });
     }
 
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
@@ -34557,7 +34389,6 @@ INDEX_HTML = """<!doctype html>
         $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });
     });
-    $("deepSurveyMode").addEventListener("click", () => openDeepSurvey());
     $("sideReportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
@@ -34565,7 +34396,6 @@ INDEX_HTML = """<!doctype html>
       $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
-    $("sideDeepSurveyMode").addEventListener("click", () => openDeepSurvey());
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
@@ -34622,13 +34452,12 @@ INDEX_HTML = """<!doctype html>
       renderThemeMonitor();
     }));
     $("forceThemeFetch")?.addEventListener("click", () => {
-      forceFetchSelectedThemeDate().catch((error) => handleThemeLoadFailure(error, state.selectedDate));
+      forceFetchSelectedThemeDate("ALL").catch((error) => handleThemeLoadFailure(error, state.selectedDate));
     });
     $("themeArxivToggle")?.addEventListener("change", (event) => {
       state.showThemeArxiv = Boolean(event.target.checked);
       renderThemeMonitor();
     });
-    $("recommendThemeKeywords")?.addEventListener("click", recommendThemeKeywords);
     $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
     $("themeFromDate")?.addEventListener("change", (event) => { state.themeFromDate = event.target.value || state.themeFromDate; });
     $("themeUntilDate")?.addEventListener("change", (event) => { state.themeUntilDate = event.target.value || state.themeUntilDate; });
@@ -34691,6 +34520,7 @@ INDEX_HTML = """<!doctype html>
       closeLibraryQuickLook();
       $("libraryShell")?.focus({preventScroll: true});
     });
+    $("openLibraryQuickLookInPreview").addEventListener("click", openLibraryQuickLookInPreview);
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
@@ -34859,6 +34689,11 @@ INDEX_HTML = """<!doctype html>
     $("closeThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
     $("cancelThemeGroup")?.addEventListener("click", closeThemeGroupDialog);
     $("saveThemeGroup")?.addEventListener("click", saveThemeGroup);
+    $("themeGroupName")?.addEventListener("input", () => {
+      resetThemeKeywordPromptButton();
+      updateThemeKeywordPromptButton();
+    });
+    $("copyThemeKeywordPrompt")?.addEventListener("click", copySuggestedThemeKeywordPrompt);
     $("themeGroupKeywords")?.addEventListener("keydown", (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") saveThemeGroup();
     });

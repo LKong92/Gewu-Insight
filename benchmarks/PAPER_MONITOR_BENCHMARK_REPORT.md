@@ -27,7 +27,7 @@
 
 - Routes discovered in `paper_monitor/ui_server.py`: 101
 - `/api/...` routes discovered: 98
-- Sample API routes: `/api/analysis, /api/analyze, /api/arxiv-daily-refresh, /api/cache/clear-web, /api/deep-survey/status, /api/delete-analysis, /api/delete-pdf, /api/download, /api/fetch-progress, /api/file-icon, /api/google-scholar-profiles, /api/journal-logo, /api/journals, /api/journals/add, /api/journals/remove, /api/library, /api/library/bootstrap, /api/library/delete, /api/library/delete-batch, /api/library/delete-file`
+- Sample API routes: `/api/analysis, /api/analyze, /api/arxiv-daily-refresh, /api/cache/clear-web, /api/delete-analysis, /api/delete-pdf, /api/download, /api/fetch-progress, /api/file-icon, /api/google-scholar-profiles, /api/journal-logo, /api/journals, /api/journals/add, /api/journals/remove, /api/library, /api/library/bootstrap, /api/library/delete, /api/library/delete-batch, /api/library/delete-file`
 
 ## Dataset
 

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Chrome Literature Downloader"
-  short_description: "Download article PDFs through Chrome when direct routes fail"
-  default_prompt: "Use $chrome-literature-downloader to download this DOI with direct/API first, then Chrome fallback if needed."

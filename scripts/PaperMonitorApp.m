@@ -4,6 +4,8 @@
 @interface DaiqoWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
+@property(nonatomic) BOOL pdfQuickLookActive;
+@property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @end
 
 @implementation DaiqoWebView
@@ -71,6 +73,114 @@
     [self evaluateJavaScript:@"window.clearNativeFinderDropTarget && window.clearNativeFinderDropTarget()" completionHandler:nil];
 }
 
+- (void)setPdfQuickLookActive:(BOOL)active {
+    _pdfQuickLookActive = active;
+    self.pdfMagnificationAccumulator = 0;
+    if (active) {
+        [self hidePDFHUDSubviews];
+    }
+}
+
+- (void)didAddSubview:(NSView *)subview {
+    [super didAddSubview:subview];
+    if (self.pdfQuickLookActive) {
+        [self hidePDFHUDSubviewsInView:subview];
+    }
+}
+
+- (void)layout {
+    [super layout];
+    if (self.pdfQuickLookActive) {
+        [self hidePDFHUDSubviews];
+    }
+}
+
+- (void)hidePDFHUDSubviews {
+    for (NSView *subview in self.subviews) {
+        [self hidePDFHUDSubviewsInView:subview];
+    }
+}
+
+- (void)hidePDFHUDSubviewsInView:(NSView *)view {
+    if ([NSStringFromClass(view.class) containsString:@"WKPDFHUDView"]) {
+        view.hidden = YES;
+        return;
+    }
+    for (NSView *subview in view.subviews) {
+        [self hidePDFHUDSubviewsInView:subview];
+    }
+}
+
+- (void)collectPDFHUDSubviewsInView:(NSView *)view into:(NSMutableArray<NSView *> *)result {
+    if ([NSStringFromClass(view.class) containsString:@"WKPDFHUDView"]) {
+        [result addObject:view];
+        return;
+    }
+    for (NSView *subview in view.subviews) {
+        [self collectPDFHUDSubviewsInView:subview into:result];
+    }
+}
+
+- (NSArray<NSView *> *)pdfHUDSubviews {
+    NSMutableArray<NSView *> *result = [NSMutableArray array];
+    for (NSView *subview in self.subviews) {
+        [self collectPDFHUDSubviewsInView:subview into:result];
+    }
+    return result;
+}
+
+- (BOOL)performPDFHUDZoomIn:(BOOL)zoomIn {
+    BOOL handled = NO;
+    SEL directSelector = NSSelectorFromString(zoomIn ? @"performPDFZoomIn" : @"performPDFZoomOut");
+    SEL legacyVisibleSelector = NSSelectorFromString(@"_setVisible:");
+    SEL legacyActionSelector = NSSelectorFromString(@"_performActionForControl:");
+    NSString *legacyControl = zoomIn ? @"plus.magnifyingglass" : @"minus.magnifyingglass";
+    for (NSView *hud in [self pdfHUDSubviews]) {
+        if ([hud respondsToSelector:directSelector]) {
+            IMP implementation = [hud methodForSelector:directSelector];
+            ((void (*)(id, SEL))implementation)(hud, directSelector);
+            handled = YES;
+            continue;
+        }
+        if (![hud respondsToSelector:legacyActionSelector]) continue;
+        if ([hud respondsToSelector:legacyVisibleSelector]) {
+            IMP visibleImplementation = [hud methodForSelector:legacyVisibleSelector];
+            ((void (*)(id, SEL, BOOL))visibleImplementation)(hud, legacyVisibleSelector, YES);
+        }
+        IMP actionImplementation = [hud methodForSelector:legacyActionSelector];
+        ((void (*)(id, SEL, id))actionImplementation)(hud, legacyActionSelector, legacyControl);
+        handled = YES;
+    }
+    [self hidePDFHUDSubviews];
+    return handled;
+}
+
+- (void)magnifyWithEvent:(NSEvent *)event {
+    if (!self.pdfQuickLookActive) {
+        [super magnifyWithEvent:event];
+        return;
+    }
+    if (event.phase == NSEventPhaseBegan) {
+        self.pdfMagnificationAccumulator = 0;
+    }
+    self.pdfMagnificationAccumulator += event.magnification;
+    const CGFloat step = 0.045;
+    NSInteger actionCount = 0;
+    BOOL handled = NO;
+    while (fabs(self.pdfMagnificationAccumulator) >= step && actionCount < 4) {
+        BOOL zoomIn = self.pdfMagnificationAccumulator > 0;
+        handled = [self performPDFHUDZoomIn:zoomIn] || handled;
+        self.pdfMagnificationAccumulator += zoomIn ? -step : step;
+        actionCount += 1;
+    }
+    if (!handled && actionCount > 0) {
+        [super magnifyWithEvent:event];
+    }
+    if (event.phase == NSEventPhaseEnded || event.phase == NSEventPhaseCancelled) {
+        self.pdfMagnificationAccumulator = 0;
+    }
+}
+
 - (void)mouseDragged:(NSEvent *)event {
     if (self.nativeDragPath.length > 0) {
         NSString *path = self.nativeDragPath;
@@ -123,15 +233,84 @@
 
 @end
 
+@interface DaiqoTitlebarGestureView : NSView
+@property(nonatomic, copy) void (^doubleClickHandler)(void);
+@end
+
+@implementation DaiqoTitlebarGestureView
+
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {
+    return YES;
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (event.clickCount == 2) {
+        if (self.doubleClickHandler) self.doubleClickHandler();
+        return;
+    }
+    [self.window performWindowDragWithEvent:event];
+}
+
+@end
+
+@interface DaiqoWindow : NSWindow
+@property(nonatomic, copy) void (^titlebarDoubleClickHandler)(void);
+@end
+
+@implementation DaiqoWindow
+
+- (BOOL)handleTitlebarDoubleClickAction {
+    NSEvent *event = NSApp.currentEvent;
+    if (!event || event.clickCount != 2 || event.window != self) return NO;
+    NSPoint point = event.locationInWindow;
+    CGFloat distanceFromTop = NSHeight(self.frame) - point.y;
+    if (point.x < 90.0 || distanceFromTop < 0.0 || distanceFromTop > 40.0) return NO;
+    if (self.titlebarDoubleClickHandler) self.titlebarDoubleClickHandler();
+    return YES;
+}
+
+- (void)sendEvent:(NSEvent *)event {
+    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
+        NSPoint point = event.locationInWindow;
+        CGFloat distanceFromTop = NSHeight(self.frame) - point.y;
+        if (point.x >= 90.0 && distanceFromTop >= 0.0 && distanceFromTop <= 40.0) {
+            if (self.titlebarDoubleClickHandler) self.titlebarDoubleClickHandler();
+            return;
+        }
+    }
+    [super sendEvent:event];
+}
+
+- (void)performMiniaturize:(id)sender {
+    if ([self handleTitlebarDoubleClickAction]) return;
+    [super performMiniaturize:sender];
+}
+
+- (void)miniaturize:(id)sender {
+    if ([self handleTitlebarDoubleClickAction]) return;
+    [super miniaturize:sender];
+}
+
+- (void)performZoom:(id)sender {
+    if ([self handleTitlebarDoubleClickAction]) return;
+    [super performZoom:sender];
+}
+
+- (void)zoom:(id)sender {
+    if ([self handleTitlebarDoubleClickAction]) return;
+    [super zoom:sender];
+}
+
+@end
+
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) DaiqoTitlebarGestureView *titlebarGestureView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
 @property(nonatomic, strong) WKWebView *userGuideWebView;
-@property(nonatomic, strong) NSWindow *aboutDeepSurveyWindow;
-@property(nonatomic, strong) WKWebView *aboutDeepSurveyWebView;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -142,6 +321,10 @@
 @property(nonatomic) BOOL windowDragging;
 @property(nonatomic) NSPoint windowDragStartPoint;
 @property(nonatomic) NSRect windowDragStartFrame;
+@property(nonatomic) NSRect windowRestoreFrame;
+@property(nonatomic) BOOL recoverTitlebarDoubleClickMiniaturize;
+- (void)toggleMainWindowFill;
+- (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 @end
 
 @implementation PaperMonitorDelegate
@@ -151,6 +334,10 @@
     NSString *host = environment[@"PAPER_MONITOR_HOST"] ?: @"127.0.0.1";
     NSString *port = environment[@"PAPER_MONITOR_PORT"] ?: @"8765";
     self.url = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@:%@", host, port]];
+
+    // Daiqo owns the title-bar double-click gesture. Keep AppKit from applying
+    // the user's global Fill/Zoom/Minimize choice before our window can toggle.
+    [[NSUserDefaults standardUserDefaults] setObject:@"None" forKey:@"AppleActionOnDoubleClick"];
 
     [self createWindow];
     [self showLoadingPage];
@@ -168,8 +355,31 @@
     return NO;
 }
 
+- (void)windowWillMiniaturize:(NSNotification *)notification {
+    NSEvent *event = NSApp.currentEvent;
+    if (!event || event.clickCount != 2 || event.window != self.window) {
+        self.recoverTitlebarDoubleClickMiniaturize = NO;
+        return;
+    }
+    NSPoint point = event.locationInWindow;
+    CGFloat distanceFromTop = NSHeight(self.window.frame) - point.y;
+    self.recoverTitlebarDoubleClickMiniaturize = point.x >= 90.0
+        && distanceFromTop >= 0.0
+        && distanceFromTop <= 40.0;
+}
+
+- (void)windowDidMiniaturize:(NSNotification *)notification {
+    if (!self.recoverTitlebarDoubleClickMiniaturize) return;
+    self.recoverTitlebarDoubleClickMiniaturize = NO;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.window deminiaturize:nil];
+        [self toggleMainWindowFill];
+    });
+}
+
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
     if (!flag) {
+        if (self.window.isMiniaturized) [self.window deminiaturize:nil];
         [self.window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
     }
@@ -196,11 +406,12 @@
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
     [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
+    [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
     configuration.userContentController = userContentController;
     self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
 
-    self.window = [[NSWindow alloc]
+    self.window = [[DaiqoWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 1280, 860)
                   styleMask:(NSWindowStyleMaskTitled |
                              NSWindowStyleMaskClosable |
@@ -216,11 +427,31 @@
     self.window.minSize = NSMakeSize(980, 680);
     NSScreen *screen = [NSScreen mainScreen];
     if (screen) {
+        self.windowRestoreFrame = [self defaultRestoreFrameForScreen:screen];
         [self.window setFrame:screen.visibleFrame display:YES];
     } else {
         [self.window center];
+        self.windowRestoreFrame = self.window.frame;
     }
     self.window.contentView = self.webView;
+    __weak PaperMonitorDelegate *weakSelf = self;
+    ((DaiqoWindow *)self.window).titlebarDoubleClickHandler = ^{
+        PaperMonitorDelegate *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.windowDragging = NO;
+        [strongSelf toggleMainWindowFill];
+    };
+    self.titlebarGestureView = [[DaiqoTitlebarGestureView alloc] initWithFrame:NSZeroRect];
+    self.titlebarGestureView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.titlebarGestureView.doubleClickHandler = ((DaiqoWindow *)self.window).titlebarDoubleClickHandler;
+    [self.webView addSubview:self.titlebarGestureView positioned:NSWindowAbove relativeTo:nil];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.titlebarGestureView.leadingAnchor constraintEqualToAnchor:self.webView.leadingAnchor constant:720.0],
+        [self.titlebarGestureView.trailingAnchor constraintEqualToAnchor:self.webView.trailingAnchor constant:-160.0],
+        [self.titlebarGestureView.topAnchor constraintEqualToAnchor:self.webView.topAnchor],
+        [self.titlebarGestureView.heightAnchor constraintEqualToConstant:40.0]
+    ]];
+    if (self.window.isMiniaturized) [self.window deminiaturize:nil];
     [self.window makeKeyAndOrderFront:nil];
     [self positionTrafficLightButtons];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -230,6 +461,16 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"pdfPreviewState"]) {
+        if (![self.webView isKindOfClass:[DaiqoWebView class]]) return;
+        BOOL active = NO;
+        if ([message.body isKindOfClass:[NSDictionary class]]) {
+            id value = ((NSDictionary *)message.body)[@"active"];
+            if ([value respondsToSelector:@selector(boolValue)]) active = [value boolValue];
+        }
+        ((DaiqoWebView *)self.webView).pdfQuickLookActive = active;
+        return;
+    }
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
         NSString *type = @"close";
         if ([message.body isKindOfClass:[NSDictionary class]]) {
@@ -266,6 +507,11 @@
         return;
     }
     NSPoint point = NSMakePoint(screenXNumber.doubleValue, screenYNumber.doubleValue);
+    if ([type isEqualToString:@"toggleFill"]) {
+        self.windowDragging = NO;
+        [self toggleMainWindowFill];
+        return;
+    }
     if ([type isEqualToString:@"begin"]) {
         self.windowDragging = YES;
         self.windowDragStartPoint = point;
@@ -285,6 +531,54 @@
     frame.origin.x += dx;
     frame.origin.y -= dy;
     [self.window setFrame:frame display:YES];
+}
+
+- (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen {
+    NSRect visibleFrame = screen.visibleFrame;
+    CGFloat width = MIN(NSWidth(visibleFrame) - 40.0, MAX(980.0, floor(NSWidth(visibleFrame) * 0.82)));
+    CGFloat height = MIN(NSHeight(visibleFrame) - 40.0, MAX(680.0, floor(NSHeight(visibleFrame) * 0.84)));
+    width = MAX(640.0, width);
+    height = MAX(480.0, height);
+    return NSMakeRect(
+        round(NSMidX(visibleFrame) - width / 2.0),
+        round(NSMidY(visibleFrame) - height / 2.0),
+        width,
+        height
+    );
+}
+
+- (void)toggleMainWindowFill {
+    NSScreen *screen = self.window.screen ?: [NSScreen mainScreen];
+    if (!screen) return;
+    NSRect visibleFrame = screen.visibleFrame;
+    NSRect currentFrame = self.window.frame;
+    BOOL fillsVisibleFrame = fabs(NSMinX(currentFrame) - NSMinX(visibleFrame)) <= 2.0
+        && fabs(NSMinY(currentFrame) - NSMinY(visibleFrame)) <= 2.0
+        && fabs(NSWidth(currentFrame) - NSWidth(visibleFrame)) <= 2.0
+        && fabs(NSHeight(currentFrame) - NSHeight(visibleFrame)) <= 2.0;
+    NSRect targetFrame;
+    if (fillsVisibleFrame) {
+        targetFrame = self.windowRestoreFrame;
+        NSRect intersection = NSIntersectionRect(targetFrame, visibleFrame);
+        BOOL restoreIsUsable = !NSIsEmptyRect(targetFrame)
+            && NSWidth(intersection) >= MIN(240.0, NSWidth(targetFrame))
+            && NSHeight(intersection) >= MIN(160.0, NSHeight(targetFrame));
+        BOOL restoreIsAlsoFilled = fabs(NSMinX(targetFrame) - NSMinX(visibleFrame)) <= 2.0
+            && fabs(NSMinY(targetFrame) - NSMinY(visibleFrame)) <= 2.0
+            && fabs(NSWidth(targetFrame) - NSWidth(visibleFrame)) <= 2.0
+            && fabs(NSHeight(targetFrame) - NSHeight(visibleFrame)) <= 2.0;
+        if (!restoreIsUsable || restoreIsAlsoFilled) {
+            targetFrame = [self defaultRestoreFrameForScreen:screen];
+        }
+        targetFrame.size.width = MIN(NSWidth(targetFrame), NSWidth(visibleFrame));
+        targetFrame.size.height = MIN(NSHeight(targetFrame), NSHeight(visibleFrame));
+        targetFrame.origin.x = MIN(MAX(NSMinX(targetFrame), NSMinX(visibleFrame)), NSMaxX(visibleFrame) - NSWidth(targetFrame));
+        targetFrame.origin.y = MIN(MAX(NSMinY(targetFrame), NSMinY(visibleFrame)), NSMaxY(visibleFrame) - NSHeight(targetFrame));
+    } else {
+        self.windowRestoreFrame = currentFrame;
+        targetFrame = visibleFrame;
+    }
+    [self.window setFrame:targetFrame display:YES animate:YES];
 }
 
 - (void)positionTrafficLightButtons {
@@ -383,8 +677,6 @@
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
     NSMenuItem *userGuideItem = [helpMenu addItemWithTitle:@"User Guide" action:@selector(openUserGuide:) keyEquivalent:@"?"];
     userGuideItem.target = self;
-    NSMenuItem *aboutDeepSurveyItem = [helpMenu addItemWithTitle:@"About Deep Survey" action:@selector(openAboutDeepSurvey:) keyEquivalent:@""];
-    aboutDeepSurveyItem.target = self;
     helpMenuItem.submenu = helpMenu;
 
     NSApp.mainMenu = mainMenu;
@@ -534,16 +826,8 @@
     return [self.url URLByAppendingPathComponent:@"user-guide"];
 }
 
-- (NSURL *)aboutDeepSurveyURL {
-    return [self.url URLByAppendingPathComponent:@"about-deep-survey"];
-}
-
 - (void)openUserGuide:(id)sender {
     [self showUserGuideWindow];
-}
-
-- (void)openAboutDeepSurvey:(id)sender {
-    [self showAboutDeepSurveyWindow];
 }
 
 - (void)showUserGuideWindow {
@@ -568,31 +852,6 @@
     }
     [self.userGuideWebView loadRequest:[NSURLRequest requestWithURL:[self userGuideURL]]];
     [self.userGuideWindow makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
-}
-
-- (void)showAboutDeepSurveyWindow {
-    if (!self.aboutDeepSurveyWindow) {
-        WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-        self.aboutDeepSurveyWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
-        self.aboutDeepSurveyWebView.UIDelegate = self;
-
-        self.aboutDeepSurveyWindow = [[NSWindow alloc]
-            initWithContentRect:NSMakeRect(0, 0, 980, 760)
-                      styleMask:(NSWindowStyleMaskTitled |
-                                 NSWindowStyleMaskClosable |
-                                 NSWindowStyleMaskMiniaturizable |
-                                 NSWindowStyleMaskResizable)
-                        backing:NSBackingStoreBuffered
-                          defer:NO];
-        self.aboutDeepSurveyWindow.title = @"About Deep Survey";
-        self.aboutDeepSurveyWindow.delegate = self;
-        self.aboutDeepSurveyWindow.minSize = NSMakeSize(760, 560);
-        self.aboutDeepSurveyWindow.contentView = self.aboutDeepSurveyWebView;
-        [self.aboutDeepSurveyWindow center];
-    }
-    [self.aboutDeepSurveyWebView loadRequest:[NSURLRequest requestWithURL:[self aboutDeepSurveyURL]]];
-    [self.aboutDeepSurveyWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
 

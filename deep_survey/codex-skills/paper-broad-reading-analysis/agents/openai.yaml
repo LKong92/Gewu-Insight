@@ -1,4 +1,0 @@
-interface:
-  display_name: "Paper Broad Reading"
-  short_description: "Full-PDF Chinese paper analysis with claim evidence"
-  default_prompt: "Use $paper-broad-reading-analysis to inspect the full PDF layout and produce a Chinese broad-reading analysis with figure evidence and claim-evidence table."

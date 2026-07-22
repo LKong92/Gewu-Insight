@@ -284,15 +284,6 @@ To prepare a clean zip for another user:
 scripts/make_release.sh
 ```
 
-Deep Survey bundles its Codex dependencies under `deep_survey/`: the
-`deep-literature-workflow` plugin plus the `literature-downloader`,
-`chrome-literature-downloader`, and `paper-broad-reading-analysis` skills. After
-cloning, a collaborator can install them into their local Codex profile with:
-
-```bash
-deep_survey/scripts/install_codex_deps.sh
-```
-
 The release zip excludes local databases, PDFs, generated notes, logs, virtual
 environments, and other personal artifacts. See `DISTRIBUTION.md` for details.
 

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Literature Downloader"
-  short_description: "Download article PDFs and supplements by DOI into Downloads, merging PDF supplements."
-  default_prompt: "Use $literature-downloader to download the article PDF and supplements for this DOI into ~/Downloads, merging any PDF supplements with the main PDF."

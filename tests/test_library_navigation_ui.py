@@ -34,11 +34,16 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("if (shouldCommit)", INDEX_HTML)
         self.assertNotIn('if (!window.confirm(message)) return;', INDEX_HTML)
 
-    def test_only_active_navigation_tab_remains_fully_emphasized(self) -> None:
+    def test_only_navigation_tabs_fade_while_section_tools_stay_emphasized(self) -> None:
         self.assertIn(".library-tab-rail .library-tab:not(.active)", INDEX_HTML)
         self.assertIn("filter: saturate(0.28) brightness(1.12);", INDEX_HTML)
-        self.assertIn(".library-tab-section-tools {", INDEX_HTML)
-        self.assertIn("opacity: 0.34;", INDEX_HTML)
+        tools_css = INDEX_HTML.split(".library-tab-section-tools {", 1)[1].split(
+            ".library-tab-section.workspace-section", 1
+        )[0]
+        self.assertIn("opacity: 1;", tools_css)
+        self.assertIn("filter: none;", tools_css)
+        self.assertNotIn("opacity: 0.34;", tools_css)
+        self.assertIn(".library-tab-section-tools button:disabled { color: #667085;", INDEX_HTML)
 
     def test_dynamic_tab_measurement_does_not_emit_javascript_nul_bytes(self) -> None:
         self.assertNotIn("\x00", INDEX_HTML)
