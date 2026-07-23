@@ -317,6 +317,7 @@
 @property(nonatomic, copy) NSString *hiddenPublisherToken;
 @property(nonatomic, copy) NSString *hiddenPublisherTemporaryPath;
 @property(nonatomic, strong) NSTimer *hiddenPublisherTimeout;
+@property(nonatomic) BOOL hiddenPublisherDownloadTransitionPending;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -604,6 +605,7 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     }
     BOOL isPDF = [mimeType containsString:@"pdf"] || [disposition containsString:@".pdf"];
     if (isPDF || !navigationResponse.canShowMIMEType) {
+        self.hiddenPublisherDownloadTransitionPending = YES;
         decisionHandler(WKNavigationResponsePolicyDownload);
     } else {
         decisionHandler(WKNavigationResponsePolicyAllow);
@@ -614,6 +616,7 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
 navigationAction:(WKNavigationAction *)navigationAction
 didBecomeDownload:(WKDownload *)download {
     if (webView != self.hiddenPublisherWebView) return;
+    self.hiddenPublisherDownloadTransitionPending = NO;
     self.hiddenPublisherDownload = download;
     download.delegate = self;
 }
@@ -622,6 +625,7 @@ didBecomeDownload:(WKDownload *)download {
 navigationResponse:(WKNavigationResponse *)navigationResponse
 didBecomeDownload:(WKDownload *)download {
     if (webView != self.hiddenPublisherWebView) return;
+    self.hiddenPublisherDownloadTransitionPending = NO;
     self.hiddenPublisherDownload = download;
     download.delegate = self;
 }
@@ -669,13 +673,26 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [self failHiddenPublisherDownload:message];
 }
 
+- (BOOL)isExpectedHiddenPublisherDownloadTransitionError:(NSError *)error {
+    if (!self.hiddenPublisherDownloadTransitionPending || !error) return NO;
+    NSString *domain = error.domain ?: @"";
+    // WebKit still reports legacy policy-change code 102 when a navigation is
+    // deliberately converted into a WKDownload, although the named constant
+    // itself has been deprecated since macOS 10.14.
+    const NSInteger frameLoadInterruptedByPolicyChange = 102;
+    return error.code == frameLoadInterruptedByPolicyChange
+        && ([domain isEqualToString:@"WebKitErrorDomain"] || [domain isEqualToString:WKErrorDomain]);
+}
+
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (webView != self.hiddenPublisherWebView || self.hiddenPublisherDownload) return;
+    if ([self isExpectedHiddenPublisherDownloadTransitionError:error]) return;
     [self failHiddenPublisherDownload:error.localizedDescription ?: @"The publisher page could not be loaded."];
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (webView != self.hiddenPublisherWebView || self.hiddenPublisherDownload) return;
+    if ([self isExpectedHiddenPublisherDownloadTransitionError:error]) return;
     [self failHiddenPublisherDownload:error.localizedDescription ?: @"The publisher page could not be loaded."];
 }
 
@@ -748,6 +765,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     self.hiddenPublisherTemporaryPath = nil;
     self.hiddenPublisherContext = nil;
     self.hiddenPublisherToken = nil;
+    self.hiddenPublisherDownloadTransitionPending = NO;
 }
 
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen {
