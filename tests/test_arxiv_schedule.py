@@ -130,6 +130,15 @@ class ArxivScheduleTests(unittest.TestCase):
         self.assertEqual(first[0], second[0])
         self.assertEqual(len(first[1]), 2)
 
+    def test_manual_latest_refresh_bypasses_the_listing_cache(self):
+        arxiv.ARXIV_LATEST_LISTING_CACHE.clear()
+        response = SimpleNamespace(text=LATEST_LISTING_HTML)
+        with patch.object(arxiv, "request_with_retries", return_value=response) as request:
+            arxiv.fetch_latest_arxiv_listing(local_tz=ZoneInfo("Asia/Shanghai"))
+            arxiv.fetch_latest_arxiv_listing(local_tz=ZoneInfo("Asia/Shanghai"), force=True)
+
+        self.assertEqual(request.call_count, 2)
+
     def test_subject_query_filters_the_shared_latest_listing_without_export_api(self):
         _listing_date, papers = arxiv.parse_arxiv_latest_listing(
             LATEST_LISTING_HTML,
@@ -177,6 +186,23 @@ class ArxivScheduleTests(unittest.TestCase):
                     start_date=date(2026, 7, 23),
                     end_date=date(2026, 7, 23),
                     max_pages=1,
+                )
+
+    def test_expected_latest_batch_never_falls_back_to_date_search_before_listing_advances(self):
+        with patch.object(
+            arxiv,
+            "fetch_latest_arxiv_listing_for_window",
+            return_value=None,
+        ), patch.object(
+            arxiv,
+            "request_with_retries",
+            side_effect=AssertionError("Date search API must not run before the listing advances"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "has not advanced"):
+                arxiv.fetch_arxiv_condensed_matter(
+                    start_date=date(2026, 7, 23),
+                    end_date=date(2026, 7, 23),
+                    require_latest_listing=True,
                 )
 
 

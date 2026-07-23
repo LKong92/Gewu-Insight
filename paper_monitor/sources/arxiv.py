@@ -54,6 +54,8 @@ def fetch_arxiv_condensed_matter(
     categories: list[str] | None = None,
     page_size: int = 200,
     max_pages: int = 3,
+    force_latest: bool = False,
+    require_latest_listing: bool = False,
 ) -> list[dict[str, Any]]:
     selected_categories = [code for code in (categories or ARXIV_DEFAULT_CATEGORIES) if code in ARXIV_CONDENSED_MATTER_CODES]
     listing_error: Exception | None = None
@@ -62,11 +64,16 @@ def fetch_arxiv_condensed_matter(
             start_date=start_date,
             end_date=end_date,
             categories=selected_categories or ARXIV_DEFAULT_CATEGORIES,
+            force=force_latest,
         )
         if listing is not None:
-            return listing
+            return enrich_arxiv_listing_metadata(listing)
     except Exception as exc:
         listing_error = exc
+    if require_latest_listing:
+        if listing_error:
+            raise RuntimeError(f"arXiv latest listing check failed: {listing_error}") from listing_error
+        raise RuntimeError("arXiv latest listing has not advanced to the expected announcement yet")
 
     papers: list[dict[str, Any]] = []
     query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
@@ -124,6 +131,88 @@ def fetch_arxiv_by_id(
     if not entries:
         return None
     return normalize_arxiv_entry(entries[0])
+
+
+def fetch_arxiv_by_ids(
+    arxiv_ids: list[str],
+    *,
+    batch_size: int = 100,
+    timeout: int = ARXIV_API_TIMEOUT,
+    max_retries: int = 0,
+) -> list[dict[str, Any]]:
+    identifiers: list[str] = []
+    for value in arxiv_ids:
+        identifier = strip_arxiv_version(clean_text(value))
+        if identifier and identifier not in identifiers:
+            identifiers.append(identifier)
+    papers: list[dict[str, Any]] = []
+    for offset in range(0, len(identifiers), max(1, int(batch_size or 100))):
+        batch = identifiers[offset : offset + max(1, int(batch_size or 100))]
+        wait_for_arxiv_rate_limit()
+        response = request_with_retries(
+            "GET",
+            "https://export.arxiv.org/api/query",
+            params={"id_list": ",".join(batch), "max_results": len(batch)},
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        root = ET.fromstring(response.content)
+        papers.extend(normalize_arxiv_entry(entry) for entry in root.findall("atom:entry", ATOM_NS))
+    return papers
+
+
+def enrich_arxiv_listing_metadata(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Best-effort bulk enrichment without making the daily listing depend on API indexing."""
+    identifiers = [
+        strip_arxiv_version(str((paper.get("raw") or {}).get("arxiv_id") or ""))
+        for paper in papers
+    ]
+    identifiers = [identifier for identifier in identifiers if identifier]
+    if not identifiers:
+        return [copy.deepcopy(paper) for paper in papers]
+    try:
+        details = fetch_arxiv_by_ids(identifiers)
+    except Exception as exc:
+        enriched = []
+        for paper in papers:
+            item = copy.deepcopy(paper)
+            raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+            raw["metadata_detail_status"] = "pending"
+            raw["metadata_detail_message"] = clean_text(str(exc))[:500]
+            item["raw"] = raw
+            enriched.append(item)
+        return enriched
+
+    detail_by_id = {
+        strip_arxiv_version(str((paper.get("raw") or {}).get("arxiv_id") or "")): paper
+        for paper in details
+    }
+    enriched: list[dict[str, Any]] = []
+    for listing_paper in papers:
+        listing = copy.deepcopy(listing_paper)
+        raw = listing.get("raw") if isinstance(listing.get("raw"), dict) else {}
+        identifier = strip_arxiv_version(str(raw.get("arxiv_id") or ""))
+        detail = detail_by_id.get(identifier)
+        if not detail:
+            raw["metadata_detail_status"] = "pending"
+            listing["raw"] = raw
+            enriched.append(listing)
+            continue
+        merged = dict(listing)
+        for key in ["doi", "title", "abstract", "abstract_source", "url", "landing_url", "pdf_url"]:
+            value = detail.get(key)
+            if value not in (None, ""):
+                merged[key] = value
+        detail_raw = detail.get("raw") if isinstance(detail.get("raw"), dict) else {}
+        merged_raw = {**raw, **detail_raw}
+        merged_raw["metadata_source"] = "arxiv_latest_listing+id_list"
+        merged_raw["metadata_detail_status"] = "complete"
+        # The listing date is the authoritative announcement date for the user's
+        # local calendar, even if the API's submitted timestamp maps differently.
+        merged["publication_date"] = listing.get("publication_date")
+        merged["raw"] = merged_raw
+        enriched.append(merged)
+    return enriched
 
 
 def search_arxiv_works(
@@ -191,8 +280,9 @@ def fetch_latest_arxiv_listing_for_window(
     end_date: date,
     categories: list[str],
     local_tz: tzinfo | None = None,
+    force: bool = False,
 ) -> list[dict[str, Any]] | None:
-    listing_date, papers = fetch_latest_arxiv_listing(local_tz=local_tz)
+    listing_date, papers = fetch_latest_arxiv_listing(local_tz=local_tz, force=force)
     if listing_date is None:
         raise RuntimeError("arXiv latest listing did not include its listing date")
     target_tz = local_tz or local_timezone()
@@ -208,13 +298,18 @@ def fetch_latest_arxiv_listing_for_window(
     ]
 
 
-def fetch_latest_arxiv_listing(*, local_tz: tzinfo | None = None) -> tuple[date | None, list[dict[str, Any]]]:
+def fetch_latest_arxiv_listing(
+    *,
+    local_tz: tzinfo | None = None,
+    force: bool = False,
+) -> tuple[date | None, list[dict[str, Any]]]:
     target_tz = local_tz or local_timezone()
     cache_key = str(getattr(target_tz, "key", target_tz))
     with ARXIV_LATEST_LISTING_LOCK:
         cached_at = float(ARXIV_LATEST_LISTING_CACHE.get("fetched_at") or 0.0)
         if (
-            ARXIV_LATEST_LISTING_CACHE.get("timezone") == cache_key
+            not force
+            and ARXIV_LATEST_LISTING_CACHE.get("timezone") == cache_key
             and time.monotonic() - cached_at < ARXIV_LATEST_LISTING_CACHE_SECONDS
         ):
             return ARXIV_LATEST_LISTING_CACHE.get("listing_date"), [

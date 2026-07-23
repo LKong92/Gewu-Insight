@@ -170,6 +170,18 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('window.setInterval(refreshAutoMonitorStatus, 60000)', polling)
         self.assertIn('still incomplete after 3 retries', INDEX_HTML)
 
+    def test_subject_progress_distinguishes_partial_waiting_and_failure(self):
+        status = INDEX_HTML.split('function themeFetchSubjectStatus', 1)[1].split(
+            'function themeFetchSubjectMeta', 1
+        )[0]
+
+        self.assertIn('status === "partial"', status)
+        self.assertIn('label: "Partial"', status)
+        self.assertIn('status === "waiting"', status)
+        self.assertIn('label: "Waiting"', status)
+        self.assertIn('status === "error"', status)
+        self.assertIn('label: "Failed"', status)
+
 
 if __name__ == "__main__":
     unittest.main()

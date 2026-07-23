@@ -331,6 +331,11 @@ class ThemeMonitorTest(unittest.TestCase):
                         {"query": "alpha", "source": "failing"},
                         first["groups"]["partial"]["failed_tasks"],
                     )
+                    storage.conn.execute(
+                        "UPDATE theme_source_runs SET retry_after = ? WHERE source = ?",
+                        ("2026-06-02T00:00:00+00:00", "failing"),
+                    )
+                    storage.conn.commit()
                     calls.clear()
                     ui_server.theme_source_fetchers = lambda: [
                         ("successful", successful_source),
@@ -353,6 +358,188 @@ class ThemeMonitorTest(unittest.TestCase):
                     storage.close()
         finally:
             ui_server.theme_source_fetchers = original_fetchers
+
+    def test_subject_monitor_never_registers_arxiv_as_a_network_source(self):
+        import paper_monitor.ui_server as ui_server
+
+        self.assertNotIn("arxiv", [name for name, _fetcher in ui_server.theme_source_fetchers()])
+
+    def test_local_arxiv_is_matched_without_network_and_keeps_its_source(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"alpha": {"name": "Alpha", "queries": ["alpha phase"]}}
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: []
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    storage.upsert_paper(
+                        {
+                            "paper_id": "arxiv_local_alpha",
+                            "doi": "",
+                            "title": "Alpha phase in a local arXiv preprint",
+                            "journal": "arXiv",
+                            "publication_date": selected.isoformat(),
+                            "abstract": "A local candidate.",
+                            "url": "https://arxiv.org/abs/2606.00001",
+                            "source": "arxiv",
+                            "type": "preprint",
+                            "section_allowed": True,
+                            "raw": {"arxiv_id": "2606.00001"},
+                        }
+                    )
+                    result = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                    )
+                    self.assertEqual(result["groups"]["alpha"]["saved"], 1)
+                    self.assertEqual(result["groups"]["alpha"]["status"], "success")
+                    self.assertEqual(storage.get_paper("arxiv_local_alpha")["source"], "arxiv")
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
+    def test_network_query_plan_is_bounded_and_does_not_expand_surface_variants(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {
+            f"group_{index}": {
+                "name": f"Group {index}",
+                "queries": [f"topic {index} keyword {variant}" for variant in range(14)],
+            }
+            for index in range(5)
+        }
+        calls = []
+
+        def empty_source(query, start_date, end_date):
+            calls.append(query)
+            return []
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("bounded_source", empty_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=list(groups),
+                        theme_groups=groups,
+                    )
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+        self.assertLessEqual(len(calls), ui_server.THEME_NETWORK_QUERIES_PER_SOURCE_RUN)
+        self.assertEqual(len(calls), len(set(calls)))
+
+    def test_partial_source_failure_keeps_saved_papers_and_reports_partial(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"alpha": {"name": "Alpha", "queries": ["alpha"]}}
+
+        def successful_source(query, start_date, end_date):
+            return [
+                {
+                    "paper_id": "doi_alpha_partial",
+                    "doi": "10.1000/alpha-partial",
+                    "title": "Alpha candidate",
+                    "journal": "Example Journal",
+                    "publication_date": selected.isoformat(),
+                    "abstract": "alpha",
+                    "url": "https://doi.org/10.1000/alpha-partial",
+                    "source": "successful_source",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                }
+            ]
+
+        calls = []
+
+        def limited_source(query, start_date, end_date):
+            calls.append(query)
+            raise RuntimeError("429 Too Many Requests")
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [
+                ("successful_source", successful_source),
+                ("limited_source", limited_source),
+            ]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    first = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                    )
+                    second = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                    )
+                    self.assertEqual(first["groups"]["alpha"]["status"], "partial")
+                    self.assertEqual(first["groups"]["alpha"]["saved"], 1)
+                    self.assertEqual(second["groups"]["alpha"]["source_statuses"]["limited_source"], "cooldown")
+                    self.assertEqual(calls, ["alpha"])
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
+    def test_on_demand_refresh_reuses_completed_source_plan(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"alpha": {"name": "Alpha", "queries": ["alpha"]}}
+        calls = []
+
+        def successful_source(query, start_date, end_date):
+            calls.append(query)
+            return []
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("cached_source", successful_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                        trigger="on_demand",
+                    )
+                    run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                        trigger="on_demand",
+                    )
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+        self.assertEqual(calls, ["alpha"])
 
     def test_theme_hit_chips_omit_group_name_duplicates(self):
         paper = {

@@ -138,6 +138,50 @@ CREATE TABLE IF NOT EXISTS theme_results (
 CREATE INDEX IF NOT EXISTS idx_theme_results_window ON theme_results(window_start, window_end, group_key);
 CREATE INDEX IF NOT EXISTS idx_theme_results_paper ON theme_results(paper_id);
 
+CREATE TABLE IF NOT EXISTS theme_source_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  query_plan_hash TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'automatic',
+  status TEXT NOT NULL,
+  candidates_found INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  retry_after TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_theme_source_runs_lookup
+ON theme_source_runs(source, window_start, window_end, query_plan_hash, finished_at);
+
+CREATE INDEX IF NOT EXISTS idx_theme_source_runs_cooldown
+ON theme_source_runs(source, retry_after, finished_at);
+
+CREATE TABLE IF NOT EXISTS theme_source_tasks (
+  run_id INTEGER NOT NULL REFERENCES theme_source_runs(id) ON DELETE CASCADE,
+  query TEXT NOT NULL,
+  status TEXT NOT NULL,
+  records_found INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  PRIMARY KEY (run_id, query)
+);
+
+CREATE TABLE IF NOT EXISTS theme_candidates (
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  window_start TEXT NOT NULL,
+  window_end TEXT NOT NULL,
+  query_plan_hash TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (paper_id, source, window_start, window_end, query_plan_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_theme_candidates_window
+ON theme_candidates(window_start, window_end, source);
+
 CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
@@ -678,6 +722,219 @@ class Storage:
             (status, int(records_found), message, now_iso(), int(fetch_run_id)),
         )
         self.conn.commit()
+
+    def start_theme_source_run(
+        self,
+        *,
+        source: str,
+        window_start: str,
+        window_end: str,
+        query_plan_hash: str,
+        trigger: str,
+        attempts: int,
+        started_at: str,
+    ) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO theme_source_runs (
+              source, window_start, window_end, query_plan_hash, trigger, status,
+              candidates_found, attempts, message, retry_after, started_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, 'running', 0, ?, '', NULL, ?, ?)
+            """,
+            (
+                str(source),
+                str(window_start),
+                str(window_end),
+                str(query_plan_hash),
+                str(trigger or "automatic"),
+                max(1, int(attempts or 1)),
+                str(started_at),
+                str(started_at),
+            ),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def finish_theme_source_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        candidates_found: int,
+        message: str = "",
+        retry_after: str = "",
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE theme_source_runs
+            SET status = ?,
+                candidates_found = ?,
+                message = ?,
+                retry_after = ?,
+                finished_at = ?
+            WHERE id = ?
+            """,
+            (
+                str(status),
+                max(0, int(candidates_found or 0)),
+                str(message or ""),
+                str(retry_after or "") or None,
+                now_iso(),
+                int(run_id),
+            ),
+        )
+        self.conn.commit()
+
+    def record_theme_source_tasks(self, run_id: int, tasks: Iterable[dict[str, Any]]) -> None:
+        rows = [
+            (
+                int(run_id),
+                str(task.get("query") or ""),
+                str(task.get("status") or ""),
+                max(0, int(task.get("records_found") or 0)),
+                str(task.get("message") or ""),
+            )
+            for task in tasks
+            if task.get("query")
+        ]
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO theme_source_tasks (run_id, query, status, records_found, message)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, query) DO UPDATE SET
+              status = excluded.status,
+              records_found = excluded.records_found,
+              message = excluded.message
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def list_theme_source_tasks(self, run_id: int) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM theme_source_tasks
+            WHERE run_id = ?
+            ORDER BY rowid
+            """,
+            (int(run_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_theme_source_run(
+        self,
+        *,
+        source: str,
+        window_start: str | None = None,
+        window_end: str | None = None,
+        query_plan_hash: str | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = ["source = ?"]
+        params: list[Any] = [str(source)]
+        if window_start is not None:
+            clauses.append("window_start = ?")
+            params.append(str(window_start))
+        if window_end is not None:
+            clauses.append("window_end = ?")
+            params.append(str(window_end))
+        if query_plan_hash is not None:
+            clauses.append("query_plan_hash = ?")
+            params.append(str(query_plan_hash))
+        row = self.conn.execute(
+            f"""
+            SELECT *
+            FROM theme_source_runs
+            WHERE {" AND ".join(clauses)}
+            ORDER BY finished_at DESC, id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        return dict(row) if row else None
+
+    def record_theme_candidate(
+        self,
+        *,
+        paper_id: str,
+        source: str,
+        window_start: str,
+        window_end: str,
+        query_plan_hash: str,
+    ) -> None:
+        self.record_theme_candidates(
+            [
+                {
+                    "paper_id": paper_id,
+                    "source": source,
+                    "window_start": window_start,
+                    "window_end": window_end,
+                    "query_plan_hash": query_plan_hash,
+                }
+            ]
+        )
+
+    def record_theme_candidates(self, candidates: Iterable[dict[str, Any]]) -> None:
+        timestamp = now_iso()
+        rows = [
+            (
+                str(candidate.get("paper_id") or ""),
+                str(candidate.get("source") or ""),
+                str(candidate.get("window_start") or ""),
+                str(candidate.get("window_end") or ""),
+                str(candidate.get("query_plan_hash") or ""),
+                timestamp,
+            )
+            for candidate in candidates
+            if candidate.get("paper_id") and candidate.get("source")
+        ]
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO theme_candidates (
+              paper_id, source, window_start, window_end, query_plan_hash, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(paper_id, source, window_start, window_end, query_plan_hash)
+            DO UPDATE SET fetched_at = excluded.fetched_at
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def list_theme_candidates(
+        self,
+        *,
+        window_start: str,
+        window_end: str,
+        sources: Iterable[str] | None = None,
+        query_plan_hash: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["theme_candidates.window_start = ?", "theme_candidates.window_end = ?"]
+        params: list[Any] = [str(window_start), str(window_end)]
+        source_list = [str(source) for source in (sources or []) if str(source)]
+        if sources is not None and not source_list:
+            return []
+        if source_list:
+            placeholders = ", ".join(["?"] * len(source_list))
+            clauses.append(f"theme_candidates.source IN ({placeholders})")
+            params.extend(source_list)
+        if query_plan_hash is not None:
+            clauses.append("theme_candidates.query_plan_hash = ?")
+            params.append(str(query_plan_hash))
+        rows = self.conn.execute(
+            f"""
+            SELECT papers.*, theme_candidates.source AS theme_candidate_source
+            FROM theme_candidates
+            JOIN papers ON papers.paper_id = theme_candidates.paper_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(

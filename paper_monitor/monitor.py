@@ -164,6 +164,8 @@ def fetch_one_arxiv_preprint_source(
     start_date: date,
     end_date: date,
     categories: list[str] | None = None,
+    force_latest: bool = False,
+    require_latest_listing: bool = False,
 ) -> dict[str, Any]:
     selected_categories = categories or ARXIV_DEFAULT_CATEGORIES
     started_at = now_iso()
@@ -188,6 +190,8 @@ def fetch_one_arxiv_preprint_source(
             start_date=start_date,
             end_date=end_date,
             categories=selected_categories,
+            force_latest=force_latest,
+            require_latest_listing=require_latest_listing,
         ),
     )
     for paper in dedup_by_id(arxiv_result["papers"]):
@@ -210,6 +214,7 @@ def fetch_one_arxiv_preprint_source(
         "source_errors": 1 if arxiv_result["status"] == "error" else 0,
         "saved": saved,
         "blocked_by_section": 0,
+        "message": arxiv_result.get("message") or "",
     }
 
 

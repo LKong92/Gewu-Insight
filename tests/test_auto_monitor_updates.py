@@ -9,6 +9,75 @@ from paper_monitor import ui_server
 
 
 class AutoMonitorUpdateTest(unittest.TestCase):
+    def test_arxiv_automatic_import_runs_once_after_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper_monitor.sqlite"
+            current = datetime.now().astimezone()
+            target = current.date()
+            calls = []
+            original_target = ui_server.arxiv_auto_target
+            original_fetch = ui_server.fetch_one_arxiv_preprint_source
+            original_match = ui_server.match_local_arxiv_for_all_subjects
+            original_schedule = ui_server.schedule_pending_arxiv_metadata_retry
+            original_retry = ui_server.retry_pending_arxiv_metadata
+            try:
+                ui_server.arxiv_auto_target = lambda _now: ("2026-07-22", target, current)
+
+                def successful_fetch(**_kwargs):
+                    calls.append("fetch")
+                    return {
+                        "source_statuses": {"arxiv": "success"},
+                        "saved": 12,
+                        "message": "",
+                    }
+
+                ui_server.fetch_one_arxiv_preprint_source = successful_fetch
+                ui_server.match_local_arxiv_for_all_subjects = lambda *_args: {}
+                ui_server.schedule_pending_arxiv_metadata_retry = lambda *_args: 0
+                ui_server.retry_pending_arxiv_metadata = lambda *_args: {"status": "complete", "pending": 0}
+                first = ui_server.run_auto_arxiv_monitor_once(db_path, current)
+                second = ui_server.run_auto_arxiv_monitor_once(db_path, current)
+            finally:
+                ui_server.arxiv_auto_target = original_target
+                ui_server.fetch_one_arxiv_preprint_source = original_fetch
+                ui_server.match_local_arxiv_for_all_subjects = original_match
+                ui_server.schedule_pending_arxiv_metadata_retry = original_schedule
+                ui_server.retry_pending_arxiv_metadata = original_retry
+
+            self.assertEqual(first["status"], "fetched")
+            self.assertEqual(second["reason"], "already complete")
+            self.assertEqual(calls, ["fetch"])
+
+    def test_arxiv_stale_listing_respects_retry_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper_monitor.sqlite"
+            current = datetime.now().astimezone()
+            target = current.date()
+            calls = []
+            original_target = ui_server.arxiv_auto_target
+            original_fetch = ui_server.fetch_one_arxiv_preprint_source
+            try:
+                ui_server.arxiv_auto_target = lambda _now: ("2026-07-22", target, current)
+
+                def waiting_fetch(**_kwargs):
+                    calls.append("fetch")
+                    return {
+                        "source_statuses": {"arxiv": "error"},
+                        "saved": 0,
+                        "message": "arXiv latest listing has not advanced to the expected announcement yet",
+                    }
+
+                ui_server.fetch_one_arxiv_preprint_source = waiting_fetch
+                first = ui_server.run_auto_arxiv_monitor_once(db_path, current)
+                second = ui_server.run_auto_arxiv_monitor_once(db_path, current + timedelta(minutes=1))
+            finally:
+                ui_server.arxiv_auto_target = original_target
+                ui_server.fetch_one_arxiv_preprint_source = original_fetch
+
+            self.assertEqual(first["status"], "waiting")
+            self.assertEqual(second["reason"], "retry cooldown")
+            self.assertEqual(calls, ["fetch"])
+
     def test_journal_waiting_target_is_filled_after_active_fetch_finishes(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "paper_monitor.sqlite"

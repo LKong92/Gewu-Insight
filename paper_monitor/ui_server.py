@@ -52,7 +52,7 @@ from .importers.inventory import ImportCancelled, build_inventory_from_folder, b
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, search_arxiv_works, strip_arxiv_version
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
@@ -103,6 +103,8 @@ MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
 MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 ACTIVE_THEME_FETCH_DATES: set[str] = set()
+THEME_SOURCE_LOCKS: dict[str, threading.Lock] = {}
+THEME_SOURCE_LOCKS_LOCK = threading.Lock()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
@@ -116,6 +118,16 @@ THEME_GROUP_OVERRIDES_SETTING = "theme_group_overrides"
 THEME_GROUP_ORDER_SETTING = "theme_group_order"
 THEME_FETCH_COMPLETED_STATUSES = ("success", "empty", "error")
 THEME_FETCH_STALE_AFTER_MINUTES = 30
+THEME_NETWORK_QUERIES_PER_GROUP = 2
+THEME_NETWORK_QUERIES_PER_SOURCE_RUN = 8
+THEME_SOURCE_BASE_COOLDOWN_SECONDS = 15 * 60
+THEME_SOURCE_MAX_COOLDOWN_SECONDS = 6 * 60 * 60
+THEME_SOURCE_MIN_INTERVAL_SECONDS = {
+    "openalex": 1.0,
+    "crossref": 1.0,
+    "semantic_scholar": 3.2,
+    "pubmed": 1.0,
+}
 LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 DEFAULT_PDF_RENAME_TEMPLATE = "{author}_{year}_{title}"
@@ -177,6 +189,7 @@ AUTO_JOURNAL_MONITOR_POLL_SECONDS = 60
 AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING = "auto_arxiv_monitor_last_announcement"
 AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING = "auto_arxiv_monitor_last_attempt"
 AUTO_ARXIV_MONITOR_STATUS_SETTING = "auto_arxiv_monitor_status"
+AUTO_ARXIV_METADATA_RETRY_SETTING = "auto_arxiv_metadata_retry_state"
 AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS = 15
 AUTO_ARXIV_MONITOR_POLL_SECONDS = 60
 AUTO_ARXIV_MONITOR_RETRY_SECONDS = 15 * 60
@@ -803,12 +816,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             fetch_storage = Storage(self.configured_db_path)
             try:
                 start_fetch_progress(selected, [ARXIV_JOURNAL_NAME])
-                fetch_one_arxiv_preprint_source(
+                result = fetch_one_arxiv_preprint_source(
                     storage=fetch_storage,
                     start_date=selected_date,
                     end_date=selected_date,
                     categories=ARXIV_DEFAULT_CATEGORIES,
+                    force_latest=selected_date >= today_local(),
+                    require_latest_listing=selected_date >= today_local(),
                 )
+                match_local_arxiv_for_all_subjects(fetch_storage, selected_date)
+                if result.get("source_statuses", {}).get("arxiv") == "success" and int(result.get("saved") or 0) > 0:
+                    schedule_pending_arxiv_metadata_retry(fetch_storage, selected)
+                    announcement_key, target_date, _ready_at = arxiv_auto_target(datetime.now(local_timezone()))
+                    if target_date == selected_date:
+                        fetch_storage.set_setting(AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING, announcement_key)
             finally:
                 finish_fetch_progress(selected)
                 finish_active_fetch(selected)
@@ -3210,6 +3231,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                         end_date=selected_date,
                         group_keys=missing_group_keys,
                         theme_groups=theme_groups,
+                        trigger="manual" if force_fetch else "on_demand",
                     )
                     fetched = True
                 finally:
@@ -3257,6 +3279,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 end_date=end_date,
                 group_keys=group_keys,
                 theme_groups=theme_groups,
+                trigger="manual_search",
             )
             papers = storage.list_theme_papers(
                 window_start=start_date.isoformat(),
@@ -4688,234 +4711,710 @@ def run_theme_monitor(
     group_keys: list[str],
     theme_groups: dict[str, dict[str, Any]] | None = None,
     retry_tasks_by_group: dict[str, list[dict[str, str]]] | None = None,
+    trigger: str = "manual",
 ) -> dict[str, Any]:
+    """Build a shared candidate pool, then match every selected Subject locally."""
+    window_start = start_date.isoformat()
+    window_end = end_date.isoformat()
     summary = {
-        "window_start": start_date.isoformat(),
-        "window_end": end_date.isoformat(),
+        "window_start": window_start,
+        "window_end": window_end,
         "groups": {},
         "queries": 0,
         "source_counts": {},
+        "source_statuses": {},
         "raw_results": 0,
         "saved": 0,
         "errors": [],
     }
     groups = theme_groups or load_theme_groups(storage)
+    group_keys = [key for key in group_keys if key in groups]
     progress_date = start_date.isoformat() if start_date == end_date else ""
     source_fetchers = theme_source_fetchers()
     source_fetcher_by_name = dict(source_fetchers)
-    tasks_by_group: dict[str, list[tuple[str, str, Any]]] = {}
-    for group_key in group_keys:
-        if group_key not in groups:
-            continue
-        if retry_tasks_by_group is not None and group_key in retry_tasks_by_group:
-            tasks: list[tuple[str, str, Any]] = []
-            seen_tasks: set[tuple[str, str]] = set()
-            for item in retry_tasks_by_group.get(group_key) or []:
-                query = clean_text(item.get("query") or "")
-                source_name = clean_text(item.get("source") or "")
-                fetcher = source_fetcher_by_name.get(source_name)
-                task_key = (query, source_name)
-                if query and fetcher and task_key not in seen_tasks:
-                    tasks.append((query, source_name, fetcher))
-                    seen_tasks.add(task_key)
-            tasks_by_group[group_key] = tasks
-        else:
-            tasks_by_group[group_key] = [
-                (query, source_name, fetcher)
-                for query in theme_search_queries(list(groups[group_key]["queries"]))
-                for source_name, fetcher in source_fetchers
-            ]
-    source_totals = {group_key: len(tasks) for group_key, tasks in tasks_by_group.items()}
+    query_plan, query_groups = theme_network_query_plan(groups, group_keys)
+    retry_sources_by_group: dict[str, set[str]] = {}
+    if retry_tasks_by_group is not None:
+        for group_key, tasks in retry_tasks_by_group.items():
+            retry_sources_by_group[group_key] = {
+                clean_text(item.get("source") or "")
+                for item in tasks or []
+                if clean_text(item.get("source") or "") in source_fetcher_by_name
+            }
+        allowed_sources = set().union(*retry_sources_by_group.values()) if retry_sources_by_group else set()
+        source_fetchers = [(name, fetcher) for name, fetcher in source_fetchers if name in allowed_sources]
+        requested_queries = {
+            clean_text(item.get("query") or "")
+            for tasks in retry_tasks_by_group.values()
+            for item in tasks or []
+            if clean_text(item.get("query") or "")
+        }
+        if requested_queries:
+            query_plan = [query for query in query_plan if query in requested_queries]
+            for query in requested_queries:
+                if query not in query_plan:
+                    query_plan.append(query)
+                    query_groups.setdefault(
+                        query,
+                        {
+                            group_key
+                            for group_key, tasks in retry_tasks_by_group.items()
+                            if any(clean_text(item.get("query") or "") == query for item in tasks or [])
+                        },
+                    )
+    source_totals = {group_key: 1 + len(source_fetchers) for group_key in group_keys}
     if progress_date:
         start_theme_fetch_progress(progress_date, group_keys, groups, source_totals)
+        for group_key in group_keys:
+            update_theme_fetch_progress(
+                progress_date,
+                group_key,
+                status="running",
+                current_source="local_arxiv",
+                source_completed=0,
+                source_total=source_totals[group_key],
+            )
+
+    candidates: dict[str, dict[str, Any]] = {}
+    candidate_sources: dict[str, set[str]] = {}
+    candidate_queries: dict[str, set[str]] = {}
+    task_states: dict[tuple[str, str], str] = {}
+    task_messages: dict[tuple[str, str], str] = {}
+    task_counts: dict[tuple[str, str], int] = {}
+    source_plan_hashes: dict[str, str] = {}
+
     try:
+        local_arxiv, local_arxiv_status, local_arxiv_message = local_arxiv_theme_candidates(
+            storage,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        summary["source_counts"]["local_arxiv"] = len(local_arxiv)
+        summary["source_statuses"]["local_arxiv"] = local_arxiv_status
+        summary["raw_results"] += len(local_arxiv)
+        for paper in local_arxiv:
+            add_theme_candidate(
+                candidates,
+                candidate_sources,
+                candidate_queries,
+                paper,
+                source_name="local_arxiv",
+                query="local arXiv",
+            )
+
+        for source_index, (source_name, fetcher) in enumerate(source_fetchers, start=1):
+            relevant_queries = [
+                query
+                for query in query_plan
+                if any(
+                    group_key in query_groups.get(query, set())
+                    and (
+                        retry_tasks_by_group is None
+                        or source_name in retry_sources_by_group.get(group_key, set())
+                    )
+                    for group_key in group_keys
+                )
+            ]
+            if not relevant_queries:
+                continue
+            source_plan_hashes[source_name] = theme_source_plan_hash(
+                source_name,
+                start_date,
+                end_date,
+                relevant_queries,
+            )
+            if progress_date:
+                for group_key in group_keys:
+                    if any(group_key in query_groups.get(query, set()) for query in relevant_queries):
+                        update_theme_fetch_progress(
+                            progress_date,
+                            group_key,
+                            status="running",
+                            current_source=source_name,
+                            current_query=relevant_queries[0],
+                            source_completed=source_index,
+                            source_total=source_totals[group_key],
+                        )
+            source_result = run_theme_source_plan(
+                storage=storage,
+                source_name=source_name,
+                fetcher=fetcher,
+                queries=relevant_queries,
+                start_date=start_date,
+                end_date=end_date,
+                trigger=trigger,
+            )
+            summary["queries"] += int(source_result["queries_attempted"])
+            summary["source_counts"][source_name] = int(source_result["raw_results"])
+            summary["source_statuses"][source_name] = str(source_result["status"])
+            summary["raw_results"] += int(source_result["raw_results"])
+            if source_result.get("message"):
+                summary["errors"].append(str(source_result["message"]))
+            for query, state in (source_result.get("task_states") or {}).items():
+                task_states[(source_name, query)] = str(state)
+            for query, message in (source_result.get("task_messages") or {}).items():
+                task_messages[(source_name, query)] = str(message)
+            for query, count in (source_result.get("task_counts") or {}).items():
+                task_counts[(source_name, query)] = int(count or 0)
+            for query, papers in (source_result.get("papers_by_query") or {}).items():
+                for paper in papers:
+                    if not theme_candidate_in_window(paper, start_date, end_date):
+                        continue
+                    if not theme_candidate_is_literature_like(paper):
+                        continue
+                    add_theme_candidate(
+                        candidates,
+                        candidate_sources,
+                        candidate_queries,
+                        theme_merge_source_marker(paper, source_name),
+                        source_name=source_name,
+                        query=query,
+                    )
+
+        plan_hash = theme_source_plan_hash(
+            "candidate_pool",
+            start_date,
+            end_date,
+            query_plan,
+        )
+        candidate_rows: list[dict[str, str]] = []
+        for merge_key, paper in candidates.items():
+            sources = candidate_sources.get(merge_key, set())
+            if "local_arxiv" not in sources:
+                if paper.get("section_allowed") is None:
+                    paper["section_allowed"] = True
+                storage.upsert_paper(paper)
+            for source_name in sources:
+                candidate_rows.append(
+                    {
+                        "paper_id": str(paper.get("paper_id") or ""),
+                        "source": source_name,
+                        "window_start": window_start,
+                        "window_end": window_end,
+                        "query_plan_hash": plan_hash
+                        if source_name == "local_arxiv"
+                        else source_plan_hashes.get(source_name, theme_source_plan_hash(source_name, start_date, end_date, query_plan)),
+                    }
+                )
+        storage.record_theme_candidates(candidate_rows)
+
         for group_key in group_keys:
             group = groups[group_key]
             group_name = str(group["name"])
-            if progress_date:
-                update_theme_fetch_progress(
-                    progress_date,
-                    group_key,
-                    status="running",
-                    source_total=source_totals.get(group_key, 0),
-                )
             fetch_run_id = storage.start_fetch_run(
                 monitor_type="theme",
                 source="multi",
                 journal=f"theme:{group_key}",
-                window_start=start_date.isoformat(),
-                window_end=end_date.isoformat(),
+                window_start=window_start,
+                window_end=window_end,
                 started_at=now_iso(),
             )
-            best: dict[str, dict[str, Any]] = {}
             group_errors: list[str] = []
             failed_tasks: list[dict[str, str]] = []
-            seen_group_errors: set[str] = set()
-            raw_count = 0
-            saved = 0
-            try:
-                tasks = tasks_by_group.get(group_key, [])
-                expected_fetches = len(tasks)
-                source_index = 0
-                for query, source_name, fetcher in tasks:
-                    summary["queries"] += 1
-                    if progress_date:
-                        update_theme_fetch_progress(
-                            progress_date,
-                            group_key,
-                            status="running",
-                            raw_results=raw_count,
-                            current_source=source_name,
-                            current_query=query,
-                            source_completed=source_index,
-                            source_total=expected_fetches,
-                        )
-                    try:
-                        papers = fetcher(query, start_date, end_date)
-                    except Exception as exc:
-                        message = theme_fetch_error_message(group_name, exc, source_name=source_name)
-                        append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
+            source_statuses = {"local_arxiv": local_arxiv_status}
+            if local_arxiv_message:
+                group_errors.append(local_arxiv_message)
+            group_queries = [query for query in query_plan if group_key in query_groups.get(query, set())]
+            for source_name, _fetcher in source_fetchers:
+                if retry_tasks_by_group is not None and source_name not in retry_sources_by_group.get(group_key, set()):
+                    continue
+                states = [task_states.get((source_name, query), "waiting") for query in group_queries]
+                counts = [task_counts.get((source_name, query), 0) for query in group_queries]
+                source_statuses[source_name] = aggregate_theme_source_task_status(states, counts)
+                for query, state in zip(group_queries, states):
+                    if state not in {"success", "empty"}:
                         failed_tasks.append({"query": query, "source": source_name})
-                        source_index += 1
-                        if progress_date:
-                            update_theme_fetch_progress(
-                                progress_date,
-                                group_key,
-                                status="running",
-                                raw_results=raw_count,
-                                message=message,
-                                current_source=source_name,
-                                current_query=query,
-                                source_completed=source_index,
-                                source_total=expected_fetches,
-                            )
-                        continue
-                    raw_count += len(papers)
-                    summary["source_counts"][source_name] = int(summary["source_counts"].get(source_name) or 0) + len(papers)
-                    source_index += 1
-                    if progress_date:
-                        update_theme_fetch_progress(
-                            progress_date,
-                            group_key,
-                            status="running",
-                            raw_results=raw_count,
-                            current_source=source_name,
-                            current_query=query,
-                            source_completed=source_index,
-                            source_total=expected_fetches,
-                        )
-                    for paper in papers:
-                        if not theme_candidate_in_window(paper, start_date, end_date):
-                            continue
-                        if not theme_candidate_is_literature_like(paper):
-                            continue
-                        paper = theme_merge_source_marker(paper, source_name)
-                        score, hits = score_theme_relevance(
-                            paper.get("title") or "",
-                            paper.get("abstract") or "",
-                            theme_keyword_matchers(list(group["queries"])),
-                        )
-                        if score <= 0:
-                            continue
-                        paper_id = clean_text(paper.get("paper_id") or "")
-                        if not paper_id:
-                            continue
-                        merge_key = theme_candidate_merge_key(paper)
-                        current = best.get(merge_key)
-                        if not current:
-                            best[merge_key] = {
-                                "paper": paper,
-                                "score": score,
-                                "hits": set(hits),
-                                "queries": [query],
-                                "sources": {source_name},
-                            }
-                        else:
-                            current["score"] = max(int(current["score"]), score)
-                            current["hits"].update(hits)
-                            if query not in current["queries"]:
-                                current["queries"].append(query)
-                            current["sources"].add(source_name)
-                            current["paper"] = theme_preferred_candidate(current["paper"], paper)
-                for item in best.values():
-                    paper = dict(item["paper"])
-                    raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
-                    raw["_paper_monitor_theme"] = {
-                        "group_key": group_key,
-                        "group_name": group_name,
-                        "queries": item["queries"],
-                        "sources": sorted(item["sources"]),
-                        "hits": sorted(item["hits"]),
-                        "score": int(item["score"]),
-                        "window_start": start_date.isoformat(),
-                        "window_end": end_date.isoformat(),
-                    }
-                    paper["raw"] = raw
-                    paper["source"] = "theme:" + "+".join(sorted(item["sources"]))
-                    if paper.get("section_allowed") is None:
-                        paper["section_allowed"] = True
-                    storage.upsert_paper(paper)
-                    storage.record_theme_result(
-                        paper_id=paper["paper_id"],
-                        group_key=group_key,
-                        group_name=group_name,
-                        query=", ".join(item["queries"]),
-                        score=int(item["score"]),
-                        hits=sorted(item["hits"]),
-                        window_start=start_date.isoformat(),
-                        window_end=end_date.isoformat(),
-                    )
-                    saved += 1
-                summary["raw_results"] += raw_count
-                summary["saved"] += saved
-                status = "error" if failed_tasks else ("success" if saved else "empty")
-                message = "; ".join(group_errors[:3])
-                storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message=message)
-                summary["groups"][group_key] = {
-                    "name": group_name,
-                    "raw_results": raw_count,
-                    "saved": saved,
-                    "errors": group_errors,
-                    "failed_tasks": failed_tasks,
-                }
-                if progress_date:
-                    update_theme_fetch_progress(
-                        progress_date,
-                        group_key,
-                        status=status,
-                        records_found=saved,
-                        raw_results=raw_count,
-                        message=message,
-                    )
-            except Exception as exc:
-                message = theme_fetch_error_message(group_name, exc)
-                append_theme_fetch_error(group_errors, summary["errors"], seen_group_errors, message)
-                storage.finish_fetch_run(fetch_run_id, status="error", records_found=0, message=message)
-                if not failed_tasks:
-                    failed_tasks = [
-                        {"query": query, "source": source_name}
-                        for query, source_name, _fetcher in tasks_by_group.get(group_key, [])
-                    ]
-                summary["groups"][group_key] = {
-                    "name": group_name,
-                    "raw_results": raw_count,
-                    "saved": 0,
-                    "errors": group_errors,
-                    "failed_tasks": failed_tasks,
-                }
-                if progress_date:
-                    update_theme_fetch_progress(
-                        progress_date,
-                        group_key,
-                        status="error",
-                        records_found=0,
-                        raw_results=raw_count,
-                        message=message,
-                    )
+                        message = task_messages.get((source_name, query), "")
+                        if message and message not in group_errors:
+                            group_errors.append(message)
+
+            saved = 0
+            matchers = theme_keyword_matchers(list(group.get("queries") or []))
+            for merge_key, paper in candidates.items():
+                score, hits = score_theme_relevance(
+                    str(paper.get("title") or ""),
+                    str(paper.get("abstract") or ""),
+                    matchers,
+                )
+                if score <= 0:
+                    continue
+                storage.record_theme_result(
+                    paper_id=str(paper["paper_id"]),
+                    group_key=group_key,
+                    group_name=group_name,
+                    query=", ".join(sorted(candidate_queries.get(merge_key, set()))),
+                    score=score,
+                    hits=hits,
+                    window_start=window_start,
+                    window_end=window_end,
+                )
+                saved += 1
+
+            status = aggregate_theme_group_status(source_statuses, saved)
+            message = "; ".join(group_errors[:3])
+            storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message=message)
+            summary["saved"] += saved
+            summary["groups"][group_key] = {
+                "name": group_name,
+                "raw_results": len(candidates),
+                "saved": saved,
+                "status": status,
+                "source_statuses": source_statuses,
+                "errors": group_errors,
+                "failed_tasks": failed_tasks,
+            }
+            if progress_date:
+                update_theme_fetch_progress(
+                    progress_date,
+                    group_key,
+                    status=status,
+                    records_found=saved,
+                    raw_results=len(candidates),
+                    message=message,
+                    source_completed=source_totals[group_key],
+                    source_total=source_totals[group_key],
+                )
     finally:
         if progress_date:
             finish_theme_fetch_progress(progress_date)
     return summary
+
+
+def theme_network_search_queries(group: dict[str, Any]) -> list[str]:
+    queries: list[str] = []
+    seen_families: set[str] = set()
+    for value in list(group.get("queries") or []):
+        query = clean_text(value)
+        family = re.sub(r"[^a-z0-9+.-]+", " ", query.lower()).strip()
+        if len(family) > 4 and family.endswith("ies"):
+            family = family[:-3] + "y"
+        elif len(family) > 4 and family.endswith("s") and not family.endswith("ss"):
+            family = family[:-1]
+        if not query or not family or family in seen_families:
+            continue
+        query_tokens = set(re.findall(r"[a-z0-9+.-]+", family))
+        if any(
+            query_tokens
+            and existing_tokens
+            and len(query_tokens & existing_tokens) / len(query_tokens | existing_tokens) >= 0.7
+            for existing in queries
+            for existing_tokens in [set(re.findall(r"[a-z0-9+.-]+", existing.lower()))]
+        ):
+            continue
+        seen_families.add(family)
+        queries.append(query)
+        if len(queries) >= THEME_NETWORK_QUERIES_PER_GROUP:
+            break
+    if not queries:
+        name = clean_text(group.get("name") or "")
+        if name:
+            queries.append(name)
+    return queries
+
+
+def theme_network_query_plan(
+    groups: dict[str, dict[str, Any]],
+    group_keys: list[str],
+) -> tuple[list[str], dict[str, set[str]]]:
+    per_group = {key: theme_network_search_queries(groups[key]) for key in group_keys if key in groups}
+    plan: list[str] = []
+    query_groups: dict[str, set[str]] = {}
+    max_depth = max((len(queries) for queries in per_group.values()), default=0)
+    for depth in range(max_depth):
+        for group_key in group_keys:
+            queries = per_group.get(group_key) or []
+            if depth >= len(queries):
+                continue
+            query = queries[depth]
+            lookup = next((item for item in plan if item.lower() == query.lower()), "")
+            canonical = lookup or query
+            if not lookup:
+                if len(plan) >= THEME_NETWORK_QUERIES_PER_SOURCE_RUN:
+                    continue
+                plan.append(query)
+            query_groups.setdefault(canonical, set()).add(group_key)
+    return plan, query_groups
+
+
+def theme_source_plan_hash(source_name: str, start_date: date, end_date: date, queries: list[str]) -> str:
+    payload = json.dumps(
+        {
+            "source": source_name,
+            "window_start": start_date.isoformat(),
+            "window_end": end_date.isoformat(),
+            "queries": [clean_text(query).lower() for query in queries],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def theme_source_lock(source_name: str) -> threading.Lock:
+    with THEME_SOURCE_LOCKS_LOCK:
+        return THEME_SOURCE_LOCKS.setdefault(source_name, threading.Lock())
+
+
+def theme_source_cooldown(storage: Storage, source_name: str) -> dict[str, Any] | None:
+    row = storage.conn.execute(
+        """
+        SELECT *
+        FROM theme_source_runs
+        WHERE source = ?
+          AND retry_after IS NOT NULL
+          AND retry_after != ''
+        ORDER BY finished_at DESC, id DESC
+        LIMIT 1
+        """,
+        (source_name,),
+    ).fetchone()
+    latest = dict(row) if row else None
+    if not latest or not latest.get("retry_after"):
+        return None
+    try:
+        retry_after = datetime.fromisoformat(str(latest["retry_after"]))
+    except ValueError:
+        return None
+    now = datetime.now(local_timezone())
+    if retry_after.tzinfo is None:
+        retry_after = retry_after.replace(tzinfo=now.tzinfo)
+    return latest if now < retry_after.astimezone(now.tzinfo) else None
+
+
+def theme_source_retry_after(exc: Exception, attempts: int) -> datetime:
+    now = datetime.now(local_timezone())
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {}) if response is not None else {}
+    retry_header = clean_text(headers.get("Retry-After") if hasattr(headers, "get") else "")
+    if retry_header.isdigit():
+        return now + timedelta(seconds=max(60, int(retry_header)))
+    delay = min(
+        THEME_SOURCE_MAX_COOLDOWN_SECONDS,
+        THEME_SOURCE_BASE_COOLDOWN_SECONDS * (2 ** max(0, min(5, attempts - 1))),
+    )
+    return now + timedelta(seconds=delay)
+
+
+def run_theme_source_plan(
+    *,
+    storage: Storage,
+    source_name: str,
+    fetcher: Any,
+    queries: list[str],
+    start_date: date,
+    end_date: date,
+    trigger: str,
+) -> dict[str, Any]:
+    plan_hash = theme_source_plan_hash(source_name, start_date, end_date, queries)
+    latest = storage.latest_theme_source_run(
+        source=source_name,
+        window_start=start_date.isoformat(),
+        window_end=end_date.isoformat(),
+        query_plan_hash=plan_hash,
+    )
+    force_refresh = trigger in {"manual", "manual_search"}
+    cached_papers = storage.list_theme_candidates(
+        window_start=start_date.isoformat(),
+        window_end=end_date.isoformat(),
+        sources=[source_name],
+        query_plan_hash=plan_hash,
+    )
+    cached_tasks = {
+        str(task.get("query") or ""): task
+        for task in storage.list_theme_source_tasks(int(latest["id"]))
+    } if latest else {}
+    reusable_states: dict[str, str] = {}
+    reusable_messages: dict[str, str] = {}
+    reusable_counts: dict[str, int] = {}
+    if latest and not force_refresh:
+        if cached_tasks:
+            for query in queries:
+                task = cached_tasks.get(query)
+                if not task or str(task.get("status") or "") not in {"success", "empty"}:
+                    continue
+                reusable_states[query] = str(task["status"])
+                reusable_messages[query] = str(task.get("message") or "")
+                reusable_counts[query] = int(task.get("records_found") or 0)
+        elif str(latest.get("status") or "") in {"success", "empty"}:
+            reusable_states = {
+                query: ("success" if int(latest.get("candidates_found") or 0) else "empty")
+                for query in queries
+            }
+            reusable_counts = {query: 0 for query in queries}
+        if (
+            str(latest.get("status") or "") == "success"
+            and int(latest.get("candidates_found") or 0) > 0
+            and not cached_papers
+        ):
+            reusable_states.clear()
+            reusable_counts.clear()
+
+    pending_queries = [query for query in queries if query not in reusable_states]
+    if not pending_queries:
+        return {
+            "status": "success" if cached_papers else "empty",
+            "message": "",
+            "queries_attempted": 0,
+            "raw_results": len(cached_papers),
+            "task_states": reusable_states,
+            "task_messages": reusable_messages,
+            "task_counts": reusable_counts,
+            "papers_by_query": {queries[0]: cached_papers} if queries and cached_papers else {},
+            "from_cache": True,
+        }
+
+    attempts = (
+        1
+        if not latest or str(latest.get("status") or "") in {"success", "empty"}
+        else int(latest.get("attempts") or 0) + 1
+    )
+    cooldown = theme_source_cooldown(storage, source_name)
+    if cooldown:
+        message = f"{source_name}: cooling down until {cooldown['retry_after']}"
+        task_states = {**reusable_states, **{query: "cooldown" for query in pending_queries}}
+        task_messages = {**reusable_messages, **{query: message for query in pending_queries}}
+        task_counts = {**reusable_counts, **{query: 0 for query in pending_queries}}
+        return {
+            "status": "partial" if reusable_states else "cooldown",
+            "message": message,
+            "queries_attempted": 0,
+            "raw_results": len(cached_papers),
+            "task_states": task_states,
+            "task_messages": task_messages,
+            "task_counts": task_counts,
+            "papers_by_query": {queries[0]: cached_papers} if queries and cached_papers else {},
+            "from_cache": bool(cached_papers),
+        }
+
+    run_id = storage.start_theme_source_run(
+        source=source_name,
+        window_start=start_date.isoformat(),
+        window_end=end_date.isoformat(),
+        query_plan_hash=plan_hash,
+        trigger=trigger,
+        attempts=attempts,
+        started_at=now_iso(),
+    )
+    task_states: dict[str, str] = dict(reusable_states)
+    task_messages: dict[str, str] = dict(reusable_messages)
+    task_counts: dict[str, int] = dict(reusable_counts)
+    papers_by_query: dict[str, list[dict[str, Any]]] = {queries[0]: cached_papers} if queries and cached_papers else {}
+    errors: list[str] = []
+    queries_attempted = 0
+    raw_results = len(cached_papers)
+    retry_after = ""
+    consecutive_failures = 0
+    lock = theme_source_lock(source_name)
+    with lock:
+        late_cooldown = theme_source_cooldown(storage, source_name)
+        queries_to_run = list(pending_queries)
+        if late_cooldown:
+            message = f"{source_name}: cooling down until {late_cooldown['retry_after']}"
+            for query in queries_to_run:
+                task_states[query] = "cooldown"
+                task_messages[query] = message
+                task_counts[query] = 0
+            retry_after = str(late_cooldown["retry_after"])
+            queries_to_run = []
+        for index, query in enumerate(queries_to_run):
+            if consecutive_failures >= 2:
+                task_states[query] = "cooldown"
+                task_messages[query] = f"{source_name}: paused after repeated failures"
+                continue
+            if index:
+                time.sleep(float(THEME_SOURCE_MIN_INTERVAL_SECONDS.get(source_name, 1.0)))
+            queries_attempted += 1
+            try:
+                papers = fetcher(query, start_date, end_date)
+            except Exception as exc:
+                consecutive_failures += 1
+                message = theme_fetch_error_message("Subject Monitor", exc, source_name=source_name)
+                errors.append(message)
+                task_states[query] = "error"
+                task_messages[query] = message
+                task_counts[query] = 0
+                retry_after = theme_source_retry_after(exc, attempts).isoformat(timespec="seconds")
+                if "429" in str(exc) or "Too Many Requests" in str(exc):
+                    consecutive_failures = 2
+                continue
+            consecutive_failures = 0
+            papers_by_query[query] = papers
+            count = len(papers)
+            task_counts[query] = count
+            task_states[query] = "success" if count else "empty"
+            raw_results += count
+
+    states = list(task_states.values())
+    completed = [state for state in states if state in {"success", "empty"}]
+    incomplete = [state for state in states if state not in {"success", "empty"}]
+    if completed and incomplete:
+        status = "partial"
+    elif completed:
+        status = "success" if raw_results else "empty"
+    else:
+        status = "error"
+    message = "; ".join(dict.fromkeys(errors))[:1500]
+    storage.finish_theme_source_run(
+        run_id,
+        status=status,
+        candidates_found=raw_results,
+        message=message,
+        retry_after=retry_after,
+    )
+    storage.record_theme_source_tasks(
+        run_id,
+        [
+            {
+                "query": query,
+                "status": task_states.get(query, "waiting"),
+                "records_found": task_counts.get(query, 0),
+                "message": task_messages.get(query, ""),
+            }
+            for query in queries
+        ],
+    )
+    return {
+        "status": status,
+        "message": message,
+        "queries_attempted": queries_attempted,
+        "raw_results": raw_results,
+        "task_states": task_states,
+        "task_messages": task_messages,
+        "task_counts": task_counts,
+        "papers_by_query": papers_by_query,
+    }
+
+
+def local_arxiv_theme_candidates(
+    storage: Storage,
+    *,
+    start_date: date,
+    end_date: date,
+) -> tuple[list[dict[str, Any]], str, str]:
+    papers = [
+        paper
+        for paper in storage.list_papers(
+            start_date=start_date.isoformat(),
+            end_date=end_date.isoformat(),
+            journals=[ARXIV_JOURNAL_NAME],
+        )
+        if start_date.isoformat() <= str(paper.get("publication_date") or "") <= end_date.isoformat()
+    ]
+    if papers:
+        return papers, "success", ""
+    row = storage.conn.execute(
+        """
+        SELECT status, message
+        FROM fetch_runs
+        WHERE monitor_type = 'journal'
+          AND source = 'arxiv'
+          AND journal = ?
+          AND window_start <= ?
+          AND window_end >= ?
+          AND status != 'running'
+        ORDER BY finished_at DESC, id DESC
+        LIMIT 1
+        """,
+        (ARXIV_JOURNAL_NAME, end_date.isoformat(), start_date.isoformat()),
+    ).fetchone()
+    if not row:
+        ready_at = arxiv_ready_time(end_date) if start_date == end_date else None
+        now = datetime.now(local_timezone())
+        if end_date >= today_local() and ready_at is not None:
+            return [], "waiting", "Local arXiv: waiting for Journal Monitor update."
+        return [], "not_available", ""
+    status = str(row["status"] or "")
+    if status in {"success", "empty"}:
+        return [], "empty", ""
+    return [], "error", clean_text(row["message"] or "Local arXiv update failed.")
+
+
+def match_local_arxiv_for_all_subjects(storage: Storage, selected_date: date) -> dict[str, int]:
+    """Match Journal Monitor's local arXiv rows without making network requests."""
+    groups = load_theme_groups(storage)
+    papers, _status, _message = local_arxiv_theme_candidates(
+        storage,
+        start_date=selected_date,
+        end_date=selected_date,
+    )
+    counts: dict[str, int] = {}
+    for group_key, group in groups.items():
+        matched = 0
+        matchers = theme_keyword_matchers(list(group.get("queries") or []))
+        for paper in papers:
+            score, hits = score_theme_relevance(
+                str(paper.get("title") or ""),
+                str(paper.get("abstract") or ""),
+                matchers,
+            )
+            if score <= 0:
+                continue
+            storage.record_theme_result(
+                paper_id=str(paper["paper_id"]),
+                group_key=group_key,
+                group_name=str(group.get("name") or group_key),
+                query="local arXiv",
+                score=score,
+                hits=hits,
+                window_start=selected_date.isoformat(),
+                window_end=selected_date.isoformat(),
+            )
+            matched += 1
+        counts[group_key] = matched
+    return counts
+
+
+def add_theme_candidate(
+    candidates: dict[str, dict[str, Any]],
+    candidate_sources: dict[str, set[str]],
+    candidate_queries: dict[str, set[str]],
+    paper: dict[str, Any],
+    *,
+    source_name: str,
+    query: str,
+) -> None:
+    if not clean_text(paper.get("paper_id") or ""):
+        return
+    merge_key = theme_candidate_merge_key(paper)
+    current = candidates.get(merge_key)
+    candidates[merge_key] = theme_preferred_candidate(current, paper) if current else dict(paper)
+    candidate_sources.setdefault(merge_key, set()).add(source_name)
+    candidate_queries.setdefault(merge_key, set()).add(query)
+
+
+def aggregate_theme_source_task_status(states: list[str], counts: list[int]) -> str:
+    if not states:
+        return "waiting"
+    completed = [state for state in states if state in {"success", "empty"}]
+    incomplete = [state for state in states if state not in {"success", "empty"}]
+    if completed and incomplete:
+        return "partial"
+    if completed:
+        return "success" if any(int(count or 0) > 0 for count in counts) else "empty"
+    if all(state == "cooldown" for state in states):
+        return "cooldown"
+    if all(state == "waiting" for state in states):
+        return "waiting"
+    return "error"
+
+
+def aggregate_theme_group_status(source_statuses: dict[str, str], saved: int) -> str:
+    statuses = [
+        str(status or "waiting")
+        for status in source_statuses.values()
+        if str(status or "") != "not_available"
+    ]
+    if not statuses:
+        return "waiting"
+    completed = [status for status in statuses if status in {"success", "empty"}]
+    incomplete = [status for status in statuses if status not in {"success", "empty"}]
+    if completed and incomplete:
+        return "partial"
+    if completed:
+        return "success" if saved else "empty"
+    if any(status in {"waiting", "cooldown"} for status in statuses):
+        return "waiting"
+    return "error"
 
 
 def theme_search_queries(queries: list[str]) -> list[str]:
@@ -4933,7 +5432,6 @@ def theme_source_fetchers() -> list[tuple[str, Any]]:
         ("openalex", search_theme_openalex),
         ("crossref", search_theme_crossref),
         ("semantic_scholar", search_semantic_scholar_works),
-        ("arxiv", search_theme_arxiv),
         ("pubmed", search_pubmed_works),
     ]
 
@@ -4959,16 +5457,6 @@ def search_theme_crossref(query: str, start_date: date, end_date: date) -> list[
         max_pages=1,
         timeout=8,
         max_retries=1,
-    )
-
-
-def search_theme_arxiv(query: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
-    return search_arxiv_works(
-        query=query,
-        start_date=start_date,
-        end_date=end_date,
-        page_size=50,
-        max_pages=1,
     )
 
 
@@ -5782,7 +6270,10 @@ def fetch_missing_sources_for_date(
                 start_date=selected_date,
                 end_date=selected_date,
                 categories=ARXIV_DEFAULT_CATEGORIES,
+                require_latest_listing=selected_date >= today_local(),
             )
+            match_local_arxiv_for_all_subjects(storage, selected_date)
+            schedule_pending_arxiv_metadata_retry(storage, selected)
         completed += 1
         update_fetch_progress(selected, journal=ARXIV_JOURNAL_NAME, completed=completed, total=total)
 
@@ -5988,6 +6479,118 @@ def arxiv_auto_retry_due(storage: Storage, announcement_key: str, now: datetime)
     return (now - attempted_at.astimezone(now.tzinfo)).total_seconds() >= AUTO_ARXIV_MONITOR_RETRY_SECONDS
 
 
+def pending_arxiv_metadata_rows(storage: Storage, selected: str) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        SELECT *
+        FROM papers
+        WHERE journal = ?
+          AND publication_date = ?
+        ORDER BY paper_id
+        """,
+        (ARXIV_JOURNAL_NAME, selected),
+    ).fetchall()
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        paper = dict(row)
+        try:
+            raw = json.loads(paper.get("raw_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict) or raw.get("metadata_detail_status") != "pending":
+            continue
+        paper["_raw"] = raw
+        pending.append(paper)
+    return pending
+
+
+def schedule_pending_arxiv_metadata_retry(storage: Storage, selected: str) -> int:
+    pending = pending_arxiv_metadata_rows(storage, selected)
+    if not pending:
+        storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, "")
+        return 0
+    state = {
+        "date": selected,
+        "attempts": 0,
+        "pending": len(pending),
+        "retry_after": (datetime.now(local_timezone()) + timedelta(seconds=AUTO_ARXIV_MONITOR_RETRY_SECONDS)).isoformat(
+            timespec="seconds"
+        ),
+    }
+    storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, json.dumps(state, ensure_ascii=False, sort_keys=True))
+    return len(pending)
+
+
+def retry_pending_arxiv_metadata(storage: Storage, selected_date: date, now: datetime) -> dict[str, Any]:
+    selected = selected_date.isoformat()
+    pending = pending_arxiv_metadata_rows(storage, selected)
+    if not pending:
+        storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, "")
+        return {"status": "complete", "pending": 0}
+    state = json_setting(storage, AUTO_ARXIV_METADATA_RETRY_SETTING, {})
+    if not isinstance(state, dict) or state.get("date") != selected:
+        schedule_pending_arxiv_metadata_retry(storage, selected)
+        return {"status": "waiting", "pending": len(pending)}
+    try:
+        retry_after = datetime.fromisoformat(str(state.get("retry_after") or ""))
+    except ValueError:
+        retry_after = now
+    if retry_after.tzinfo is None:
+        retry_after = retry_after.replace(tzinfo=now.tzinfo)
+    if now < retry_after.astimezone(now.tzinfo):
+        return {"status": "waiting", "pending": len(pending), "retry_after": retry_after.isoformat(timespec="seconds")}
+
+    attempts = int(state.get("attempts") or 0) + 1
+    identifiers = [
+        strip_arxiv_version(str((paper.get("_raw") or {}).get("arxiv_id") or ""))
+        for paper in pending
+    ]
+    identifiers = [identifier for identifier in identifiers if identifier]
+    try:
+        details = fetch_arxiv_by_ids(identifiers, max_retries=0)
+    except Exception as exc:
+        delay = min(AUTO_ARXIV_MONITOR_RETRY_SECONDS * (2 ** min(attempts, 4)), 6 * 60 * 60)
+        retry_state = {
+            "date": selected,
+            "attempts": attempts,
+            "pending": len(pending),
+            "message": clean_text(str(exc))[:500],
+            "retry_after": (now + timedelta(seconds=delay)).isoformat(timespec="seconds"),
+        }
+        storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, json.dumps(retry_state, ensure_ascii=False, sort_keys=True))
+        return {"status": "error", **retry_state}
+
+    existing_by_arxiv = {
+        strip_arxiv_version(str((paper.get("_raw") or {}).get("arxiv_id") or "")): paper
+        for paper in pending
+    }
+    for detail in details:
+        identifier = strip_arxiv_version(str((detail.get("raw") or {}).get("arxiv_id") or ""))
+        existing = existing_by_arxiv.get(identifier)
+        if not existing:
+            continue
+        detail_raw = {**(existing.get("_raw") or {}), **(detail.get("raw") or {})}
+        detail_raw["metadata_source"] = "arxiv_latest_listing+id_list"
+        detail_raw["metadata_detail_status"] = "complete"
+        detail["raw"] = detail_raw
+        detail["publication_date"] = selected
+        storage.refresh_paper_metadata(str(existing["paper_id"]), detail)
+    remaining = pending_arxiv_metadata_rows(storage, selected)
+    if not remaining:
+        storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, "")
+        match_local_arxiv_for_all_subjects(storage, selected_date)
+        return {"status": "complete", "pending": 0}
+    delay = min(AUTO_ARXIV_MONITOR_RETRY_SECONDS * (2 ** min(attempts, 4)), 6 * 60 * 60)
+    retry_state = {
+        "date": selected,
+        "attempts": attempts,
+        "pending": len(remaining),
+        "retry_after": (now + timedelta(seconds=delay)).isoformat(timespec="seconds"),
+    }
+    storage.set_setting(AUTO_ARXIV_METADATA_RETRY_SETTING, json.dumps(retry_state, ensure_ascii=False, sort_keys=True))
+    return {"status": "partial", **retry_state}
+
+
 def run_auto_arxiv_monitor_once(db_path: Path, now: datetime | None = None) -> dict[str, Any]:
     current = now or datetime.now(local_timezone())
     announcement_key, target_date, ready_at = arxiv_auto_target(current)
@@ -5995,7 +6598,14 @@ def run_auto_arxiv_monitor_once(db_path: Path, now: datetime | None = None) -> d
     storage = Storage(db_path)
     try:
         if storage.get_setting(AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING, "") == announcement_key:
-            return {"status": "skipped", "reason": "already complete", "announcement": announcement_key, "date": selected}
+            enrichment = retry_pending_arxiv_metadata(storage, target_date, current)
+            return {
+                "status": "skipped",
+                "reason": "already complete",
+                "announcement": announcement_key,
+                "date": selected,
+                "metadata": enrichment,
+            }
         if not arxiv_auto_retry_due(storage, announcement_key, current):
             return {"status": "skipped", "reason": "retry cooldown", "announcement": announcement_key, "date": selected}
         if not try_start_fetch(selected):
@@ -6011,16 +6621,23 @@ def run_auto_arxiv_monitor_once(db_path: Path, now: datetime | None = None) -> d
                 start_date=target_date,
                 end_date=target_date,
                 categories=ARXIV_DEFAULT_CATEGORIES,
+                require_latest_listing=True,
             )
+            if int(result.get("saved") or 0) > 0:
+                match_local_arxiv_for_all_subjects(storage, target_date)
             succeeded = result.get("source_statuses", {}).get("arxiv") == "success" and int(result.get("saved") or 0) > 0
+            arxiv_message = clean_text(result.get("message") or "")
+            waiting_for_listing = "has not advanced" in arxiv_message
             if succeeded:
                 storage.set_setting(AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING, announcement_key)
+                schedule_pending_arxiv_metadata_retry(storage, selected)
             status = {
-                "status": "fetched" if succeeded else str(result.get("source_statuses", {}).get("arxiv") or "empty"),
+                "status": "fetched" if succeeded else ("waiting" if waiting_for_listing else str(result.get("source_statuses", {}).get("arxiv") or "empty")),
                 "announcement": announcement_key,
                 "date": selected,
                 "ready_at": ready_at.isoformat(),
                 "saved": int(result.get("saved") or 0),
+                "message": arxiv_message,
                 "finished_at": now_iso(),
             }
             storage.set_setting(AUTO_ARXIV_MONITOR_STATUS_SETTING, json.dumps(status, ensure_ascii=False, sort_keys=True))
@@ -6177,6 +6794,7 @@ def run_auto_subject_monitor_once(db_path: Path, run_date: date) -> None:
                 end_date=target_date,
                 group_keys=missing_group_keys,
                 theme_groups=theme_groups,
+                trigger="automatic",
             )
             for group_key in missing_group_keys:
                 processed_retry_keys.add((selected, group_key))
@@ -6303,6 +6921,7 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
                 group_keys=group_keys,
                 theme_groups=theme_groups,
                 retry_tasks_by_group=retry_tasks,
+                trigger="automatic_retry",
             )
             attempted += len(runnable)
             for item in runnable:
@@ -6311,6 +6930,22 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
                 failed_tasks = normalize_theme_failed_tasks(group_summary.get("failed_tasks"))
                 if not failed_tasks:
                     succeeded += 1
+                    continue
+                source_statuses = group_summary.get("source_statuses") or {}
+                failed_sources = {str(task.get("source") or "") for task in failed_tasks}
+                if failed_sources and all(
+                    str(source_statuses.get(source) or "") in {"cooldown", "waiting"}
+                    for source in failed_sources
+                ):
+                    retained.append(
+                        subject_retry_item(
+                            selected=selected,
+                            group_key=group_key,
+                            group_name=str(item.get("group_name") or theme_groups[group_key].get("name") or group_key),
+                            failed_tasks=failed_tasks,
+                            retry_count=int(item.get("retry_count") or 0),
+                        )
+                    )
                     continue
                 retry_count = int(item.get("retry_count") or 0) + 1
                 if retry_count >= AUTO_SUBJECT_MONITOR_MAX_RETRIES:
@@ -12345,7 +12980,8 @@ def finish_theme_fetch_progress(selected: str) -> None:
 
 def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool) -> dict[str, Any]:
     total = len(subjects)
-    completed = sum(1 for item in subjects if item.get("status") in {"success", "empty", "error"})
+    terminal_statuses = {"success", "empty", "partial", "error", "waiting", "cooldown"}
+    completed = sum(1 for item in subjects if item.get("status") in terminal_statuses)
     source_total = 0
     source_completed = 0
     for item in subjects:
@@ -12353,7 +12989,7 @@ def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool
         if item_source_total <= 0:
             continue
         source_total += item_source_total
-        if item.get("status") in {"success", "empty", "error"}:
+        if item.get("status") in terminal_statuses:
             source_completed += item_source_total
         else:
             source_completed += max(0, min(item_source_total, int(item.get("source_completed") or 0)))
@@ -25046,7 +25682,7 @@ INDEX_HTML = """<!doctype html>
 	      const live = themeProgress?.kind === "theme" ? themeProgress : null;
 	      const subjects = live ? normalizedThemeProgressSubjects(live.subjects || []) : themeSubjectsFromLastFetch(lastFetch);
 	      const total = Number(live?.total || subjects.length || 0);
-	      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "error"].includes(item.status)).length || 0);
+	      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "partial", "error", "waiting", "cooldown"].includes(item.status)).length || 0);
 	      const percent = Math.max(0, Math.min(100, Number(live?.percent ?? (total ? Math.round((completed / total) * 100) : 0))));
 	      const sourceTotal = Number(live?.sourceTotal || 0);
 	      const sourceCompleted = Number(live?.sourceCompleted || 0);
@@ -25109,6 +25745,9 @@ INDEX_HTML = """<!doctype html>
       const status = String(item?.status || "pending");
       if (status === "success") return {label: "Fetched", className: "ok"};
       if (status === "empty") return {label: "Fetched, no matches", className: "warn"};
+      if (status === "partial") return {label: "Partial", className: "warn"};
+      if (status === "waiting") return {label: "Waiting", className: "pending"};
+      if (status === "cooldown") return {label: "Cooling down", className: "pending"};
       if (status === "error") return {label: "Failed", className: "err"};
       if (status === "running") return {label: "Fetching", className: "live"};
       if (status === "not_fetched") return {label: "Not fetched", className: "pending"};
@@ -25117,7 +25756,11 @@ INDEX_HTML = """<!doctype html>
 
 	    function themeFetchSubjectMeta(item) {
 	      const status = String(item?.status || "");
-	      if (status === "success" || status === "empty") return `${Number(item.records_found || 0)} saved`;
+	      if (["success", "empty", "partial"].includes(status)) {
+	        const saved = `${Number(item.records_found || 0)} saved`;
+	        return status === "partial" && item.message ? `${saved} · ${item.message}` : saved;
+	      }
+	      if (status === "waiting" || status === "cooldown") return item.message || "Waiting for an available source";
 	      if (status === "error") return item.message || "No successful source fetches";
 	      if (status === "running") {
 	        const source = themeSourceLabel(item.current_source || "");
