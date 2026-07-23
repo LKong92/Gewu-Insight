@@ -136,12 +136,18 @@ def remove_intermediate_pdfs(paths: list[Path], *, keep: Path) -> None:
 def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     main: list[str] = []
     supplements: list[str] = []
+    doi = normalize_doi(paper.get("doi") or "")
 
+    # AAAS currently places an anti-bot challenge in front of direct PDF
+    # requests. Prefer verified open repository copies before trying the
+    # publisher URLs, while retaining the publisher candidates as fallbacks.
+    if doi.startswith("10.1126/"):
+        main.extend(science_open_access_pdf_candidates(doi))
     if paper.get("pdf_url"):
         main.append(paper["pdf_url"])
     main.extend(journal_pdf_candidates(paper))
-    main.extend(doi_pdf_candidates(paper.get("doi") or ""))
-    main.extend(crossref_pdf_candidates(paper.get("doi") or ""))
+    main.extend(doi_pdf_candidates(doi))
+    main.extend(crossref_pdf_candidates(doi))
 
     landing_url = paper.get("landing_url") or paper.get("url")
     if landing_url:
@@ -172,7 +178,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def doi_pdf_candidates(doi: str) -> list[str]:
-    doi = doi.replace("https://doi.org/", "").strip()
+    doi = normalize_doi(doi)
     if not doi:
         return []
     candidates = []
@@ -188,15 +194,18 @@ def doi_pdf_candidates(doi: str) -> list[str]:
 
 
 def journal_pdf_candidates(paper: dict[str, Any]) -> list[str]:
-    doi = str(paper.get("doi") or "").replace("https://doi.org/", "").strip()
+    doi = normalize_doi(paper.get("doi") or "")
     journal = str(paper.get("journal") or "").lower()
     if not doi:
         return []
     if doi.startswith("10.1103/"):
         aps_slug = aps_journal_slug(journal)
-        candidates = [f"https://link.aps.org/pdf/{doi}"]
+        candidates = [
+            f"https://harvest.aps.org/v2/journals/articles/{doi}/fulltext",
+        ]
         if aps_slug:
-            candidates.insert(0, f"https://journals.aps.org/{aps_slug}/pdf/{doi}")
+            candidates.append(f"https://journals.aps.org/{aps_slug}/pdf/{doi}")
+        candidates.append(f"https://link.aps.org/pdf/{doi}")
         return candidates
     return []
 
@@ -222,7 +231,7 @@ def aps_journal_slug(journal: str) -> str:
 
 
 def crossref_pdf_candidates(doi: str) -> list[str]:
-    doi = doi.replace("https://doi.org/", "").strip()
+    doi = normalize_doi(doi)
     if not doi:
         return []
     try:
@@ -246,6 +255,109 @@ def crossref_pdf_candidates(doi: str) -> list[str]:
     if primary:
         candidates.append(str(primary))
     return candidates
+
+
+def science_open_access_pdf_candidates(doi: str) -> list[str]:
+    doi = normalize_doi(doi)
+    if not doi.startswith("10.1126/"):
+        return []
+    return dedup(
+        europe_pmc_pdf_candidates(doi)
+        + openalex_open_pdf_candidates(doi, published_only=True)
+    )
+
+
+def europe_pmc_pdf_candidates(doi: str) -> list[str]:
+    doi = normalize_doi(doi)
+    if not doi:
+        return []
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            params={
+                "query": f"DOI:{doi}",
+                "format": "json",
+                "pageSize": 3,
+            },
+            headers={"Accept": "application/json"},
+            timeout=12,
+            max_retries=1,
+        )
+        payload = response.json()
+    except Exception:
+        return []
+    candidates: list[str] = []
+    results = ((payload.get("resultList") or {}).get("result") or []) if isinstance(payload, dict) else []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        result_doi = normalize_doi(result.get("doi") or "")
+        pmcid = str(result.get("pmcid") or "").strip().upper()
+        if (
+            result_doi == doi
+            and pmcid.startswith("PMC")
+            and str(result.get("isOpenAccess") or "").upper() == "Y"
+            and str(result.get("hasPDF") or "").upper() == "Y"
+        ):
+            candidates.append(f"https://europepmc.org/api/getPdf?pmcid={quote(pmcid, safe='')}")
+    return dedup(candidates)
+
+
+def openalex_open_pdf_candidates(
+    doi: str,
+    *,
+    repositories_first: bool = False,
+    published_only: bool = False,
+) -> list[str]:
+    doi = normalize_doi(doi)
+    if not doi:
+        return []
+    work_id = quote(f"https://doi.org/{doi}", safe="")
+    try:
+        response = request_with_retries(
+            "GET",
+            f"https://api.openalex.org/works/{work_id}",
+            params={"select": "best_oa_location,locations"},
+            headers={"Accept": "application/json"},
+            timeout=12,
+            max_retries=1,
+        )
+        payload = response.json()
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    locations = [item for item in (payload.get("locations") or []) if isinstance(item, dict)]
+    best = payload.get("best_oa_location")
+    if isinstance(best, dict):
+        locations.append(best)
+
+    def location_rank(location: dict[str, Any]) -> int:
+        source = location.get("source") if isinstance(location.get("source"), dict) else {}
+        is_repository = str(source.get("type") or "").lower() == "repository"
+        if repositories_first and is_repository:
+            return 0
+        if is_repository:
+            return 1
+        return 2
+
+    candidates: list[str] = []
+    for location in sorted(locations, key=location_rank):
+        if location.get("is_oa") is not True:
+            continue
+        if published_only and str(location.get("version") or "") != "publishedVersion":
+            continue
+        pdf_url = str(location.get("pdf_url") or "").strip()
+        if pdf_url:
+            candidates.append(pdf_url)
+    return dedup(candidates)
+
+
+def normalize_doi(value: Any) -> str:
+    doi = str(value or "").strip()
+    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi, flags=re.IGNORECASE)
+    return doi.strip().lower()
 
 
 def try_download_pdf(url: str, path: Path, messages: list[str]) -> bool:

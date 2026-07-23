@@ -303,7 +303,7 @@
 
 @end
 
-@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKScriptMessageHandler>
+@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) DaiqoTitlebarGestureView *titlebarGestureView;
@@ -311,6 +311,12 @@
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
 @property(nonatomic, strong) WKWebView *userGuideWebView;
+@property(nonatomic, strong) WKWebView *hiddenPublisherWebView;
+@property(nonatomic, strong) WKDownload *hiddenPublisherDownload;
+@property(nonatomic, copy) NSDictionary *hiddenPublisherContext;
+@property(nonatomic, copy) NSString *hiddenPublisherToken;
+@property(nonatomic, copy) NSString *hiddenPublisherTemporaryPath;
+@property(nonatomic, strong) NSTimer *hiddenPublisherTimeout;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -407,6 +413,7 @@
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
     [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
+    [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
     configuration.userContentController = userContentController;
     self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -461,6 +468,11 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"publisherPdfDownload"]) {
+        if (![message.body isKindOfClass:[NSDictionary class]]) return;
+        [self startHiddenPublisherDownload:(NSDictionary *)message.body];
+        return;
+    }
     if ([message.name isEqualToString:@"pdfPreviewState"]) {
         if (![self.webView isKindOfClass:[DaiqoWebView class]]) return;
         BOOL active = NO;
@@ -531,6 +543,211 @@
     frame.origin.x += dx;
     frame.origin.y -= dy;
     [self.window setFrame:frame display:YES];
+}
+
+- (void)startHiddenPublisherDownload:(NSDictionary *)payload {
+    NSString *token = [payload[@"token"] isKindOfClass:[NSString class]] ? payload[@"token"] : @"";
+    NSString *urlString = [payload[@"url"] isKindOfClass:[NSString class]] ? payload[@"url"] : @"";
+    NSDictionary *context = [payload[@"context"] isKindOfClass:[NSDictionary class]] ? payload[@"context"] : @{};
+    NSURL *publisherURL = [NSURL URLWithString:urlString];
+    NSString *host = publisherURL.host.lowercaseString ?: @"";
+    NSString *path = publisherURL.path.lowercaseString ?: @"";
+    BOOL allowedHost = [host isEqualToString:@"science.org"] || [host hasSuffix:@".science.org"];
+    BOOL allowedPath = [path hasPrefix:@"/doi/pdf/"] || [path hasPrefix:@"/doi/epdf/"];
+    if (token.length == 0 || !publisherURL || ![publisherURL.scheme.lowercaseString isEqualToString:@"https"] || !allowedHost || !allowedPath) {
+        [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:@"Invalid published PDF download request."];
+        return;
+    }
+    if (self.hiddenPublisherWebView || self.hiddenPublisherDownload) {
+        [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:@"Another published PDF is already downloading."];
+        return;
+    }
+
+    self.hiddenPublisherToken = token;
+    self.hiddenPublisherContext = [context copy];
+    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
+    self.hiddenPublisherWebView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1) configuration:configuration];
+    self.hiddenPublisherWebView.navigationDelegate = self;
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:publisherURL];
+    [request setValue:@"application/pdf,application/octet-stream;q=0.9,text/html;q=0.8,*/*;q=0.5" forHTTPHeaderField:@"Accept"];
+    NSString *refererPath = [publisherURL.path stringByReplacingOccurrencesOfString:@"/doi/pdf/" withString:@"/doi/"];
+    refererPath = [refererPath stringByReplacingOccurrencesOfString:@"/doi/epdf/" withString:@"/doi/"];
+    NSString *referer = [NSString stringWithFormat:@"https://www.science.org%@", refererPath ?: @""];
+    [request setValue:referer forHTTPHeaderField:@"Referer"];
+
+    self.hiddenPublisherTimeout = [NSTimer scheduledTimerWithTimeInterval:80.0
+                                                                   target:self
+                                                                 selector:@selector(hiddenPublisherDownloadTimedOut:)
+                                                                 userInfo:nil
+                                                                  repeats:NO];
+    [self.hiddenPublisherWebView loadRequest:request];
+}
+
+- (void)hiddenPublisherDownloadTimedOut:(NSTimer *)timer {
+    [self failHiddenPublisherDownload:@"The publisher did not provide a PDF before the background download timed out."];
+}
+
+- (void)webView:(WKWebView *)webView
+decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    if (webView != self.hiddenPublisherWebView) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+    NSString *mimeType = navigationResponse.response.MIMEType.lowercaseString ?: @"";
+    NSString *disposition = @"";
+    if ([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
+        id value = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields[@"Content-Disposition"];
+        if ([value isKindOfClass:[NSString class]]) disposition = [value lowercaseString];
+    }
+    BOOL isPDF = [mimeType containsString:@"pdf"] || [disposition containsString:@".pdf"];
+    if (isPDF || !navigationResponse.canShowMIMEType) {
+        decisionHandler(WKNavigationResponsePolicyDownload);
+    } else {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+    }
+}
+
+- (void)webView:(WKWebView *)webView
+navigationAction:(WKNavigationAction *)navigationAction
+didBecomeDownload:(WKDownload *)download {
+    if (webView != self.hiddenPublisherWebView) return;
+    self.hiddenPublisherDownload = download;
+    download.delegate = self;
+}
+
+- (void)webView:(WKWebView *)webView
+navigationResponse:(WKNavigationResponse *)navigationResponse
+didBecomeDownload:(WKDownload *)download {
+    if (webView != self.hiddenPublisherWebView) return;
+    self.hiddenPublisherDownload = download;
+    download.delegate = self;
+}
+
+- (void)download:(WKDownload *)download
+decideDestinationUsingResponse:(NSURLResponse *)response
+suggestedFilename:(NSString *)suggestedFilename
+completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
+    if (download != self.hiddenPublisherDownload) {
+        completionHandler(nil);
+        return;
+    }
+    NSString *temporaryName = [NSString stringWithFormat:@"daiqo-published-%@.pdf", NSUUID.UUID.UUIDString];
+    NSString *temporaryPath = [NSTemporaryDirectory() stringByAppendingPathComponent:temporaryName];
+    self.hiddenPublisherTemporaryPath = temporaryPath;
+    completionHandler([NSURL fileURLWithPath:temporaryPath]);
+}
+
+- (void)downloadDidFinish:(WKDownload *)download {
+    if (download != self.hiddenPublisherDownload) return;
+    [self.hiddenPublisherTimeout invalidate];
+    self.hiddenPublisherTimeout = nil;
+    [self acceptHiddenPublisherPDFAtPath:self.hiddenPublisherTemporaryPath ?: @""];
+}
+
+- (void)acceptHiddenPublisherPDFAtPath:(NSString *)path {
+    NSDictionary *attributes = path.length > 0
+        ? [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil]
+        : nil;
+    unsigned long long fileSize = [attributes fileSize];
+    NSFileHandle *handle = path.length > 0 ? [NSFileHandle fileHandleForReadingAtPath:path] : nil;
+    NSData *prefix = [handle readDataOfLength:1024];
+    [handle closeFile];
+    NSString *prefixText = prefix ? [[NSString alloc] initWithData:prefix encoding:NSISOLatin1StringEncoding] : @"";
+    if (path.length == 0 || fileSize < 1024 || [prefixText rangeOfString:@"%PDF-"].location == NSNotFound) {
+        [self failHiddenPublisherDownload:@"The publisher returned a page instead of a valid PDF."];
+        return;
+    }
+    [self attachHiddenPublisherPDFAtPath:path];
+}
+
+- (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+    if (download != self.hiddenPublisherDownload) return;
+    NSString *message = error.localizedDescription.length > 0 ? error.localizedDescription : @"Published PDF download failed.";
+    [self failHiddenPublisherDownload:message];
+}
+
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    if (webView != self.hiddenPublisherWebView || self.hiddenPublisherDownload) return;
+    [self failHiddenPublisherDownload:error.localizedDescription ?: @"The publisher page could not be loaded."];
+}
+
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    if (webView != self.hiddenPublisherWebView || self.hiddenPublisherDownload) return;
+    [self failHiddenPublisherDownload:error.localizedDescription ?: @"The publisher page could not be loaded."];
+}
+
+- (void)attachHiddenPublisherPDFAtPath:(NSString *)path {
+    NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:self.hiddenPublisherContext ?: @{}];
+    payload[@"source_path"] = path;
+    payload[@"preserve_filename"] = @NO;
+    NSError *jsonError = nil;
+    NSData *body = [NSJSONSerialization dataWithJSONObject:payload options:0 error:&jsonError];
+    if (!body || jsonError) {
+        [self failHiddenPublisherDownload:@"Could not prepare the downloaded PDF for the Library."];
+        return;
+    }
+    NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/manual-pdf-path"];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    request.HTTPMethod = @"POST";
+    [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    request.HTTPBody = body;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request
+                                    completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *responsePayload = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]]
+            ? ((NSHTTPURLResponse *)response).statusCode
+            : 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error || statusCode < 200 || statusCode >= 300 || ![responsePayload isKindOfClass:[NSDictionary class]]) {
+                NSString *serverError = [responsePayload[@"error"] isKindOfClass:[NSString class]] ? responsePayload[@"error"] : nil;
+                [self failHiddenPublisherDownload:serverError ?: error.localizedDescription ?: @"Could not add the published PDF to Daiqo."];
+                return;
+            }
+            NSString *token = self.hiddenPublisherToken ?: @"";
+            [self notifyHiddenPublisherDownloadToken:token success:YES data:responsePayload error:nil];
+            [self clearHiddenPublisherDownload];
+        });
+    }] resume];
+}
+
+- (void)failHiddenPublisherDownload:(NSString *)message {
+    NSString *token = self.hiddenPublisherToken ?: @"";
+    [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:message ?: @"Published PDF download failed."];
+    [self clearHiddenPublisherDownload];
+}
+
+- (void)notifyHiddenPublisherDownloadToken:(NSString *)token
+                                   success:(BOOL)success
+                                      data:(NSDictionary *)data
+                                     error:(NSString *)error {
+    NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+    payload[@"token"] = token ?: @"";
+    payload[@"success"] = @(success);
+    if (data) payload[@"data"] = data;
+    if (error.length > 0) payload[@"error"] = error;
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    NSString *json = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"{}";
+    NSString *script = [NSString stringWithFormat:@"window.handleNativePublisherDownloadResult && window.handleNativePublisherDownloadResult(%@)", json];
+    [self.webView evaluateJavaScript:script completionHandler:nil];
+}
+
+- (void)clearHiddenPublisherDownload {
+    [self.hiddenPublisherTimeout invalidate];
+    self.hiddenPublisherTimeout = nil;
+    [self.hiddenPublisherWebView stopLoading];
+    self.hiddenPublisherWebView.navigationDelegate = nil;
+    self.hiddenPublisherWebView = nil;
+    self.hiddenPublisherDownload.delegate = nil;
+    self.hiddenPublisherDownload = nil;
+    if (self.hiddenPublisherTemporaryPath.length > 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:self.hiddenPublisherTemporaryPath error:nil];
+    }
+    self.hiddenPublisherTemporaryPath = nil;
+    self.hiddenPublisherContext = nil;
+    self.hiddenPublisherToken = nil;
 }
 
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen {

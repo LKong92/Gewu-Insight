@@ -4,13 +4,15 @@ from paper_monitor.ui_server import INDEX_HTML
 
 
 class SubjectMonitorUiTests(unittest.TestCase):
-    def test_subject_toolbar_has_refresh_and_arxiv_hidden_by_default(self):
+    def test_subject_toolbar_has_refresh_and_optional_sources_hidden_by_default(self):
         toolbar = INDEX_HTML.split('id="themeToolbarActions"', 1)[1].split('</div>', 1)[0]
 
         self.assertIn('id="forceThemeFetch"', toolbar)
         self.assertIn('>Refresh</button>', toolbar)
         self.assertIn('id="themeArxivToggle"', toolbar)
+        self.assertIn('id="themeZenodoToggle"', toolbar)
         self.assertNotIn('id="themeArxivToggle" checked', toolbar)
+        self.assertNotIn('id="themeZenodoToggle" checked', toolbar)
 
     def test_subjects_render_as_journal_style_tabs(self):
         render_tabs = INDEX_HTML.split('function renderThemeTabs', 1)[1].split(
@@ -31,17 +33,37 @@ class SubjectMonitorUiTests(unittest.TestCase):
 
         self.assertIn('return knownThemeGroupKeys();', selection)
 
-    def test_arxiv_filter_is_display_only(self):
+    def test_arxiv_and_zenodo_filters_are_display_only(self):
         visible = INDEX_HTML.split('function themeVisiblePapers', 1)[1].split(
             'function themePaperMatchesGroup', 1
         )[0]
 
         self.assertIn('state.showThemeArxiv || !themePaperIsArxiv(paper)', visible)
+        self.assertIn('state.showThemeZenodo || !themePaperIsZenodo(paper)', visible)
         self.assertNotIn('/api/', visible)
+        self.assertIn('doi.startsWith("10.5281/zenodo.")', INDEX_HTML)
+        self.assertIn('url.includes("zenodo.org/")', INDEX_HTML)
+
+    def test_figure_mode_keeps_a_stable_column_when_image_lookup_fails(self):
+        render_paper = INDEX_HTML.split('function renderPaper', 1)[1].split(
+            'function themePaperMetaMarkup', 1
+        )[0]
+        hydrate = INDEX_HTML.split('async function hydratePaperFigure', 1)[1].split(
+            'function openInternalBrowser', 1
+        )[0]
+
+        self.assertIn('const reserveFigure = state.showFigures;', render_paper)
+        self.assertIn('showReportFigurePlaceholderForArticle(article)', render_paper)
+        self.assertNotIn('article.classList.remove("with-figure")', render_paper)
+        self.assertIn('showReportFigurePlaceholder(paperId)', hydrate)
+        self.assertIn('.paper-figure.missing {', INDEX_HTML)
 
     def test_subject_keyboard_navigation_reuses_report_interactions(self):
         keyboard = INDEX_HTML.split('function handleReportKeydown', 1)[1].split(
             'function renderArxivUpdateCountdown', 1
+        )[0]
+        selection = INDEX_HTML.split('function selectReportPaper', 1)[1].split(
+            'function switchReportJournalTab', 1
         )[0]
         switcher = INDEX_HTML.split('function switchReportJournalTab', 1)[1].split(
             'function openSelectedReportPaperQuickLook', 1
@@ -49,6 +71,10 @@ class SubjectMonitorUiTests(unittest.TestCase):
 
         self.assertIn("['report', 'theme'].includes(state.mode)", keyboard)
         self.assertIn('return switchThemeSubjectTab(delta);', switcher)
+        self.assertIn('state.libraryQuickLookOpen', selection)
+        self.assertIn('refreshSelectedReportPaperQuickLook({open: true})', selection)
+        self.assertIn('quickLookLibraryPdf(previewPaper, {silent: true})', INDEX_HTML)
+        self.assertIn('showLibraryQuickLookPlaceholder({open: true})', INDEX_HTML)
 
     def test_subject_dialog_points_to_codex_instead_of_recommending_keywords(self):
         dialog = INDEX_HTML.split('id="themeGroupBackdrop"', 1)[1].split(
@@ -111,6 +137,15 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('supersededWhileFetchContinues', load_report)
         self.assertIn('state.themeFetchCompletionWatchers.has(themeFetchCompletionKey', load_report)
         self.assertIn('if (!supersededWhileFetchContinues)', load_report)
+
+    def test_browsing_subject_dates_never_starts_a_network_fetch(self):
+        load_report = INDEX_HTML.split('async function loadThemeReportForDate', 1)[1].split(
+            'async function loadThemeCachedReportAfterFailure', 1
+        )[0]
+
+        self.assertIn('options.autoFetch === true && !hasCompleteFetchRecord', load_report)
+        self.assertNotIn('options.autoFetch !== false', load_report)
+        self.assertIn('const autoFetch = shouldFetchRemote ? "1" : "0"', load_report)
 
     def test_journal_tab_uses_custom_single_journal_refresh_menu(self):
         tabs = INDEX_HTML.split('function renderReportTabs', 1)[1].split(

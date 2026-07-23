@@ -46,7 +46,7 @@ from .config import (
     ROOT,
     load_config,
 )
-from .download import download_paper
+from .download import download_paper, normalize_doi
 from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
@@ -905,7 +905,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             paper = storage.get_paper(paper_id)
         finally:
             storage.close()
-        self.send_json({"result": result, "paper": paper_to_api(paper) if paper else None})
+        response_payload: dict[str, Any] = {
+            "result": result,
+            "paper": paper_to_api(paper) if paper else None,
+        }
+        browser_fallback = published_pdf_browser_fallback(paper, result)
+        if browser_fallback:
+            response_payload["browser_fallback"] = browser_fallback
+        self.send_json(response_payload)
 
     def handle_manual_pdf(self) -> None:
         fields, files = self.read_multipart_body()
@@ -954,7 +961,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 filename=Path(source_path).name,
                 context=payload,
                 source_path=Path(source_path),
-                preserve_filename=True,
+                preserve_filename=payload.get("preserve_filename") is not False,
             )
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -7098,6 +7105,21 @@ def annotate_papers_with_library_status(storage: Storage, papers: list[dict[str,
         count = counts.get(paper_id, 0)
         annotated.append({**paper, "in_library": count > 0, "library_item_count": count})
     return annotated
+
+
+def published_pdf_browser_fallback(
+    paper: dict[str, Any] | None,
+    result: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    if not paper or str((result or {}).get("status") or "") != "failed":
+        return None
+    doi = normalize_doi(paper.get("doi") or "")
+    if not doi.startswith("10.1126/"):
+        return None
+    return {
+        "kind": "aaas-published-pdf",
+        "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+    }
 
 
 def paper_to_api(paper: dict[str, Any], *, late_arrival_unread: bool = False) -> dict[str, Any]:
@@ -20682,6 +20704,10 @@ INDEX_HTML = """<!doctype html>
       background: #f8fafc;
       aspect-ratio: 4 / 3;
     }
+    .paper-figure.missing {
+      border-color: transparent;
+      background: transparent;
+    }
     .paper-figure img {
       width: 100%;
       height: 100%;
@@ -20695,7 +20721,7 @@ INDEX_HTML = """<!doctype html>
       place-items: center;
       color: var(--muted);
       font-size: 12px;
-      background: #f8fafc;
+      background: transparent;
     }
     .paper-head { min-width: 0; }
     .paper-title-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
@@ -21560,6 +21586,7 @@ INDEX_HTML = """<!doctype html>
             <div class="toolbar-actions hidden theme-toolbar-actions" id="themeToolbarActions">
               <button class="smallbtn" id="forceThemeFetch" type="button" title="Refresh all subjects for this date">Refresh</button>
               <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle"> arXiv</label>
+              <label class="toolbar-toggle"><input type="checkbox" id="themeZenodoToggle"> Zenodo</label>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
@@ -21850,6 +21877,7 @@ INDEX_HTML = """<!doctype html>
       selectedThemeGroups: new Set(),
       activeThemeGroupKey: "",
       showThemeArxiv: false,
+      showThemeZenodo: false,
       themeGroup: "ALL",
       themeFromDate: initialToday,
       themeUntilDate: initialToday,
@@ -25429,8 +25457,10 @@ INDEX_HTML = """<!doctype html>
 
     function selectReportPaper(paperId, options = {}) {
       if (!paperId) return;
+      const followSelection = state.libraryQuickLookOpen && ["report", "theme"].includes(state.mode);
       state.reportSelectedPaperId = paperId;
       updateReportPaperSelectionDom(options);
+      if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
     }
 
     function switchReportJournalTab(delta) {
@@ -25440,31 +25470,44 @@ INDEX_HTML = """<!doctype html>
       const currentIndex = groups.findIndex((group) => group.journal === state.activeReportJournal);
       const baseIndex = currentIndex >= 0 ? currentIndex : 0;
       const nextIndex = (baseIndex + delta + groups.length) % groups.length;
+      const followSelection = state.libraryQuickLookOpen;
       state.activeReportJournal = groups[nextIndex].journal;
       state.reportSelectedPaperId = groups[nextIndex].papers[0]?.paper_id || "";
       renderReport();
       revealActiveReportTab({smooth: true});
       updateReportPaperSelectionDom({scroll: true});
+      if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
       return true;
+    }
+
+    function reportPaperForPdfPreview(paper) {
+      if (!paper?.merged_pdf_path && !paper?.main_pdf_path) return null;
+      return paper.merged_pdf_path
+        ? paper
+        : {...paper, merged_pdf_path: paper.main_pdf_path, merged_pdf_url: paper.main_pdf_url || ""};
+    }
+
+    function refreshSelectedReportPaperQuickLook(options = {}) {
+      if (!state.libraryQuickLookOpen && !options.open) return;
+      const paper = selectedReportPaper();
+      if (!paper) return;
+      const previewPaper = reportPaperForPdfPreview(paper);
+      state.reportQuickLookPaperId = paper.paper_id || "";
+      if (previewPaper) {
+        quickLookLibraryPdf(previewPaper, {silent: true});
+      } else {
+        showLibraryQuickLookPlaceholder({open: true});
+      }
     }
 
     function openSelectedReportPaperQuickLook() {
       const paper = selectedReportPaper();
       if (!paper) return;
-      if (paper.merged_pdf_path || paper.main_pdf_path) {
-        const previewPaper = paper.merged_pdf_path
-          ? paper
-          : {...paper, merged_pdf_path: paper.main_pdf_path, merged_pdf_url: paper.main_pdf_url || ""};
-        quickLookLibraryPdf(previewPaper, {toggle: true, silent: true});
-        state.reportQuickLookPaperId = paper.paper_id || "";
-        return;
-      }
-      if (state.libraryQuickLookOpen && state.libraryQuickLookKind === "placeholder" && state.reportQuickLookPaperId === paper.paper_id) {
+      if (state.libraryQuickLookOpen && state.reportQuickLookPaperId === paper.paper_id) {
         closeLibraryQuickLook();
         return;
       }
-      state.reportQuickLookPaperId = paper.paper_id || "";
-      showLibraryQuickLookPlaceholder({open: true});
+      refreshSelectedReportPaperQuickLook({open: true});
     }
 
     function reportKeyboardTargetIsEditable(target) {
@@ -32227,6 +32270,61 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    const pendingNativePublisherDownloads = new Map();
+
+    window.handleNativePublisherDownloadResult = function(payload) {
+      const token = String(payload?.token || "");
+      const pending = pendingNativePublisherDownloads.get(token);
+      if (!pending) return;
+      pendingNativePublisherDownloads.delete(token);
+      window.clearTimeout(pending.timeoutId);
+      if (payload?.success) pending.resolve(payload.data || {});
+      else pending.reject(new Error(payload?.error || "Published PDF download failed"));
+    };
+
+    function downloadPublishedPdfInBackground(browserFallback, context) {
+      const handler = window.webkit?.messageHandlers?.publisherPdfDownload;
+      if (!handler || !browserFallback?.url) {
+        throw new Error("The publisher blocked direct PDF access. Open Daiqo.app to use its background browser download.");
+      }
+      const token = window.crypto?.randomUUID?.() || `publisher-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return new Promise((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          pendingNativePublisherDownloads.delete(token);
+          reject(new Error("The publisher did not provide a PDF before the background download timed out."));
+        }, 95000);
+        pendingNativePublisherDownloads.set(token, {resolve, reject, timeoutId});
+        try {
+          handler.postMessage({
+            token,
+            url: browserFallback.url,
+            context: {...context}
+          });
+        } catch (error) {
+          window.clearTimeout(timeoutId);
+          pendingNativePublisherDownloads.delete(token);
+          reject(error);
+        }
+      });
+    }
+
+    async function requestPaperPdfDownload(payload) {
+      const res = await fetch("/api/download", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "download failed");
+      if (data?.result?.status === "failed" && data.browser_fallback) {
+        return await downloadPublishedPdfInBackground(data.browser_fallback, payload);
+      }
+      if (data?.result?.status === "failed") {
+        throw new Error(data.result.message || "download failed");
+      }
+      return data;
+    }
+
     async function downloadLibraryPdf(paper, options = {}) {
       if (!paper?.paper_id) return;
       const status = $("libraryDetailStatus");
@@ -32243,13 +32341,7 @@ INDEX_HTML = """<!doctype html>
       updateLibraryActivityStatus(options.force ? "Refreshing PDF..." : "Downloading PDF...", {live: true, clear: false});
       try {
         const payload = {...libraryPdfContextPayload(paper.paper_id), force: Boolean(options.force)};
-        const res = await fetch("/api/download", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "download failed");
+        const data = await requestPaperPdfDownload(payload);
         updatePaperState(paper.paper_id, data.paper);
         if (status) {
           status.textContent = options.force ? "PDF refreshed" : "PDF downloaded";
@@ -32341,9 +32433,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function selectedLibraryQuickLookPlaceholder() {
-      if (state.mode === "report") {
+      if (["report", "theme"].includes(state.mode)) {
         const paper = selectedReportPaper();
-        return {icon: "○", title: paper?.citation_label || paper?.title || "Paper", type: paper ? "No PDF" : "Journal Monitor"};
+        const monitorName = state.mode === "theme" ? "Subject Monitor" : "Journal Monitor";
+        return {icon: "○", title: paper?.citation_label || paper?.title || "Paper", type: paper ? "No PDF" : monitorName};
       }
       if (state.libraryTab === "my-publications") {
         const paper = selectedMyPublicationPaper();
@@ -32490,7 +32583,7 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryQuickLookPdfKeydown(event) {
       const key = event.key === "Spacebar" ? " " : event.key;
-      if (key === " " && state.mode === "report") {
+      if (key === " " && ["report", "theme"].includes(state.mode)) {
         event.preventDefault();
         event.stopPropagation();
         closeLibraryQuickLook();
@@ -33201,7 +33294,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderPaper(paper) {
       const article = document.createElement("article");
-      const reserveFigure = state.showFigures && (paper.image_url || (paper.paper_id && !state.figureFailures.has(paper.paper_id)));
+      const reserveFigure = state.showFigures;
       const selected = paper.paper_id && paper.paper_id === state.reportSelectedPaperId;
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${inLibrary ? " in-library" : ""}${selected ? " report-selected" : ""}`;
@@ -33286,8 +33379,7 @@ INDEX_HTML = """<!doctype html>
       if (figureImage) {
         figureImage.addEventListener("error", () => {
           state.figureFailures.add(paper.paper_id);
-          article.classList.remove("with-figure");
-          article.querySelector(".paper-figure")?.remove();
+          showReportFigurePlaceholderForArticle(article);
           syncCurrentMonitorPaperSignature();
         }, {once: true});
       } else if (reserveFigure && !paper.image_url) {
@@ -33372,7 +33464,22 @@ INDEX_HTML = """<!doctype html>
       if (paper.image_url) {
         return `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>`;
       }
-      return `<figure class="paper-figure"><div class="paper-figure-placeholder"></div></figure>`;
+      return `<figure class="paper-figure missing"><div class="paper-figure-placeholder"></div></figure>`;
+    }
+
+    function showReportFigurePlaceholderForArticle(article) {
+      if (!article || !state.showFigures) return;
+      article.classList.add("with-figure");
+      let figure = article.querySelector(".paper-figure");
+      if (!figure) {
+        article.querySelector(".paper-layout")?.insertAdjacentHTML(
+          "afterbegin",
+          `<figure class="paper-figure missing"><div class="paper-figure-placeholder"></div></figure>`
+        );
+        return;
+      }
+      figure.classList.add("missing");
+      figure.innerHTML = `<div class="paper-figure-placeholder"></div>`;
     }
 
     function updateReportFigure(paper) {
@@ -33382,25 +33489,24 @@ INDEX_HTML = """<!doctype html>
         const figure = article.querySelector(".paper-figure");
         const markup = `<img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy">`;
         if (figure) {
+          figure.classList.remove("missing");
           figure.innerHTML = markup;
         } else {
           article.querySelector(".paper-layout")?.insertAdjacentHTML("afterbegin", `<figure class="paper-figure">${markup}</figure>`);
         }
         article.querySelector(".paper-figure img")?.addEventListener("error", () => {
           state.figureFailures.add(paper.paper_id);
-          article.classList.remove("with-figure");
-          article.querySelector(".paper-figure")?.remove();
+          showReportFigurePlaceholderForArticle(article);
           syncCurrentMonitorPaperSignature();
         }, {once: true});
       });
       syncCurrentMonitorPaperSignature();
     }
 
-    function removeReportFigure(paperId) {
+    function showReportFigurePlaceholder(paperId) {
       if (!paperId) return;
       document.querySelectorAll(`.paper[data-paper-id="${CSS.escape(String(paperId))}"]`).forEach((article) => {
-        article.classList.remove("with-figure");
-        article.querySelector(".paper-figure")?.remove();
+        showReportFigurePlaceholderForArticle(article);
       });
       syncCurrentMonitorPaperSignature();
     }
@@ -33429,7 +33535,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok || !data.paper?.image_url) {
           state.figureFailures.add(paperId);
-          removeReportFigure(paperId);
+          showReportFigurePlaceholder(paperId);
           return;
         }
         updatePaperState(paperId, data.paper);
@@ -33437,7 +33543,7 @@ INDEX_HTML = """<!doctype html>
         else updateReportFigure(data.paper);
       } catch (error) {
         state.figureFailures.add(paperId);
-        removeReportFigure(paperId);
+        showReportFigurePlaceholder(paperId);
       } finally {
         delete state.figureRequests[paperId];
         state.activeFigureHydrations = Math.max(0, state.activeFigureHydrations - 1);
@@ -33720,10 +33826,47 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function renderCurrentPaperSurface() {
+    function captureMonitorViewport(article) {
+      const mode = state.mode;
+      const root = $("papers");
+      if (!["report", "theme"].includes(mode) || !root || !article?.isConnected || !root.contains(article)) {
+        return null;
+      }
+      const paperId = String(article.dataset.paperId || "");
+      const rootRect = root.getBoundingClientRect();
+      const articleRect = article.getBoundingClientRect();
+      return {
+        mode,
+        paperId,
+        scrollTop: root.scrollTop,
+        anchorOffset: articleRect.top - rootRect.top
+      };
+    }
+
+    function restoreMonitorViewport(snapshot) {
+      if (!snapshot || snapshot.mode !== state.mode || !["report", "theme"].includes(state.mode)) return;
+      const applySnapshot = () => {
+        if (snapshot.mode !== state.mode) return;
+        const root = $("papers");
+        if (!root || root.dataset.monitorMode !== snapshot.mode) return;
+        root.scrollTop = Number(snapshot.scrollTop || 0);
+        if (!snapshot.paperId || !Number.isFinite(snapshot.anchorOffset)) return;
+        const article = root.querySelector(`.paper[data-paper-id="${CSS.escape(snapshot.paperId)}"]`);
+        if (!article) return;
+        const currentOffset = article.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        root.scrollTop += currentOffset - snapshot.anchorOffset;
+      };
+      window.requestAnimationFrame(() => {
+        applySnapshot();
+        window.requestAnimationFrame(applySnapshot);
+      });
+    }
+
+    function renderCurrentPaperSurface(options = {}) {
       if (state.mode === "library") renderActiveLibraryTab();
       else if (state.mode === "theme") renderThemeMonitor();
       else renderReport();
+      restoreMonitorViewport(options.monitorViewport);
     }
 
     async function uploadManualPdf(article, paperId, file) {
@@ -33744,8 +33887,9 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/manual-pdf", {method: "POST", body: form});
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "upload failed");
+        const monitorViewport = captureMonitorViewport(article);
         updatePaperState(paperId, data.paper);
-        renderCurrentPaperSurface();
+        renderCurrentPaperSurface({monitorViewport});
       } catch (error) {
         status.textContent = error.message;
         status.className = "status err";
@@ -33760,15 +33904,21 @@ INDEX_HTML = """<!doctype html>
       status.textContent = action === "download" ? "Downloading..." : "Queueing Codex analysis...";
       status.className = "status";
       try {
-        const res = await fetch(`/api/${action}`, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paperId})
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "request failed");
+        let data;
+        if (action === "download") {
+          data = await requestPaperPdfDownload({paper_id: paperId});
+        } else {
+          const res = await fetch(`/api/${action}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paperId})
+          });
+          data = await res.json();
+          if (!res.ok) throw new Error(data.error || "request failed");
+        }
+        const monitorViewport = action === "download" ? captureMonitorViewport(article) : null;
         updatePaperState(paperId, data.paper);
-        renderCurrentPaperSurface();
+        renderCurrentPaperSurface({monitorViewport});
       } catch (error) {
         status.textContent = error.message;
         status.className = "status err";
@@ -34957,7 +35107,11 @@ INDEX_HTML = """<!doctype html>
         if (requestSequence !== state.themeRequestSequence) return;
         const lastFetch = cachedThemeLastFetch(selectedDate, requestedGroupParam);
         const hasCompleteFetchRecord = themeFetchRecordIsComplete(lastFetch, requestedGroupParam);
-        shouldFetchRemote = Boolean(options.forceFetch) || (options.autoFetch !== false && !hasCompleteFetchRecord);
+        // Opening Subject Monitor and browsing dates are read-only operations.
+        // Network work must be explicitly requested by Refresh; automatic
+        // updates and source-level retries are owned by the backend scheduler.
+        shouldFetchRemote = Boolean(options.forceFetch)
+          || (options.autoFetch === true && !hasCompleteFetchRecord);
         state.themeFromDate = selectedDate;
         state.themeUntilDate = selectedDate;
         state.themeSearched = true;
@@ -35391,8 +35545,23 @@ INDEX_HTML = """<!doctype html>
       return journal === "arxiv" || journal.startsWith("arxiv ") || journal.startsWith("arxiv (") || source === "arxiv";
     }
 
+    function themePaperIsZenodo(paper) {
+      const journal = String(paper?.journal || "").trim().toLowerCase();
+      const source = String(paper?.source || "").trim().toLowerCase();
+      const doi = String(paper?.doi || "").trim().toLowerCase();
+      const url = String(paper?.url || "").trim().toLowerCase();
+      return journal === "zenodo"
+        || journal.startsWith("zenodo ")
+        || source === "zenodo"
+        || doi.startsWith("10.5281/zenodo.")
+        || url.includes("zenodo.org/");
+    }
+
     function themeVisiblePapers() {
-      return (state.themePapers || []).filter((paper) => state.showThemeArxiv || !themePaperIsArxiv(paper));
+      return (state.themePapers || []).filter((paper) => (
+        (state.showThemeArxiv || !themePaperIsArxiv(paper))
+        && (state.showThemeZenodo || !themePaperIsZenodo(paper))
+      ));
     }
 
     function themePaperMatchesGroup(paper, key) {
@@ -35494,11 +35663,13 @@ INDEX_HTML = """<!doctype html>
       const currentIndex = groups.findIndex((group) => group.key === state.activeThemeGroupKey);
       const baseIndex = currentIndex >= 0 ? currentIndex : 0;
       const next = groups[(baseIndex + delta + groups.length) % groups.length];
+      const followSelection = state.libraryQuickLookOpen;
       state.activeThemeGroupKey = next.key;
       state.reportSelectedPaperId = next.papers[0]?.paper_id || "";
       renderThemeMonitor();
       revealActiveReportTab({smooth: true});
       updateReportPaperSelectionDom({scroll: true});
+      if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
       return true;
     }
 
@@ -35581,10 +35752,12 @@ INDEX_HTML = """<!doctype html>
       ensureReportPaperSelection(activePapers);
       renderMonitorPaperList(root, activePapers, "theme");
       if (!activePapers.length) {
-        const hiddenArxivCount = state.showThemeArxiv
-          ? 0
-          : state.themePapers.filter((paper) => themePaperMatchesGroup(paper, activeGroup.key) && themePaperIsArxiv(paper)).length;
-        showMonitorStatusMessage(hiddenArxivCount ? "No non-arXiv papers in this subject for this date." : "No papers in this subject for this date.");
+        const hiddenSources = [];
+        const groupPapers = state.themePapers.filter((paper) => themePaperMatchesGroup(paper, activeGroup.key));
+        if (!state.showThemeArxiv && groupPapers.some(themePaperIsArxiv)) hiddenSources.push("arXiv");
+        if (!state.showThemeZenodo && groupPapers.some(themePaperIsZenodo)) hiddenSources.push("Zenodo");
+        const hiddenMessage = hiddenSources.length ? ` ${hiddenSources.join(" and ")} entries are hidden.` : "";
+        showMonitorStatusMessage(`No visible papers in this subject for this date.${hiddenMessage}`);
       }
     }
 
@@ -35612,6 +35785,8 @@ INDEX_HTML = """<!doctype html>
 	        : "Refresh all subjects for this date";
 	      const arxivToggle = $("themeArxivToggle");
 	      if (arxivToggle) arxivToggle.checked = Boolean(state.showThemeArxiv);
+	      const zenodoToggle = $("themeZenodoToggle");
+	      if (zenodoToggle) zenodoToggle.checked = Boolean(state.showThemeZenodo);
 	    }
 
     function formatThemeFetchTime(value) {
@@ -35915,6 +36090,10 @@ INDEX_HTML = """<!doctype html>
     });
     $("themeArxivToggle")?.addEventListener("change", (event) => {
       state.showThemeArxiv = Boolean(event.target.checked);
+      renderThemeMonitor();
+    });
+    $("themeZenodoToggle")?.addEventListener("change", (event) => {
+      state.showThemeZenodo = Boolean(event.target.checked);
       renderThemeMonitor();
     });
     $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
