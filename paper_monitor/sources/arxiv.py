@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 import time
 from datetime import date, datetime, time as datetime_time, timedelta, timezone, tzinfo
@@ -7,6 +8,8 @@ import threading
 from typing import Any
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
+
+from bs4 import BeautifulSoup
 
 from ..http import request_with_retries
 from ..text import clean_text, normalize_doi, normalize_publication_title, safe_slug
@@ -33,6 +36,10 @@ ARXIV_API_MAX_RETRIES = 2
 ARXIV_REQUEST_INTERVAL = 3.2
 ARXIV_REQUEST_LOCK = threading.Lock()
 ARXIV_LAST_REQUEST_AT = 0.0
+ARXIV_LATEST_LISTING_URL = "https://arxiv.org/list/cond-mat/new"
+ARXIV_LATEST_LISTING_CACHE_SECONDS = 10 * 60
+ARXIV_LATEST_LISTING_LOCK = threading.Lock()
+ARXIV_LATEST_LISTING_CACHE: dict[str, Any] = {}
 
 ATOM_NS = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -48,32 +55,50 @@ def fetch_arxiv_condensed_matter(
     page_size: int = 200,
     max_pages: int = 3,
 ) -> list[dict[str, Any]]:
-    papers: list[dict[str, Any]] = []
     selected_categories = [code for code in (categories or ARXIV_DEFAULT_CATEGORIES) if code in ARXIV_CONDENSED_MATTER_CODES]
-    query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
-
-    for page in range(max_pages):
-        wait_for_arxiv_rate_limit()
-        response = request_with_retries(
-            "GET",
-            "https://export.arxiv.org/api/query",
-            params={
-                "search_query": query,
-                "start": page * page_size,
-                "max_results": page_size,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            },
-            timeout=ARXIV_API_TIMEOUT,
-            max_retries=ARXIV_API_MAX_RETRIES,
+    listing_error: Exception | None = None
+    try:
+        listing = fetch_latest_arxiv_listing_for_window(
+            start_date=start_date,
+            end_date=end_date,
+            categories=selected_categories or ARXIV_DEFAULT_CATEGORIES,
         )
-        root = ET.fromstring(response.content)
-        entries = root.findall("atom:entry", ATOM_NS)
-        papers.extend(normalize_arxiv_entry(entry) for entry in entries)
-        if len(entries) < page_size:
-            break
-        time.sleep(3)
+        if listing is not None:
+            return listing
+    except Exception as exc:
+        listing_error = exc
 
+    papers: list[dict[str, Any]] = []
+    query = arxiv_query(selected_categories or ARXIV_DEFAULT_CATEGORIES, start_date, end_date)
+    try:
+        for page in range(max_pages):
+            wait_for_arxiv_rate_limit()
+            response = request_with_retries(
+                "GET",
+                "https://export.arxiv.org/api/query",
+                params={
+                    "search_query": query,
+                    "start": page * page_size,
+                    "max_results": page_size,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                },
+                timeout=ARXIV_API_TIMEOUT,
+                max_retries=ARXIV_API_MAX_RETRIES,
+            )
+            root = ET.fromstring(response.content)
+            entries = root.findall("atom:entry", ATOM_NS)
+            papers.extend(normalize_arxiv_entry(entry) for entry in entries)
+            if len(entries) < page_size:
+                break
+            time.sleep(3)
+    except Exception as api_error:
+        if listing_error:
+            raise RuntimeError(f"arXiv latest listing failed: {listing_error}; Export API failed: {api_error}") from api_error
+        raise
+
+    if not papers and listing_error:
+        raise RuntimeError(f"arXiv latest listing failed and Export API returned no papers: {listing_error}")
     return papers
 
 
@@ -112,34 +137,252 @@ def search_arxiv_works(
     query = clean_text(query)
     if not query:
         return []
+    listing_error: Exception | None = None
+    try:
+        listing = fetch_latest_arxiv_listing_for_window(
+            start_date=start_date,
+            end_date=end_date,
+            categories=ARXIV_DEFAULT_CATEGORIES,
+        )
+        if listing is not None:
+            return filter_arxiv_listing_by_query(listing, query)
+    except Exception as exc:
+        listing_error = exc
     papers: list[dict[str, Any]] = []
     start_utc, end_utc = announcement_date_range_as_submitted_utc(start_date, end_date)
     submitted_range = f"submittedDate:[{start_utc:%Y%m%d%H%M} TO {end_utc:%Y%m%d%H%M}]"
     search_query = f"({arxiv_text_query(query)}) AND {submitted_range}"
 
-    for page in range(max_pages):
-        wait_for_arxiv_rate_limit()
+    try:
+        for page in range(max_pages):
+            wait_for_arxiv_rate_limit()
+            response = request_with_retries(
+                "GET",
+                "https://export.arxiv.org/api/query",
+                params={
+                    "search_query": search_query,
+                    "start": page * page_size,
+                    "max_results": page_size,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                },
+                timeout=ARXIV_API_TIMEOUT,
+                max_retries=ARXIV_API_MAX_RETRIES,
+            )
+            root = ET.fromstring(response.content)
+            entries = root.findall("atom:entry", ATOM_NS)
+            papers.extend(normalize_arxiv_entry(entry) for entry in entries)
+            if len(entries) < page_size:
+                break
+            time.sleep(3)
+    except Exception as api_error:
+        if listing_error:
+            raise RuntimeError(f"arXiv latest listing failed: {listing_error}; Export API failed: {api_error}") from api_error
+        raise
+
+    if not papers and listing_error:
+        raise RuntimeError(f"arXiv latest listing failed and Export API returned no papers: {listing_error}")
+    return papers
+
+
+def fetch_latest_arxiv_listing_for_window(
+    *,
+    start_date: date,
+    end_date: date,
+    categories: list[str],
+    local_tz: tzinfo | None = None,
+) -> list[dict[str, Any]] | None:
+    listing_date, papers = fetch_latest_arxiv_listing(local_tz=local_tz)
+    if listing_date is None:
+        raise RuntimeError("arXiv latest listing did not include its listing date")
+    target_tz = local_tz or local_timezone()
+    announcement_utc = arxiv_announcement_at(listing_date - timedelta(days=1)).astimezone(timezone.utc)
+    local_day = announcement_utc.astimezone(target_tz).date()
+    if not (start_date <= local_day <= end_date):
+        return None
+    selected = set(categories)
+    return [
+        paper
+        for paper in papers
+        if selected.intersection((paper.get("raw") or {}).get("categories") or [])
+    ]
+
+
+def fetch_latest_arxiv_listing(*, local_tz: tzinfo | None = None) -> tuple[date | None, list[dict[str, Any]]]:
+    target_tz = local_tz or local_timezone()
+    cache_key = str(getattr(target_tz, "key", target_tz))
+    with ARXIV_LATEST_LISTING_LOCK:
+        cached_at = float(ARXIV_LATEST_LISTING_CACHE.get("fetched_at") or 0.0)
+        if (
+            ARXIV_LATEST_LISTING_CACHE.get("timezone") == cache_key
+            and time.monotonic() - cached_at < ARXIV_LATEST_LISTING_CACHE_SECONDS
+        ):
+            return ARXIV_LATEST_LISTING_CACHE.get("listing_date"), [
+                copy.deepcopy(paper) for paper in ARXIV_LATEST_LISTING_CACHE.get("papers") or []
+            ]
         response = request_with_retries(
             "GET",
-            "https://export.arxiv.org/api/query",
-            params={
-                "search_query": search_query,
-                "start": page * page_size,
-                "max_results": page_size,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            },
+            ARXIV_LATEST_LISTING_URL,
+            params={"skip": 0, "show": 2000},
+            headers={"Accept": "text/html,application/xhtml+xml"},
             timeout=ARXIV_API_TIMEOUT,
             max_retries=ARXIV_API_MAX_RETRIES,
         )
-        root = ET.fromstring(response.content)
-        entries = root.findall("atom:entry", ATOM_NS)
-        papers.extend(normalize_arxiv_entry(entry) for entry in entries)
-        if len(entries) < page_size:
-            break
-        time.sleep(3)
+        listing_date, papers = parse_arxiv_latest_listing(response.text, local_tz=target_tz)
+        ARXIV_LATEST_LISTING_CACHE.clear()
+        ARXIV_LATEST_LISTING_CACHE.update(
+            {
+                "fetched_at": time.monotonic(),
+                "timezone": cache_key,
+                "listing_date": listing_date,
+                "papers": papers,
+            }
+        )
+        return listing_date, [copy.deepcopy(paper) for paper in papers]
 
-    return papers
+
+def parse_arxiv_latest_listing(html: str, *, local_tz: tzinfo | None = None) -> tuple[date | None, list[dict[str, Any]]]:
+    soup = BeautifulSoup(html, "html.parser")
+    listing_date = arxiv_listing_date_from_soup(soup)
+    if listing_date is None:
+        return None, []
+    target_tz = local_tz or local_timezone()
+    announcement_utc = arxiv_announcement_at(listing_date - timedelta(days=1)).astimezone(timezone.utc)
+    publication_date = announcement_utc.astimezone(target_tz).date().isoformat()
+    papers: list[dict[str, Any]] = []
+    article_lists = soup.select("dl#articles")
+    if not article_lists:
+        return listing_date, []
+    for articles in article_lists:
+        section = ""
+        pending_id = ""
+        for child in articles.children:
+            tag_name = getattr(child, "name", None)
+            if tag_name == "h3":
+                heading = clean_text(child.get_text(" ", strip=True)).lower()
+                if heading.startswith("new submissions"):
+                    section = "new"
+                elif heading.startswith(("cross-lists", "cross submissions")):
+                    section = "cross"
+                elif heading.startswith(("replacements", "replacement submissions")):
+                    section = "replacement"
+                else:
+                    section = ""
+                continue
+            if tag_name == "dt":
+                abstract_link = child.select_one('a[title="Abstract"]')
+                pending_id = strip_arxiv_version(arxiv_id_from_url(str(abstract_link.get("href") or ""))) if abstract_link else ""
+                continue
+            if tag_name != "dd" or not pending_id:
+                continue
+            arxiv_id = pending_id
+            pending_id = ""
+            if section not in {"new", "cross"}:
+                continue
+            title_node = child.select_one(".list-title")
+            author_node = child.select_one(".list-authors")
+            subject_node = child.select_one(".list-subjects")
+            primary_node = child.select_one(".list-subjects .primary-subject")
+            abstract_node = child.select_one("p.mathjax")
+            comment_node = child.select_one(".list-comments")
+            journal_ref_node = child.select_one(".list-journal-ref")
+            title = descriptor_text(title_node, "Title:") or "(Untitled)"
+            subject_text = clean_text(subject_node.get_text(" ", strip=True) if subject_node else "")
+            categories = re.findall(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", subject_text)
+            primary_text = clean_text(primary_node.get_text(" ", strip=True) if primary_node else "")
+            primary_match = re.search(r"\(([A-Za-z-]+(?:\.[A-Za-z-]+)?)\)", primary_text)
+            primary_category = primary_match.group(1) if primary_match else (categories[0] if categories else "")
+            authors = [clean_text(link.get_text(" ", strip=True)) for link in (author_node.select("a") if author_node else [])]
+            papers.append(
+                {
+                    "paper_id": "arxiv_" + safe_slug(arxiv_id, 90),
+                    "doi": "",
+                    "title": normalize_publication_title(title) or "(Untitled)",
+                    "journal": ARXIV_JOURNAL_NAME,
+                    "publication_date": publication_date,
+                    "abstract": clean_text(abstract_node.get_text(" ", strip=True) if abstract_node else ""),
+                    "abstract_source": "arxiv",
+                    "url": f"https://arxiv.org/abs/{arxiv_id}",
+                    "landing_url": f"https://arxiv.org/abs/{arxiv_id}",
+                    "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
+                    "source": "arxiv",
+                    "type": "preprint",
+                    "type_crossref": "",
+                    "publisher_section": "preprint",
+                    "section_allowed": True,
+                    "raw": {
+                        "arxiv_id": arxiv_id,
+                        "versioned_arxiv_id": arxiv_id,
+                        "authors": [author for author in authors if author],
+                        "categories": categories,
+                        "primary_category": primary_category,
+                        "published": "",
+                        "updated": "",
+                        "announcement_at_utc": announcement_utc.isoformat(timespec="seconds"),
+                        "journal_ref": descriptor_text(journal_ref_node, "Journal-ref:"),
+                        "comment": descriptor_text(comment_node, "Comments:"),
+                        "metadata_source": "arxiv_latest_listing",
+                    },
+                }
+            )
+    return listing_date, papers
+
+
+def arxiv_listing_date_from_soup(soup: BeautifulSoup) -> date | None:
+    for heading in soup.select("h3"):
+        text = clean_text(heading.get_text(" ", strip=True))
+        match = re.search(r"Showing new listings for [A-Za-z]+,\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", text)
+        if not match:
+            continue
+        month_lookup = {
+            name: index
+            for index, name in enumerate(
+                [
+                    "",
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ]
+            )
+        }
+        month = month_lookup.get(match.group(2))
+        if month:
+            return date(int(match.group(3)), month, int(match.group(1)))
+    return None
+
+
+def descriptor_text(node: Any, descriptor: str) -> str:
+    if not node:
+        return ""
+    text = clean_text(node.get_text(" ", strip=True))
+    return clean_text(text[len(descriptor):]) if text.lower().startswith(descriptor.lower()) else text
+
+
+def filter_arxiv_listing_by_query(papers: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    terms = [term.lower() for term in re.findall(r"[A-Za-z0-9_+.-]+", clean_text(query)) if term]
+    if not terms:
+        return copy.deepcopy(papers)
+    matches: list[dict[str, Any]] = []
+    for paper in papers:
+        haystack = " ".join(
+            [
+                str(paper.get("title") or ""),
+                str(paper.get("abstract") or ""),
+                " ".join((paper.get("raw") or {}).get("categories") or []),
+            ]
+        ).lower()
+        if all(term in haystack for term in terms[:8]):
+            matches.append(copy.deepcopy(paper))
+    return matches
 
 
 def wait_for_arxiv_rate_limit() -> None:
