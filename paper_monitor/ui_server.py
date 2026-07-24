@@ -101,8 +101,12 @@ LIBRARY_IMPORT_JOBS: dict[str, dict[str, Any]] = {}
 LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
 MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
+AUTHOR_MONITOR_ENRICHMENT_JOBS: dict[str, dict[str, Any]] = {}
+AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK = threading.Lock()
 ACTIVE_FETCH_DATES: set[str] = set()
 ACTIVE_THEME_FETCH_DATES: set[str] = set()
+ACTIVE_AUTHOR_MONITOR_IDS: set[int] = set()
+ACTIVE_AUTHOR_MONITOR_LOCK = threading.Lock()
 THEME_SOURCE_LOCKS: dict[str, threading.Lock] = {}
 THEME_SOURCE_LOCKS_LOCK = threading.Lock()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
@@ -201,6 +205,15 @@ AUTO_SUBJECT_MONITOR_STARTUP_DELAY_SECONDS = 20
 AUTO_SUBJECT_MONITOR_POLL_SECONDS = 60
 AUTO_SUBJECT_MONITOR_RETRY_SECONDS = 15 * 60
 AUTO_SUBJECT_MONITOR_MAX_RETRIES = 3
+AUTO_AUTHOR_MONITOR_STATUS_SETTING = "auto_author_monitor_status"
+AUTO_AUTHOR_MONITOR_HOUR = 10
+AUTO_AUTHOR_MONITOR_STARTUP_DELAY_SECONDS = 30
+AUTO_AUTHOR_MONITOR_POLL_SECONDS = 5 * 60
+AUTHOR_MONITOR_BLOCK_COOLDOWN_SECONDS = 6 * 60 * 60
+AUTHOR_MONITOR_INITIAL_IMPORT_LIMIT = 5000
+AUTHOR_MONITOR_RECENT_CHECK_LIMIT = 50
+AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
+AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "PaperMonitor"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
@@ -245,6 +258,7 @@ def run_ui_server(
     threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
+    threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
@@ -380,6 +394,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/google-scholar-profiles":
                 self.handle_google_scholar_profile_search(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/author-monitor":
+                self.handle_author_monitor(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/author-monitor/enrichment/progress":
+                self.handle_author_monitor_enrichment_progress(parse_qs(parsed.query))
                 return
             if parsed.path == "/files":
                 self.handle_file(parse_qs(parsed.query))
@@ -529,6 +549,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/my-publications/add":
                 self.handle_add_my_publication(payload)
+                return
+            if parsed.path == "/api/author-monitor/add":
+                self.handle_add_author_monitor(payload)
+                return
+            if parsed.path == "/api/author-monitor/refresh":
+                self.handle_refresh_author_monitor(payload)
+                return
+            if parsed.path == "/api/author-monitor/delete":
+                self.handle_delete_author_monitor(payload)
+                return
+            if parsed.path == "/api/author-monitor/reorder":
+                self.handle_reorder_author_monitors(payload)
+                return
+            if parsed.path == "/api/author-monitor/read":
+                self.handle_mark_author_monitor_read(payload)
+                return
+            if parsed.path == "/api/author-monitor/enrich":
+                self.handle_enrich_author_monitor(payload)
                 return
             if parsed.path == "/api/my-publications/import-scholar":
                 self.handle_import_google_scholar_publications(payload)
@@ -766,6 +804,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             journal = json_setting(storage, AUTO_JOURNAL_MONITOR_STATUS_SETTING, {})
             arxiv = json_setting(storage, AUTO_ARXIV_MONITOR_STATUS_SETTING, {})
             subject = json_setting(storage, AUTO_SUBJECT_MONITOR_STATUS_SETTING, {})
+            author = json_setting(storage, AUTO_AUTHOR_MONITOR_STATUS_SETTING, {})
             subject_retry = read_auto_subject_retry_state(storage)
         finally:
             storage.close()
@@ -774,6 +813,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "journal": journal if isinstance(journal, dict) else {},
                 "arxiv": arxiv if isinstance(arxiv, dict) else {},
                 "subject": subject if isinstance(subject, dict) else {},
+                "author": author if isinstance(author, dict) else {},
                 "subject_retry": subject_retry,
                 "timezone": system_timezone_name(),
                 "checked_at": now_iso(),
@@ -1109,6 +1149,162 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar profile lookup failed: {exc}")
             return
         self.send_json({"profiles": merge_google_scholar_profiles(local_profiles, profiles, search_text, limit=20)})
+
+    def handle_author_monitor(self, query: dict[str, list[str]]) -> None:
+        author_monitor_id = int(first(query, "author_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            if first(query, "summary") == "1":
+                authors = [author_monitor_to_api(row) for row in storage.list_author_monitors()]
+                payload = {
+                    "authors": authors,
+                    "unreadCount": sum(int(item.get("unread_count") or 0) for item in authors),
+                    "checkedAt": now_iso(),
+                }
+            else:
+                payload = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+        finally:
+            storage.close()
+        self.send_json(payload)
+
+    def handle_add_author_monitor(self, payload: dict[str, Any]) -> None:
+        profile = sanitize_google_scholar_profile(payload.get("profile"))
+        if not profile.get("user_id") or not profile.get("name"):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose a Google Scholar profile first")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            existing = next(
+                (
+                    item for item in storage.list_author_monitors()
+                    if str(item.get("scholar_user_id") or "") == str(profile.get("user_id") or "")
+                ),
+                None,
+            )
+            monitor = storage.add_author_monitor(profile)
+            author_monitor_id = int(monitor.get("id") or 0)
+            needs_initial_import = not existing or storage.author_monitor_paper_count(author_monitor_id) == 0
+        finally:
+            storage.close()
+        result = (
+            refresh_author_monitor_for_db(
+                self.configured_db_path,
+                author_monitor_id,
+                initial=True,
+                force=True,
+            )
+            if needs_initial_import
+            else {"status": "existing", "added": 0}
+        )
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+        finally:
+            storage.close()
+        self.send_json({**snapshot, "refresh": result, "selectedAuthorId": author_monitor_id})
+
+    def handle_refresh_author_monitor(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        storage = Storage(self.configured_db_path)
+        try:
+            author_ids = (
+                [author_monitor_id]
+                if author_monitor_id and storage.get_author_monitor(author_monitor_id)
+                else [int(item["id"]) for item in storage.list_author_monitors()]
+            )
+        finally:
+            storage.close()
+        if author_monitor_id and not author_ids:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+            return
+        results = [
+            refresh_author_monitor_for_db(
+                self.configured_db_path,
+                current_id,
+                initial=False,
+                force=True,
+            )
+            for current_id in author_ids
+        ]
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+        finally:
+            storage.close()
+        self.send_json({**snapshot, "refreshes": results})
+
+    def handle_delete_author_monitor(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            if not storage.get_author_monitor(author_monitor_id):
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+                return
+            storage.delete_author_monitor(author_monitor_id)
+            snapshot = author_monitor_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_reorder_author_monitors(self, payload: dict[str, Any]) -> None:
+        author_ids = [
+            int(value) for value in payload.get("author_ids") or []
+            if str(value).isdigit() and int(value) > 0
+        ]
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.reorder_author_monitors(author_ids)
+            snapshot = author_monitor_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_mark_author_monitor_read(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        paper_ids = [
+            str(value) for value in payload.get("paper_ids") or []
+            if str(value or "").strip()
+        ]
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.mark_author_monitor_papers_read(
+                author_monitor_id=author_monitor_id,
+                paper_ids=paper_ids,
+            )
+            snapshot = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        active = active_author_monitor_enrichment_job(author_monitor_id=author_monitor_id)
+        if active:
+            self.send_json({"job_id": active["job_id"], "job": active})
+            return
+        job_id = create_author_monitor_enrichment_job(author_monitor_id=author_monitor_id)
+        thread = threading.Thread(
+            target=run_author_monitor_enrichment_job,
+            kwargs={
+                "job_id": job_id,
+                "db_path": self.configured_db_path,
+                "author_monitor_id": author_monitor_id,
+            },
+            daemon=True,
+        )
+        thread.start()
+        self.send_json({"job_id": job_id, "job": get_author_monitor_enrichment_job(job_id)})
+
+    def handle_author_monitor_enrichment_progress(self, query: dict[str, list[str]]) -> None:
+        job_id = first(query, "job_id") or first(query, "id")
+        job = get_author_monitor_enrichment_job(job_id)
+        if not job:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown Author Monitor enrichment job")
+            return
+        self.send_json({"job": job})
 
     def handle_add_my_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("paper")
@@ -7027,6 +7223,80 @@ def run_auto_subject_monitor_scheduler(db_path: Path) -> None:
             time.sleep(AUTO_SUBJECT_MONITOR_POLL_SECONDS)
 
 
+def author_monitor_checked_today(monitor: dict[str, Any], today: date) -> bool:
+    raw = clean_text(monitor.get("last_checked_at") or "")
+    if not raw:
+        return False
+    try:
+        checked = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if checked.tzinfo is None:
+        checked = checked.replace(tzinfo=local_timezone())
+    return checked.astimezone(local_timezone()).date() == today
+
+
+def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any]:
+    storage = Storage(db_path)
+    try:
+        authors = storage.list_author_monitors()
+    finally:
+        storage.close()
+    results: list[dict[str, Any]] = []
+    for index, author in enumerate(authors):
+        if author_monitor_checked_today(author, run_date):
+            continue
+        if author_monitor_cooldown_active(author):
+            results.append(
+                {
+                    "author_id": int(author.get("id") or 0),
+                    "status": "cooldown",
+                    "added": 0,
+                }
+            )
+            continue
+        if index:
+            time.sleep(2.0)
+        results.append(
+            refresh_author_monitor_for_db(
+                db_path,
+                int(author.get("id") or 0),
+                initial=False,
+                force=False,
+            )
+        )
+    status = {
+        "run_date": run_date.isoformat(),
+        "finished_at": now_iso(),
+        "authors": len(authors),
+        "checked": len(results),
+        "new_papers": sum(int(item.get("added") or 0) for item in results),
+        "results": results,
+    }
+    storage = Storage(db_path)
+    try:
+        storage.set_setting(
+            AUTO_AUTHOR_MONITOR_STATUS_SETTING,
+            json.dumps(status, ensure_ascii=False, sort_keys=True),
+        )
+    finally:
+        storage.close()
+    return status
+
+
+def run_auto_author_monitor_scheduler(db_path: Path) -> None:
+    time.sleep(AUTO_AUTHOR_MONITOR_STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            now = datetime.now(local_timezone())
+            if now.hour >= AUTO_AUTHOR_MONITOR_HOUR:
+                run_auto_author_monitor_once(db_path, now.date())
+            time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
+        except Exception as exc:
+            print(f"Auto Author Monitor scheduler error: {exc}")
+            time.sleep(AUTO_AUTHOR_MONITOR_POLL_SECONDS)
+
+
 def prepare_internal_page_html(html: str, base_url: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for meta in soup.select("meta[http-equiv]"):
@@ -9344,6 +9614,261 @@ def sanitize_google_scholar_profile(profile: Any) -> dict[str, Any]:
     return sanitized if sanitized["name"] or sanitized["url"] or sanitized["user_id"] or sanitized["avatar_url"] else {}
 
 
+def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        interests = json.loads(str(row.get("interests_json") or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        interests = []
+    if not isinstance(interests, list):
+        interests = []
+    return {
+        "id": int(row.get("id") or 0),
+        "user_id": clean_text(row.get("scholar_user_id") or ""),
+        "name": clean_text(row.get("name") or ""),
+        "affiliation": clean_text(row.get("affiliation") or ""),
+        "email": clean_text(row.get("email") or ""),
+        "cited_by": clean_text(row.get("cited_by") or ""),
+        "interests": [clean_text(item) for item in interests if clean_text(item)],
+        "url": clean_text(row.get("profile_url") or ""),
+        "avatar_url": clean_text(row.get("avatar_url") or ""),
+        "sort_order": int(row.get("sort_order") or 0),
+        "status": clean_text(row.get("status") or "idle"),
+        "message": clean_text(row.get("message") or ""),
+        "paper_count": int(row.get("paper_count") or 0),
+        "unread_count": int(row.get("unread_count") or 0),
+        "last_checked_at": clean_text(row.get("last_checked_at") or ""),
+        "last_success_at": clean_text(row.get("last_success_at") or ""),
+        "cooldown_until": clean_text(row.get("cooldown_until") or ""),
+    }
+
+
+def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> dict[str, Any]:
+    authors = [author_monitor_to_api(row) for row in storage.list_author_monitors()]
+    if author_monitor_id and not any(int(item["id"]) == int(author_monitor_id) for item in authors):
+        author_monitor_id = 0
+    # Keep the full local candidate set in the client so switching authors is
+    # instantaneous and never triggers another Google Scholar request.
+    papers = storage.list_author_monitor_papers()
+    papers = annotate_papers_with_library_status(storage, papers)
+    paper_payloads: list[dict[str, Any]] = []
+    for paper in papers:
+        item = paper_to_api(paper)
+        item["author_unread"] = bool(paper.get("author_unread"))
+        item["author_monitor_ids"] = [
+            int(value) for value in paper.get("author_monitor_ids") or []
+            if int(value or 0) > 0
+        ]
+        item["monitored_authors"] = [
+            clean_text(value) for value in paper.get("monitored_authors") or []
+            if clean_text(value)
+        ]
+        item["author_first_seen_at"] = clean_text(paper.get("author_first_seen_at") or "")
+        paper_payloads.append(item)
+    return {
+        "authors": authors,
+        "papers": paper_payloads,
+        "selectedAuthorId": int(author_monitor_id),
+        "unreadCount": sum(1 for paper in paper_payloads if paper.get("author_unread")),
+        "checkedAt": now_iso(),
+    }
+
+
+def scholar_candidate_key(candidate: dict[str, Any], paper: dict[str, Any]) -> str:
+    candidate_paper = candidate.get("paper") if isinstance(candidate.get("paper"), dict) else candidate
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    url = clean_text(
+        candidate_paper.get("url")
+        or candidate_paper.get("landing_url")
+        or raw.get("url")
+        or paper.get("url")
+        or ""
+    )
+    if url:
+        return url
+    return "|".join(
+        [
+            normalize_publication_title(paper.get("title") or "").lower(),
+            clean_text(paper.get("journal") or "").lower(),
+            clean_text(paper.get("publication_date") or "")[:4],
+        ]
+    )
+
+
+def existing_paper_for_author_monitor(storage: Storage, paper: dict[str, Any]) -> dict[str, Any] | None:
+    paper_id = clean_text(paper.get("paper_id") or "")
+    if paper_id:
+        existing = storage.get_paper(paper_id)
+        if existing:
+            return existing
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if doi:
+        row = storage.conn.execute(
+            "SELECT * FROM papers WHERE lower(doi) = lower(?) ORDER BY source_count DESC LIMIT 1",
+            (doi,),
+        ).fetchone()
+        if row:
+            return dict(row)
+    title = normalize_publication_title(paper.get("title") or "")
+    if not title:
+        return None
+    year = clean_text(paper.get("publication_date") or "")[:4]
+    rows = storage.conn.execute(
+        """
+        SELECT * FROM papers
+        WHERE lower(title) = lower(?)
+        ORDER BY CASE WHEN doi IS NOT NULL AND doi != '' THEN 0 ELSE 1 END,
+                 source_count DESC
+        LIMIT 8
+        """,
+        (title,),
+    ).fetchall()
+    for row in rows:
+        existing = dict(row)
+        existing_year = clean_text(existing.get("publication_date") or "")[:4]
+        if not year or not existing_year or year == existing_year:
+            return existing
+    return None
+
+
+def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None = None) -> bool:
+    raw = clean_text(monitor.get("cooldown_until") or "")
+    if not raw:
+        return False
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    current = now or datetime.now(local_timezone())
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=current.tzinfo)
+    return current < until.astimezone(current.tzinfo)
+
+
+def refresh_author_monitor_for_db(
+    db_path: Path,
+    author_monitor_id: int,
+    *,
+    initial: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    author_monitor_id = int(author_monitor_id)
+    with ACTIVE_AUTHOR_MONITOR_LOCK:
+        if author_monitor_id in ACTIVE_AUTHOR_MONITOR_IDS:
+            return {"author_id": author_monitor_id, "status": "active", "added": 0}
+        ACTIVE_AUTHOR_MONITOR_IDS.add(author_monitor_id)
+    storage = Storage(db_path)
+    try:
+        monitor = storage.get_author_monitor(author_monitor_id)
+        if not monitor:
+            return {"author_id": author_monitor_id, "status": "missing", "added": 0}
+        if author_monitor_cooldown_active(monitor):
+            return {
+                "author_id": author_monitor_id,
+                "status": "cooldown",
+                "added": 0,
+                "message": clean_text(monitor.get("message") or ""),
+                "cooldown_until": clean_text(monitor.get("cooldown_until") or ""),
+            }
+        checked_at = now_iso()
+        storage.update_author_monitor(
+            author_monitor_id,
+            status="refreshing",
+            message="Checking Google Scholar for profile updates...",
+            last_checked_at=checked_at,
+        )
+        baseline = bool(initial or storage.author_monitor_paper_count(author_monitor_id) == 0)
+        limit = AUTHOR_MONITOR_INITIAL_IMPORT_LIMIT if baseline else AUTHOR_MONITOR_RECENT_CHECK_LIMIT
+        try:
+            scholar_payload = fetch_google_scholar_profile_payload(
+                clean_text(monitor.get("profile_url") or ""),
+                limit=limit,
+                sort_by_date=not baseline,
+            )
+            candidates = scholar_payload.get("candidates") or []
+            added = 0
+            for candidate in candidates:
+                try:
+                    normalized = paper_from_publication_candidate(candidate)
+                except Exception:
+                    continue
+                existing = existing_paper_for_author_monitor(storage, normalized)
+                if existing:
+                    paper_id = clean_text(existing.get("paper_id") or "")
+                else:
+                    storage.upsert_paper(normalized)
+                    paper_id = clean_text(normalized.get("paper_id") or "")
+                if not paper_id:
+                    continue
+                inserted = storage.add_author_monitor_paper(
+                    author_monitor_id=author_monitor_id,
+                    paper_id=paper_id,
+                    scholar_key=scholar_candidate_key(candidate, normalized),
+                    scholar_title=clean_text(normalized.get("title") or ""),
+                    unread=not baseline,
+                )
+                if inserted:
+                    added += 1
+            success_at = now_iso()
+            message = (
+                f"Imported {added} existing profile publications."
+                if baseline
+                else (f"{added} new publication{'s' if added != 1 else ''} found." if added else "No new publications.")
+            )
+            storage.update_author_monitor(
+                author_monitor_id,
+                profile=scholar_payload.get("profile") or {},
+                status="success",
+                message=message,
+                last_checked_at=success_at,
+                last_success_at=success_at,
+                cooldown_until="",
+            )
+            return {
+                "author_id": author_monitor_id,
+                "status": "success",
+                "added": added,
+                "seen": len(candidates),
+                "baseline": baseline,
+                "message": message,
+            }
+        except GoogleScholarBlockedError as exc:
+            cooldown_until = (
+                datetime.now(local_timezone()) + timedelta(seconds=AUTHOR_MONITOR_BLOCK_COOLDOWN_SECONDS)
+            ).isoformat(timespec="seconds")
+            storage.update_author_monitor(
+                author_monitor_id,
+                status="cooldown",
+                message=str(exc),
+                last_checked_at=now_iso(),
+                cooldown_until=cooldown_until,
+            )
+            return {
+                "author_id": author_monitor_id,
+                "status": "cooldown",
+                "added": 0,
+                "message": str(exc),
+                "cooldown_until": cooldown_until,
+            }
+        except Exception as exc:
+            message = clean_text(str(exc)) or "Author refresh failed"
+            storage.update_author_monitor(
+                author_monitor_id,
+                status="error",
+                message=message,
+                last_checked_at=now_iso(),
+            )
+            return {
+                "author_id": author_monitor_id,
+                "status": "error",
+                "added": 0,
+                "message": message,
+            }
+    finally:
+        storage.close()
+        with ACTIVE_AUTHOR_MONITOR_LOCK:
+            ACTIVE_AUTHOR_MONITOR_IDS.discard(author_monitor_id)
+
+
 def load_my_publications_scholar_profile(storage: Storage) -> dict[str, Any]:
     raw = storage.get_setting(MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING, "")
     if not raw:
@@ -10104,11 +10629,16 @@ def fetch_google_scholar_profile_publications(profile_url: str, *, limit: int = 
     return fetch_google_scholar_profile_payload(profile_url, limit=limit)["candidates"]
 
 
-def fetch_google_scholar_profile_payload(profile_url: str, *, limit: int = 500) -> dict[str, Any]:
+def fetch_google_scholar_profile_payload(
+    profile_url: str,
+    *,
+    limit: int = 500,
+    sort_by_date: bool = False,
+) -> dict[str, Any]:
     user_id = google_scholar_user_id(profile_url)
     if not user_id:
         raise ValueError("Paste a Google Scholar profile URL that contains a user id")
-    page_size = 50
+    page_size = 100
     candidates: list[dict[str, Any]] = []
     profile: dict[str, Any] = {
         "candidate_type": "scholar-profile",
@@ -10126,10 +10656,18 @@ def fetch_google_scholar_profile_payload(profile_url: str, *, limit: int = 500) 
         if start:
             time.sleep(1.2)
         try:
+            params = {
+                "user": user_id,
+                "hl": "en",
+                "cstart": start,
+                "pagesize": min(page_size, limit - start),
+            }
+            if sort_by_date:
+                params["sortby"] = "pubdate"
             response = request_with_retries(
                 "GET",
                 "https://scholar.google.com/citations",
-                params={"user": user_id, "hl": "en", "cstart": start, "pagesize": min(page_size, limit - start)},
+                params=params,
                 headers={
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -13045,6 +13583,245 @@ def get_fetch_progress(selected: str, *, kind: str = "") -> dict[str, Any] | Non
             return dict(progress) if progress else None
         progress = FETCH_PROGRESS.get(fetch_progress_key("journal", selected)) or FETCH_PROGRESS.get(fetch_progress_key("theme", selected))
         return dict(progress) if progress else None
+
+
+def create_author_monitor_enrichment_job(*, author_monitor_id: int = 0) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+        AUTHOR_MONITOR_ENRICHMENT_JOBS[job_id] = {
+            "job_id": job_id,
+            "author_id": int(author_monitor_id or 0),
+            "status": "queued",
+            "stage": "queued",
+            "started_at": now,
+            "finished_at": "",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            "matched": 0,
+            "enriched": 0,
+            "unresolved": 0,
+            "skipped": 0,
+            "current_title": "",
+            "errors": [],
+        }
+    return job_id
+
+
+def get_author_monitor_enrichment_job(job_id: str | None) -> dict[str, Any] | None:
+    if not job_id:
+        return None
+    with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+        job = AUTHOR_MONITOR_ENRICHMENT_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def active_author_monitor_enrichment_job(*, author_monitor_id: int = 0) -> dict[str, Any] | None:
+    with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+        for job in reversed(list(AUTHOR_MONITOR_ENRICHMENT_JOBS.values())):
+            if job.get("status") not in {"queued", "running"}:
+                continue
+            # Identifier services are shared and rate limited, so Author Monitor
+            # deliberately runs only one enrichment worker at a time.
+            return dict(job)
+    return None
+
+
+def update_author_monitor_enrichment_job(job_id: str, **updates: Any) -> None:
+    with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+        job = AUTHOR_MONITOR_ENRICHMENT_JOBS.get(job_id)
+        if job:
+            job.update(updates)
+
+
+def author_monitor_enrichment_marker(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    marker = raw.get("author_monitor_enrichment")
+    return marker if isinstance(marker, dict) else {}
+
+
+def author_monitor_enrichment_recently_attempted(paper: dict[str, Any]) -> bool:
+    marker = author_monitor_enrichment_marker(paper)
+    attempted_at = clean_text(marker.get("attempted_at") or "")
+    if not attempted_at:
+        return False
+    try:
+        attempted = datetime.fromisoformat(attempted_at)
+    except ValueError:
+        return False
+    now = datetime.now(local_timezone())
+    if attempted.tzinfo is None:
+        attempted = attempted.replace(tzinfo=now.tzinfo)
+    return now - attempted.astimezone(now.tzinfo) < timedelta(days=AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS)
+
+
+def author_monitor_paper_needs_enrichment(paper: dict[str, Any]) -> bool:
+    has_identifier = bool(
+        looks_like_doi(normalize_publication_doi(str(paper.get("doi") or "")))
+        or arxiv_identifier_for_paper(paper)
+    )
+    has_abstract = bool(clean_text(paper.get("abstract") or ""))
+    return not has_identifier or not has_abstract
+
+
+def author_monitor_candidate_from_paper(paper: dict[str, Any]) -> dict[str, Any]:
+    raw = parse_raw_json(paper)
+    return {
+        "paper": {
+            "paper_id": paper.get("paper_id") or "",
+            "title": paper.get("title") or "",
+            "journal": paper.get("journal") or "",
+            "publication_date": paper.get("publication_date") or "",
+            "doi": paper.get("doi") or "",
+            "url": paper.get("url") or paper.get("landing_url") or "",
+            "landing_url": paper.get("landing_url") or paper.get("url") or "",
+            "abstract": paper.get("abstract") or "",
+            "raw": raw,
+        },
+        "raw": raw,
+    }
+
+
+def record_author_monitor_enrichment_attempt(
+    storage: Storage,
+    paper_id: str,
+    paper: dict[str, Any],
+    *,
+    status: str,
+    message: str = "",
+) -> dict[str, Any] | None:
+    current = storage.get_paper(paper_id) or paper
+    raw = parse_raw_json(current)
+    raw["author_monitor_enrichment"] = {
+        "status": status,
+        "message": clean_text(message),
+        "attempted_at": now_iso(),
+    }
+    return storage.update_paper_raw_json(paper_id, raw)
+
+
+def run_author_monitor_enrichment_job(
+    *,
+    job_id: str,
+    db_path: Path,
+    author_monitor_id: int = 0,
+) -> None:
+    storage = Storage(db_path)
+    matched = 0
+    enriched = 0
+    unresolved = 0
+    skipped = 0
+    errors: list[str] = []
+    try:
+        rows = storage.list_author_monitor_papers(int(author_monitor_id or 0))
+        pending = [
+            paper for paper in rows
+            if author_monitor_paper_needs_enrichment(paper)
+            and not author_monitor_enrichment_recently_attempted(paper)
+        ]
+        skipped = len(rows) - len(pending)
+        total = len(pending)
+        update_author_monitor_enrichment_job(
+            job_id,
+            status="running",
+            stage="identifiers",
+            total=total,
+            skipped=skipped,
+        )
+        for index, paper in enumerate(pending, start=1):
+            paper_id = clean_text(paper.get("paper_id") or "")
+            title = clean_text(paper.get("title") or paper_id or "Untitled paper")
+            update_author_monitor_enrichment_job(
+                job_id,
+                current=index,
+                current_title=title,
+                percent=max(1, min(99, round((index - 1) / max(1, total) * 100))),
+            )
+            try:
+                doi = normalize_publication_doi(str(paper.get("doi") or ""))
+                arxiv_id = arxiv_identifier_for_paper(paper)
+                normalized: dict[str, Any] | None = None
+                if looks_like_doi(doi):
+                    normalized = publication_metrics_metadata_from_doi(doi, timeout=12, max_retries=1)
+                elif arxiv_id:
+                    normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=12, max_retries=1)
+                else:
+                    normalized = resolve_google_scholar_candidate_to_identifier(
+                        author_monitor_candidate_from_paper(paper)
+                    )
+                    if normalized and looks_like_doi(normalize_publication_doi(str(normalized.get("doi") or ""))):
+                        resolved_doi = normalize_publication_doi(str(normalized.get("doi") or ""))
+                        richer = publication_metrics_metadata_from_doi(resolved_doi, timeout=12, max_retries=1)
+                        normalized = richer or normalized
+                if normalized:
+                    matched += 1
+                    merged = merge_refreshed_metadata(paper, normalized)
+                    updated = storage.refresh_paper_metadata(paper_id, merged) or paper
+                    if clean_text(updated.get("abstract") or ""):
+                        enriched += 1
+                    record_author_monitor_enrichment_attempt(
+                        storage,
+                        paper_id,
+                        updated,
+                        status="complete",
+                        message="Identifier metadata refreshed",
+                    )
+                else:
+                    unresolved += 1
+                    record_author_monitor_enrichment_attempt(
+                        storage,
+                        paper_id,
+                        paper,
+                        status="unresolved",
+                        message="No confident DOI or arXiv match",
+                    )
+            except Exception as exc:
+                unresolved += 1
+                if len(errors) < 8:
+                    errors.append(f"{title}: {exc}")
+                record_author_monitor_enrichment_attempt(
+                    storage,
+                    paper_id,
+                    paper,
+                    status="error",
+                    message=str(exc),
+                )
+            update_author_monitor_enrichment_job(
+                job_id,
+                current=index,
+                percent=max(1, min(99, round(index / max(1, total) * 100))),
+                matched=matched,
+                enriched=enriched,
+                unresolved=unresolved,
+                skipped=skipped,
+                errors=list(errors),
+            )
+            if index < total:
+                time.sleep(AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS)
+        update_author_monitor_enrichment_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            current=total,
+            percent=100,
+            matched=matched,
+            enriched=enriched,
+            unresolved=unresolved,
+            skipped=skipped,
+            errors=list(errors),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    except Exception as exc:
+        update_author_monitor_enrichment_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            errors=[str(exc)],
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    finally:
+        storage.close()
 
 
 def create_my_publication_metrics_job() -> str:
@@ -16424,7 +17201,13 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(0, 1fr);
       background: #fff;
     }
-    .app.library-mode .sidebar {
+    .app.author-mode {
+      --sidebar-width: 0px;
+      grid-template-columns: minmax(0, 1fr);
+      background: #f7f8fb;
+    }
+    .app.library-mode .sidebar,
+    .app.author-mode .sidebar {
       display: none;
     }
     .sidebar {
@@ -16738,6 +17521,10 @@ INDEX_HTML = """<!doctype html>
     .app.library-mode .main {
       padding: 42px 12px 0 30px;
       background: #fff;
+    }
+    .app.author-mode .main {
+      padding: 42px 12px 0 18px;
+      background: #f7f8fb;
     }
     .internal-browser {
       position: fixed;
@@ -17237,6 +18024,17 @@ INDEX_HTML = """<!doctype html>
       right: -14px;
       background: radial-gradient(circle at 100% 0, transparent 14px, var(--paper) 15px);
     }
+    .view-switch-dot {
+      position: absolute;
+      top: 6px;
+      right: 10px;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.16);
+    }
+    .view-switch-dot[hidden] { display: none; }
     .toolbar-actions {
       display: flex;
       gap: 8px;
@@ -20653,6 +21451,339 @@ INDEX_HTML = """<!doctype html>
       overflow: visible;
       padding-right: 0;
     }
+    .app.author-mode .papers {
+      display: block;
+      grid-row: 2;
+      height: calc(100vh - 42px);
+      transform: translateY(8px);
+      overflow: hidden;
+      padding-right: 0;
+    }
+    .app.author-mode .report-column {
+      padding-right: 0;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .app.author-mode .toolbar {
+      min-height: 0;
+      margin-bottom: 0;
+    }
+    .author-monitor-shell {
+      display: grid;
+      grid-template-columns: minmax(210px, 250px) minmax(390px, 1fr) minmax(280px, 340px);
+      grid-template-rows: minmax(0, 1fr) 26px;
+      column-gap: 12px;
+      row-gap: 0;
+      height: 100%;
+      min-height: 0;
+    }
+    .author-monitor-rail,
+    .author-monitor-list-panel,
+    .author-monitor-detail {
+      grid-row: 1;
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .author-monitor-rail {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .author-monitor-rail-head,
+    .author-monitor-list-head,
+    .author-monitor-detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 48px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .author-monitor-rail-head strong,
+    .author-monitor-list-head strong,
+    .author-monitor-detail-head strong { font-size: 14px; }
+    .author-monitor-add {
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .author-monitor-add:hover { color: var(--accent); border-color: var(--accent); }
+    .author-monitor-authors {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 8px;
+      display: grid;
+      align-content: start;
+      gap: 6px;
+    }
+    .author-monitor-author {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      padding: 8px;
+      text-align: left;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .author-monitor-author:hover { background: #f7faf9; }
+    .author-monitor-author.active {
+      border-color: rgba(15, 107, 110, 0.58);
+      background: #eef8f6;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .author-monitor-author[draggable="true"] { cursor: grab; }
+    .author-monitor-author[draggable="true"]:active { cursor: grabbing; }
+    .author-monitor-author.dragging { opacity: 0.48; }
+    .author-monitor-author.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
+    .author-monitor-author.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
+    .author-monitor-avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: #e8f1f0;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .author-monitor-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .author-monitor-author-copy { min-width: 0; }
+    .author-monitor-author-name {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .author-monitor-author-affiliation {
+      display: block;
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .author-monitor-unread {
+      min-width: 19px;
+      height: 19px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      padding: 0 5px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 750;
+    }
+    .author-monitor-list-panel {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+    .author-monitor-list-head-copy { min-width: 0; }
+    .author-monitor-list-head-copy span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .author-monitor-paper-list {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+      padding: 9px;
+      scroll-padding-block: 40%;
+    }
+    .author-paper-card {
+      position: relative;
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      outline: 0;
+      transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+    }
+    .author-paper-card:hover {
+      border-color: rgba(15, 107, 110, 0.32);
+      background: #fbfdfd;
+    }
+    .author-paper-card.report-selected {
+      border-color: rgba(15, 107, 110, 0.7);
+      background: #f5fbfa;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .author-paper-title {
+      color: #176c45;
+      font-size: 16px;
+      font-weight: 730;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
+    }
+    .author-paper-authors {
+      color: #526071;
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .author-paper-authors .author-paper-last-author {
+      color: #263648;
+      font-weight: 700;
+    }
+    .author-paper-citation-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+      font-size: 13px;
+    }
+    .author-paper-citation {
+      min-width: 0;
+      color: #315c6a;
+      font-style: italic;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+    .author-paper-date {
+      flex: 0 0 auto;
+      color: #9a6a2c;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .author-paper-card.author-unread::before {
+      content: "";
+      position: absolute;
+      top: 7px;
+      left: 7px;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.16);
+      z-index: 2;
+    }
+    .author-monitor-detail {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border: 0;
+      border-radius: 0;
+      background: #f2f2f2;
+    }
+    .author-monitor-detail .author-monitor-detail-head {
+      padding-left: 8px;
+      padding-right: 4px;
+      background: #f2f2f2;
+    }
+    .author-monitor-detail-body {
+      min-height: 0;
+      overflow-y: auto;
+      padding: 14px;
+    }
+    .author-monitor-detail-body.library-detail {
+      padding: 4px 4px 1px 8px;
+      background: #f2f2f2;
+    }
+    .author-monitor-detail-body.library-detail h3 {
+      margin-bottom: 12px;
+      font-size: 19px;
+      line-height: 1.3;
+    }
+    .author-monitor-detail-body.library-detail .bibtex-box,
+    .author-monitor-detail-body.library-detail .citation-panel,
+    .author-monitor-detail-body.library-detail .library-detail-abstract,
+    .author-monitor-detail-body.library-detail .library-detail-authors,
+    .author-monitor-detail-body.library-detail .library-detail-doi input,
+    .author-monitor-detail-body.library-detail .library-detail-figure,
+    .author-monitor-detail-body.library-detail .library-detail-figure img,
+    .author-monitor-detail-body.library-detail .semantic-detail-row,
+    .author-monitor-detail-body.library-detail .semantic-influential-card {
+      background: #f2f2f2;
+    }
+    .author-monitor-detail-body.library-detail .action,
+    .author-monitor-detail-body.library-detail .citation-source-cell {
+      border: 0;
+      background: #d9d9d9;
+      color: #2f3948;
+      box-shadow: none;
+    }
+    .author-monitor-status-bar {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      min-width: 0;
+      height: 26px;
+      border-top: 1px solid #d8d8dc;
+      background: #fff;
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      padding: 0 8px 4px;
+      font-size: 12px;
+      line-height: 12px;
+      overflow: hidden;
+    }
+    .author-monitor-empty {
+      padding: 28px 18px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+    }
+    .author-profile-results {
+      display: grid;
+      gap: 8px;
+      max-height: 360px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+    .author-profile-result {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 9px;
+    }
+    .author-profile-result-copy { min-width: 0; }
+    .author-profile-result-copy strong,
+    .author-profile-result-copy span { display: block; }
+    .author-profile-result-copy span {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    @media (max-width: 1180px) {
+      .author-monitor-shell {
+        grid-template-columns: minmax(180px, 215px) minmax(340px, 1fr) minmax(270px, 320px);
+      }
+    }
     .paper {
       position: relative;
       background: var(--panel);
@@ -21528,6 +22659,7 @@ INDEX_HTML = """<!doctype html>
           <button class="view-switch" id="sideLibraryMode" type="button">Library</button>
           <button class="view-switch" id="sideReportMode" type="button">Journal Monitor</button>
           <button class="view-switch" id="sideThemeMode" type="button">Subject Monitor</button>
+          <button class="view-switch" id="sideAuthorMode" type="button">Author Monitor</button>
         </div>
       </div>
       <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
@@ -21575,6 +22707,7 @@ INDEX_HTML = """<!doctype html>
               <button class="view-switch" id="myPublicationsMode" type="button">My Publications</button>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
               <button class="view-switch" id="themeMode" type="button">Subject Monitor</button>
+              <button class="view-switch" id="authorMode" type="button"><span>Author Monitor</span><span class="view-switch-dot" id="authorMonitorTopDot" hidden></span></button>
             </div>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
@@ -21718,6 +22851,30 @@ INDEX_HTML = """<!doctype html>
                 <button class="smallbtn" id="cancelThemeGroup" type="button">Cancel</button>
                 <button class="smallbtn" id="saveThemeGroup" type="button">Save</button>
               </div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="settings-backdrop" id="authorMonitorBackdrop" aria-hidden="true">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="authorMonitorDialogTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="authorMonitorDialogTitle">Add Monitored Author</h2>
+              <p>Find the correct Google Scholar profile using a name and optional affiliations.</p>
+            </div>
+            <button class="settings-modal-close" id="closeAuthorMonitorDialog" type="button" title="Close">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="theme-form">
+              <label>
+                <span>Name and affiliations</span>
+                <input id="authorMonitorQuery" type="text" autocomplete="off" placeholder="Name; affiliation A; affiliation B">
+              </label>
+              <div class="theme-dialog-actions">
+                <button class="smallbtn" id="searchAuthorProfiles" type="button">Find Profiles</button>
+              </div>
+              <div class="citation-settings-status" id="authorMonitorDialogStatus"></div>
+              <div class="author-profile-results" id="authorProfileResults"></div>
             </div>
           </div>
         </section>
@@ -22015,6 +23172,26 @@ INDEX_HTML = """<!doctype html>
       myPublicationJournalFilter: "",
       myPublicationKeyboardDetailToken: 0,
       myPublicationKeyboardDetailTimer: 0,
+      authorMonitors: [],
+      authorMonitorPapers: [],
+      authorMonitorSelectedId: 0,
+      authorMonitorSelectedPaperId: "",
+      authorMonitorLoaded: false,
+      authorMonitorLoading: false,
+      authorMonitorRefreshing: false,
+      authorMonitorQuery: "",
+      authorMonitorUnreadOnly: false,
+      authorMonitorProfileResults: [],
+      authorMonitorDialogBusy: false,
+      authorMonitorStatus: "",
+      authorMonitorDragId: 0,
+      authorMonitorActivityText: "",
+      authorMonitorActivityLive: false,
+      authorMonitorActivityTimer: 0,
+      authorMonitorEnrichmentJobId: "",
+      authorMonitorEnrichmentPoller: 0,
+      authorMonitorEnrichmentStarted: false,
+      authorMonitorEnrichmentPendingAuthorId: null,
       mode: "library",
       activeReportJournal: "",
       reportSelectedPaperId: "",
@@ -22050,7 +23227,8 @@ INDEX_HTML = """<!doctype html>
       showFigures: true,
       arxivCountdownTimer: null,
       autoMonitorStatus: null,
-      autoMonitorStatusTimer: 0
+      autoMonitorStatusTimer: 0,
+      authorMonitorSummaryTimer: 0
     };
 
     const $ = (id) => document.getElementById(id);
@@ -25419,6 +26597,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function activeReportPapers() {
+      if (state.mode === "author") return authorMonitorVisiblePapers();
       if (state.mode === "theme") return activeThemePapers();
       const groups = groupedReportPapers(reportVisiblePapers());
       if (!groups.length) return [];
@@ -25550,6 +26729,40 @@ INDEX_HTML = """<!doctype html>
           ? fallback
           : Math.max(0, Math.min(papers.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
         selectReportPaper(papers[nextIndex].paper_id, {scroll: true});
+        return true;
+      }
+      if (key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        openSelectedReportPaperQuickLook();
+        return true;
+      }
+      return false;
+    }
+
+    function handleAuthorMonitorKeydown(event) {
+      if (state.mode !== "author") return false;
+      const keyAliases = {"Up": "ArrowUp", "Down": "ArrowDown", "Spacebar": " "};
+      const key = keyAliases[event.key] || event.key;
+      if (key === " " && state.libraryQuickLookOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeLibraryQuickLook();
+        return true;
+      }
+      if (reportKeyboardTargetIsEditable(event.target)) return false;
+      if (event.metaKey || event.ctrlKey || event.altKey) return false;
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        const papers = authorMonitorVisiblePapers();
+        if (!papers.length) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        const currentIndex = papers.findIndex((paper) => paper.paper_id === state.authorMonitorSelectedPaperId);
+        const fallback = key === "ArrowDown" ? 0 : papers.length - 1;
+        const nextIndex = currentIndex < 0
+          ? fallback
+          : Math.max(0, Math.min(papers.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1)));
+        selectAuthorMonitorPaper(papers[nextIndex].paper_id, {scroll: true});
         return true;
       }
       if (key === " ") {
@@ -29310,7 +30523,7 @@ INDEX_HTML = """<!doctype html>
       const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors, paper) : authorsMarkup(authors, paper);
       return `
         <dl>
-          <dt>Title</dt><dd class="library-detail-title">${publicationTitleMarkup(paper.title || "Untitled paper")}</dd>
+          ${options.hideTitle ? "" : `<dt>Title</dt><dd class="library-detail-title">${publicationTitleMarkup(paper.title || "Untitled paper")}</dd>`}
           ${options.hideAuthors ? "" : `<dt>Authors</dt><dd>${authorMarkup}</dd>`}
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
@@ -33290,6 +34503,773 @@ INDEX_HTML = """<!doctype html>
       state.myPublications.forEach((item) => {
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = {...(item.paper || {}), ...paper};
       });
+      const authorIndex = state.authorMonitorPapers.findIndex((item) => item.paper_id === paperId);
+      if (authorIndex >= 0) {
+        state.authorMonitorPapers[authorIndex] = {...state.authorMonitorPapers[authorIndex], ...paper};
+      }
+    }
+
+    function applyAuthorMonitorSnapshot(data = {}) {
+      state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
+      state.authorMonitorPapers = Array.isArray(data.papers) ? data.papers : [];
+      const requestedId = Number(data.selectedAuthorId || state.authorMonitorSelectedId || 0);
+      state.authorMonitorSelectedId = requestedId && state.authorMonitors.some((item) => Number(item.id) === requestedId)
+        ? requestedId
+        : 0;
+      const visible = authorMonitorVisiblePapers();
+      if (!state.authorMonitorSelectedPaperId || !visible.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)) {
+        state.authorMonitorSelectedPaperId = visible[0]?.paper_id || "";
+      }
+      state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
+      state.authorMonitorLoaded = true;
+      updateAuthorMonitorTopDot();
+    }
+
+    function updateAuthorMonitorTopDot() {
+      const unread = state.authorMonitors.reduce((sum, author) => sum + Number(author.unread_count || 0), 0);
+      const dot = $("authorMonitorTopDot");
+      if (dot) dot.hidden = unread <= 0;
+    }
+
+    async function refreshAuthorMonitorSummary() {
+      if (state.authorMonitorLoading || state.authorMonitorRefreshing) return;
+      try {
+        const fullSnapshot = state.mode === "author";
+        const url = fullSnapshot
+          ? `/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`
+          : "/api/author-monitor?summary=1";
+        const data = await fetchJson(url, 20000);
+        if (fullSnapshot) {
+          applyAuthorMonitorSnapshot(data);
+          renderAuthorMonitor({preserveScroll: true});
+          return;
+        }
+        state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
+        if (
+          state.authorMonitorSelectedId
+          && !state.authorMonitors.some((item) => Number(item.id) === Number(state.authorMonitorSelectedId))
+        ) {
+          state.authorMonitorSelectedId = 0;
+        }
+        updateAuthorMonitorTopDot();
+      } catch (_error) {
+        // Author monitoring continues in the server even when this small badge
+        // refresh cannot reach the local API.
+      }
+    }
+
+    function startAuthorMonitorSummaryPolling() {
+      if (state.authorMonitorSummaryTimer) window.clearInterval(state.authorMonitorSummaryTimer);
+      window.setTimeout(refreshAuthorMonitorSummary, 1200);
+      state.authorMonitorSummaryTimer = window.setInterval(refreshAuthorMonitorSummary, 60000);
+    }
+
+    function selectedAuthorMonitor() {
+      return state.authorMonitors.find((item) => Number(item.id) === Number(state.authorMonitorSelectedId)) || null;
+    }
+
+    function authorMonitorVisiblePapers() {
+      const authorId = Number(state.authorMonitorSelectedId || 0);
+      return state.authorMonitorPapers.filter((paper) => {
+        const monitorIds = Array.isArray(paper.author_monitor_ids) ? paper.author_monitor_ids.map(Number) : [];
+        if (authorId && !monitorIds.includes(authorId)) return false;
+        return true;
+      });
+    }
+
+    function authorMonitorInitials(name) {
+      return scholarProfileInitials(name || "") || "AU";
+    }
+
+    function authorMonitorAvatarMarkup(author) {
+      const initials = authorMonitorInitials(author?.name || "");
+      return author?.avatar_url
+        ? `<span class="author-monitor-avatar"><img src="${escapeAttr(author.avatar_url)}" alt="${escapeAttr(author.name || "Author")}" onerror="this.parentElement.textContent='${escapeAttr(initials)}'"></span>`
+        : `<span class="author-monitor-avatar">${escapeHtml(initials)}</span>`;
+    }
+
+    function renderAuthorMonitorRail() {
+      const root = $("authorMonitorAuthors");
+      if (!root) return;
+      const totalUnread = state.authorMonitors.reduce((sum, author) => sum + Number(author.unread_count || 0), 0);
+      root.innerHTML = `
+        <button class="author-monitor-author${state.authorMonitorSelectedId ? "" : " active"}" type="button" data-author-id="0">
+          <span class="author-monitor-avatar">ALL</span>
+          <span class="author-monitor-author-copy">
+            <span class="author-monitor-author-name">All Authors</span>
+            <span class="author-monitor-author-affiliation">${state.authorMonitors.length} monitored</span>
+          </span>
+          ${totalUnread ? `<span class="author-monitor-unread">${totalUnread}</span>` : ""}
+        </button>
+        ${state.authorMonitors.map((author) => `
+          <button class="author-monitor-author${Number(author.id) === Number(state.authorMonitorSelectedId) ? " active" : ""}" type="button" data-author-id="${Number(author.id)}">
+            ${authorMonitorAvatarMarkup(author)}
+            <span class="author-monitor-author-copy">
+              <span class="author-monitor-author-name">${escapeHtml(author.name || "Unknown author")}</span>
+              <span class="author-monitor-author-affiliation">${escapeHtml(author.affiliation || author.message || "Google Scholar")}</span>
+            </span>
+            ${Number(author.unread_count || 0) ? `<span class="author-monitor-unread">${Number(author.unread_count || 0)}</span>` : ""}
+          </button>
+        `).join("")}
+      `;
+      root.querySelectorAll("[data-author-id]").forEach((button) => {
+        button.addEventListener("click", () => {
+          state.authorMonitorSelectedId = Number(button.dataset.authorId || 0);
+          const papers = authorMonitorVisiblePapers();
+          state.authorMonitorSelectedPaperId = papers[0]?.paper_id || "";
+          state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
+          renderAuthorMonitor({preserveScroll: false});
+        });
+        const author = state.authorMonitors.find((item) => Number(item.id) === Number(button.dataset.authorId || 0));
+        if (author) {
+          button.draggable = true;
+          button.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            showAuthorMonitorContextMenu(event, author);
+          });
+          button.addEventListener("dragstart", (event) => {
+            state.authorMonitorDragId = Number(author.id);
+            button.classList.add("dragging");
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", String(author.id));
+          });
+          button.addEventListener("dragover", (event) => {
+            const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
+            if (!draggedId || draggedId === Number(author.id)) return;
+            event.preventDefault();
+            const rect = button.getBoundingClientRect();
+            const after = event.clientY > rect.top + rect.height / 2;
+            button.classList.toggle("drag-over-before", !after);
+            button.classList.toggle("drag-over-after", after);
+          });
+          button.addEventListener("dragleave", () => {
+            button.classList.remove("drag-over-before", "drag-over-after");
+          });
+          button.addEventListener("drop", (event) => {
+            const draggedId = Number(state.authorMonitorDragId || event.dataTransfer.getData("text/plain") || 0);
+            if (!draggedId || draggedId === Number(author.id)) return;
+            event.preventDefault();
+            const rect = button.getBoundingClientRect();
+            reorderAuthorMonitors(draggedId, Number(author.id), event.clientY > rect.top + rect.height / 2);
+          });
+          button.addEventListener("dragend", () => {
+            state.authorMonitorDragId = 0;
+            root.querySelectorAll(".author-monitor-author").forEach((item) => {
+              item.classList.remove("dragging", "drag-over-before", "drag-over-after");
+            });
+          });
+        }
+      });
+    }
+
+    async function reorderAuthorMonitors(draggedId, targetId, after) {
+      const authors = [...state.authorMonitors];
+      const draggedIndex = authors.findIndex((item) => Number(item.id) === Number(draggedId));
+      const targetIndex = authors.findIndex((item) => Number(item.id) === Number(targetId));
+      if (draggedIndex < 0 || targetIndex < 0 || draggedIndex === targetIndex) return;
+      const [dragged] = authors.splice(draggedIndex, 1);
+      let insertion = authors.findIndex((item) => Number(item.id) === Number(targetId));
+      if (after) insertion += 1;
+      authors.splice(Math.max(0, insertion), 0, dragged);
+      state.authorMonitors = authors;
+      state.authorMonitorDragId = 0;
+      renderAuthorMonitorRail();
+      try {
+        const res = await fetch("/api/author-monitor/reorder", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_ids: authors.map((item) => Number(item.id))})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not reorder authors");
+        applyAuthorMonitorSnapshot(data);
+        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+      } catch (error) {
+        await refreshAuthorMonitorSummary();
+        if (state.mode === "author") showMonitorStatusMessage(error.message || "Could not reorder authors");
+      }
+    }
+
+    function authorMonitorSummaryText() {
+      const author = selectedAuthorMonitor();
+      if (!author) return `${state.authorMonitors.length} monitored authors`;
+      const parts = [`${Number(author.paper_count || 0)} publications`];
+      if (Number(author.unread_count || 0)) parts.push(`${Number(author.unread_count || 0)} new`);
+      if (author.last_checked_at) parts.push(`checked ${autoStatusTime(author.last_checked_at) || "recently"}`);
+      return parts.join(" · ");
+    }
+
+    function selectedAuthorMonitorPaper() {
+      return state.authorMonitorPapers.find(
+        (paper) => paper.paper_id === state.authorMonitorSelectedPaperId
+      ) || null;
+    }
+
+    function authorMonitorCompactAuthors(paper) {
+      const source = Array.isArray(paper?.full_authors) && paper.full_authors.length
+        ? paper.full_authors
+        : (Array.isArray(paper?.authors) ? paper.authors : []);
+      const authors = source
+        .map((author) => String(author || "").trim())
+        .filter((author) => author && author !== "…");
+      if (authors.length <= 6) return authors;
+      return [...authors.slice(0, 3), "…", ...authors.slice(-3)];
+    }
+
+    function authorMonitorAuthorsMarkup(paper) {
+      const authors = authorMonitorCompactAuthors(paper);
+      if (!authors.length) return `<span>Authors unavailable</span>`;
+      const lastIndex = authors.length - 1;
+      return authors.map((author, index) => {
+        if (author === "…") return `<span>…</span>`;
+        const className = index === lastIndex ? "author-paper-last-author" : "";
+        return `<span class="${className}">${escapeHtml(author)}</span>`;
+      }).join(`<span>, </span>`);
+    }
+
+    function authorMonitorCitationText(paper) {
+      return String(paper?.citation_label || paper?.journal || "").trim() || "Publication details unavailable";
+    }
+
+    function renderAuthorMonitorPaperCard(paper) {
+      const article = document.createElement("article");
+      const selected = paper.paper_id === state.authorMonitorSelectedPaperId;
+      article.className = `author-paper-card${selected ? " report-selected" : ""}${paper.author_unread ? " author-unread" : ""}`;
+      article.dataset.paperId = paper.paper_id || "";
+      article.tabIndex = -1;
+      article.setAttribute("role", "option");
+      article.setAttribute("aria-selected", selected ? "true" : "false");
+      article.innerHTML = `
+        <div class="author-paper-title">${publicationTitleMarkup(paper.title || "Untitled paper")}</div>
+        <div class="author-paper-authors">${authorMonitorAuthorsMarkup(paper)}</div>
+        <div class="author-paper-citation-row">
+          <span class="author-paper-citation">${escapeHtml(authorMonitorCitationText(paper))}</span>
+          <time class="author-paper-date" datetime="${escapeAttr(paper.publication_date || "")}">${escapeHtml(paper.publication_date || "")}</time>
+        </div>
+      `;
+      article.addEventListener("click", () => selectAuthorMonitorPaper(paper.paper_id));
+      return article;
+    }
+
+    function authorMonitorActivityStatusClass() {
+      const base = "library-activity-status";
+      if (!state.authorMonitorActivityText) return base;
+      if (state.authorMonitorActivityLive) return `${base} live`;
+      if (/failed|could not|error/i.test(state.authorMonitorActivityText)) return `${base} err`;
+      return `${base} ok`;
+    }
+
+    function updateAuthorMonitorActivityStatus(text = "", options = {}) {
+      if (state.authorMonitorActivityTimer) {
+        window.clearTimeout(state.authorMonitorActivityTimer);
+        state.authorMonitorActivityTimer = 0;
+      }
+      state.authorMonitorActivityText = text;
+      state.authorMonitorActivityLive = Boolean(options.live);
+      const status = $("authorMonitorActivityStatus");
+      if (status) {
+        status.textContent = text;
+        status.className = authorMonitorActivityStatusClass();
+      }
+      if (text && !options.live && options.clear !== false) {
+        state.authorMonitorActivityTimer = window.setTimeout(() => {
+          state.authorMonitorActivityText = "";
+          state.authorMonitorActivityLive = false;
+          const current = $("authorMonitorActivityStatus");
+          if (current) {
+            current.textContent = "";
+            current.className = authorMonitorActivityStatusClass();
+          }
+        }, Number(options.delay || 2200));
+      }
+    }
+
+    function authorMonitorEnrichmentProgressText(job) {
+      const total = Number(job?.total || 0);
+      const current = Number(job?.current || 0);
+      const title = String(job?.current_title || "").trim();
+      if (!total) return "Checking imported-paper metadata...";
+      return `Finding identifiers and abstracts ${Math.min(current, total)} / ${total}${title ? ` · ${title}` : ""}`;
+    }
+
+    async function pollAuthorMonitorEnrichment(jobId) {
+      if (!jobId) return;
+      if (state.authorMonitorEnrichmentPoller) {
+        window.clearTimeout(state.authorMonitorEnrichmentPoller);
+        state.authorMonitorEnrichmentPoller = 0;
+      }
+      try {
+        const res = await fetch(`/api/author-monitor/enrichment/progress?job_id=${encodeURIComponent(jobId)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not read metadata progress");
+        const job = data.job || {};
+        if (["queued", "running"].includes(job.status)) {
+          updateAuthorMonitorActivityStatus(authorMonitorEnrichmentProgressText(job), {live: true, clear: false});
+          state.authorMonitorEnrichmentPoller = window.setTimeout(
+            () => pollAuthorMonitorEnrichment(jobId),
+            700
+          );
+          return;
+        }
+        state.authorMonitorEnrichmentJobId = "";
+        if (job.status === "completed") {
+          const matched = Number(job.matched || 0);
+          const unresolved = Number(job.unresolved || 0);
+          const message = Number(job.total || 0)
+            ? `Metadata complete · ${matched} matched${unresolved ? ` · ${unresolved} unresolved` : ""}`
+            : "Imported-paper metadata is up to date.";
+          updateAuthorMonitorActivityStatus(message, {live: false});
+          const snapshotRes = await fetch(`/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`);
+          const snapshot = await snapshotRes.json();
+          if (snapshotRes.ok) {
+            applyAuthorMonitorSnapshot(snapshot);
+            if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+          }
+          const pendingAuthorId = state.authorMonitorEnrichmentPendingAuthorId;
+          state.authorMonitorEnrichmentPendingAuthorId = null;
+          if (pendingAuthorId !== null) startAuthorMonitorEnrichment(pendingAuthorId);
+        } else {
+          const message = Array.isArray(job.errors) && job.errors.length
+            ? job.errors[0]
+            : "Author metadata enrichment failed";
+          updateAuthorMonitorActivityStatus(message, {live: false});
+        }
+      } catch (error) {
+        state.authorMonitorEnrichmentJobId = "";
+        updateAuthorMonitorActivityStatus(error.message || "Author metadata enrichment failed", {live: false});
+      }
+    }
+
+    async function startAuthorMonitorEnrichment(authorId = state.authorMonitorSelectedId) {
+      if (state.authorMonitorEnrichmentJobId) {
+        state.authorMonitorEnrichmentPendingAuthorId = Number(authorId || 0);
+        return;
+      }
+      state.authorMonitorEnrichmentStarted = true;
+      updateAuthorMonitorActivityStatus("Preparing imported-paper metadata...", {live: true, clear: false});
+      try {
+        const res = await fetch("/api/author-monitor/enrich", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_id: Number(authorId || 0)})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not start metadata enrichment");
+        state.authorMonitorEnrichmentJobId = String(data.job_id || "");
+        await pollAuthorMonitorEnrichment(state.authorMonitorEnrichmentJobId);
+      } catch (error) {
+        state.authorMonitorEnrichmentJobId = "";
+        updateAuthorMonitorActivityStatus(error.message || "Could not start metadata enrichment", {live: false});
+      }
+    }
+
+    function renderAuthorMonitorPaperDetail() {
+      const root = $("authorMonitorDetailBody");
+      if (!root) return;
+      const paper = selectedAuthorMonitorPaper();
+      if (!paper) {
+        root.innerHTML = `<div class="author-monitor-empty">Select a paper to show its details.</div>`;
+        return;
+      }
+      const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
+        ? paper.full_authors
+        : (Array.isArray(paper.authors) ? paper.authors : []);
+      root.innerHTML = `
+        <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
+        ${libraryDetailFigureMarkup(paper)}
+        <div class="actions">
+          ${paper.merged_pdf_path ? `<button class="action" data-action="author-preview-pdf">Open in Preview</button>` : ""}
+          <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download Again" : "Download PDF"}</button>
+          ${paper.url ? `<button class="action" data-action="author-open-page">Open Page</button>` : ""}
+          ${paper.google_scholar_url ? `<button class="action" data-action="author-open-scholar">Google Scholar</button>` : ""}
+        </div>
+        <div class="library-detail-status" id="authorMonitorDetailStatus"></div>
+        ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: false, hideTitle: true})}
+        ${citationMetricsMarkup(paper)}
+        ${libraryDetailAbstractMarkup(paper)}
+        ${pubmedMarkup(paper.pubmed || {})}
+        <div class="library-reference-head">
+          <strong>BibTeX</strong>
+          <button class="action" data-action="author-copy-bibtex" data-copy-button data-default-label="Copy Code">Copy Code</button>
+        </div>
+        <pre class="bibtex-box">${escapeHtml(paper.bibtex || "")}</pre>
+        <div class="library-reference-head">
+          <strong>Nature Reference</strong>
+          <button class="action" data-action="author-copy-reference" data-copy-button data-default-label="Copy Reference">Copy Reference</button>
+        </div>
+        <div class="bibtex-box nature-reference-box">${natureReferenceMarkup(paper)}</div>
+      `;
+      root.querySelector('[data-action="author-preview-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
+      root.querySelector('[data-action="author-download-pdf"]')?.addEventListener("click", () => downloadAuthorMonitorPdf(paper));
+      root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openUrlExternally(paper.url));
+      root.querySelector('[data-action="author-open-scholar"]')?.addEventListener("click", () => openUrlExternally(paper.google_scholar_url));
+      root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
+      root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
+      wireCitationSourceSelector(root);
+      wireSemanticInfluentialCitations(root);
+      hydrateLibraryDetailFigureIfNeeded(paper);
+    }
+
+    async function downloadAuthorMonitorPdf(paper) {
+      const status = $("authorMonitorDetailStatus");
+      const replacing = Boolean(paper.merged_pdf_path);
+      updateAuthorMonitorActivityStatus(
+        replacing ? "Refreshing selected paper PDF..." : "Downloading selected paper PDF...",
+        {live: true, clear: false}
+      );
+      if (status) {
+        status.textContent = replacing ? "Refreshing PDF..." : "Downloading PDF...";
+        status.className = "library-detail-status";
+      }
+      try {
+        const data = await requestPaperPdfDownload({
+          paper_id: paper.paper_id,
+          force: replacing
+        });
+        updatePaperState(paper.paper_id, data.paper);
+        updateAuthorMonitorActivityStatus(replacing ? "PDF refreshed." : "PDF downloaded.", {live: false});
+        if (status) {
+          status.textContent = replacing ? "PDF refreshed" : "PDF downloaded";
+          status.className = "library-detail-status ok";
+        }
+        renderAuthorMonitorPaperDetail();
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "PDF download failed", {live: false});
+        if (status) {
+          status.textContent = error.message || "Download failed";
+          status.className = "library-detail-status err";
+        }
+      }
+    }
+
+    function selectAuthorMonitorPaper(paperId, options = {}) {
+      if (!paperId) return;
+      const followSelection = state.libraryQuickLookOpen;
+      state.authorMonitorSelectedPaperId = paperId;
+      state.reportSelectedPaperId = paperId;
+      document.querySelectorAll(".author-monitor-paper-list .author-paper-card").forEach((article) => {
+        const selected = article.dataset.paperId === paperId;
+        article.classList.toggle("report-selected", selected);
+        article.setAttribute("aria-selected", selected ? "true" : "false");
+      });
+      renderAuthorMonitorPaperDetail();
+      const paper = selectedAuthorMonitorPaper();
+      if (paper?.author_unread) markAuthorMonitorPaperRead(paper);
+      if (options.scroll) {
+        document.querySelector(`.author-monitor-paper-list .author-paper-card[data-paper-id="${CSS.escape(paperId)}"]`)
+          ?.scrollIntoView({block: "nearest"});
+      }
+      if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
+    }
+
+    async function markAuthorMonitorPaperRead(paper) {
+      if (!paper?.paper_id || !paper.author_unread) return;
+      paper.author_unread = false;
+      const monitorIds = Array.isArray(paper.author_monitor_ids) ? paper.author_monitor_ids.map(Number) : [];
+      state.authorMonitors.forEach((author) => {
+        if (monitorIds.includes(Number(author.id))) {
+          author.unread_count = Math.max(0, Number(author.unread_count || 0) - 1);
+        }
+      });
+      document.querySelector(`.author-monitor-paper-list .author-paper-card[data-paper-id="${CSS.escape(paper.paper_id)}"]`)
+        ?.classList.remove("author-unread");
+      renderAuthorMonitorRail();
+      updateAuthorMonitorTopDot();
+      try {
+        await fetch("/api/author-monitor/read", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            author_id: 0,
+            paper_ids: [paper.paper_id]
+          })
+        });
+      } catch (_) {
+      }
+    }
+
+    function renderAuthorMonitor(options = {}) {
+      if (state.mode !== "author") return;
+      const root = $("papers");
+      const previousScroll = options.preserveScroll
+        ? Number(document.querySelector(".author-monitor-paper-list")?.scrollTop || 0)
+        : 0;
+      delete root.dataset.monitorMode;
+      delete root.dataset.monitorSignature;
+      root.classList.remove("library-view");
+      $("libraryControls").classList.remove("open");
+      $("reportTabs").classList.remove("open");
+      $("reportTabs").innerHTML = "";
+      $("summary").textContent = "";
+      $("autoUpdateStatus").textContent = "";
+      clearFetchProgressDisplay();
+      clearMonitorStatusDisplay();
+      $("reportTitle").textContent = "Author Monitor";
+      const selected = selectedAuthorMonitor();
+      root.innerHTML = `
+        <div class="author-monitor-shell">
+          <aside class="author-monitor-rail">
+            <div class="author-monitor-rail-head">
+              <strong>Monitored Authors</strong>
+              <button class="author-monitor-add" id="openAuthorMonitorDialog" type="button" title="Add monitored author">+</button>
+            </div>
+            <div class="author-monitor-authors" id="authorMonitorAuthors"></div>
+          </aside>
+          <section class="author-monitor-list-panel">
+            <div class="author-monitor-list-head">
+              <div class="author-monitor-list-head-copy">
+                <strong>${escapeHtml(selected?.name || "All Authors")}</strong>
+                <span>${escapeHtml(authorMonitorSummaryText())}</span>
+              </div>
+              ${selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(selected.message || "")}">Paused</span>` : ""}
+            </div>
+            <div class="author-monitor-paper-list" id="authorMonitorPaperList"></div>
+          </section>
+          <aside class="author-monitor-detail">
+            <div class="author-monitor-detail-head"><strong>Paper Details</strong></div>
+            <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
+          </aside>
+          <div class="author-monitor-status-bar">
+            <span class="${authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus">${escapeHtml(state.authorMonitorActivityText || "")}</span>
+          </div>
+        </div>
+      `;
+      $("openAuthorMonitorDialog")?.addEventListener("click", openAuthorMonitorDialog);
+      renderAuthorMonitorRail();
+      const list = $("authorMonitorPaperList");
+      const papers = authorMonitorVisiblePapers();
+      if (!state.authorMonitorSelectedPaperId || !papers.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)) {
+        state.authorMonitorSelectedPaperId = papers[0]?.paper_id || "";
+      }
+      state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
+      if (!state.authorMonitors.length) {
+        list.innerHTML = `<div class="author-monitor-empty">Add a Google Scholar profile to begin monitoring an author.</div>`;
+      } else if (!papers.length) {
+        list.innerHTML = `<div class="author-monitor-empty">${state.authorMonitorUnreadOnly ? "No unread papers match this view." : "No monitored papers match this view."}</div>`;
+      } else {
+        requestKatexForPapers(papers);
+        const fragment = document.createDocumentFragment();
+        papers.forEach((paper) => {
+          fragment.appendChild(renderAuthorMonitorPaperCard(paper));
+        });
+        list.appendChild(fragment);
+        list.scrollTop = previousScroll;
+      }
+      renderAuthorMonitorPaperDetail();
+      updateAuthorMonitorTopDot();
+    }
+
+    async function openAuthorMonitor() {
+      state.mode = "author";
+      closeLibraryQuickLook();
+      closeAnalysis();
+      stopArxivUpdateCountdown();
+      setPrimaryView("author");
+      if (!state.authorMonitorLoaded) {
+        state.authorMonitorLoading = true;
+        $("papers").innerHTML = `<div class="empty">Loading Author Monitor...</div>`;
+      } else {
+        renderAuthorMonitor();
+      }
+      updateAuthorMonitorActivityStatus("Loading Author Monitor...", {live: true, clear: false});
+      try {
+        const res = await fetch(`/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load Author Monitor");
+        applyAuthorMonitorSnapshot(data);
+        updateAuthorMonitorActivityStatus("Author Monitor loaded.", {live: false});
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "Could not load Author Monitor", {live: false});
+      } finally {
+        state.authorMonitorLoading = false;
+      }
+      if (state.mode === "author") renderAuthorMonitor();
+      if (!state.authorMonitorEnrichmentStarted && state.authorMonitors.length) {
+        startAuthorMonitorEnrichment(state.authorMonitorSelectedId);
+      }
+    }
+
+    function openAuthorMonitorDialog() {
+      const backdrop = $("authorMonitorBackdrop");
+      if (!backdrop) return;
+      state.authorMonitorProfileResults = [];
+      state.authorMonitorStatus = "";
+      $("authorMonitorQuery").value = "";
+      $("authorProfileResults").innerHTML = "";
+      $("authorMonitorDialogStatus").textContent = "";
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      window.setTimeout(() => $("authorMonitorQuery")?.focus(), 0);
+    }
+
+    function closeAuthorMonitorDialog() {
+      const backdrop = $("authorMonitorBackdrop");
+      backdrop?.classList.remove("open");
+      backdrop?.setAttribute("aria-hidden", "true");
+    }
+
+    function renderAuthorProfileResults() {
+      const root = $("authorProfileResults");
+      if (!root) return;
+      root.innerHTML = state.authorMonitorProfileResults.map((profile, index) => `
+        <div class="author-profile-result">
+          ${authorMonitorAvatarMarkup(profile)}
+          <div class="author-profile-result-copy">
+            <strong>${escapeHtml(profile.name || "Unknown author")}</strong>
+            <span>${escapeHtml(profile.affiliation || profile.email || "Google Scholar profile")}</span>
+            ${profile.interests?.length ? `<span>${escapeHtml(profile.interests.slice(0, 4).join(" · "))}</span>` : ""}
+          </div>
+          <button class="smallbtn" type="button" data-add-author-profile="${index}">Monitor</button>
+        </div>
+      `).join("");
+      root.querySelectorAll("[data-add-author-profile]").forEach((button) => {
+        button.addEventListener("click", () => addAuthorMonitorProfile(
+          state.authorMonitorProfileResults[Number(button.dataset.addAuthorProfile || 0)]
+        ));
+      });
+    }
+
+    async function searchAuthorMonitorProfiles() {
+      const query = String($("authorMonitorQuery")?.value || "").trim();
+      if (!query || state.authorMonitorDialogBusy) return;
+      const status = $("authorMonitorDialogStatus");
+      state.authorMonitorDialogBusy = true;
+      $("searchAuthorProfiles").disabled = true;
+      status.textContent = "Searching Google Scholar profiles...";
+      status.className = "citation-settings-status";
+      try {
+        const res = await fetch(`/api/google-scholar-profiles?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Profile search failed");
+        state.authorMonitorProfileResults = data.profiles || [];
+        status.textContent = state.authorMonitorProfileResults.length
+          ? "Choose the correct profile."
+          : "No matching Google Scholar profiles were found.";
+        renderAuthorProfileResults();
+      } catch (error) {
+        status.textContent = error.message || "Profile search failed";
+        status.className = "citation-settings-status err";
+      } finally {
+        state.authorMonitorDialogBusy = false;
+        $("searchAuthorProfiles").disabled = false;
+      }
+    }
+
+    async function addAuthorMonitorProfile(profile) {
+      if (!profile || state.authorMonitorDialogBusy) return;
+      const status = $("authorMonitorDialogStatus");
+      state.authorMonitorDialogBusy = true;
+      updateAuthorMonitorActivityStatus(
+        `Importing ${profile.name || "author"} from Google Scholar...`,
+        {live: true, clear: false}
+      );
+      status.textContent = `Importing ${profile.name || "author"} publications as the initial baseline...`;
+      status.className = "citation-settings-status";
+      $("authorProfileResults")?.querySelectorAll("button").forEach((button) => button.disabled = true);
+      try {
+        const res = await fetch("/api/author-monitor/add", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({profile})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not add monitored author");
+        applyAuthorMonitorSnapshot(data);
+        state.authorMonitorSelectedId = Number(data.selectedAuthorId || state.authorMonitorSelectedId || 0);
+        closeAuthorMonitorDialog();
+        if (state.mode === "author") renderAuthorMonitor();
+        updateAuthorMonitorActivityStatus("Scholar profile imported. Preparing paper metadata...", {live: true, clear: false});
+        startAuthorMonitorEnrichment(state.authorMonitorSelectedId);
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "Could not add monitored author", {live: false});
+        status.textContent = error.message || "Could not add monitored author";
+        status.className = "citation-settings-status err";
+      } finally {
+        state.authorMonitorDialogBusy = false;
+        $("authorProfileResults")?.querySelectorAll("button").forEach((button) => button.disabled = false);
+      }
+    }
+
+    async function refreshAuthorMonitor(authorId = state.authorMonitorSelectedId) {
+      if (state.authorMonitorRefreshing) return;
+      state.authorMonitorRefreshing = true;
+      const selectedId = Number(authorId || 0);
+      const selectedName = state.authorMonitors.find((author) => Number(author.id) === selectedId)?.name || "authors";
+      updateAuthorMonitorActivityStatus(
+        `Checking ${selectedName} on Google Scholar...`,
+        {live: true, clear: false}
+      );
+      const refreshButton = $("refreshAuthorMonitor");
+      const refreshAllButton = $("refreshAllAuthors");
+      if (refreshButton) refreshButton.disabled = true;
+      if (refreshAllButton) refreshAllButton.disabled = true;
+      try {
+        const res = await fetch("/api/author-monitor/refresh", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_id: selectedId})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Author refresh failed");
+        applyAuthorMonitorSnapshot(data);
+        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        updateAuthorMonitorActivityStatus("Scholar check complete. Updating paper metadata...", {live: true, clear: false});
+        startAuthorMonitorEnrichment(selectedId);
+      } catch (error) {
+        state.authorMonitorStatus = error.message || "Author refresh failed";
+        updateAuthorMonitorActivityStatus(state.authorMonitorStatus, {live: false});
+        if (state.mode === "author") showMonitorStatusMessage(state.authorMonitorStatus);
+      } finally {
+        state.authorMonitorRefreshing = false;
+        if (refreshButton) refreshButton.disabled = false;
+        if (refreshAllButton) refreshAllButton.disabled = false;
+      }
+    }
+
+    async function deleteAuthorMonitor(author) {
+      if (!author?.id) return;
+      if (!window.confirm(`Remove ${author.name || "this author"} from Author Monitor? Papers, PDFs, and Library items will be kept.`)) return;
+      updateAuthorMonitorActivityStatus(`Removing ${author.name || "author"} from Author Monitor...`, {live: true, clear: false});
+      const res = await fetch("/api/author-monitor/delete", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({author_id: Number(author.id)})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not remove monitored author");
+      state.authorMonitorSelectedId = 0;
+      applyAuthorMonitorSnapshot(data);
+      if (state.mode === "author") renderAuthorMonitor();
+      updateAuthorMonitorActivityStatus("Author removed from monitor.", {live: false});
+    }
+
+    function showAuthorMonitorContextMenu(event, author) {
+      hideThemeContextMenu();
+      const menu = document.createElement("div");
+      menu.className = "theme-context-menu";
+      menu.innerHTML = `
+        <button type="button" data-action="refresh-author">Refresh This Author</button>
+        <button type="button" data-action="open-author-profile">Open Google Scholar</button>
+        <button type="button" class="danger" data-action="remove-author">Remove from Monitor</button>
+      `;
+      document.body.appendChild(menu);
+      menu.addEventListener("mousedown", (menuEvent) => menuEvent.stopPropagation());
+      menu.addEventListener("click", (menuEvent) => {
+        const button = menuEvent.target?.closest?.("[data-action]");
+        if (!button) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+        hideThemeContextMenu();
+        if (button.dataset.action === "refresh-author") refreshAuthorMonitor(Number(author.id));
+        if (button.dataset.action === "open-author-profile") openUrlExternally(author.url);
+        if (button.dataset.action === "remove-author") {
+          deleteAuthorMonitor(author).catch((error) => window.alert(error.message || "Could not remove author"));
+        }
+      });
+      const width = menu.offsetWidth || 170;
+      const height = menu.offsetHeight || 98;
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
     }
 
     function renderPaper(paper) {
@@ -33864,6 +35844,7 @@ INDEX_HTML = """<!doctype html>
 
     function renderCurrentPaperSurface(options = {}) {
       if (state.mode === "library") renderActiveLibraryTab();
+      else if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
       else if (state.mode === "theme") renderThemeMonitor();
       else renderReport();
       restoreMonitorViewport(options.monitorViewport);
@@ -35895,7 +37876,7 @@ INDEX_HTML = """<!doctype html>
         const arxivFinished = autoStatusTime(arxiv.finished_at);
         if (arxivFinished) parts.push(`arXiv ${String(arxiv.status || "checked")} ${arxivFinished}`);
         warning = Boolean(pending || incomplete);
-      } else {
+      } else if (state.mode === "theme") {
         const subject = data.subject || {};
         const retryItems = Array.isArray(data.subject_retry?.items) ? data.subject_retry.items : [];
         const pending = retryItems.filter((item) => !item?.exhausted).length;
@@ -35943,7 +37924,7 @@ INDEX_HTML = """<!doctype html>
     function setPrimaryView(view) {
       const isLibrarySurface = view === "library" || view === "my-publications";
       const app = document.querySelector(".app");
-      const switchingToMonitor = ["report", "theme"].includes(view) && !app?.classList.contains(`${view}-mode`);
+      const switchingToMonitor = ["report", "theme", "author"].includes(view) && !app?.classList.contains(`${view}-mode`);
       const paperRoot = $("papers");
       const renderedMonitorMode = paperRoot?.dataset.monitorMode || "";
       if (["report", "theme"].includes(renderedMonitorMode) && renderedMonitorMode !== view) {
@@ -35956,17 +37937,29 @@ INDEX_HTML = """<!doctype html>
       app?.classList.toggle("library-mode", isLibrarySurface);
       app?.classList.toggle("report-mode", view === "report");
       app?.classList.toggle("theme-mode", view === "theme");
+      app?.classList.toggle("author-mode", view === "author");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
       $("themeMode")?.classList.toggle("active", view === "theme");
+      $("authorMode")?.classList.toggle("active", view === "author");
       $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
       $("sideThemeMode")?.classList.toggle("active", view === "theme");
+      $("sideAuthorMode")?.classList.toggle("active", view === "author");
       $("primaryViewSwitcher")?.classList.remove("hidden");
       $("sidebarViewSwitcher")?.classList.remove("open");
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
-	      $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
+      $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
+      $("authorToolbarActions")?.classList.toggle("hidden", view !== "author");
+      if (view === "author") {
+        const figureToggle = $("authorFigureToggle");
+        if (figureToggle) figureToggle.checked = Boolean(state.showFigures);
+        const unreadToggle = $("authorUnreadOnly");
+        if (unreadToggle) unreadToggle.checked = Boolean(state.authorMonitorUnreadOnly);
+        const search = $("authorMonitorSearch");
+        if (search && search.value !== state.authorMonitorQuery) search.value = state.authorMonitorQuery;
+      }
 	      updateLibrarySearchTools();
 	      updateReportRefreshButton();
 	      updateThemeFetchButton();
@@ -36017,6 +38010,9 @@ INDEX_HTML = """<!doctype html>
     $("themeMode").addEventListener("click", () => openThemeMonitor().catch((error) => {
       showMonitorStatusMessage(error.message);
     }));
+    $("authorMode").addEventListener("click", () => openAuthorMonitor().catch((error) => {
+      showMonitorStatusMessage(error.message);
+    }));
     $("libraryMode").addEventListener("click", loadLibrary);
     $("myPublicationsMode").addEventListener("click", () => {
       loadMyPublications().catch((error) => {
@@ -36027,6 +38023,9 @@ INDEX_HTML = """<!doctype html>
       showMonitorStatusMessage(error.message);
     }));
     $("sideThemeMode").addEventListener("click", () => openThemeMonitor().catch((error) => {
+      showMonitorStatusMessage(error.message);
+    }));
+    $("sideAuthorMode").addEventListener("click", () => openAuthorMonitor().catch((error) => {
       showMonitorStatusMessage(error.message);
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
@@ -36095,6 +38094,37 @@ INDEX_HTML = """<!doctype html>
     $("themeZenodoToggle")?.addEventListener("change", (event) => {
       state.showThemeZenodo = Boolean(event.target.checked);
       renderThemeMonitor();
+    });
+    $("refreshAuthorMonitor")?.addEventListener("click", () => refreshAuthorMonitor());
+    $("refreshAllAuthors")?.addEventListener("click", () => refreshAuthorMonitor(0));
+    $("authorMonitorSearch")?.addEventListener("input", (event) => {
+      state.authorMonitorQuery = event.target.value || "";
+      renderAuthorMonitor({preserveScroll: false});
+    });
+    $("authorUnreadOnly")?.addEventListener("change", (event) => {
+      state.authorMonitorUnreadOnly = Boolean(event.target.checked);
+      renderAuthorMonitor({preserveScroll: false});
+    });
+    $("authorFigureToggle")?.addEventListener("change", (event) => {
+      state.showFigures = Boolean(event.target.checked);
+      const reportToggle = $("figureToggle");
+      if (reportToggle) reportToggle.checked = state.showFigures;
+      if (!state.showFigures) {
+        state.figureQueue = [];
+        state.queuedFigureIds.clear();
+      }
+      renderAuthorMonitor({preserveScroll: true});
+    });
+    $("closeAuthorMonitorDialog")?.addEventListener("click", closeAuthorMonitorDialog);
+    $("searchAuthorProfiles")?.addEventListener("click", searchAuthorMonitorProfiles);
+    $("authorMonitorQuery")?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        searchAuthorMonitorProfiles();
+      }
+    });
+    $("authorMonitorBackdrop")?.addEventListener("click", (event) => {
+      if (event.target === $("authorMonitorBackdrop")) closeAuthorMonitorDialog();
     });
     $("themeGroupSelect")?.addEventListener("change", (event) => { state.themeGroup = event.target.value || "ALL"; });
     $("themeFromDate")?.addEventListener("change", (event) => { state.themeFromDate = event.target.value || state.themeFromDate; });
@@ -36167,11 +38197,18 @@ INDEX_HTML = """<!doctype html>
       if (handleTextClipboardShortcut(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (handleReportKeydown(event)) return;
+      if (handleAuthorMonitorKeydown(event)) return;
       if (event.key !== "Escape") return;
       closeLibraryAddMenus();
       closePublicationAuthorMenu();
       closePublicationExportMenu();
       closeAuthorAffiliationTooltip();
+      if ($("authorMonitorBackdrop")?.classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeAuthorMonitorDialog();
+        return;
+      }
       if ($("libraryNavBackdrop").classList.contains("open")) {
         event.preventDefault();
         event.stopPropagation();
@@ -36266,6 +38303,7 @@ INDEX_HTML = """<!doctype html>
     });
     window.addEventListener("katex-ready", () => {
       if (state.mode === "report") renderReport();
+      if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
     });
     window.addEventListener("scroll", (event) => {
       if (!event.target?.closest?.(".library-add-menu")) closeLibraryAddMenus();
@@ -36361,6 +38399,7 @@ INDEX_HTML = """<!doctype html>
         }).then((libraryLoaded) => {
           if (libraryLoaded !== false) scheduleMyPublicationsPrefetch();
         });
+      startAuthorMonitorSummaryPolling();
       window.setInterval(() => {
         const currentTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
         if (currentTimeZone !== initialBrowserTimeZone) window.location.reload();

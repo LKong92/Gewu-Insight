@@ -1,19 +1,21 @@
 # PROJECT_STATE.md
-
 ## Current handoff
-
 - Repo: `/Users/lingyuan/PaperMonitor-20260516`
 - App launcher: `Daiqo.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current `main` includes the loader-based folder import workflow and the macOS app local-networking launcher fix.
+- Current worktree includes the new Author Monitor; unrelated local journal configuration and generated reports may also be present.
 
 ## Completed work
 
-1. Analysis queue
-   - Processed the queued Codex analysis job for the Nature Physics paper.
-   - Wrote Chinese analysis note under `reports/analyses/`.
-   - Completed the queue job and updated SQLite.
+1. Author Monitor
+   - Added a fifth top-level `Author Monitor` view with no calendar.
+   - Uses compact title/authors/citation/date cards with click/arrow-key selection; ordinary scrolling never changes selection. The narrower Library-style Paper Details and 26px animated bottom status bar align with Library/My Publications.
+   - Authors are selected through existing Google Scholar profile matching and persisted by Scholar user ID; full-profile paging is no longer capped at 500 papers.
+   - Scholar rows are saved immediately, then a resumable, rate-limited background stage resolves DOI/arXiv identifiers and abstracts with visible progress; unresolved rows cool down for seven days.
+   - Initial profile import is a read baseline; later recent-profile checks create unread badges.
+   - Automatic checks run once daily after 10:00 local time, stagger requests, and apply a six-hour cooldown after Scholar blocking.
+   - Deleting a monitored author removes only monitor associations and never deletes shared papers, PDFs, or Library items.
 
 2. Nature-family PDF download reliability
    - Fixed false PDF detection where Springer/Nature “Peer Review File” could be treated as the main article PDF.
@@ -84,13 +86,10 @@
 
 ## Verification already done
 
-- Ran Python compile check:
-  `PYTHONPYCACHEPREFIX=/private/tmp/paper-monitor-pycache .venv/bin/python -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Ran frontend JavaScript syntax check by extracting the embedded script and using `new Function(...)`.
-- Smoke-tested `http://127.0.0.1:8766/`, `/api/report?date=2026-05-15`, and `/api/page-proxy?url=https%3A%2F%2Fwww.nature.com%2Fnphys%2F`.
-- Smoke-tested `http://127.0.0.1:8767/`; `/api/report?date=2026-05-15&auto_fetch=0` returned in about 0.013s.
-- Verified `/api/open-url` rejects invalid URLs without launching a browser.
-- Verified native `.app` fetch progress, fetching calendar dot, date switching during fetch, report grouping, and author display.
+- Python compile and embedded JavaScript syntax checks pass.
+- Full suite passes: 186 tests.
+- Author Monitor was visually checked with an isolated SQLite database, including empty state, populated three-column layout, unread badges, and click-to-read behavior.
+- `Daiqo.app` rebuilt, signed, restarted, and `/api/health` plus `/api/author-monitor?summary=1` verified.
 
 ## Current caveats
 

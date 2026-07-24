@@ -199,6 +199,49 @@ CREATE TABLE IF NOT EXISTS my_publications (
 
 CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starred, sort_order, id);
 
+CREATE TABLE IF NOT EXISTS author_monitors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scholar_user_id TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  affiliation TEXT,
+  email TEXT,
+  cited_by TEXT,
+  interests_json TEXT,
+  profile_url TEXT NOT NULL,
+  avatar_url TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle',
+  message TEXT,
+  last_checked_at TEXT,
+  last_success_at TEXT,
+  cooldown_until TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_author_monitors_order
+ON author_monitors(sort_order, id);
+
+CREATE TABLE IF NOT EXISTS author_monitor_papers (
+  author_monitor_id INTEGER NOT NULL REFERENCES author_monitors(id) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  scholar_key TEXT,
+  scholar_title TEXT,
+  is_unread INTEGER NOT NULL DEFAULT 0,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (author_monitor_id, paper_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_author_monitor_papers_author
+ON author_monitor_papers(author_monitor_id, is_unread, first_seen_at);
+
+CREATE INDEX IF NOT EXISTS idx_author_monitor_papers_paper
+ON author_monitor_papers(paper_id);
+
+CREATE INDEX IF NOT EXISTS idx_author_monitor_papers_scholar
+ON author_monitor_papers(author_monitor_id, scholar_key);
+
 CREATE TABLE IF NOT EXISTS inventory_import_batches (
   id TEXT PRIMARY KEY,
   inventory_path TEXT NOT NULL,
@@ -1564,6 +1607,292 @@ class Storage:
         ).fetchall()
         for index, row in enumerate(rows):
             self.conn.execute("UPDATE my_publications SET sort_order = ? WHERE id = ?", (index, row["id"]))
+        self.conn.commit()
+
+    def add_author_monitor(self, profile: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(profile.get("user_id") or "").strip()
+        name = str(profile.get("name") or "").strip()
+        profile_url = str(profile.get("url") or "").strip()
+        if not user_id or not name or not profile_url:
+            raise ValueError("A Google Scholar user id, name, and profile URL are required")
+        timestamp = now_iso()
+        next_order_row = self.conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM author_monitors"
+        ).fetchone()
+        next_order = int(next_order_row["next_order"] or 0)
+        interests = profile.get("interests") if isinstance(profile.get("interests"), list) else []
+        self.conn.execute(
+            """
+            INSERT INTO author_monitors (
+              scholar_user_id, name, affiliation, email, cited_by, interests_json,
+              profile_url, avatar_url, sort_order, status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+            ON CONFLICT(scholar_user_id) DO UPDATE SET
+              name = excluded.name,
+              affiliation = excluded.affiliation,
+              email = excluded.email,
+              cited_by = excluded.cited_by,
+              interests_json = excluded.interests_json,
+              profile_url = excluded.profile_url,
+              avatar_url = excluded.avatar_url,
+              updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                name,
+                str(profile.get("affiliation") or "").strip(),
+                str(profile.get("email") or "").strip(),
+                str(profile.get("cited_by") or "").strip(),
+                json.dumps([str(item) for item in interests if str(item).strip()], ensure_ascii=False),
+                profile_url,
+                str(profile.get("avatar_url") or "").strip(),
+                next_order,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.conn.commit()
+        row = self.conn.execute(
+            "SELECT id FROM author_monitors WHERE scholar_user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return self.get_author_monitor(int(row["id"])) if row else {}
+
+    def get_author_monitor(self, author_monitor_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            """
+            SELECT author_monitors.*,
+                   (SELECT COUNT(*) FROM author_monitor_papers
+                    WHERE author_monitor_id = author_monitors.id) AS paper_count,
+                   (SELECT COUNT(*) FROM author_monitor_papers
+                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count
+            FROM author_monitors
+            WHERE id = ?
+            """,
+            (int(author_monitor_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_author_monitors(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT author_monitors.*,
+                   (SELECT COUNT(*) FROM author_monitor_papers
+                    WHERE author_monitor_id = author_monitors.id) AS paper_count,
+                   (SELECT COUNT(*) FROM author_monitor_papers
+                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count
+            FROM author_monitors
+            ORDER BY sort_order ASC, id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_author_monitor(
+        self,
+        author_monitor_id: int,
+        *,
+        profile: dict[str, Any] | None = None,
+        status: str | None = None,
+        message: str | None = None,
+        last_checked_at: str | None = None,
+        last_success_at: str | None = None,
+        cooldown_until: str | None = None,
+    ) -> dict[str, Any]:
+        current = self.get_author_monitor(int(author_monitor_id))
+        if not current:
+            return {}
+        values = dict(current)
+        if profile:
+            values.update(
+                {
+                    "name": str(profile.get("name") or values.get("name") or "").strip(),
+                    "affiliation": str(profile.get("affiliation") or values.get("affiliation") or "").strip(),
+                    "email": str(profile.get("email") or values.get("email") or "").strip(),
+                    "cited_by": str(profile.get("cited_by") or values.get("cited_by") or "").strip(),
+                    "profile_url": str(profile.get("url") or values.get("profile_url") or "").strip(),
+                    "avatar_url": str(profile.get("avatar_url") or values.get("avatar_url") or "").strip(),
+                }
+            )
+            interests = profile.get("interests")
+            if isinstance(interests, list):
+                values["interests_json"] = json.dumps(
+                    [str(item) for item in interests if str(item).strip()],
+                    ensure_ascii=False,
+                )
+        if status is not None:
+            values["status"] = str(status)
+        if message is not None:
+            values["message"] = str(message)
+        if last_checked_at is not None:
+            values["last_checked_at"] = last_checked_at
+        if last_success_at is not None:
+            values["last_success_at"] = last_success_at
+        if cooldown_until is not None:
+            values["cooldown_until"] = cooldown_until
+        self.conn.execute(
+            """
+            UPDATE author_monitors
+            SET name = ?, affiliation = ?, email = ?, cited_by = ?, interests_json = ?,
+                profile_url = ?, avatar_url = ?, status = ?, message = ?,
+                last_checked_at = ?, last_success_at = ?, cooldown_until = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                values.get("name") or "",
+                values.get("affiliation") or "",
+                values.get("email") or "",
+                values.get("cited_by") or "",
+                values.get("interests_json") or "[]",
+                values.get("profile_url") or "",
+                values.get("avatar_url") or "",
+                values.get("status") or "idle",
+                values.get("message") or "",
+                values.get("last_checked_at"),
+                values.get("last_success_at"),
+                values.get("cooldown_until"),
+                now_iso(),
+                int(author_monitor_id),
+            ),
+        )
+        self.conn.commit()
+        return self.get_author_monitor(int(author_monitor_id)) or {}
+
+    def reorder_author_monitors(self, author_monitor_ids: list[int]) -> None:
+        timestamp = now_iso()
+        for index, author_monitor_id in enumerate(author_monitor_ids):
+            self.conn.execute(
+                "UPDATE author_monitors SET sort_order = ?, updated_at = ? WHERE id = ?",
+                (index, timestamp, int(author_monitor_id)),
+            )
+        self.conn.commit()
+
+    def delete_author_monitor(self, author_monitor_id: int) -> None:
+        self.conn.execute("DELETE FROM author_monitors WHERE id = ?", (int(author_monitor_id),))
+        self.conn.commit()
+
+    def add_author_monitor_paper(
+        self,
+        *,
+        author_monitor_id: int,
+        paper_id: str,
+        scholar_key: str = "",
+        scholar_title: str = "",
+        unread: bool = False,
+    ) -> bool:
+        existing = self.conn.execute(
+            """
+            SELECT 1 FROM author_monitor_papers
+            WHERE author_monitor_id = ? AND paper_id = ?
+            """,
+            (int(author_monitor_id), str(paper_id)),
+        ).fetchone()
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO author_monitor_papers (
+              author_monitor_id, paper_id, scholar_key, scholar_title,
+              is_unread, first_seen_at, last_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(author_monitor_id, paper_id) DO UPDATE SET
+              scholar_key = CASE
+                WHEN excluded.scholar_key != '' THEN excluded.scholar_key
+                ELSE author_monitor_papers.scholar_key
+              END,
+              scholar_title = CASE
+                WHEN excluded.scholar_title != '' THEN excluded.scholar_title
+                ELSE author_monitor_papers.scholar_title
+              END,
+              last_seen_at = excluded.last_seen_at
+            """,
+            (
+                int(author_monitor_id),
+                str(paper_id),
+                str(scholar_key or ""),
+                str(scholar_title or ""),
+                1 if unread else 0,
+                timestamp,
+                timestamp,
+            ),
+        )
+        self.conn.commit()
+        return existing is None
+
+    def author_monitor_paper_count(self, author_monitor_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS count FROM author_monitor_papers WHERE author_monitor_id = ?",
+            (int(author_monitor_id),),
+        ).fetchone()
+        return int(row["count"] or 0)
+
+    def list_author_monitor_papers(self, author_monitor_id: int = 0) -> list[dict[str, Any]]:
+        params: tuple[Any, ...] = ()
+        where = ""
+        if int(author_monitor_id):
+            where = "WHERE author_monitor_papers.author_monitor_id = ?"
+            params = (int(author_monitor_id),)
+        rows = self.conn.execute(
+            f"""
+            SELECT papers.*,
+                   author_monitor_papers.author_monitor_id,
+                   author_monitor_papers.is_unread AS author_unread,
+                   author_monitor_papers.first_seen_at AS author_first_seen_at,
+                   author_monitors.name AS monitored_author_name
+            FROM author_monitor_papers
+            JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+            JOIN author_monitors ON author_monitors.id = author_monitor_papers.author_monitor_id
+            {where}
+            ORDER BY author_monitor_papers.is_unread DESC,
+                     papers.publication_date DESC,
+                     author_monitor_papers.first_seen_at DESC,
+                     papers.title ASC
+            """,
+            params,
+        ).fetchall()
+        merged: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for row in rows:
+            item = dict(row)
+            paper_id = str(item.get("paper_id") or "")
+            if paper_id not in merged:
+                item["author_monitor_ids"] = []
+                item["monitored_authors"] = []
+                item["author_unread"] = bool(item.get("author_unread"))
+                merged[paper_id] = item
+                order.append(paper_id)
+            current = merged[paper_id]
+            monitor_id = int(item.get("author_monitor_id") or 0)
+            monitor_name = str(item.get("monitored_author_name") or "")
+            if monitor_id and monitor_id not in current["author_monitor_ids"]:
+                current["author_monitor_ids"].append(monitor_id)
+            if monitor_name and monitor_name not in current["monitored_authors"]:
+                current["monitored_authors"].append(monitor_name)
+            current["author_unread"] = bool(current.get("author_unread")) or bool(item.get("author_unread"))
+        return [merged[paper_id] for paper_id in order]
+
+    def mark_author_monitor_papers_read(
+        self,
+        *,
+        author_monitor_id: int = 0,
+        paper_ids: Iterable[str] = (),
+    ) -> None:
+        ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
+        if not int(author_monitor_id) and not ids:
+            return
+        conditions: list[str] = ["is_unread = 1"]
+        params: list[Any] = []
+        if int(author_monitor_id):
+            conditions.append("author_monitor_id = ?")
+            params.append(int(author_monitor_id))
+        if ids:
+            placeholders = ", ".join("?" for _ in ids)
+            conditions.append(f"paper_id IN ({placeholders})")
+            params.extend(ids)
+        self.conn.execute(
+            f"UPDATE author_monitor_papers SET is_unread = 0 WHERE {' AND '.join(conditions)}",
+            tuple(params),
+        )
         self.conn.commit()
 
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
