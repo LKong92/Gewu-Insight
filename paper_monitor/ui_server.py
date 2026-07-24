@@ -7554,7 +7554,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
-        "citation_label": citation_label(paper),
+        "citation_label": citation_label(paper, full_lead=True),
         "in_library": bool(paper.get("in_library")),
         "library_item_count": int(paper.get("library_item_count") or 0),
         "author_details": {},
@@ -11269,9 +11269,12 @@ def paper_id_from_publication(doi: str, title: str, journal: str, publication_da
     return "p_" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
-def citation_label(paper: dict[str, Any]) -> str:
+def citation_label(paper: dict[str, Any], *, full_lead: bool = False) -> str:
     authors = full_author_names(paper) or author_summary(paper)
-    lead = author_last_name(authors[0]) if authors else "Unknown"
+    if authors:
+        lead = clean_author_name(authors[0]) if full_lead else author_last_name(authors[0])
+    else:
+        lead = "Unknown"
     if len(authors) > 1:
         lead = f"{lead} et al."
     journal = display_journal_name(paper) or "Unknown Journal"
@@ -21936,10 +21939,13 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       content-visibility: auto;
       contain: layout paint style;
-      contain-intrinsic-size: auto 112px;
-      gap: 8px;
+      contain-intrinsic-size: auto 68px;
+      box-sizing: border-box;
+      min-height: 68px;
+      align-content: center;
+      gap: 3px;
       min-width: 0;
-      padding: 13px 15px;
+      padding: 9px 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fff;
@@ -21968,20 +21974,22 @@ INDEX_HTML = """<!doctype html>
       opacity: 0.78;
     }
     .author-paper-title-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 8px;
+      display: block;
       min-width: 0;
+      padding-right: 34px;
     }
     .author-paper-title {
-      color: #176c45;
+      color: var(--ink);
       font-size: 16px;
       font-weight: 730;
       line-height: 1.3;
       overflow-wrap: anywhere;
     }
     .author-paper-action-stack {
+      position: absolute;
+      top: 9px;
+      right: 12px;
+      z-index: 1;
       width: 26px;
       display: flex;
       flex-direction: column;
@@ -22027,21 +22035,9 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       font-weight: 800;
     }
-    .author-paper-authors {
-      color: #526071;
-      font-size: 13px;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
-    }
-    .author-paper-authors .author-paper-last-author {
-      color: #263648;
-      font-weight: 700;
-    }
     .author-paper-citation-row {
       display: flex;
       align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
       min-width: 0;
       font-size: 13px;
     }
@@ -22051,12 +22047,6 @@ INDEX_HTML = """<!doctype html>
       font-style: italic;
       font-weight: 650;
       overflow-wrap: anywhere;
-    }
-    .author-paper-date {
-      flex: 0 0 auto;
-      color: #9a6a2c;
-      font-variant-numeric: tabular-nums;
-      white-space: nowrap;
     }
     .author-paper-card.author-unread::before {
       content: "";
@@ -22242,7 +22232,7 @@ INDEX_HTML = """<!doctype html>
     .paper-head { min-width: 0; }
     .paper-title-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
     .paper-title-row > h3 { min-width: 0; flex: 1 1 auto; }
-    .paper h3 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
+    .paper h3 { margin: 0; color: var(--ink); font-size: 18px; line-height: 1.35; letter-spacing: 0; }
     .paper h3 .katex, .paper .abstract .katex { font-size: 1em; color: inherit; }
     .paper .katex-display { margin: 0.45em 0; overflow-x: auto; overflow-y: hidden; }
     .journal-group {
@@ -35281,28 +35271,6 @@ INDEX_HTML = """<!doctype html>
       ) || null;
     }
 
-    function authorMonitorCompactAuthors(paper) {
-      const source = Array.isArray(paper?.full_authors) && paper.full_authors.length
-        ? paper.full_authors
-        : (Array.isArray(paper?.authors) ? paper.authors : []);
-      const authors = source
-        .map((author) => String(author || "").trim())
-        .filter((author) => author && author !== "…");
-      if (authors.length <= 6) return authors;
-      return [...authors.slice(0, 3), "…", ...authors.slice(-3)];
-    }
-
-    function authorMonitorAuthorsMarkup(paper) {
-      const authors = authorMonitorCompactAuthors(paper);
-      if (!authors.length) return `<span>Authors unavailable</span>`;
-      const lastIndex = authors.length - 1;
-      return authors.map((author, index) => {
-        if (author === "…") return `<span>…</span>`;
-        const className = index === lastIndex ? "author-paper-last-author" : "";
-        return `<span class="${className}">${escapeHtml(author)}</span>`;
-      }).join(`<span>, </span>`);
-    }
-
     function authorMonitorCitationText(paper) {
       return String(paper?.citation_label || paper?.journal || "").trim() || "Publication details unavailable";
     }
@@ -35361,10 +35329,8 @@ INDEX_HTML = """<!doctype html>
             ` : `<span class="author-paper-mini-button-spacer" aria-hidden="true"></span>`}
           </div>
         </div>
-        <div class="author-paper-authors">${authorMonitorAuthorsMarkup(paper)}</div>
         <div class="author-paper-citation-row">
           <span class="author-paper-citation">${escapeHtml(authorMonitorCitationText(paper))}</span>
-          <time class="author-paper-date" datetime="${escapeAttr(paper.publication_date || "")}">${escapeHtml(paper.publication_date || "")}</time>
         </div>
       `;
       article.addEventListener("click", () => selectAuthorMonitorPaper(paper.paper_id));
@@ -36185,7 +36151,7 @@ INDEX_HTML = """<!doctype html>
           <div class="paper-main">
             <div class="paper-head">
               <div class="paper-title-row">
-                <h3 style="color:${paper.section_color}">${inlineLatexMarkup(paper.title || "(Untitled)", publicationTitleMarkup)}</h3>
+                <h3>${inlineLatexMarkup(paper.title || "(Untitled)", publicationTitleMarkup)}</h3>
                 <div class="paper-badges">
                   <span class="badge" style="color:${paper.section_color};background:${paper.section_badge_background}">${escapeHtml(paper.section)}</span>
                   ${fieldBadges}

@@ -360,6 +360,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "nature_reference": "large reference",
             "raw_json": json.dumps(
                 {
+                    "authors": ["Ada Author", "Ben Author"],
                     "author_details": {"author_affiliations": [{"name": "Ada Author"}]},
                     "citation_metrics": {"counts_by_year": {"2026": 10}},
                 }
@@ -377,6 +378,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         author_item = ui_server.author_monitor_paper_to_api(paper)
         self.assertFalse(author_item["full_detail"])
         self.assertFalse(author_item["author_details_loaded"])
+        self.assertTrue(author_item["citation_label"].startswith("Ada Author et al."))
         self.assertNotIn("abstract", author_item)
         self.assertNotIn("bibtex", author_item)
         self.assertNotIn("citation_metrics", author_item)
@@ -398,9 +400,11 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "function authorMonitorActivityStatusClass", 1
         )[0]
         self.assertIn("author-paper-title", card)
-        self.assertIn("author-paper-authors", card)
         self.assertIn("author-paper-citation", card)
-        self.assertIn("paper.publication_date", card)
+        self.assertNotIn("author-paper-authors", card)
+        self.assertNotIn("authorMonitorAuthorsMarkup", card)
+        self.assertNotIn("author-paper-date", card)
+        self.assertNotIn("paper.publication_date", card)
         self.assertNotIn("paper.abstract", card)
         self.assertNotIn("reportFigureMarkup", card)
         self.assertNotIn("paperFieldValues", card)
@@ -452,6 +456,14 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("appendAuthorMonitorPaperCards", html)
         self.assertIn("authorMonitorDetailController.abort()", html)
         self.assertIn('fetchJson("/api/author-monitor?summary=1"', html)
+        card_css = html.split(".author-paper-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-height: 68px", card_css)
+        self.assertIn("align-content: center", card_css)
+        title_css = html.split(".author-paper-title {", 1)[1].split("}", 1)[0]
+        self.assertIn("color: var(--ink)", title_css)
+        action_css = html.split(".author-paper-action-stack {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: absolute", action_css)
+        self.assertIn("top: 9px", action_css)
         detail_title_css = html.split(
             ".author-monitor-detail-body.library-detail h3 {", 1
         )[1].split("}", 1)[0]

@@ -58,6 +58,15 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('showReportFigurePlaceholder(paperId)', hydrate)
         self.assertIn('.paper-figure.missing {', INDEX_HTML)
 
+    def test_journal_and_subject_paper_titles_use_the_same_black_color(self):
+        render_paper = INDEX_HTML.split('function renderPaper', 1)[1].split(
+            'function themePaperMetaMarkup', 1
+        )[0]
+        title_css = INDEX_HTML.split('.paper h3 {', 1)[1].split('}', 1)[0]
+
+        self.assertIn('color: var(--ink)', title_css)
+        self.assertNotIn('style="color:${paper.section_color}"', render_paper)
+
     def test_subject_keyboard_navigation_reuses_report_interactions(self):
         keyboard = INDEX_HTML.split('function handleReportKeydown', 1)[1].split(
             'function renderArxivUpdateCountdown', 1
