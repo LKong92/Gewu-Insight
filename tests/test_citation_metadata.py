@@ -2,6 +2,7 @@ import json
 import unittest
 
 from paper_monitor.ui_server import (
+    author_details_summary,
     authors_from_google_scholar,
     citation_label,
     full_author_names,
@@ -15,6 +16,78 @@ from paper_monitor.sources.crossref import normalize_crossref_item
 
 
 class CitationMetadataTest(unittest.TestCase):
+    def test_author_details_use_openalex_affiliations_when_pubmed_is_unavailable(self):
+        paper = {
+            "raw_json": json.dumps({
+                "authorships": [
+                    {
+                        "author": {"display_name": "Ada Author"},
+                        "raw_affiliation_strings": ["Quantum Institute"],
+                        "institutions": [{"display_name": "Example University"}],
+                    }
+                ]
+            }),
+        }
+        summary = author_details_summary(paper)
+        self.assertEqual(summary["sources"], ["openalex"])
+        self.assertEqual(
+            summary["author_affiliations"][0]["affiliations"],
+            ["Quantum Institute", "Example University"],
+        )
+        self.assertFalse(summary["author_affiliations"][0]["roles"]["corresponding_author"])
+
+    def test_author_details_use_crossref_affiliations_when_available(self):
+        paper = {
+            "raw_json": json.dumps({
+                "crossref": {
+                    "author": [
+                        {
+                            "given": "Ada",
+                            "family": "Author",
+                            "affiliation": [{"name": "Crossref Laboratory"}],
+                        }
+                    ]
+                }
+            }),
+        }
+        summary = author_details_summary(paper)
+        self.assertEqual(summary["sources"], ["crossref"])
+        self.assertEqual(
+            summary["author_affiliations"][0]["affiliations"],
+            ["Crossref Laboratory"],
+        )
+
+    def test_author_details_keep_pubmed_roles_and_prefer_pubmed_affiliation(self):
+        paper = {
+            "raw_json": json.dumps({
+                "authors": ["Ada Author"],
+                "pubmed": {
+                    "author_affiliations": [
+                        {
+                            "name": "Ada Author",
+                            "affiliations": ["PubMed Institute"],
+                            "roles": {
+                                "co_first_author": True,
+                                "corresponding_author": True,
+                                "notes": ["equal contribution", "corresponding author"],
+                            },
+                        }
+                    ]
+                },
+                "authorships": [
+                    {
+                        "author": {"display_name": "Ada Author"},
+                        "raw_affiliation_strings": ["OpenAlex Institute"],
+                    }
+                ],
+            }),
+        }
+        summary = author_details_summary(paper)
+        detail = summary["author_affiliations"][0]
+        self.assertEqual(detail["affiliations"], ["PubMed Institute", "OpenAlex Institute"])
+        self.assertTrue(detail["roles"]["co_first_author"])
+        self.assertTrue(detail["roles"]["corresponding_author"])
+
     def test_aps_doi_fills_missing_volume_and_article_number(self):
         paper = {
             "doi": "10.1103/physrevb.94.094524",
