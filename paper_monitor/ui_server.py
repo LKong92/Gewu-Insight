@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import queue
+import random
 import re
 import shutil
 import socketserver
@@ -46,10 +47,11 @@ from .config import (
     ROOT,
     load_config,
 )
-from .download import download_paper, normalize_doi
+from .download import download_paper, normalize_doi, science_supplement_pdf_candidates
 from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
+from .pdf_utils import merge_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
@@ -97,6 +99,8 @@ function run(argv) {
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
 FETCH_PROGRESS_LOCK = threading.Lock()
+GOOGLE_SCHOLAR_REQUEST_LOCK = threading.Lock()
+GOOGLE_SCHOLAR_LAST_REQUEST_AT = 0.0
 LIBRARY_IMPORT_JOBS: dict[str, dict[str, Any]] = {}
 LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
@@ -206,10 +210,18 @@ AUTO_SUBJECT_MONITOR_POLL_SECONDS = 60
 AUTO_SUBJECT_MONITOR_RETRY_SECONDS = 15 * 60
 AUTO_SUBJECT_MONITOR_MAX_RETRIES = 3
 AUTO_AUTHOR_MONITOR_STATUS_SETTING = "auto_author_monitor_status"
+GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SETTING = "google_scholar_global_cooldown"
 AUTO_AUTHOR_MONITOR_HOUR = 10
 AUTO_AUTHOR_MONITOR_STARTUP_DELAY_SECONDS = 30
 AUTO_AUTHOR_MONITOR_POLL_SECONDS = 5 * 60
 AUTHOR_MONITOR_BLOCK_COOLDOWN_SECONDS = 6 * 60 * 60
+GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SECONDS = 24 * 60 * 60
+GOOGLE_SCHOLAR_REQUEST_INTERVAL_MIN_SECONDS = 4.0
+GOOGLE_SCHOLAR_REQUEST_INTERVAL_MAX_SECONDS = 8.0
+AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MIN_SECONDS = 12.0
+AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MAX_SECONDS = 24.0
+AUTO_AUTHOR_MONITOR_STAGGER_MIN_SECONDS = 45.0
+AUTO_AUTHOR_MONITOR_STAGGER_MAX_SECONDS = 90.0
 AUTHOR_MONITOR_INITIAL_IMPORT_LIMIT = 5000
 AUTHOR_MONITOR_RECENT_CHECK_LIMIT = 50
 AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
@@ -998,14 +1010,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
-            target_path, paper = attach_manual_pdf_to_paper(
-                storage,
-                paper_id=paper_id,
-                filename=Path(source_path).name,
-                context=payload,
-                source_path=Path(source_path),
-                preserve_filename=payload.get("preserve_filename") is not False,
-            )
+            if clean_text(str(payload.get("publisher_download_kind") or "")) == "aaas-supplement-pdf":
+                target_path, paper = attach_publisher_supplement_pdf_to_paper(
+                    storage,
+                    paper_id=paper_id,
+                    context=payload,
+                    source_path=Path(source_path),
+                )
+            else:
+                target_path, paper = attach_manual_pdf_to_paper(
+                    storage,
+                    paper_id=paper_id,
+                    filename=Path(source_path).name,
+                    context=payload,
+                    source_path=Path(source_path),
+                    preserve_filename=payload.get("preserve_filename") is not False,
+                )
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -1138,20 +1158,42 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             local_profiles = local_google_scholar_profiles(storage, search_text, limit=20)
+            global_cooldown = google_scholar_global_cooldown(storage)
         finally:
             storage.close()
         if local_profiles:
-            self.send_json({"profiles": local_profiles})
+            self.send_json({"profiles": local_profiles, "scholarCooldown": global_cooldown})
+            return
+        if global_cooldown.get("active"):
+            self.send_error_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                google_scholar_global_cooldown_message(global_cooldown),
+            )
             return
         try:
-            profiles = search_google_scholar_profiles(search_text, limit=20)
+            if google_scholar_user_id(search_text):
+                scholar_payload = fetch_google_scholar_profile_payload(search_text, limit=1)
+                profile = sanitize_google_scholar_profile(scholar_payload.get("profile") or {})
+                profiles = [profile] if profile.get("user_id") else []
+            else:
+                profiles = search_google_scholar_profiles(search_text, limit=20)
         except GoogleScholarBlockedError as exc:
-            self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+            cooldown = start_google_scholar_global_cooldown_for_db(
+                self.configured_db_path,
+                message=str(exc),
+            )
+            self.send_error_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                google_scholar_global_cooldown_message(cooldown),
+            )
             return
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar profile lookup failed: {exc}")
             return
-        self.send_json({"profiles": merge_google_scholar_profiles(local_profiles, profiles, search_text, limit=20)})
+        self.send_json({
+            "profiles": merge_google_scholar_profiles(local_profiles, profiles, search_text, limit=20),
+            "scholarCooldown": global_cooldown,
+        })
 
     def handle_author_monitor(self, query: dict[str, list[str]]) -> None:
         author_monitor_id = int(first(query, "author_id") or 0)
@@ -1163,6 +1205,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     "authors": authors,
                     "unreadCount": sum(int(item.get("unread_count") or 0) for item in authors),
                     "checkedAt": now_iso(),
+                    "scholarCooldown": google_scholar_global_cooldown(storage),
                 }
             else:
                 payload = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
@@ -1177,6 +1220,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
+            global_cooldown = google_scholar_global_cooldown(storage)
+            if global_cooldown.get("active"):
+                self.send_error_json(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    google_scholar_global_cooldown_message(global_cooldown),
+                )
+                return
             existing = next(
                 (
                     item for item in storage.list_author_monitors()
@@ -1184,21 +1234,32 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 ),
                 None,
             )
-            monitor = storage.add_author_monitor(profile)
+            monitor = existing or storage.add_author_monitor(profile)
             author_monitor_id = int(monitor.get("id") or 0)
             needs_initial_import = not existing or storage.author_monitor_paper_count(author_monitor_id) == 0
+            if needs_initial_import:
+                storage.update_author_monitor(
+                    author_monitor_id,
+                    status="queued",
+                    message="Initial Google Scholar import queued...",
+                )
         finally:
             storage.close()
-        result = (
-            refresh_author_monitor_for_db(
-                self.configured_db_path,
-                author_monitor_id,
-                initial=True,
-                force=True,
-            )
-            if needs_initial_import
-            else {"status": "existing", "added": 0}
-        )
+        if needs_initial_import:
+            threading.Thread(
+                target=refresh_author_monitor_for_db,
+                kwargs={
+                    "db_path": self.configured_db_path,
+                    "author_monitor_id": author_monitor_id,
+                    "initial": True,
+                    "force": True,
+                },
+                name=f"author-monitor-initial-{author_monitor_id}",
+                daemon=True,
+            ).start()
+            result = {"status": "queued", "added": 0}
+        else:
+            result = {"status": "existing", "added": 0}
         storage = Storage(self.configured_db_path)
         try:
             snapshot = author_monitor_snapshot(storage, author_monitor_id=author_monitor_id)
@@ -1210,6 +1271,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         author_monitor_id = int(payload.get("author_id") or 0)
         storage = Storage(self.configured_db_path)
         try:
+            global_cooldown = google_scholar_global_cooldown(storage)
+            if global_cooldown.get("active"):
+                self.send_error_json(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    google_scholar_global_cooldown_message(global_cooldown),
+                )
+                return
             author_ids = (
                 [author_monitor_id]
                 if author_monitor_id and storage.get_author_monitor(author_monitor_id)
@@ -1380,12 +1448,30 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not profile_url:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Google Scholar profile URL is required")
             return
+        storage = Storage(self.configured_db_path)
+        try:
+            global_cooldown = google_scholar_global_cooldown(storage)
+        finally:
+            storage.close()
+        if global_cooldown.get("active"):
+            self.send_error_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                google_scholar_global_cooldown_message(global_cooldown),
+            )
+            return
         limit = max(1, min(300, int(payload.get("limit") or 200)))
         try:
             scholar_payload = fetch_google_scholar_profile_payload(profile_url, limit=limit)
             candidates = scholar_payload["candidates"]
         except GoogleScholarBlockedError as exc:
-            self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+            cooldown = start_google_scholar_global_cooldown_for_db(
+                self.configured_db_path,
+                message=str(exc),
+            )
+            self.send_error_json(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                google_scholar_global_cooldown_message(cooldown),
+            )
             return
         except Exception as exc:
             self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar import failed: {exc}")
@@ -7258,10 +7344,11 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
     storage = Storage(db_path)
     try:
         authors = storage.list_author_monitors()
+        global_cooldown = google_scholar_global_cooldown(storage)
     finally:
         storage.close()
     results: list[dict[str, Any]] = []
-    for index, author in enumerate(authors):
+    for index, author in enumerate(authors if not global_cooldown.get("active") else []):
         if author_monitor_checked_today(author, run_date):
             continue
         if author_monitor_cooldown_active(author):
@@ -7274,7 +7361,12 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
             )
             continue
         if index:
-            time.sleep(2.0)
+            time.sleep(
+                random.uniform(
+                    AUTO_AUTHOR_MONITOR_STAGGER_MIN_SECONDS,
+                    AUTO_AUTHOR_MONITOR_STAGGER_MAX_SECONDS,
+                )
+            )
         results.append(
             refresh_author_monitor_for_db(
                 db_path,
@@ -7290,6 +7382,7 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
         "checked": len(results),
         "new_papers": sum(int(item.get("added") or 0) for item in results),
         "results": results,
+        "scholar_cooldown": global_cooldown,
     }
     storage = Storage(db_path)
     try:
@@ -7398,15 +7491,26 @@ def annotate_papers_with_library_status(storage: Storage, papers: list[dict[str,
 def published_pdf_browser_fallback(
     paper: dict[str, Any] | None,
     result: dict[str, Any] | None,
-) -> dict[str, str] | None:
-    if not paper or str((result or {}).get("status") or "") != "failed":
+) -> dict[str, Any] | None:
+    if not paper:
         return None
     doi = normalize_doi(paper.get("doi") or "")
     if not doi.startswith("10.1126/"):
         return None
+    supplement_urls = science_supplement_pdf_candidates(doi)
+    supplement = {
+        "kind": "aaas-supplement-pdf",
+        "url": supplement_urls[0],
+    } if supplement_urls else None
+    status = str((result or {}).get("status") or "")
+    if status == "partial" and "no PDF supplement found" in str((result or {}).get("message") or ""):
+        return supplement
+    if status != "failed":
+        return None
     return {
         "kind": "aaas-published-pdf",
         "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+        "followup": supplement,
     }
 
 
@@ -9754,6 +9858,74 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def google_scholar_global_cooldown(
+    storage: Storage,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    raw = storage.get_setting(GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SETTING, "")
+    try:
+        saved = json.loads(raw) if raw else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    until_text = clean_text(saved.get("until") or "")
+    current = now or datetime.now(local_timezone())
+    active = False
+    if until_text:
+        try:
+            until = datetime.fromisoformat(until_text)
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=current.tzinfo)
+            active = current < until.astimezone(current.tzinfo)
+        except ValueError:
+            active = False
+    return {
+        "active": active,
+        "until": until_text,
+        "message": clean_text(saved.get("message") or ""),
+        "triggered_at": clean_text(saved.get("triggered_at") or ""),
+    }
+
+
+def google_scholar_global_cooldown_message(cooldown: dict[str, Any]) -> str:
+    until = clean_text(cooldown.get("until") or "")
+    suffix = f" until {until}" if until else ""
+    return (
+        f"Google Scholar access is paused for all authors{suffix} to protect the current network IP. "
+        "Profile search, add, and refresh are disabled during this cooldown."
+    )
+
+
+def start_google_scholar_global_cooldown(
+    storage: Storage,
+    *,
+    message: str = "",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or datetime.now(local_timezone())
+    until = current + timedelta(seconds=GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SECONDS)
+    payload = {
+        "until": until.isoformat(timespec="seconds"),
+        "message": clean_text(message) or google_scholar_block_message(),
+        "triggered_at": current.isoformat(timespec="seconds"),
+    }
+    storage.set_setting(
+        GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SETTING,
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    )
+    return {"active": True, **payload}
+
+
+def start_google_scholar_global_cooldown_for_db(db_path: Path, *, message: str = "") -> dict[str, Any]:
+    storage = Storage(db_path)
+    try:
+        return start_google_scholar_global_cooldown(storage, message=message)
+    finally:
+        storage.close()
+
+
 def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> dict[str, Any]:
     authors = [author_monitor_to_api(row) for row in storage.list_author_monitors()]
     if author_monitor_id and not any(int(item["id"]) == int(author_monitor_id) for item in authors):
@@ -9782,6 +9954,7 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         "selectedAuthorId": int(author_monitor_id),
         "unreadCount": sum(1 for paper in paper_payloads if paper.get("author_unread")),
         "checkedAt": now_iso(),
+        "scholarCooldown": google_scholar_global_cooldown(storage),
     }
 
 
@@ -9873,6 +10046,15 @@ def refresh_author_monitor_for_db(
         monitor = storage.get_author_monitor(author_monitor_id)
         if not monitor:
             return {"author_id": author_monitor_id, "status": "missing", "added": 0}
+        global_cooldown = google_scholar_global_cooldown(storage)
+        if global_cooldown.get("active"):
+            return {
+                "author_id": author_monitor_id,
+                "status": "global-cooldown",
+                "added": 0,
+                "message": google_scholar_global_cooldown_message(global_cooldown),
+                "cooldown_until": clean_text(global_cooldown.get("until") or ""),
+            }
         if author_monitor_cooldown_active(monitor):
             return {
                 "author_id": author_monitor_id,
@@ -9944,6 +10126,10 @@ def refresh_author_monitor_for_db(
                 "message": message,
             }
         except GoogleScholarBlockedError as exc:
+            global_cooldown = start_google_scholar_global_cooldown(
+                storage,
+                message=str(exc),
+            )
             cooldown_until = (
                 datetime.now(local_timezone()) + timedelta(seconds=AUTHOR_MONITOR_BLOCK_COOLDOWN_SECONDS)
             ).isoformat(timespec="seconds")
@@ -9958,8 +10144,8 @@ def refresh_author_monitor_for_db(
                 "author_id": author_monitor_id,
                 "status": "cooldown",
                 "added": 0,
-                "message": str(exc),
-                "cooldown_until": cooldown_until,
+                "message": google_scholar_global_cooldown_message(global_cooldown),
+                "cooldown_until": clean_text(global_cooldown.get("until") or cooldown_until),
             }
         except Exception as exc:
             message = clean_text(str(exc)) or "Author refresh failed"
@@ -10292,47 +10478,25 @@ def local_google_scholar_profiles(storage: Storage, search_text: str, *, limit: 
     author_name, affiliations = parse_author_search_query(search_text)
     if not author_name:
         return []
-    profiles_by_user: dict[str, dict[str, Any]] = {}
-    for paper in local_google_scholar_candidate_papers(storage):
-        authors = full_author_names(paper) or author_summary(paper)
-        matching_author = next((author for author in authors if author_matches_name(author, author_name)), "")
-        if not matching_author:
-            continue
-        user_ids = google_scholar_user_ids_from_paper(paper)
-        if not user_ids:
-            continue
-        for user_id in user_ids:
-            profile = profiles_by_user.setdefault(
-                user_id,
-                {
-                    "candidate_type": "scholar-profile",
-                    "name": author_name or matching_author,
-                    "affiliation": "",
-                    "email": "",
-                    "cited_by": "",
-                    "interests": [],
-                    "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
-                    "user_id": user_id,
-                    "source": "local",
-                    "_papers": [],
-                },
-            )
-            if matching_author and matching_author != author_name:
-                profile.setdefault("_aliases", set()).add(matching_author)
-            profile["_papers"].append(paper)
     profiles: list[dict[str, Any]] = []
-    for profile in profiles_by_user.values():
-        papers = profile.pop("_papers", [])
-        aliases = profile.pop("_aliases", set())
-        journals = dedup_names([clean_text(paper.get("journal") or "") for paper in papers if paper.get("journal")])[:2]
-        context_parts = [f"Local Google Scholar imports · {len(papers)} publication{'s' if len(papers) != 1 else ''}"]
-        if journals:
-            context_parts.append(", ".join(journals))
-        if affiliations:
-            context_parts.append("; ".join(affiliations))
-        if aliases:
-            context_parts.append("aliases: " + ", ".join(sorted(aliases)[:3]))
-        profile["affiliation"] = " · ".join(context_parts)
+    for row in storage.list_author_monitors():
+        profile = author_monitor_to_api(row)
+        if not author_matches_name(profile.get("name") or "", author_name):
+            continue
+        affiliation_text = " ".join(
+            [
+                clean_text(profile.get("affiliation") or ""),
+                clean_text(profile.get("email") or ""),
+            ]
+        )
+        if affiliations and not all(
+            affiliation_text_matches(affiliation_text, affiliation)
+            for affiliation in affiliations
+        ):
+            continue
+        profile["candidate_type"] = "scholar-profile"
+        profile["source"] = "monitored"
+        profile["already_monitored"] = True
         profiles.append(profile)
     return sorted_google_scholar_profiles(profiles, author_name, affiliations)[:limit]
 
@@ -10548,74 +10712,15 @@ def publication_search_dedupe_key(paper: dict[str, Any]) -> str:
 
 def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list[dict[str, Any]]:
     author_name, affiliations = parse_author_search_query(search_text)
-    queries = [
-        f"{author_name} {' '.join(affiliations)} Google Scholar profile".strip(),
-        f'"{author_name}" Google Scholar profile',
-        f"{author_name} {' '.join(affiliations)}".strip(),
+    if not author_name:
+        return []
+    query = clean_text(f"{author_name} {' '.join(affiliations)} Google Scholar profile")
+    profiles = [
+        profile
+        for profile in fetch_google_scholar_profiles_from_search(query, limit=limit)
+        if google_scholar_profile_matches_author(profile, author_name)
     ]
-    if affiliations:
-        queries.extend(f"{author_name} {affiliation} Google Scholar" for affiliation in affiliations if affiliation)
-    queries.append(author_name)
-    profiles: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for query in queries:
-        clean_query = clean_text(query)
-        if not clean_query:
-            continue
-        for profile in fetch_google_scholar_profiles_from_search(clean_query, limit=limit):
-            if not google_scholar_profile_matches_author(profile, author_name):
-                continue
-            user_id = clean_text(profile.get("user_id") or "")
-            if not user_id or user_id in seen:
-                continue
-            seen.add(user_id)
-            profiles.append(profile)
-            if len(profiles) >= limit:
-                return sorted_google_scholar_profiles(profiles, author_name, affiliations)
-    if profiles:
-        return sorted_google_scholar_profiles(profiles, author_name, affiliations)
-    saw_login_redirect = False
-    for query in queries:
-        clean_query = clean_text(query)
-        if not clean_query:
-            continue
-        try:
-            response = request_with_retries(
-                "GET",
-                "https://scholar.google.com/citations",
-                params={"view_op": "search_authors", "mauthors": clean_query, "hl": "en"},
-                headers={
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": "https://scholar.google.com/",
-                },
-                timeout=20,
-                max_retries=1,
-            )
-        except RuntimeError as exc:
-            if is_google_scholar_block_error(exc):
-                raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
-            raise
-        if "accounts.google." in urlparse(response.url).netloc.lower():
-            saw_login_redirect = True
-            continue
-        if is_google_scholar_block_page(response.text, response.url):
-            raise GoogleScholarBlockedError(google_scholar_block_message())
-        soup = BeautifulSoup(response.text, "html.parser")
-        for row in soup.select(".gsc_1usr"):
-            profile = google_scholar_author_row_to_profile(row)
-            if not google_scholar_profile_matches_author(profile, author_name):
-                continue
-            user_id = clean_text(profile.get("user_id") or "")
-            if not user_id or user_id in seen:
-                continue
-            seen.add(user_id)
-            profiles.append(profile)
-            if len(profiles) >= limit:
-                return sorted_google_scholar_profiles(profiles, author_name, affiliations)
-    if saw_login_redirect and not profiles:
-        raise GoogleScholarBlockedError(google_scholar_block_message())
-    return sorted_google_scholar_profiles(profiles, author_name, affiliations)
+    return sorted_google_scholar_profiles(profiles, author_name, affiliations)[:limit]
 
 
 def google_scholar_profile_matches_author(profile: dict[str, Any], author_name: str) -> bool:
@@ -10659,7 +10764,7 @@ def google_scholar_profile_match_score(profile: dict[str, Any], author_name: str
 
 def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 20) -> list[dict[str, Any]]:
     try:
-        response = request_with_retries(
+        response = google_scholar_request_with_spacing(
             "GET",
             "https://scholar.google.com/scholar",
             params={"hl": "en", "q": search_text},
@@ -10671,7 +10776,7 @@ def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 
             timeout=20,
             max_retries=1,
         )
-    except RuntimeError as exc:
+    except Exception as exc:
         if is_google_scholar_block_error(exc):
             raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
         raise
@@ -10690,6 +10795,27 @@ def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 
         if len(profiles) >= limit:
             break
     return profiles
+
+
+def google_scholar_request_with_spacing(
+    method: str,
+    url: str,
+    **kwargs: Any,
+) -> Any:
+    global GOOGLE_SCHOLAR_LAST_REQUEST_AT
+    with GOOGLE_SCHOLAR_REQUEST_LOCK:
+        if GOOGLE_SCHOLAR_LAST_REQUEST_AT > 0:
+            target_interval = random.uniform(
+                GOOGLE_SCHOLAR_REQUEST_INTERVAL_MIN_SECONDS,
+                GOOGLE_SCHOLAR_REQUEST_INTERVAL_MAX_SECONDS,
+            )
+            elapsed = time.monotonic() - GOOGLE_SCHOLAR_LAST_REQUEST_AT
+            if elapsed < target_interval:
+                time.sleep(target_interval - elapsed)
+        try:
+            return request_with_retries(method, url, **kwargs)
+        finally:
+            GOOGLE_SCHOLAR_LAST_REQUEST_AT = time.monotonic()
 
 
 def google_scholar_search_link_to_profile(link: Any) -> dict[str, Any]:
@@ -10768,7 +10894,12 @@ def fetch_google_scholar_profile_payload(
     seen: set[str] = set()
     for start in range(0, limit, page_size):
         if start:
-            time.sleep(1.2)
+            time.sleep(
+                random.uniform(
+                    AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MIN_SECONDS,
+                    AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MAX_SECONDS,
+                )
+            )
         try:
             params = {
                 "user": user_id,
@@ -10778,7 +10909,7 @@ def fetch_google_scholar_profile_payload(
             }
             if sort_by_date:
                 params["sortby"] = "pubdate"
-            response = request_with_retries(
+            response = google_scholar_request_with_spacing(
                 "GET",
                 "https://scholar.google.com/citations",
                 params=params,
@@ -10790,7 +10921,7 @@ def fetch_google_scholar_profile_payload(
                 timeout=20,
                 max_retries=1,
             )
-        except RuntimeError as exc:
+        except Exception as exc:
             if is_google_scholar_block_error(exc):
                 raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
             raise
@@ -10871,7 +11002,13 @@ def google_scholar_profile_avatar_url(soup: BeautifulSoup, page_url: str) -> str
 
 def is_google_scholar_block_error(error: Exception) -> bool:
     text = str(error).lower()
-    return "too many requests" in text or "sorry/index" in text or "google.com/sorry" in text
+    return (
+        "too many requests" in text
+        or "sorry/index" in text
+        or "google.com/sorry" in text
+        or "403 client error" in text
+        or "forbidden" in text
+    )
 
 
 def is_google_scholar_block_page(html: str, url: str = "") -> bool:
@@ -15573,6 +15710,67 @@ def attach_manual_pdf_to_paper(
             ),
         )
         storage.conn.commit()
+    updated = storage.get_paper(str(paper_id))
+    if not updated:
+        raise KeyError(str(paper_id))
+    return target_path, updated
+
+
+def attach_publisher_supplement_pdf_to_paper(
+    storage: Storage,
+    *,
+    paper_id: str,
+    context: dict[str, Any],
+    source_path: Path,
+) -> tuple[Path, dict[str, Any]]:
+    paper = storage.get_paper(str(paper_id))
+    if not paper:
+        raise KeyError(str(paper_id))
+    main_path = canonical_pdf_path_for_paper(paper)
+    if not main_path:
+        raise ValueError("The main PDF must be downloaded before its supplementary PDF")
+    supplement_path = source_path.expanduser().resolve()
+    if not supplement_path.exists() or not supplement_path.is_file():
+        raise FileNotFoundError(f"PDF file was not found: {source_path}")
+    with supplement_path.open("rb") as handle:
+        if b"%PDF-" not in handle.read(1024):
+            raise ValueError("Publisher supplement must be a valid PDF")
+
+    main_is_shared = pdf_path_referenced_by_other_paper(storage, main_path, str(paper_id))
+    can_replace_in_place = is_allowed_file(main_path, allowed_pdf_roots()) and not main_is_shared
+    if can_replace_in_place:
+        target_path = main_path
+        working_path = main_path.with_name(f".{main_path.stem}-supplement-{uuid.uuid4().hex}.pdf")
+    else:
+        target_dir = local_copy_dir_for_download_context(storage, context) or (DEFAULT_PDF_DIR / str(paper_id))
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = unique_path_in_dir(
+            target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf"
+        )
+        working_path = target_path
+
+    try:
+        merge_pdfs([main_path, supplement_path], working_path)
+        if can_replace_in_place:
+            working_path.replace(target_path)
+        storage.update_download_status(
+            str(paper_id),
+            status="success",
+            message="downloaded and merged Science supplementary PDF; temporary PDF removed",
+            main_pdf_path=str(target_path),
+            supplement_pdf_paths=[],
+            merged_pdf_path=str(target_path),
+        )
+        sync_all_pdf_aliases_for_paper(
+            storage,
+            str(paper_id),
+            old_target=main_path if target_path != main_path else None,
+        )
+    except Exception:
+        if working_path != target_path or target_path != main_path:
+            working_path.unlink(missing_ok=True)
+        raise
+
     updated = storage.get_paper(str(paper_id))
     if not updated:
         raise KeyError(str(paper_id))
@@ -22112,16 +22310,26 @@ INDEX_HTML = """<!doctype html>
       grid-column: 1 / -1;
       grid-row: 2;
       min-width: 0;
-      height: 26px;
+      min-height: 26px;
       border-top: 1px solid #d8d8dc;
       background: #fff;
       display: flex;
-      align-items: flex-end;
-      justify-content: flex-end;
+      align-items: center;
+      justify-content: flex-start;
       padding: 0 8px 4px;
       font-size: 12px;
-      line-height: 12px;
-      overflow: hidden;
+      line-height: 16px;
+      overflow: visible;
+    }
+    .author-monitor-status-bar .library-activity-status {
+      width: 100%;
+      max-width: none;
+      flex: 1 1 100%;
+      justify-content: flex-start;
+      white-space: normal;
+      overflow: visible;
+      text-overflow: clip;
+      border-radius: 8px;
     }
     .author-monitor-empty {
       padding: 28px 18px;
@@ -23234,15 +23442,15 @@ INDEX_HTML = """<!doctype html>
           <div class="settings-modal-head">
             <div>
               <h2 id="authorMonitorDialogTitle">Add Monitored Author</h2>
-              <p>Find the correct Google Scholar profile using a name and optional affiliations.</p>
+              <p>Paste an exact Google Scholar profile URL for the safest lookup, or search once by name and optional affiliations.</p>
             </div>
             <button class="settings-modal-close" id="closeAuthorMonitorDialog" type="button" title="Close">×</button>
           </div>
           <div class="settings-modal-body">
             <div class="theme-form">
               <label>
-                <span>Name and affiliations</span>
-                <input id="authorMonitorQuery" type="text" autocomplete="off" placeholder="Name; affiliation A; affiliation B">
+                <span>Profile URL or name and affiliations</span>
+                <input id="authorMonitorQuery" type="text" autocomplete="off" placeholder="https://scholar.google.com/citations?user=… or Name; affiliation">
               </label>
               <div class="theme-dialog-actions">
                 <button class="smallbtn" id="searchAuthorProfiles" type="button">Find Profiles</button>
@@ -23562,10 +23770,12 @@ INDEX_HTML = """<!doctype html>
       authorMonitorProfileResults: [],
       authorMonitorDialogBusy: false,
       authorMonitorStatus: "",
+      scholarGlobalCooldown: {active: false, until: "", message: "", triggered_at: ""},
       authorMonitorDragId: 0,
       authorMonitorActivityText: "",
       authorMonitorActivityLive: false,
       authorMonitorActivityTimer: 0,
+      authorMonitorImportPoller: 0,
       authorMonitorEnrichmentJobId: "",
       authorMonitorEnrichmentPoller: 0,
       authorMonitorEnrichmentStarted: false,
@@ -34054,7 +34264,10 @@ INDEX_HTML = """<!doctype html>
           handler.postMessage({
             token,
             url: browserFallback.url,
-            context: {...context}
+            context: {
+              ...context,
+              publisher_download_kind: browserFallback.kind || ""
+            }
           });
         } catch (error) {
           window.clearTimeout(timeoutId);
@@ -34072,8 +34285,12 @@ INDEX_HTML = """<!doctype html>
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "download failed");
-      if (data?.result?.status === "failed" && data.browser_fallback) {
-        return await downloadPublishedPdfInBackground(data.browser_fallback, payload);
+      if (data.browser_fallback) {
+        let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
+        if (data.browser_fallback.followup) {
+          downloaded = await downloadPublishedPdfInBackground(data.browser_fallback.followup, payload);
+        }
+        return downloaded;
       }
       if (data?.result?.status === "failed") {
         throw new Error(data.result.message || "download failed");
@@ -35054,6 +35271,9 @@ INDEX_HTML = """<!doctype html>
 
     function applyAuthorMonitorSnapshot(data = {}) {
       state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
+      if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
+        state.scholarGlobalCooldown = data.scholarCooldown;
+      }
       const previousDetails = new Map(
         state.authorMonitorPapers
           .filter((paper) => paper?.full_detail)
@@ -35091,18 +35311,77 @@ INDEX_HTML = """<!doctype html>
       if (dot) dot.hidden = unread <= 0;
     }
 
+    function scholarGlobalCooldownActive() {
+      if (!state.scholarGlobalCooldown?.active) return false;
+      const until = Date.parse(state.scholarGlobalCooldown.until || "");
+      return !Number.isFinite(until) || until > Date.now();
+    }
+
+    function scholarGlobalCooldownText() {
+      if (!scholarGlobalCooldownActive()) return "";
+      const until = Date.parse(state.scholarGlobalCooldown?.until || "");
+      const label = Number.isFinite(until) ? new Date(until).toLocaleString() : "later";
+      return `Google Scholar paused for this network until ${label}. Profile search, add, and refresh are disabled.`;
+    }
+
+    function updateScholarCooldownControls() {
+      const paused = scholarGlobalCooldownActive();
+      const add = $("openAuthorMonitorDialog");
+      const search = $("searchAuthorProfiles");
+      const query = $("authorMonitorQuery");
+      const refresh = $("refreshAuthorMonitor");
+      const refreshAll = $("refreshAllAuthors");
+      if (add) {
+        add.disabled = paused;
+        add.title = paused ? scholarGlobalCooldownText() : "Add monitored author";
+      }
+      if (search) search.disabled = paused || state.authorMonitorDialogBusy;
+      if (query) query.disabled = paused;
+      if (refresh) refresh.disabled = paused || state.authorMonitorRefreshing;
+      if (refreshAll) refreshAll.disabled = paused || state.authorMonitorRefreshing;
+    }
+
     async function refreshAuthorMonitorSummary() {
       if (state.authorMonitorLoading || state.authorMonitorRefreshing) return;
       try {
+        const previousSignature = state.authorMonitors.map(
+          (item) => [
+            Number(item.id || 0),
+            String(item.name || ""),
+            String(item.status || ""),
+            Number(item.paper_count || 0)
+          ].join(":")
+        ).join("|");
         const data = await fetchJson("/api/author-monitor?summary=1", 12000);
         state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
+        if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
+          state.scholarGlobalCooldown = data.scholarCooldown;
+        }
         if (
           state.authorMonitorSelectedId
           && !state.authorMonitors.some((item) => Number(item.id) === Number(state.authorMonitorSelectedId))
         ) {
           state.authorMonitorSelectedId = 0;
         }
+        const nextSignature = state.authorMonitors.map(
+          (item) => [
+            Number(item.id || 0),
+            String(item.name || ""),
+            String(item.status || ""),
+            Number(item.paper_count || 0)
+          ].join(":")
+        ).join("|");
         updateAuthorMonitorTopDot();
+        updateScholarCooldownControls();
+        if (state.mode === "author" && previousSignature !== nextSignature) {
+          renderAuthorMonitor({preserveScroll: true});
+        }
+        const pendingImport = state.authorMonitors.find(
+          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+        );
+        if (pendingImport && !state.authorMonitorImportPoller) {
+          pollAuthorMonitorInitialImport(Number(pendingImport.id));
+        }
       } catch (_error) {
         // Author monitoring continues in the server even when this small badge
         // refresh cannot reach the local API.
@@ -35842,12 +36121,13 @@ INDEX_HTML = """<!doctype html>
       clearMonitorStatusDisplay();
       $("reportTitle").textContent = "Author Monitor";
       const selected = selectedAuthorMonitor();
+      const scholarPaused = scholarGlobalCooldownActive();
       root.innerHTML = `
         <div class="author-monitor-shell">
           <aside class="author-monitor-rail">
             <div class="author-monitor-rail-head">
               <strong>Monitored Authors</strong>
-              <button class="author-monitor-add" id="openAuthorMonitorDialog" type="button" title="Add monitored author">+</button>
+              <button class="author-monitor-add" id="openAuthorMonitorDialog" type="button" title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : "Add monitored author")}" ${scholarPaused ? "disabled" : ""}>+</button>
             </div>
             <div class="author-monitor-authors" id="authorMonitorAuthors"></div>
           </aside>
@@ -35857,7 +36137,7 @@ INDEX_HTML = """<!doctype html>
                 <strong>${escapeHtml(selected?.name || "All Authors")}</strong>
                 <span>${escapeHtml(authorMonitorSummaryText())}</span>
               </div>
-              ${selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(selected.message || "")}">Paused</span>` : ""}
+              ${scholarPaused || selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : selected.message || "")}">Paused</span>` : ""}
             </div>
             <div class="author-monitor-paper-list" id="authorMonitorPaperList"></div>
           </section>
@@ -35866,11 +36146,12 @@ INDEX_HTML = """<!doctype html>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">
-            <span class="${authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus">${escapeHtml(state.authorMonitorActivityText || "")}</span>
+            <span class="${scholarPaused ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus">${escapeHtml(scholarPaused ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}</span>
           </div>
         </div>
       `;
       $("openAuthorMonitorDialog")?.addEventListener("click", openAuthorMonitorDialog);
+      updateScholarCooldownControls();
       renderAuthorMonitorRail();
       const list = $("authorMonitorPaperList");
       const papers = authorMonitorVisiblePapers();
@@ -35917,7 +36198,12 @@ INDEX_HTML = """<!doctype html>
       if (cacheIsFresh) {
         updateAuthorMonitorActivityStatus("", {live: false});
         refreshAuthorMonitorSummary();
-        if (!state.authorMonitorEnrichmentStarted && state.authorMonitors.length) {
+        const pendingImport = state.authorMonitors.find(
+          (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+        );
+        if (pendingImport) {
+          pollAuthorMonitorInitialImport(Number(pendingImport.id));
+        } else if (!state.authorMonitorEnrichmentStarted && state.authorMonitors.length) {
           startAuthorMonitorEnrichment(state.authorMonitorSelectedId);
         }
         return;
@@ -35935,7 +36221,12 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorLoading = false;
       }
       if (state.mode === "author") renderAuthorMonitor();
-      if (!state.authorMonitorEnrichmentStarted && state.authorMonitors.length) {
+      const pendingImport = state.authorMonitors.find(
+        (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
+      );
+      if (pendingImport) {
+        pollAuthorMonitorInitialImport(Number(pendingImport.id));
+      } else if (!state.authorMonitorEnrichmentStarted && state.authorMonitors.length) {
         startAuthorMonitorEnrichment(state.authorMonitorSelectedId);
       }
     }
@@ -35947,9 +36238,13 @@ INDEX_HTML = """<!doctype html>
       state.authorMonitorStatus = "";
       $("authorMonitorQuery").value = "";
       $("authorProfileResults").innerHTML = "";
-      $("authorMonitorDialogStatus").textContent = "";
+      $("authorMonitorDialogStatus").textContent = scholarGlobalCooldownText();
+      $("authorMonitorDialogStatus").className = scholarGlobalCooldownActive()
+        ? "citation-settings-status err"
+        : "citation-settings-status";
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      updateScholarCooldownControls();
       window.setTimeout(() => $("authorMonitorQuery")?.focus(), 0);
     }
 
@@ -35962,17 +36257,22 @@ INDEX_HTML = """<!doctype html>
     function renderAuthorProfileResults() {
       const root = $("authorProfileResults");
       if (!root) return;
-      root.innerHTML = state.authorMonitorProfileResults.map((profile, index) => `
-        <div class="author-profile-result">
-          ${authorMonitorAvatarMarkup(profile)}
-          <div class="author-profile-result-copy">
-            <strong>${escapeHtml(profile.name || "Unknown author")}</strong>
-            <span>${escapeHtml(profile.affiliation || profile.email || "Google Scholar profile")}</span>
-            ${profile.interests?.length ? `<span>${escapeHtml(profile.interests.slice(0, 4).join(" · "))}</span>` : ""}
+      root.innerHTML = state.authorMonitorProfileResults.map((profile, index) => {
+        const alreadyMonitored = state.authorMonitors.some(
+          (author) => String(author.user_id || "") === String(profile.user_id || "")
+        );
+        return `
+          <div class="author-profile-result">
+            ${authorMonitorAvatarMarkup(profile)}
+            <div class="author-profile-result-copy">
+              <strong>${escapeHtml(profile.name || "Unknown author")}</strong>
+              <span>${escapeHtml(profile.affiliation || profile.email || "Google Scholar profile")}</span>
+              ${profile.interests?.length ? `<span>${escapeHtml(profile.interests.slice(0, 4).join(" · "))}</span>` : ""}
+            </div>
+            <button class="smallbtn" type="button" data-add-author-profile="${index}" ${alreadyMonitored || scholarGlobalCooldownActive() ? "disabled" : ""}>${alreadyMonitored ? "Monitored" : "Monitor"}</button>
           </div>
-          <button class="smallbtn" type="button" data-add-author-profile="${index}">Monitor</button>
-        </div>
-      `).join("");
+        `;
+      }).join("");
       root.querySelectorAll("[data-add-author-profile]").forEach((button) => {
         button.addEventListener("click", () => addAuthorMonitorProfile(
           state.authorMonitorProfileResults[Number(button.dataset.addAuthorProfile || 0)]
@@ -35980,34 +36280,135 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function authorMonitorProfileSearchErrorMessage(error) {
+      const message = String(error?.message || "").trim();
+      if (!message || message === "Load failed" || message === "Failed to fetch") {
+        return "Profile search was interrupted before a new result arrived. Please try again.";
+      }
+      return message;
+    }
+
     async function searchAuthorMonitorProfiles() {
       const query = String($("authorMonitorQuery")?.value || "").trim();
-      if (!query || state.authorMonitorDialogBusy) return;
+      if (!query || state.authorMonitorDialogBusy || scholarGlobalCooldownActive()) return;
       const status = $("authorMonitorDialogStatus");
       state.authorMonitorDialogBusy = true;
       $("searchAuthorProfiles").disabled = true;
+      state.authorMonitorProfileResults = [];
+      renderAuthorProfileResults();
       status.textContent = "Searching Google Scholar profiles...";
       status.className = "citation-settings-status";
       try {
         const res = await fetch(`/api/google-scholar-profiles?q=${encodeURIComponent(query)}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Profile search failed");
+        if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
+          state.scholarGlobalCooldown = data.scholarCooldown;
+        }
         state.authorMonitorProfileResults = data.profiles || [];
-        status.textContent = state.authorMonitorProfileResults.length
-          ? "Choose the correct profile."
-          : "No matching Google Scholar profiles were found.";
+        status.textContent = scholarGlobalCooldownActive()
+          ? scholarGlobalCooldownText()
+          : state.authorMonitorProfileResults.length
+            ? "Choose the correct profile."
+            : "No matching Google Scholar profiles were found.";
+        status.className = scholarGlobalCooldownActive()
+          ? "citation-settings-status err"
+          : "citation-settings-status";
         renderAuthorProfileResults();
       } catch (error) {
-        status.textContent = error.message || "Profile search failed";
+        state.authorMonitorProfileResults = [];
+        renderAuthorProfileResults();
+        status.textContent = authorMonitorProfileSearchErrorMessage(error);
         status.className = "citation-settings-status err";
+        await refreshAuthorMonitorSummary();
       } finally {
         state.authorMonitorDialogBusy = false;
-        $("searchAuthorProfiles").disabled = false;
+        updateScholarCooldownControls();
+      }
+    }
+
+    async function fetchAuthorMonitorSnapshot(authorId = 0) {
+      const res = await fetch(`/api/author-monitor?author_id=${Number(authorId || 0)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not reload Author Monitor");
+      return data;
+    }
+
+    async function reconcileAddedAuthorMonitor(profile) {
+      try {
+        const summary = await fetchJson("/api/author-monitor?summary=1", 12000);
+        const author = (summary.authors || []).find(
+          (item) => String(item.user_id || "") === String(profile?.user_id || "")
+        );
+        if (!author) return false;
+        const snapshot = await fetchAuthorMonitorSnapshot(Number(author.id));
+        snapshot.selectedAuthorId = Number(author.id);
+        applyAuthorMonitorSnapshot(snapshot);
+        closeAuthorMonitorDialog();
+        if (state.mode === "author") renderAuthorMonitor();
+        updateAuthorMonitorActivityStatus(
+          `${author.name || profile.name || "Author"} was added. Importing the Google Scholar baseline...`,
+          {live: true, clear: false}
+        );
+        pollAuthorMonitorInitialImport(Number(author.id));
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    async function pollAuthorMonitorInitialImport(authorId) {
+      if (state.authorMonitorImportPoller) {
+        window.clearTimeout(state.authorMonitorImportPoller);
+        state.authorMonitorImportPoller = 0;
+      }
+      try {
+        const snapshot = await fetchAuthorMonitorSnapshot(authorId);
+        snapshot.selectedAuthorId = Number(authorId);
+        applyAuthorMonitorSnapshot(snapshot);
+        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        const author = state.authorMonitors.find((item) => Number(item.id) === Number(authorId));
+        if (!author) {
+          updateAuthorMonitorActivityStatus("The imported author is no longer monitored.", {live: false});
+          return;
+        }
+        if (["idle", "queued", "refreshing"].includes(String(author.status || ""))) {
+          updateAuthorMonitorActivityStatus(
+            author.message || `Importing ${author.name || "author"} from Google Scholar...`,
+            {live: true, clear: false}
+          );
+          state.authorMonitorImportPoller = window.setTimeout(
+            () => pollAuthorMonitorInitialImport(authorId),
+            2200
+          );
+          return;
+        }
+        if (author.status === "success") {
+          updateAuthorMonitorActivityStatus(
+            `${author.name || "Author"} imported successfully · ${Number(author.paper_count || 0)} papers.`,
+            {live: false, clear: false}
+          );
+          startAuthorMonitorEnrichment(authorId);
+          return;
+        }
+        updateAuthorMonitorActivityStatus(
+          author.message || `Could not import ${author.name || "author"}.`,
+          {live: false, clear: false}
+        );
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(
+          `Import is still running, but the local status check was interrupted: ${authorMonitorProfileSearchErrorMessage(error)}`,
+          {live: true, clear: false}
+        );
+        state.authorMonitorImportPoller = window.setTimeout(
+          () => pollAuthorMonitorInitialImport(authorId),
+          3000
+        );
       }
     }
 
     async function addAuthorMonitorProfile(profile) {
-      if (!profile || state.authorMonitorDialogBusy) return;
+      if (!profile || state.authorMonitorDialogBusy || scholarGlobalCooldownActive()) return;
       const status = $("authorMonitorDialogStatus");
       state.authorMonitorDialogBusy = true;
       updateAuthorMonitorActivityStatus(
@@ -36029,20 +36430,39 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorSelectedId = Number(data.selectedAuthorId || state.authorMonitorSelectedId || 0);
         closeAuthorMonitorDialog();
         if (state.mode === "author") renderAuthorMonitor();
-        updateAuthorMonitorActivityStatus("Scholar profile imported. Preparing paper metadata...", {live: true, clear: false});
-        startAuthorMonitorEnrichment(state.authorMonitorSelectedId);
+        if (data.refresh?.status === "queued") {
+          updateAuthorMonitorActivityStatus(
+            `${profile.name || "Author"} was added. Importing the Google Scholar baseline...`,
+            {live: true, clear: false}
+          );
+          pollAuthorMonitorInitialImport(state.authorMonitorSelectedId);
+        } else {
+          updateAuthorMonitorActivityStatus(
+            `${profile.name || "Author"} is already monitored.`,
+            {live: false, clear: false}
+          );
+        }
       } catch (error) {
+        if (await reconcileAddedAuthorMonitor(profile)) return;
         updateAuthorMonitorActivityStatus(error.message || "Could not add monitored author", {live: false});
         status.textContent = error.message || "Could not add monitored author";
         status.className = "citation-settings-status err";
+        await refreshAuthorMonitorSummary();
       } finally {
         state.authorMonitorDialogBusy = false;
-        $("authorProfileResults")?.querySelectorAll("button").forEach((button) => button.disabled = false);
+        $("authorProfileResults")?.querySelectorAll("button").forEach((button) => {
+          button.disabled = scholarGlobalCooldownActive();
+        });
+        updateScholarCooldownControls();
       }
     }
 
     async function refreshAuthorMonitor(authorId = state.authorMonitorSelectedId) {
       if (state.authorMonitorRefreshing) return;
+      if (scholarGlobalCooldownActive()) {
+        updateAuthorMonitorActivityStatus(scholarGlobalCooldownText(), {live: false, clear: false});
+        return;
+      }
       state.authorMonitorRefreshing = true;
       const selectedId = Number(authorId || 0);
       const selectedName = state.authorMonitors.find((author) => Number(author.id) === selectedId)?.name || "authors";
@@ -36069,29 +36489,81 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         state.authorMonitorStatus = error.message || "Author refresh failed";
         updateAuthorMonitorActivityStatus(state.authorMonitorStatus, {live: false});
+        await refreshAuthorMonitorSummary();
         if (state.mode === "author") showMonitorStatusMessage(state.authorMonitorStatus);
       } finally {
         state.authorMonitorRefreshing = false;
-        if (refreshButton) refreshButton.disabled = false;
-        if (refreshAllButton) refreshAllButton.disabled = false;
+        updateScholarCooldownControls();
       }
+    }
+
+    function confirmAuthorMonitorRemoval(author) {
+      const name = author?.name || "this author";
+      const paperCount = Number(author?.paper_count || 0);
+      return new Promise((resolve) => {
+        document.querySelector(".author-remove-confirm-backdrop")?.remove();
+        const backdrop = document.createElement("div");
+        backdrop.className = "finder-drop-modal-backdrop author-remove-confirm-backdrop";
+        backdrop.innerHTML = `
+          <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="authorRemoveTitle">
+            <h2 id="authorRemoveTitle">Remove ${escapeHtml(name)} from Author Monitor?</h2>
+            <p>This removes only the monitored-author entry and its links to ${paperCount} imported profile paper${paperCount === 1 ? "" : "s"}.</p>
+            <p><strong>Papers, PDFs, Library items, My Publications, analysis files, and original source files will be kept.</strong></p>
+            <div class="finder-drop-actions">
+              <button type="button" data-confirm="cancel">Cancel</button>
+              <button type="button" class="primary danger" data-confirm="remove">Remove Author</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(backdrop);
+        const finish = (confirmed) => {
+          backdrop.remove();
+          window.removeEventListener("keydown", onKeyDown);
+          resolve(Boolean(confirmed));
+        };
+        const onKeyDown = (event) => {
+          if (event.key === "Escape") finish(false);
+        };
+        backdrop.addEventListener("click", (event) => {
+          if (event.target === backdrop) finish(false);
+        });
+        backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
+        backdrop.querySelector('[data-confirm="remove"]')?.addEventListener("click", () => finish(true));
+        window.addEventListener("keydown", onKeyDown);
+        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
+      });
     }
 
     async function deleteAuthorMonitor(author) {
       if (!author?.id) return;
-      if (!window.confirm(`Remove ${author.name || "this author"} from Author Monitor? Papers, PDFs, and Library items will be kept.`)) return;
+      if (!(await confirmAuthorMonitorRemoval(author))) return;
       updateAuthorMonitorActivityStatus(`Removing ${author.name || "author"} from Author Monitor...`, {live: true, clear: false});
-      const res = await fetch("/api/author-monitor/delete", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({author_id: Number(author.id)})
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not remove monitored author");
-      state.authorMonitorSelectedId = 0;
-      applyAuthorMonitorSnapshot(data);
-      if (state.mode === "author") renderAuthorMonitor();
-      updateAuthorMonitorActivityStatus("Author removed from monitor.", {live: false});
+      try {
+        const res = await fetch("/api/author-monitor/delete", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_id: Number(author.id)})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not remove monitored author");
+        state.authorMonitorSelectedId = 0;
+        applyAuthorMonitorSnapshot(data);
+        if (state.mode === "author") renderAuthorMonitor();
+        updateAuthorMonitorActivityStatus("Author removed from monitor.", {live: false, clear: false});
+      } catch (error) {
+        const snapshot = await fetchAuthorMonitorSnapshot(0);
+        const stillExists = (snapshot.authors || []).some(
+          (item) => Number(item.id) === Number(author.id)
+        );
+        if (stillExists) throw error;
+        state.authorMonitorSelectedId = 0;
+        applyAuthorMonitorSnapshot(snapshot);
+        if (state.mode === "author") renderAuthorMonitor();
+        updateAuthorMonitorActivityStatus(
+          "Author removed from monitor. The response was interrupted, but SQLite confirms the deletion.",
+          {live: false, clear: false}
+        );
+      }
     }
 
     function showAuthorMonitorContextMenu(event, author) {
@@ -36099,7 +36571,7 @@ INDEX_HTML = """<!doctype html>
       const menu = document.createElement("div");
       menu.className = "theme-context-menu";
       menu.innerHTML = `
-        <button type="button" data-action="refresh-author">Refresh This Author</button>
+        <button type="button" data-action="refresh-author" ${scholarGlobalCooldownActive() ? "disabled" : ""} title="${escapeAttr(scholarGlobalCooldownActive() ? scholarGlobalCooldownText() : "Refresh this author from Google Scholar")}">Refresh This Author</button>
         <button type="button" data-action="find-author-identifiers">Find Missing Identifiers</button>
         <button type="button" data-action="open-author-profile">Open Google Scholar</button>
         <button type="button" class="danger" data-action="remove-author">Remove from Monitor</button>

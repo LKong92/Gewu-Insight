@@ -17,6 +17,33 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
             {
                 "kind": "aaas-published-pdf",
                 "url": "https://www.science.org/doi/pdf/10.1126/sciadv.adw9449?download=true",
+                "followup": {
+                    "kind": "aaas-supplement-pdf",
+                    "url": (
+                        "https://www.science.org/doi/suppl/10.1126/sciadv.adw9449/"
+                        "suppl_file/sciadv.adw9449_sm.pdf"
+                    ),
+                },
+            },
+        )
+
+    def test_partial_aaas_download_offers_supplement_browser_fallback(self):
+        fallback = published_pdf_browser_fallback(
+            {"doi": "10.1126/science.aao1797"},
+            {
+                "status": "partial",
+                "message": "main PDF saved as merged PDF; no PDF supplement found",
+            },
+        )
+
+        self.assertEqual(
+            fallback,
+            {
+                "kind": "aaas-supplement-pdf",
+                "url": (
+                    "https://www.science.org/doi/suppl/10.1126/science.aao1797/"
+                    "suppl_file/science.aao1797_sm.pdf"
+                ),
             },
         )
 

@@ -1628,15 +1628,7 @@ class Storage:
               profile_url, avatar_url, sort_order, status, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
-            ON CONFLICT(scholar_user_id) DO UPDATE SET
-              name = excluded.name,
-              affiliation = excluded.affiliation,
-              email = excluded.email,
-              cited_by = excluded.cited_by,
-              interests_json = excluded.interests_json,
-              profile_url = excluded.profile_url,
-              avatar_url = excluded.avatar_url,
-              updated_at = excluded.updated_at
+            ON CONFLICT(scholar_user_id) DO NOTHING
             """,
             (
                 user_id,

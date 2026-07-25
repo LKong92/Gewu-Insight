@@ -110,6 +110,38 @@ class DownloadCandidateTests(unittest.TestCase):
         )
         self.assertIn(paper["pdf_url"], candidates)
 
+    def test_science_supplement_uses_aaas_sm_pdf_url(self):
+        self.assertEqual(
+            download.science_supplement_pdf_candidates("https://doi.org/10.1126/sciadv.adw9449"),
+            [
+                "https://www.science.org/doi/suppl/10.1126/sciadv.adw9449/"
+                "suppl_file/sciadv.adw9449_sm.pdf",
+            ],
+        )
+
+    def test_science_supplement_is_collected_without_landing_page_access(self):
+        paper = {
+            "paper_id": "science-example",
+            "doi": "10.1126/science.aao1797",
+            "journal": "Science",
+            "landing_url": "",
+            "url": "",
+        }
+        with patch.object(download, "science_open_access_pdf_candidates", return_value=[]), patch.object(
+            download,
+            "crossref_pdf_candidates",
+            return_value=[],
+        ):
+            candidates = download.collect_pdf_candidates(paper)
+
+        self.assertEqual(
+            candidates["supplements"],
+            [
+                "https://www.science.org/doi/suppl/10.1126/science.aao1797/"
+                "suppl_file/science.aao1797_sm.pdf",
+            ],
+        )
+
     def test_non_science_doi_does_not_trigger_science_fallback(self):
         paper = {
             "paper_id": "other-example",

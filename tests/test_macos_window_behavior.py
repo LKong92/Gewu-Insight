@@ -71,6 +71,13 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('<iframe class="library-pdf-frame"', INDEX_HTML)
         self.assertNotIn("pdfjsLib", INDEX_HTML)
 
+    def test_native_publisher_download_accepts_science_supplements(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+
+        self.assertIn('[path hasPrefix:@"/doi/suppl/"]', source)
+        self.assertIn('rangeOfString:@"/suppl_file/"', source)
+        self.assertIn("publisher_download_kind: browserFallback.kind", INDEX_HTML)
+
 
 if __name__ == "__main__":
     unittest.main()

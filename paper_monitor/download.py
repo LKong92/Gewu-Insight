@@ -143,6 +143,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     # publisher URLs, while retaining the publisher candidates as fallbacks.
     if doi.startswith("10.1126/"):
         main.extend(science_open_access_pdf_candidates(doi))
+        supplements.extend(science_supplement_pdf_candidates(doi))
     if paper.get("pdf_url"):
         main.append(paper["pdf_url"])
     main.extend(journal_pdf_candidates(paper))
@@ -265,6 +266,16 @@ def science_open_access_pdf_candidates(doi: str) -> list[str]:
         europe_pmc_pdf_candidates(doi)
         + openalex_open_pdf_candidates(doi, published_only=True)
     )
+
+
+def science_supplement_pdf_candidates(doi: str) -> list[str]:
+    doi = normalize_doi(doi)
+    if not doi.startswith("10.1126/"):
+        return []
+    article_id = doi.split("/", 1)[1]
+    return [
+        f"https://www.science.org/doi/suppl/{doi}/suppl_file/{article_id}_sm.pdf",
+    ]
 
 
 def europe_pmc_pdf_candidates(doi: str) -> list[str]:

@@ -554,7 +554,9 @@
     NSString *host = publisherURL.host.lowercaseString ?: @"";
     NSString *path = publisherURL.path.lowercaseString ?: @"";
     BOOL allowedHost = [host isEqualToString:@"science.org"] || [host hasSuffix:@".science.org"];
-    BOOL allowedPath = [path hasPrefix:@"/doi/pdf/"] || [path hasPrefix:@"/doi/epdf/"];
+    BOOL allowedPath = [path hasPrefix:@"/doi/pdf/"]
+        || [path hasPrefix:@"/doi/epdf/"]
+        || [path hasPrefix:@"/doi/suppl/"];
     if (token.length == 0 || !publisherURL || ![publisherURL.scheme.lowercaseString isEqualToString:@"https"] || !allowedHost || !allowedPath) {
         [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:@"Invalid published PDF download request."];
         return;
@@ -575,6 +577,14 @@
     [request setValue:@"application/pdf,application/octet-stream;q=0.9,text/html;q=0.8,*/*;q=0.5" forHTTPHeaderField:@"Accept"];
     NSString *refererPath = [publisherURL.path stringByReplacingOccurrencesOfString:@"/doi/pdf/" withString:@"/doi/"];
     refererPath = [refererPath stringByReplacingOccurrencesOfString:@"/doi/epdf/" withString:@"/doi/"];
+    if ([publisherURL.path hasPrefix:@"/doi/suppl/"]) {
+        NSString *supplementPath = [publisherURL.path substringFromIndex:@"/doi/suppl/".length];
+        NSRange fileRange = [supplementPath rangeOfString:@"/suppl_file/"];
+        if (fileRange.location != NSNotFound) {
+            supplementPath = [supplementPath substringToIndex:fileRange.location];
+        }
+        refererPath = [@"/doi/" stringByAppendingString:supplementPath];
+    }
     NSString *referer = [NSString stringWithFormat:@"https://www.science.org%@", refererPath ?: @""];
     [request setValue:referer forHTTPHeaderField:@"Referer"];
 

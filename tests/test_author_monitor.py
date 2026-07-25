@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from paper_monitor import ui_server
 from paper_monitor.storage import Storage
@@ -29,6 +30,23 @@ def paper(paper_id: str, title: str, date: str) -> dict:
 
 
 class AuthorMonitorStorageTests(unittest.TestCase):
+    def test_duplicate_scholar_id_does_not_overwrite_existing_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                original = scholar_profile("same-user", "Leo Kouwenhoven")
+                original["affiliation"] = "Delft University of Technology"
+                first = storage.add_author_monitor(original)
+                conflicting = scholar_profile("same-user", "Stevan Nadj-Perge")
+                second = storage.add_author_monitor(conflicting)
+                saved = storage.get_author_monitor(int(first["id"]))
+            finally:
+                storage.close()
+
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(saved["name"], "Leo Kouwenhoven")
+        self.assertEqual(saved["affiliation"], "Delft University of Technology")
+
     def test_shared_paper_is_deduplicated_and_monitor_delete_keeps_paper(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -46,6 +64,30 @@ class AuthorMonitorStorageTests(unittest.TestCase):
                     paper_id="shared-paper",
                     unread=True,
                 )
+                storage.add_library_item(paper_id="shared-paper", folder_id=1)
+                storage.add_my_publication(paper_id="shared-paper")
+                timestamp = ui_server.now_iso()
+                storage.conn.execute(
+                    """
+                    INSERT INTO resources (
+                      paper_id, source_path, stored_path, original_filename,
+                      kind, mime_type, size_bytes, status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'imported', ?, ?)
+                    """,
+                    (
+                        "shared-paper",
+                        "/tmp/shared-paper-source.pdf",
+                        "/tmp/shared-paper.pdf",
+                        "shared-paper.pdf",
+                        "pdf",
+                        "application/pdf",
+                        123,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                storage.conn.commit()
 
                 rows = storage.list_author_monitor_papers()
                 self.assertEqual(len(rows), 1)
@@ -64,6 +106,27 @@ class AuthorMonitorStorageTests(unittest.TestCase):
                 storage.delete_author_monitor(int(first["id"]))
                 self.assertIsNotNone(storage.get_paper("shared-paper"))
                 self.assertEqual(len(storage.list_author_monitor_papers()), 1)
+                self.assertEqual(
+                    storage.conn.execute(
+                        "SELECT COUNT(*) FROM library_items WHERE paper_id = ?",
+                        ("shared-paper",),
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    storage.conn.execute(
+                        "SELECT COUNT(*) FROM resources WHERE paper_id = ?",
+                        ("shared-paper",),
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    storage.conn.execute(
+                        "SELECT COUNT(*) FROM my_publications WHERE paper_id = ?",
+                        ("shared-paper",),
+                    ).fetchone()[0],
+                    1,
+                )
             finally:
                 storage.close()
 
@@ -85,6 +148,150 @@ class AuthorMonitorStorageTests(unittest.TestCase):
 
 
 class AuthorMonitorRefreshTests(unittest.TestCase):
+    def test_local_profile_search_never_assigns_a_monitored_id_to_a_coauthor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                storage.add_author_monitor(
+                    scholar_profile("leo-profile", "L. P. Kouwenhoven")
+                )
+                coauthored = paper("coauthored", "Shared Paper", "2026-07-24")
+                coauthored["url"] = (
+                    "https://scholar.google.com/citations?view_op=view_citation"
+                    "&user=leo-profile&citation_for_view=leo-profile:abc"
+                )
+                coauthored["raw"] = {
+                    "authors": ["L. P. Kouwenhoven", "Stevan Nadj-Perge"],
+                    "url": coauthored["url"],
+                }
+                storage.upsert_paper(coauthored)
+
+                wrong = ui_server.local_google_scholar_profiles(
+                    storage,
+                    "Stevan Nadj-Perge",
+                )
+                correct = ui_server.local_google_scholar_profiles(
+                    storage,
+                    "Leo Kouwenhoven",
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(wrong, [])
+        self.assertEqual(len(correct), 1)
+        self.assertEqual(correct[0]["user_id"], "leo-profile")
+        self.assertTrue(correct[0]["already_monitored"])
+
+    def test_global_scholar_cooldown_stops_every_author_refresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(scholar_profile("author-a", "Ada Author"))
+                cooldown = ui_server.start_google_scholar_global_cooldown(
+                    storage,
+                    message="unusual traffic",
+                )
+                snapshot = ui_server.author_monitor_snapshot(storage)
+            finally:
+                storage.close()
+
+            with patch.object(
+                ui_server,
+                "fetch_google_scholar_profile_payload",
+                side_effect=AssertionError("Scholar must not be requested during global cooldown"),
+            ):
+                result = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    int(author["id"]),
+                    initial=False,
+                    force=True,
+                )
+
+            self.assertTrue(cooldown["active"])
+            self.assertTrue(snapshot["scholarCooldown"]["active"])
+            self.assertEqual(result["status"], "global-cooldown")
+            self.assertIn("all authors", result["message"])
+
+    def test_scholar_block_starts_global_24_hour_circuit_breaker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(scholar_profile("author-a", "Ada Author"))
+            finally:
+                storage.close()
+
+            with patch.object(
+                ui_server,
+                "fetch_google_scholar_profile_payload",
+                side_effect=ui_server.GoogleScholarBlockedError("unusual traffic"),
+            ):
+                result = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    int(author["id"]),
+                    initial=True,
+                    force=True,
+                )
+
+            storage = Storage(db_path)
+            try:
+                cooldown = ui_server.google_scholar_global_cooldown(storage)
+            finally:
+                storage.close()
+            self.assertEqual(result["status"], "cooldown")
+            self.assertTrue(cooldown["active"])
+            self.assertEqual(ui_server.GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SECONDS, 24 * 60 * 60)
+
+    def test_name_profile_search_uses_one_network_query(self):
+        profile = scholar_profile("author-a", "Ada Author")
+        with patch.object(
+            ui_server,
+            "fetch_google_scholar_profiles_from_search",
+            return_value=[profile],
+        ) as fetch:
+            results = ui_server.search_google_scholar_profiles(
+                "Ada Author; Example University",
+                limit=20,
+            )
+
+        fetch.assert_called_once()
+        self.assertEqual(results, [profile])
+        self.assertIn("Ada Author Example University", fetch.call_args.args[0])
+
+    def test_all_scholar_requests_share_a_random_minimum_interval(self):
+        previous = ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT
+        ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT = 10.0
+        response = object()
+        try:
+            with patch.object(ui_server.random, "uniform", return_value=6.0), patch.object(
+                ui_server.time,
+                "monotonic",
+                side_effect=[12.0, 13.0],
+            ), patch.object(ui_server.time, "sleep") as sleep, patch.object(
+                ui_server,
+                "request_with_retries",
+                return_value=response,
+            ) as request:
+                result = ui_server.google_scholar_request_with_spacing(
+                    "GET",
+                    "https://scholar.google.com/citations",
+                    max_retries=1,
+                )
+        finally:
+            ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT = previous
+
+        self.assertIs(result, response)
+        sleep.assert_called_once_with(4.0)
+        request.assert_called_once()
+
+    def test_scholar_http_403_is_treated_as_an_ip_block(self):
+        self.assertTrue(
+            ui_server.is_google_scholar_block_error(
+                RuntimeError("403 Client Error: Forbidden for url: https://scholar.google.com/")
+            )
+        )
+
     def test_initial_import_is_baseline_and_later_refresh_marks_only_new_papers(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "monitor.sqlite"
@@ -393,6 +600,71 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(210px, 250px)", html)
         self.assertIn(".app.author-mode .sidebar", html)
         self.assertIn("display: none;", html)
+
+    def test_author_monitor_exposes_global_scholar_safety_controls(self):
+        html = ui_server.INDEX_HTML
+        self.assertIn("scholarGlobalCooldown", html)
+        self.assertIn("scholarGlobalCooldownActive()", html)
+        self.assertIn("Profile URL or name and affiliations", html)
+        self.assertIn("publisher", html.lower())
+        self.assertIn("Profile search, add, and refresh are disabled.", html)
+        self.assertIn('data-action="refresh-author" ${scholarGlobalCooldownActive() ? "disabled"', html)
+        self.assertEqual(ui_server.AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MIN_SECONDS, 12.0)
+        self.assertEqual(ui_server.AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MAX_SECONDS, 24.0)
+        self.assertEqual(ui_server.AUTO_AUTHOR_MONITOR_STAGGER_MIN_SECONDS, 45.0)
+        self.assertEqual(ui_server.AUTO_AUTHOR_MONITOR_STAGGER_MAX_SECONDS, 90.0)
+
+    def test_author_profile_search_does_not_leave_stale_candidates_after_failure(self):
+        html = ui_server.INDEX_HTML
+        search = html.split("async function searchAuthorMonitorProfiles()", 1)[1].split(
+            "async function addAuthorMonitorProfile", 1
+        )[0]
+        self.assertGreaterEqual(search.count("state.authorMonitorProfileResults = [];"), 2)
+        self.assertIn("authorMonitorProfileSearchErrorMessage(error)", search)
+        self.assertIn(
+            "Profile search was interrupted before a new result arrived. Please try again.",
+            html,
+        )
+
+    def test_author_add_and_delete_reconcile_interrupted_responses(self):
+        html = ui_server.INDEX_HTML
+        self.assertIn('result = {"status": "queued", "added": 0}', Path(ui_server.__file__).read_text())
+        self.assertIn("pollAuthorMonitorInitialImport", html)
+        self.assertIn("reconcileAddedAuthorMonitor(profile)", html)
+        self.assertIn("SQLite confirms the deletion", html)
+        self.assertIn('${alreadyMonitored ? "Monitored" : "Monitor"}', html)
+        summary = html.split("async function refreshAuthorMonitorSummary()", 1)[1].split(
+            "function startAuthorMonitorSummaryPolling", 1
+        )[0]
+        self.assertIn("previousSignature !== nextSignature", summary)
+        self.assertIn("renderAuthorMonitor({preserveScroll: true})", summary)
+        self.assertIn("pollAuthorMonitorInitialImport(Number(pendingImport.id))", summary)
+
+    def test_author_remove_uses_an_in_app_safety_confirmation(self):
+        html = ui_server.INDEX_HTML
+        confirm = html.split("function confirmAuthorMonitorRemoval(author)", 1)[1].split(
+            "async function deleteAuthorMonitor", 1
+        )[0]
+        remove = html.split("async function deleteAuthorMonitor(author)", 1)[1].split(
+            "function showAuthorMonitorContextMenu", 1
+        )[0]
+        self.assertIn("Papers, PDFs, Library items, My Publications, analysis files", confirm)
+        self.assertIn('data-confirm="remove"', confirm)
+        self.assertIn("if (event.key === \"Escape\") finish(false)", confirm)
+        self.assertNotIn("event.key === \"Enter\"", confirm)
+        self.assertIn("await confirmAuthorMonitorRemoval(author)", remove)
+        self.assertNotIn("window.confirm", remove)
+
+    def test_author_status_bar_uses_full_width_and_wraps(self):
+        html = ui_server.INDEX_HTML
+        css = html.split(
+            ".author-monitor-status-bar .library-activity-status {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("width: 100%", css)
+        self.assertIn("max-width: none", css)
+        self.assertIn("white-space: normal", css)
+        self.assertIn("overflow: visible", css)
+        self.assertIn("text-overflow: clip", css)
 
     def test_author_monitor_uses_compact_cards_and_manual_keyboard_selection(self):
         html = ui_server.INDEX_HTML

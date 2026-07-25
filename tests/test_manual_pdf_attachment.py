@@ -256,6 +256,35 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         self.assertIn('data-pdf-replace="1"].drag-over::after', ui_server.INDEX_HTML)
         self.assertIn('replacing: Boolean(paper.merged_pdf_path)', ui_server.INDEX_HTML)
 
+    def test_science_supplement_is_merged_after_main_and_temporary_source_is_not_stored(self) -> None:
+        self.add_paper("paper-science")
+        main = self.write_pdf("data/pdfs/paper-science/Main.pdf")
+        supplement = self.write_pdf("native-temp/Science Supplement.pdf")
+        self.storage.update_download_status(
+            "paper-science",
+            status="partial",
+            message="main PDF saved as merged PDF; no PDF supplement found",
+            main_pdf_path=str(main),
+            supplement_pdf_paths=[],
+            merged_pdf_path=str(main),
+        )
+
+        target, paper = ui_server.attach_publisher_supplement_pdf_to_paper(
+            self.storage,
+            paper_id="paper-science",
+            context={},
+            source_path=supplement,
+        )
+
+        self.assertEqual(target, main.resolve())
+        self.assertEqual(len(ui_server.PdfReader(str(target)).pages), 2)
+        self.assertTrue(supplement.exists(), "The native wrapper owns and removes its temporary file")
+        self.assertEqual(paper["download_status"], "success")
+        self.assertEqual(paper["main_pdf_path"], str(target))
+        self.assertEqual(paper["merged_pdf_path"], str(target))
+        self.assertEqual(paper["supplement_pdf_paths"], "[]")
+        self.assertIn("merged Science supplementary PDF", paper["download_message"])
+
 
 if __name__ == "__main__":
     unittest.main()
