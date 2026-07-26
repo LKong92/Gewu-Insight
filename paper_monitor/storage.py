@@ -208,6 +208,7 @@ CREATE TABLE IF NOT EXISTS author_monitors (
   cited_by TEXT,
   interests_json TEXT,
   profile_url TEXT NOT NULL,
+  homepage_url TEXT,
   avatar_url TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'idle',
@@ -396,6 +397,12 @@ class Storage:
             self.conn.commit()
         if "author_marks" not in my_publication_columns:
             self.conn.execute("ALTER TABLE my_publications ADD COLUMN author_marks TEXT")
+            self.conn.commit()
+        author_monitor_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(author_monitors)").fetchall()
+        }
+        if "homepage_url" not in author_monitor_columns:
+            self.conn.execute("ALTER TABLE author_monitors ADD COLUMN homepage_url TEXT")
             self.conn.commit()
 
     def _sync_arxiv_calendar_timezone(self) -> None:
@@ -1625,9 +1632,9 @@ class Storage:
             """
             INSERT INTO author_monitors (
               scholar_user_id, name, affiliation, email, cited_by, interests_json,
-              profile_url, avatar_url, sort_order, status, created_at, updated_at
+              profile_url, homepage_url, avatar_url, sort_order, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
             ON CONFLICT(scholar_user_id) DO NOTHING
             """,
             (
@@ -1638,6 +1645,7 @@ class Storage:
                 str(profile.get("cited_by") or "").strip(),
                 json.dumps([str(item) for item in interests if str(item).strip()], ensure_ascii=False),
                 profile_url,
+                str(profile.get("homepage_url") or "").strip(),
                 str(profile.get("avatar_url") or "").strip(),
                 next_order,
                 timestamp,
@@ -1703,6 +1711,7 @@ class Storage:
                     "email": str(profile.get("email") or values.get("email") or "").strip(),
                     "cited_by": str(profile.get("cited_by") or values.get("cited_by") or "").strip(),
                     "profile_url": str(profile.get("url") or values.get("profile_url") or "").strip(),
+                    "homepage_url": str(profile.get("homepage_url") or values.get("homepage_url") or "").strip(),
                     "avatar_url": str(profile.get("avatar_url") or values.get("avatar_url") or "").strip(),
                 }
             )
@@ -1726,7 +1735,7 @@ class Storage:
             """
             UPDATE author_monitors
             SET name = ?, affiliation = ?, email = ?, cited_by = ?, interests_json = ?,
-                profile_url = ?, avatar_url = ?, status = ?, message = ?,
+                profile_url = ?, homepage_url = ?, avatar_url = ?, status = ?, message = ?,
                 last_checked_at = ?, last_success_at = ?, cooldown_until = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -1737,6 +1746,7 @@ class Storage:
                 values.get("cited_by") or "",
                 values.get("interests_json") or "[]",
                 values.get("profile_url") or "",
+                values.get("homepage_url") or "",
                 values.get("avatar_url") or "",
                 values.get("status") or "idle",
                 values.get("message") or "",

@@ -30,6 +30,19 @@ def paper(paper_id: str, title: str, date: str) -> dict:
 
 
 class AuthorMonitorStorageTests(unittest.TestCase):
+    def test_author_homepage_is_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                profile = scholar_profile("homepage-user", "Homepage Author")
+                profile["homepage_url"] = "https://example.edu/author"
+                author = storage.add_author_monitor(profile)
+                saved = storage.get_author_monitor(int(author["id"]))
+            finally:
+                storage.close()
+
+        self.assertEqual(saved["homepage_url"], "https://example.edu/author")
+
     def test_duplicate_scholar_id_does_not_overwrite_existing_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -148,6 +161,97 @@ class AuthorMonitorStorageTests(unittest.TestCase):
 
 
 class AuthorMonitorRefreshTests(unittest.TestCase):
+    def test_scholar_row_parses_citation_count_without_another_request(self):
+        soup = ui_server.BeautifulSoup(
+            """
+            <table><tr class="gsc_a_tr">
+              <td><a class="gsc_a_at" href="/citations?view_op=view_citation">Paper</a>
+              <div class="gs_gray">Ada Author</div><div class="gs_gray">Nature 1, 2</div></td>
+              <td class="gsc_a_c"><a>1,234</a></td>
+              <td class="gsc_a_y"><span>2026</span></td>
+            </tr></table>
+            """,
+            "html.parser",
+        )
+        candidate = ui_server.google_scholar_row_to_publication(soup.select_one("tr"))
+
+        self.assertEqual(candidate["raw"]["google_scholar"]["citation_count"], 1234)
+        self.assertIn("checked_at", candidate["raw"]["google_scholar"])
+
+    def test_scholar_profile_parses_external_homepage(self):
+        soup = ui_server.BeautifulSoup(
+            """
+            <div id="gsc_prf_in">Ada Author</div>
+            <div id="gsc_prf_ivh"><a class="gsc_prf_ila" href="https://example.edu/ada">Homepage</a></div>
+            <div id="gsc_prf_int"><a href="/citations?view_op=search_authors">Quantum</a></div>
+            """,
+            "html.parser",
+        )
+        profile = ui_server.google_scholar_profile_page_metadata(
+            soup,
+            "https://scholar.google.com/citations?user=ada",
+            "ada",
+        )
+
+        self.assertEqual(profile["homepage_url"], "https://example.edu/ada")
+
+    def test_google_scholar_count_participates_in_merged_citations(self):
+        candidate = paper("scholar-count", "Scholar Count", "2026-07-24")
+        candidate["raw_json"] = json.dumps(
+            {
+                "cited_by_count": 8,
+                "google_scholar": {
+                    "citation_count": 21,
+                    "publication_url": "https://scholar.google.com/example",
+                },
+            }
+        )
+
+        metrics = ui_server.citation_metrics(candidate)
+
+        self.assertEqual(metrics["count"], 21)
+        self.assertEqual(metrics["sources"]["google_scholar"]["count"], 21)
+        self.assertEqual(metrics["source"], "Merged")
+
+    def test_existing_paper_receives_scholar_observation_in_place(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                storage.upsert_paper(paper("existing-paper", "Existing", "2026-01-01"))
+                ui_server.save_google_scholar_publication_observation(
+                    storage,
+                    "existing-paper",
+                    {
+                        "raw": {
+                            "google_scholar": {
+                                "citation_count": 17,
+                                "publication_url": "https://scholar.google.com/existing",
+                                "checked_at": "2026-07-26T12:00:00+08:00",
+                            }
+                        }
+                    },
+                )
+                saved = storage.get_paper("existing-paper")
+            finally:
+                storage.close()
+
+        self.assertEqual(
+            ui_server.parse_raw_json(saved)["google_scholar"]["citation_count"],
+            17,
+        )
+
+    def test_manual_identifier_request_can_enter_active_job_priority_queue(self):
+        job_id = ui_server.create_author_monitor_enrichment_job()
+        ui_server.update_author_monitor_enrichment_job(job_id, status="running")
+
+        queued = ui_server.queue_author_monitor_enrichment_priority(job_id, "paper-priority")
+
+        self.assertTrue(queued)
+        self.assertEqual(
+            ui_server.take_author_monitor_enrichment_priorities(job_id),
+            ["paper-priority"],
+        )
+
     def test_local_profile_search_never_assigns_a_monitored_id_to_a_coauthor(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -366,6 +470,79 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
                 self.assertTrue(rows["new-paper"]["author_unread"])
             finally:
                 storage.close()
+
+    def test_full_citation_update_reads_whole_profile_and_marks_new_papers_unread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(scholar_profile("author-a", "Ada Author"))
+                author_id = int(author["id"])
+                storage.upsert_paper(paper("existing-paper", "Existing Paper", "2025-01-01"))
+                storage.add_author_monitor_paper(
+                    author_monitor_id=author_id,
+                    paper_id="existing-paper",
+                    unread=False,
+                )
+            finally:
+                storage.close()
+
+            calls = []
+
+            def fake_fetch(_url, *, limit, sort_by_date=False):
+                calls.append((limit, sort_by_date))
+                profile = scholar_profile("author-a", "Ada Author")
+                profile["homepage_url"] = "https://example.edu/ada"
+                return {
+                    "profile": profile,
+                    "candidates": [{"key": "existing"}, {"key": "new"}],
+                }
+
+            def fake_normalize(candidate):
+                if candidate["key"] == "existing":
+                    return paper("existing-paper", "Existing Paper", "2025-01-01")
+                return paper("backfilled-paper", "Backfilled Paper", "2024-01-01")
+
+            with patch.object(
+                ui_server,
+                "fetch_google_scholar_profile_payload",
+                side_effect=fake_fetch,
+            ), patch.object(
+                ui_server,
+                "paper_from_publication_candidate",
+                side_effect=fake_normalize,
+            ), patch.object(
+                ui_server,
+                "scholar_candidate_key",
+                side_effect=lambda candidate, _paper: candidate["key"],
+            ):
+                result = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=False,
+                    force=True,
+                    full_metadata=True,
+                )
+
+            storage = Storage(db_path)
+            try:
+                saved_author = storage.get_author_monitor(author_id)
+                rows = {
+                    row["paper_id"]: row
+                    for row in storage.list_author_monitor_papers(author_id)
+                }
+            finally:
+                storage.close()
+
+        self.assertTrue(result["full_metadata"])
+        self.assertEqual(
+            calls,
+            [(ui_server.AUTHOR_MONITOR_INITIAL_IMPORT_LIMIT, False)],
+        )
+        self.assertEqual(saved_author["homepage_url"], "https://example.edu/ada")
+        self.assertFalse(rows["existing-paper"]["author_unread"])
+        self.assertTrue(rows["backfilled-paper"]["author_unread"])
+        self.assertIn("1 new publication", result["message"])
 
     def test_background_enrichment_updates_scholar_only_paper_in_place(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -589,6 +766,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertNotIn("abstract", author_item)
         self.assertNotIn("bibtex", author_item)
         self.assertNotIn("citation_metrics", author_item)
+        self.assertIn("google_scholar_citation_count", author_item)
 
     def test_author_monitor_has_fifth_view_and_independent_three_column_layout(self):
         html = ui_server.INDEX_HTML
@@ -609,10 +787,50 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("publisher", html.lower())
         self.assertIn("Profile search, add, and refresh are disabled.", html)
         self.assertIn('data-action="refresh-author" ${scholarGlobalCooldownActive() ? "disabled"', html)
+        self.assertIn('data-action="update-all-scholar-citations"', html)
+        self.assertIn("No other author will be refreshed automatically.", html)
+        self.assertIn("full_metadata: true", html)
+        self.assertIn("Update All Scholar Citations</button>", html)
+        self.assertNotIn("Backfill Scholar Metadata", html)
         self.assertEqual(ui_server.AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MIN_SECONDS, 12.0)
         self.assertEqual(ui_server.AUTHOR_MONITOR_INITIAL_PAGE_PAUSE_MAX_SECONDS, 24.0)
         self.assertEqual(ui_server.AUTO_AUTHOR_MONITOR_STAGGER_MIN_SECONDS, 45.0)
         self.assertEqual(ui_server.AUTO_AUTHOR_MONITOR_STAGGER_MAX_SECONDS, 90.0)
+
+    def test_author_monitor_restores_list_position_and_uses_conference_popover(self):
+        html = ui_server.INDEX_HTML
+        self.assertIn("authorMonitorListScrollTop", html)
+        self.assertIn('article.closest(".author-monitor-paper-list")', html)
+        self.assertIn("restoreStoredScroll", html)
+        self.assertIn("author-monitor-conference-popover", html)
+        self.assertIn("Conference publications", html)
+        self.assertNotIn("author-monitor-conference-group", html)
+
+    def test_global_search_is_explicitly_clickable_after_commit(self):
+        html = ui_server.INDEX_HTML
+        self.assertIn("-webkit-app-region: no-drag;", html)
+        self.assertIn('closest(".library-search-wrap")?.addEventListener("pointerdown"', html)
+        self.assertIn('input.focus({preventScroll: true})', html)
+        self.assertIn("function searchInputCaretIndexFromPoint", html)
+        self.assertIn("input.setSelectionRange?.(caret, caret)", html)
+
+    def test_author_paper_card_content_is_vertically_centered_without_paint_clipping(self):
+        html = ui_server.INDEX_HTML
+        card_css = html.split(".author-paper-card {", 1)[1].split("}", 1)[0]
+        scholar_css = html.split(".author-paper-scholar-citations {", 1)[1].split("}", 1)[0]
+        citation_row_markup = html.split('<div class="author-paper-citation-row">', 1)[1].split("</div>", 1)[0]
+        self.assertIn("align-content: center;", card_css)
+        self.assertIn("padding: 11px 50px 11px 12px;", card_css)
+        self.assertNotIn("content-visibility", card_css)
+        self.assertNotIn("contain:", card_css)
+        self.assertIn("justify-self: end;", scholar_css)
+        self.assertNotIn("position: absolute", scholar_css)
+        self.assertIn("author-paper-scholar-citations", citation_row_markup)
+
+    def test_window_drag_region_never_covers_the_search_input(self):
+        html = ui_server.INDEX_HTML
+        drag_css = html.split(".window-drag-region {", 1)[1].split("}", 1)[0]
+        self.assertIn("right: 430px;", drag_css)
 
     def test_author_profile_search_does_not_leave_stale_candidates_after_failure(self):
         html = ui_server.INDEX_HTML
@@ -655,16 +873,102 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("await confirmAuthorMonitorRemoval(author)", remove)
         self.assertNotIn("window.confirm", remove)
 
-    def test_author_status_bar_uses_full_width_and_wraps(self):
+    def test_author_status_bar_is_fixed_height_and_supports_two_channels(self):
         html = ui_server.INDEX_HTML
         css = html.split(
             ".author-monitor-status-bar .library-activity-status {", 1
         )[1].split("}", 1)[0]
-        self.assertIn("width: 100%", css)
-        self.assertIn("max-width: none", css)
-        self.assertIn("white-space: normal", css)
-        self.assertIn("overflow: visible", css)
-        self.assertIn("text-overflow: clip", css)
+        self.assertIn("width: fit-content", css)
+        self.assertIn("white-space: nowrap", css)
+        self.assertIn("text-overflow: ellipsis", css)
+        self.assertIn('id="authorMonitorSecondaryActivityStatus"', html)
+        self.assertIn("syncAuthorMonitorBackgroundScholarStatus", html)
+        self.assertIn('"scholar-background"', html)
+        self.assertIn('data-keyboard-pane=', html)
+
+    def test_author_import_polling_preserves_the_users_current_selection(self):
+        html = ui_server.INDEX_HTML
+        polling = html.split(
+            "async function pollAuthorMonitorInitialImport", 1
+        )[1].split(
+            "async function addAuthorMonitorProfile", 1
+        )[0]
+        self.assertIn(
+            "snapshot.selectedAuthorId = Number(state.authorMonitorSelectedId || 0)",
+            polling,
+        )
+        self.assertNotIn("snapshot.selectedAuthorId = Number(authorId)", polling)
+        self.assertIn('channel: "secondary"', polling)
+        self.assertIn('kind: "scholar-background"', polling)
+
+    def test_author_importing_empty_state_explains_background_work(self):
+        html = ui_server.INDEX_HTML
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        self.assertIn("authorMonitorIsBackgroundScholarJob(selected)", rendering)
+        self.assertIn("author-monitor-importing-empty", rendering)
+        self.assertIn("Importing ${escapeHtml(selected.name", rendering)
+        self.assertIn("This import continues in the background.", rendering)
+
+    def test_author_avatars_link_to_homepage_with_scholar_fallback(self):
+        html = ui_server.INDEX_HTML
+        avatar_links = html.split(
+            "function authorMonitorAvatarDestination", 1
+        )[1].split(
+            "function renderAuthorMonitorRail", 1
+        )[0]
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        self.assertIn("author?.homepage_url || author?.url", avatar_links)
+        self.assertIn('data-author-avatar-link="', avatar_links)
+        self.assertIn("wireAuthorMonitorAvatarLinks", avatar_links)
+        self.assertIn('authorMonitorLinkedAvatarMarkup(selected, "header")', rendering)
+        self.assertIn("wireAuthorMonitorAvatarLinks(root)", rendering)
+        self.assertIn("Open Homepage", html)
+        self.assertIn("Open Google Scholar", html)
+
+    def test_full_scholar_citation_update_has_confirmed_and_direct_entry_points(self):
+        html = ui_server.INDEX_HTML
+        updating = html.split(
+            "async function updateAllAuthorScholarCitations", 1
+        )[1].split(
+            "function confirmAuthorMonitorRemoval", 1
+        )[0]
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        context_menu = html.split("function showAuthorMonitorContextMenu", 1)[1].split(
+            "function renderPaper", 1
+        )[0]
+        self.assertIn("options.confirm !== false", updating)
+        self.assertIn("confirmUpdateAllScholarCitations(author)", updating)
+        self.assertIn("full_metadata: true", updating)
+        self.assertIn('data-action="update-all-scholar-citations"', rendering)
+        self.assertIn("updateAllAuthorScholarCitations(selected, {confirm: false})", rendering)
+        self.assertIn('class="author-monitor-scholar-update-icon"', rendering)
+        self.assertIn(">↻</span></button>", rendering)
+        update_button_css = html.split(
+            ".author-monitor-scholar-update-button {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("width: 18px", update_button_css)
+        self.assertIn("border: 0", update_button_css)
+        self.assertIn("background: transparent", update_button_css)
+        self.assertIn("font-size: 10px", update_button_css)
+        self.assertNotIn("author-paper-mini-button author-monitor-scholar-update-button", rendering)
+        self.assertIn("setAuthorMonitorScholarUpdateButtonBusy(true)", updating)
+        self.assertLess(
+            updating.index("setAuthorMonitorScholarUpdateButtonBusy(true)"),
+            updating.index('fetch("/api/author-monitor/refresh"'),
+        )
+        self.assertIn('channel: "secondary"', updating)
+        self.assertIn("transform: translateY(1px)", html)
+        self.assertIn("height: 54px", html)
+        self.assertIn("height: 55px", html)
+        self.assertIn("Update All Scholar Citations</button>", context_menu)
+        self.assertIn("updateAllAuthorScholarCitations(author, {confirm: true})", context_menu)
+        self.assertIn("newly discovered publications are marked as new", html)
 
     def test_author_monitor_uses_compact_cards_and_manual_keyboard_selection(self):
         html = ui_server.INDEX_HTML
