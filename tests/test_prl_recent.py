@@ -41,7 +41,13 @@ def crossref_item(
     return item
 
 
-def openalex_item(*, formal: bool, published: str, doi: str = "10.1103/g565-3dyn") -> dict:
+def openalex_item(
+    *,
+    formal: bool,
+    published: str,
+    doi: str = "10.1103/g565-3dyn",
+    journal: str = "Physical Review X",
+) -> dict:
     return {
         "id": "https://openalex.org/W123",
         "doi": f"https://doi.org/{doi}",
@@ -53,7 +59,7 @@ def openalex_item(*, formal: bool, published: str, doi: str = "10.1103/g565-3dyn
             "landing_page_url": f"https://doi.org/{doi}",
             "pdf_url": "",
             "version": "publishedVersion" if formal else "acceptedVersion",
-            "source": {"display_name": "Physical Review X"},
+            "source": {"display_name": journal},
         },
     }
 
@@ -151,6 +157,45 @@ class PrlRecentTests(unittest.TestCase):
 
         self.assertEqual(accepted["publisher_section"], "accepted")
         self.assertFalse(accepted["section_allowed"])
+        self.assertEqual(formal["publisher_section"], "published")
+        self.assertTrue(formal["section_allowed"])
+
+    def test_rmp_uses_the_same_accepted_and_published_lifecycle(self) -> None:
+        journal = "Reviews of Modern Physics"
+        accepted = normalize_crossref_item(
+            crossref_item(
+                formal=False,
+                published=(2026, 7, 14),
+                doi="10.1103/j9ly-b6q3",
+                journal=journal,
+            ),
+            journal,
+        )
+        formal_crossref_raw = crossref_item(
+            formal=True,
+            published=(2026, 8, 3),
+            doi="10.1103/revmodphys.98.031001",
+            journal=journal,
+        )
+        formal_crossref_raw.update(
+            {"volume": "98", "issue": "3", "article-number": "031001"}
+        )
+        formal = normalize_crossref_item(formal_crossref_raw, journal)
+        openalex_accepted = normalize_openalex_item(
+            openalex_item(
+                formal=False,
+                published="2026-07-14",
+                doi="10.1103/j9ly-b6q3",
+                journal=journal,
+            ),
+            journal,
+        )
+
+        self.assertTrue(is_aps_lifecycle_journal(journal))
+        self.assertEqual(accepted["publisher_section"], "accepted")
+        self.assertFalse(accepted["section_allowed"])
+        self.assertEqual(openalex_accepted["publisher_section"], "accepted")
+        self.assertFalse(openalex_accepted["section_allowed"])
         self.assertEqual(formal["publisher_section"], "published")
         self.assertTrue(formal["section_allowed"])
 
@@ -280,6 +325,37 @@ class PrlRecentTests(unittest.TestCase):
             storage.upsert_paper(accepted)
             storage.conn.execute(
                 "UPDATE papers SET publisher_section = 'research article', section_allowed = 1 WHERE paper_id = ?",
+                (accepted["paper_id"],),
+            )
+            storage.conn.commit()
+            storage.close()
+
+            reopened = Storage(path)
+            migrated = reopened.get_paper(accepted["paper_id"])
+            self.assertEqual(migrated["publisher_section"], "accepted")
+            self.assertEqual(migrated["section_allowed"], 0)
+            reopened.close()
+
+    def test_opening_legacy_database_hides_openalex_only_accepted_rmp_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "papers.sqlite"
+            storage = Storage(path)
+            accepted = normalize_openalex_item(
+                openalex_item(
+                    formal=False,
+                    published="2026-07-14",
+                    doi="10.1103/j9ly-b6q3",
+                    journal="Reviews of Modern Physics",
+                ),
+                "Reviews of Modern Physics",
+            )
+            storage.upsert_paper(accepted)
+            storage.conn.execute(
+                """
+                UPDATE papers
+                SET publisher_section = 'research article', section_allowed = 1
+                WHERE paper_id = ?
+                """,
                 (accepted["paper_id"],),
             )
             storage.conn.commit()

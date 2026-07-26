@@ -6,6 +6,7 @@ from typing import Any
 APS_MONITORED_JOURNALS = {
     "physical review letters": "Physical Review Letters",
     "physical review x": "Physical Review X",
+    "reviews of modern physics": "Reviews of Modern Physics",
 }
 
 

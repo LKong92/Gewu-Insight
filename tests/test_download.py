@@ -10,6 +10,190 @@ from paper_monitor import download
 
 
 class DownloadCandidateTests(unittest.TestCase):
+    def test_acs_uses_pdf_and_epdf_routes(self):
+        self.assertEqual(
+            download.journal_pdf_candidates(
+                {
+                    "doi": "10.1021/acs.nanolett.6c02635",
+                    "journal": "Nano Letters",
+                }
+            ),
+            [
+                "https://pubs.acs.org/doi/pdf/10.1021/acs.nanolett.6c02635",
+                "https://pubs.acs.org/doi/epdf/10.1021/acs.nanolett.6c02635",
+            ],
+        )
+
+    def test_advanced_materials_prefers_journal_specific_wiley_route(self):
+        self.assertEqual(
+            download.journal_pdf_candidates(
+                {
+                    "doi": "10.1002/adma.202300582",
+                    "journal": "Advanced Materials",
+                }
+            )[0],
+            "https://advanced.onlinelibrary.wiley.com/doi/pdf/"
+            "10.1002/adma.202300582",
+        )
+
+    def test_wiley_browser_candidate_establishes_article_session_before_pdf(self):
+        self.assertEqual(
+            download.publisher_browser_candidate(
+                {
+                    "doi": "10.1002/adma.202300582",
+                    "journal": "Advanced Materials",
+                }
+            ),
+            {
+                "publisher": "wiley",
+                "url": "https://advanced.onlinelibrary.wiley.com/doi/10.1002/adma.202300582",
+                "referer": "https://advanced.onlinelibrary.wiley.com/doi/10.1002/adma.202300582",
+                "target_url": (
+                    "https://advanced.onlinelibrary.wiley.com/doi/pdfdirect/"
+                    "10.1002/adma.202300582"
+                ),
+            },
+        )
+
+    def test_cpl_prefers_the_official_chinese_pdf_mirror(self):
+        self.assertEqual(
+            download.journal_pdf_candidates(
+                {
+                    "doi": "10.1088/0256-307X/41/11/117401",
+                    "journal": "Chinese Physics Letters",
+                }
+            )[0],
+            "https://cpl.iphy.ac.cn/en/article/pdf/preview/"
+            "10.1088/0256-307x/41/11/117401.pdf",
+        )
+
+    def test_cpb_extracts_the_internal_pdf_identifier(self):
+        response = SimpleNamespace(
+            text=(
+                "DOI: 10.1088/1674-1056/ae1c24 "
+                "onclick=\"lsdy1('PDF','128369','https://cpb.iphy.ac.cn')\""
+            )
+        )
+        with patch.object(download, "request_with_retries", return_value=response):
+            self.assertEqual(
+                download.cpb_pdf_candidates("10.1088/1674-1056/ae1c24"),
+                [
+                    "https://cpb.iphy.ac.cn/EN/article/"
+                    "downloadArticleFile.do?attachType=PDF&id=128369"
+                ],
+            )
+
+    def test_elsevier_linkinghub_candidate_becomes_sciencedirect_pdf(self):
+        self.assertEqual(
+            download.science_direct_pdf_candidates(
+                ["https://linkinghub.elsevier.com/retrieve/pii/S2095927319304165"]
+            ),
+            [
+                "https://www.sciencedirect.com/science/article/pii/"
+                "S2095927319304165/pdfft?isDTMRedir=true&download=true"
+            ],
+        )
+
+    def test_elsevier_browser_candidate_establishes_article_session_before_pdf(self):
+        direct_url = (
+            "https://www.sciencedirect.com/science/article/pii/"
+            "S2095927319304165/pdfft?isDTMRedir=true&download=true"
+        )
+        with patch.object(
+            download,
+            "crossref_pdf_candidates",
+            return_value=["https://linkinghub.elsevier.com/retrieve/pii/S2095927319304165"],
+        ):
+            self.assertEqual(
+                download.publisher_browser_candidate(
+                    {
+                        "doi": "10.1016/j.scib.2019.07.019",
+                        "journal": "Science Bulletin",
+                    }
+                ),
+                {
+                    "publisher": "elsevier",
+                    "url": (
+                        "https://www.sciencedirect.com/science/article/pii/"
+                        "S2095927319304165"
+                    ),
+                    "referer": (
+                        "https://www.sciencedirect.com/science/article/pii/"
+                        "S2095927319304165"
+                    ),
+                    "target_url": direct_url,
+                },
+            )
+
+    def test_nsr_browser_candidate_uses_oxford_pdf_from_crossref(self):
+        pdf_url = (
+            "https://academic.oup.com/nsr/advance-article-pdf/doi/"
+            "10.1093/nsr/nwaf253/63552132/nwaf253.pdf"
+        )
+        with patch.object(download, "crossref_pdf_candidates", return_value=[pdf_url]):
+            self.assertEqual(
+                download.publisher_browser_candidate(
+                    {
+                        "doi": "10.1093/nsr/nwaf253",
+                        "journal": "National Science Review",
+                    }
+                ),
+                {
+                    "publisher": "oup",
+                    "url": pdf_url,
+                    "referer": (
+                        "https://academic.oup.com/nsr/advance-article/doi/"
+                        "10.1093/nsr/nwaf253"
+                    ),
+                },
+            )
+
+    def test_word_supplements_are_detected_but_presentation_files_are_ignored(self):
+        self.assertTrue(
+            download.is_probable_word_supplement(
+                "https://example.org/files/supporting-information.docx supporting information"
+            )
+        )
+        self.assertFalse(
+            download.is_probable_word_supplement(
+                "https://example.org/files/supporting-information.pptx supporting information"
+            )
+        )
+        self.assertFalse(
+            download.is_probable_supplement(
+                "https://example.org/files/supporting-information.mp4 supporting information"
+            )
+        )
+
+    def test_doc_supplement_can_be_converted_with_macos_text_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "supplement.doc"
+            target = Path(tmp) / "supplement.pdf"
+            source.write_text(r"{\rtf1\ansi Supplementary text}", encoding="ascii")
+            with patch.object(download.shutil, "which", return_value=None):
+                download.convert_word_document_to_pdf(source, target)
+
+            self.assertTrue(download.is_valid_pdf_file(target))
+
+    def test_reviews_of_modern_physics_uses_the_aps_pdf_routes(self):
+        candidates = download.journal_pdf_candidates(
+            {
+                "doi": "10.1103/RevModPhys.98.031001",
+                "journal": "Reviews of Modern Physics",
+            }
+        )
+
+        self.assertEqual(
+            candidates,
+            [
+                "https://harvest.aps.org/v2/journals/articles/"
+                "10.1103/revmodphys.98.031001/fulltext",
+                "https://journals.aps.org/rmp/pdf/"
+                "10.1103/revmodphys.98.031001",
+                "https://link.aps.org/pdf/10.1103/revmodphys.98.031001",
+            ],
+        )
+
     def test_europe_pmc_returns_only_exact_open_pdf_match(self):
         response = SimpleNamespace(
             json=lambda: {

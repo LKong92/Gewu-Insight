@@ -16,7 +16,9 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
             fallback,
             {
                 "kind": "aaas-published-pdf",
+                "publisher": "aaas",
                 "url": "https://www.science.org/doi/pdf/10.1126/sciadv.adw9449?download=true",
+                "referer": "https://www.science.org/doi/10.1126/sciadv.adw9449",
                 "followup": {
                     "kind": "aaas-supplement-discovery",
                     "url": "https://www.science.org/doi/10.1126/sciadv.adw9449",
@@ -49,7 +51,7 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
             },
         )
 
-    def test_success_or_non_aaas_paper_has_no_browser_fallback(self):
+    def test_success_or_unsupported_paper_has_no_browser_fallback(self):
         self.assertIsNone(
             published_pdf_browser_fallback(
                 {"doi": "10.1126/sciadv.adw9449"},
@@ -62,8 +64,62 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
                     "doi": "10.1103/PhysRevLett.1.1",
                     "journal": "Physical Review Letters",
                 },
+                {"status": "success"},
+            )
+        )
+        self.assertIsNone(
+            published_pdf_browser_fallback(
+                {
+                    "doi": "10.5555/example",
+                    "journal": "Unsupported Journal",
+                },
                 {"status": "failed"},
             )
+        )
+
+    def test_acs_failure_uses_the_generic_publisher_browser(self):
+        self.assertEqual(
+            published_pdf_browser_fallback(
+                {
+                    "doi": "10.1021/acs.nanolett.6c02635",
+                    "journal": "Nano Letters",
+                },
+                {"status": "failed"},
+            ),
+            {
+                "kind": "publisher-main-pdf",
+                "publisher": "acs",
+                "url": "https://pubs.acs.org/doi/pdf/10.1021/acs.nanolett.6c02635",
+                "referer": "https://pubs.acs.org/doi/10.1021/acs.nanolett.6c02635",
+                "followup": {
+                    "kind": "publisher-supplement-discovery",
+                    "publisher": "acs",
+                    "url": "https://pubs.acs.org/doi/10.1021/acs.nanolett.6c02635",
+                    "referer": "https://pubs.acs.org/doi/10.1021/acs.nanolett.6c02635",
+                    "fallback_urls": [],
+                },
+            },
+        )
+
+    def test_aps_partial_download_checks_for_supplementary_files(self):
+        self.assertEqual(
+            published_pdf_browser_fallback(
+                {
+                    "doi": "10.1103/PhysRevLett.1.1",
+                    "journal": "Physical Review Letters",
+                },
+                {
+                    "status": "partial",
+                    "message": "main PDF saved as merged PDF; no PDF supplement found",
+                },
+            ),
+            {
+                "kind": "publisher-supplement-discovery",
+                "publisher": "aps",
+                "url": "https://journals.aps.org/prl/abstract/10.1103/physrevlett.1.1",
+                "referer": "https://journals.aps.org/prl/abstract/10.1103/physrevlett.1.1",
+                "fallback_urls": [],
+            },
         )
 
 

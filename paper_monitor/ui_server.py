@@ -38,6 +38,7 @@ from .analysis import queue_codex_analysis
 from .config import (
     AppConfig,
     DEFAULT_ANALYSIS_DIR,
+    DEFAULT_AUTHOR_PHOTO_DIR,
     DEFAULT_CONFIG_PATH,
     DEFAULT_DB_PATH,
     DEFAULT_LIBRARY_DIR,
@@ -48,7 +49,13 @@ from .config import (
     ROOT,
     load_config,
 )
-from .download import download_paper, normalize_doi, science_supplement_pdf_candidates
+from .download import (
+    convert_word_document_to_pdf,
+    download_paper,
+    normalize_doi,
+    publisher_browser_candidate,
+    science_supplement_pdf_candidates,
+)
 from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
@@ -87,6 +94,14 @@ class GoogleScholarBlockedError(RuntimeError):
 
 class MacOSTrashError(OSError):
     pass
+
+
+AUTHOR_PHOTO_MAX_BYTES = 10 * 1024 * 1024
+AUTHOR_PHOTO_TYPES = {
+    "jpeg": ("jpg", "image/jpeg"),
+    "png": ("png", "image/png"),
+    "webp": ("webp", "image/webp"),
+}
 
 
 MACOS_TRASH_JXA = r'''
@@ -439,6 +454,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/author-monitor":
                 self.handle_author_monitor(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/author-monitor/photo":
+                self.handle_author_monitor_photo(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/author-monitor/enrichment/progress":
                 self.handle_author_monitor_enrichment_progress(parse_qs(parsed.query))
                 return
@@ -457,6 +475,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/manual-pdf":
                 self.handle_manual_pdf()
+                return
+            if parsed.path == "/api/author-monitor/photo":
+                self.handle_set_author_monitor_photo()
                 return
             payload = self.read_json_body()
             if parsed.path == "/api/manual-pdf-path":
@@ -599,6 +620,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/author-monitor/homepage":
                 self.handle_set_author_monitor_homepage(payload)
+                return
+            if parsed.path == "/api/author-monitor/photo/choose":
+                self.handle_choose_author_monitor_photo(payload)
+                return
+            if parsed.path == "/api/author-monitor/photo/path":
+                self.handle_set_author_monitor_photo_path(payload)
                 return
             if parsed.path == "/api/author-monitor/delete":
                 self.handle_delete_author_monitor(payload)
@@ -1046,7 +1073,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             publisher_download_kind = clean_text(str(payload.get("publisher_download_kind") or ""))
-            if publisher_download_kind == "aaas-supplement-pdf":
+            if publisher_download_kind in {"aaas-supplement-pdf", "publisher-supplement-file"}:
                 target_path, paper = attach_publisher_supplement_pdf_to_paper(
                     storage,
                     paper_id=paper_id,
@@ -1067,6 +1094,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                         paper_id,
                         status="partial",
                         message="published Science main PDF saved; supplementary PDF pending",
+                        main_pdf_path=str(target_path),
+                        supplement_pdf_paths=[],
+                        merged_pdf_path=str(target_path),
+                    )
+                    paper = storage.get_paper(paper_id)
+                elif publisher_download_kind == "publisher-main-pdf":
+                    storage.update_download_status(
+                        paper_id,
+                        status="success",
+                        message="publisher PDF downloaded through Daiqo browser session",
                         main_pdf_path=str(target_path),
                         supplement_pdf_paths=[],
                         merged_pdf_path=str(target_path),
@@ -1577,6 +1614,136 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             )
         finally:
             storage.close()
+        self.send_json({"author": author_monitor_to_api(updated)})
+
+    def handle_author_monitor_photo(
+        self,
+        query: dict[str, list[str]],
+    ) -> None:
+        author_monitor_id = int(first(query, "author_id") or 0)
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            author = storage.get_author_monitor(author_monitor_id)
+        finally:
+            storage.close()
+        if not author:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+            return
+        photo_path = managed_author_photo_path(
+            author.get("avatar_override_path"),
+            self.configured_db_path,
+        )
+        if not photo_path or not photo_path.exists() or not photo_path.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Author photo not found")
+            return
+        content_type = mimetypes.guess_type(str(photo_path))[0] or "application/octet-stream"
+        self.send_bytes(photo_path.read_bytes(), content_type=content_type)
+
+    def handle_set_author_monitor_photo(self) -> None:
+        try:
+            fields, files = self.read_multipart_body()
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        author_monitor_id = int(fields.get("author_id") or 0)
+        upload = files.get("photo")
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        if not upload:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Photo file is required")
+            return
+        content = upload.get("content") or b""
+        try:
+            updated = save_author_monitor_photo(
+                self.configured_db_path,
+                author_monitor_id,
+                content,
+            )
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"author": author_monitor_to_api(updated)})
+
+    def handle_choose_author_monitor_photo(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            author = storage.get_author_monitor(author_monitor_id)
+        finally:
+            storage.close()
+        if not author:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+            return
+        try:
+            script = (
+                'POSIX path of (choose file with prompt '
+                '"Choose a PNG, JPEG, or WebP author photo." '
+                "default location (path to pictures folder))"
+            )
+            result = subprocess.run(
+                ["/usr/bin/osascript", "-e", script],
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError:
+            self.send_json({"cancelled": True})
+            return
+        photo_path = Path(result.stdout.strip()).expanduser()
+        if not photo_path.exists() or not photo_path.is_file():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Selected photo was not found")
+            return
+        try:
+            if photo_path.stat().st_size > AUTHOR_PHOTO_MAX_BYTES:
+                raise ValueError("Photo must be 10 MB or smaller")
+            updated = save_author_monitor_photo(
+                self.configured_db_path,
+                author_monitor_id,
+                photo_path.read_bytes(),
+            )
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        self.send_json({"author": author_monitor_to_api(updated)})
+
+    def handle_set_author_monitor_photo_path(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        raw_path = clean_text(payload.get("path") or "")
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Photo path is required")
+            return
+        photo_path = Path(raw_path).expanduser()
+        if not photo_path.exists() or not photo_path.is_file():
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Selected photo was not found")
+            return
+        try:
+            if photo_path.stat().st_size > AUTHOR_PHOTO_MAX_BYTES:
+                raise ValueError("Photo must be 10 MB or smaller")
+            updated = save_author_monitor_photo(
+                self.configured_db_path,
+                author_monitor_id,
+                photo_path.read_bytes(),
+            )
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+            return
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         self.send_json({"author": author_monitor_to_api(updated)})
 
     def handle_reorder_author_monitors(self, payload: dict[str, Any]) -> None:
@@ -7859,22 +8026,42 @@ def published_pdf_browser_fallback(
     if not paper:
         return None
     doi = normalize_doi(paper.get("doi") or "")
-    if not doi.startswith("10.1126/"):
-        return None
-    supplement_urls = science_supplement_pdf_candidates(doi)
-    supplement = {
-        "kind": "aaas-supplement-discovery",
-        "url": f"https://www.science.org/doi/{doi}",
-        "fallback_urls": supplement_urls,
-    }
     status = str((result or {}).get("status") or "")
+    if doi.startswith("10.1126/"):
+        supplement_urls = science_supplement_pdf_candidates(doi)
+        supplement = {
+            "kind": "aaas-supplement-discovery",
+            "url": f"https://www.science.org/doi/{doi}",
+            "fallback_urls": supplement_urls,
+        }
+        if status == "partial" and "no PDF supplement found" in str((result or {}).get("message") or ""):
+            return supplement
+        if status != "failed":
+            return None
+        return {
+            "kind": "aaas-published-pdf",
+            "publisher": "aaas",
+            "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+            "referer": f"https://www.science.org/doi/{doi}",
+            "followup": supplement,
+        }
+    candidate = publisher_browser_candidate(paper)
+    if not candidate:
+        return None
+    supplement = {
+        "kind": "publisher-supplement-discovery",
+        "publisher": candidate["publisher"],
+        "url": candidate["referer"],
+        "referer": candidate["referer"],
+        "fallback_urls": [],
+    }
     if status == "partial" and "no PDF supplement found" in str((result or {}).get("message") or ""):
         return supplement
     if status != "failed":
         return None
     return {
-        "kind": "aaas-published-pdf",
-        "url": f"https://www.science.org/doi/pdf/{doi}?download=true",
+        "kind": "publisher-main-pdf",
+        **candidate,
         "followup": supplement,
     }
 
@@ -10934,6 +11121,94 @@ def sanitize_author_monitor_profile(profile: Any) -> dict[str, Any]:
     return sanitized
 
 
+def author_photo_dir(db_path: Path = DEFAULT_DB_PATH) -> Path:
+    return Path(db_path).expanduser().resolve().parent / DEFAULT_AUTHOR_PHOTO_DIR.name
+
+
+def managed_author_photo_path(
+    raw_path: Any,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> Path | None:
+    value = clean_text(raw_path or "")
+    if not value:
+        return None
+    requested = Path(value).expanduser().resolve()
+    root = author_photo_dir(db_path).resolve()
+    return requested if is_relative_to(requested, root) else None
+
+
+def author_photo_type(content: bytes) -> tuple[str, str]:
+    if not content:
+        raise ValueError("Photo file is empty")
+    if len(content) > AUTHOR_PHOTO_MAX_BYTES:
+        raise ValueError("Photo must be 10 MB or smaller")
+    kind = ""
+    if content.startswith(b"\xff\xd8\xff"):
+        kind = "jpeg"
+    elif content.startswith(b"\x89PNG\r\n\x1a\n"):
+        kind = "png"
+    elif len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        kind = "webp"
+    if not kind:
+        raise ValueError("Choose a PNG, JPEG, or WebP image")
+    return AUTHOR_PHOTO_TYPES[kind]
+
+
+def save_author_monitor_photo(
+    db_path: Path,
+    author_monitor_id: int,
+    content: bytes,
+) -> dict[str, Any]:
+    extension, _content_type = author_photo_type(content)
+    storage = Storage(db_path)
+    temp_path: Path | None = None
+    try:
+        author = storage.get_author_monitor(int(author_monitor_id))
+        if not author:
+            raise KeyError(author_monitor_id)
+        photo_dir = author_photo_dir(db_path)
+        photo_dir.mkdir(parents=True, exist_ok=True)
+        target_path = photo_dir / f"author-{int(author_monitor_id)}.{extension}"
+        temp_path = (
+            photo_dir
+            / f".author-{int(author_monitor_id)}-{uuid.uuid4().hex}.{extension}.tmp"
+        )
+        temp_path.write_bytes(content)
+        temp_path.replace(target_path)
+        old_path = managed_author_photo_path(
+            author.get("avatar_override_path"),
+            db_path,
+        )
+        updated = storage.set_author_monitor_avatar_override(
+            int(author_monitor_id),
+            str(target_path.resolve()),
+        )
+        if old_path and old_path != target_path.resolve() and old_path.exists():
+            old_path.unlink()
+        return updated
+    finally:
+        storage.close()
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+def author_monitor_avatar_url(row: dict[str, Any]) -> str:
+    raw_override = clean_text(row.get("avatar_override_path") or "")
+    override_path = Path(raw_override).expanduser().resolve() if raw_override else None
+    if override_path and override_path.parent.name != DEFAULT_AUTHOR_PHOTO_DIR.name:
+        override_path = None
+    if override_path and override_path.exists() and override_path.is_file():
+        try:
+            version = override_path.stat().st_mtime_ns
+        except OSError:
+            version = 0
+        return (
+            "/api/author-monitor/photo?author_id="
+            f"{int(row.get('id') or 0)}&v={version}"
+        )
+    return clean_text(row.get("avatar_url") or "")
+
+
 def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
     try:
         interests = json.loads(str(row.get("interests_json") or "[]"))
@@ -10984,7 +11259,9 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "homepage_url": homepage_override_url or scholar_homepage_url,
         "scholar_homepage_url": scholar_homepage_url,
         "homepage_override_url": homepage_override_url,
-        "avatar_url": clean_text(row.get("avatar_url") or ""),
+        "avatar_url": author_monitor_avatar_url(row),
+        "source_avatar_url": clean_text(row.get("avatar_url") or ""),
+        "avatar_override_path": clean_text(row.get("avatar_override_path") or ""),
         "sort_order": int(row.get("sort_order") or 0),
         "status": clean_text(row.get("status") or "idle"),
         "message": clean_text(row.get("message") or ""),
@@ -16949,6 +17226,7 @@ KNOWN_JOURNAL_HOME_PAGES = {
     "nature nanotechnology": "https://www.nature.com/nnano/",
     "physical review letters": "https://journals.aps.org/prl/",
     "physical review x": "https://journals.aps.org/prx/",
+    "reviews of modern physics": "https://journals.aps.org/rmp/",
     "arxiv": "https://arxiv.org/",
 }
 
@@ -17343,12 +17621,26 @@ def attach_publisher_supplement_pdf_to_paper(
     main_path = canonical_pdf_path_for_paper(paper)
     if not main_path:
         raise ValueError("The main PDF must be downloaded before its supplementary PDF")
-    supplement_path = source_path.expanduser().resolve()
-    if not supplement_path.exists() or not supplement_path.is_file():
+    source_supplement_path = source_path.expanduser().resolve()
+    if not source_supplement_path.exists() or not source_supplement_path.is_file():
         raise FileNotFoundError(f"PDF file was not found: {source_path}")
+    converted_path: Path | None = None
+    supplement_path = source_supplement_path
     with supplement_path.open("rb") as handle:
-        if b"%PDF-" not in handle.read(1024):
-            raise ValueError("Publisher supplement must be a valid PDF")
+        supplement_header = handle.read(1024)
+    if b"%PDF-" in supplement_header:
+        pass
+    elif supplement_path.suffix.lower() in {".doc", ".docx"}:
+        converted_path = supplement_path.with_name(
+            f".{supplement_path.stem}-converted-{uuid.uuid4().hex}.pdf"
+        )
+        try:
+            supplement_path = convert_word_document_to_pdf(supplement_path, converted_path)
+        except Exception:
+            converted_path.unlink(missing_ok=True)
+            raise
+    else:
+        raise ValueError("Publisher supplement must be a valid PDF, DOC, or DOCX file")
 
     main_is_shared = pdf_path_referenced_by_other_paper(storage, main_path, str(paper_id))
     can_replace_in_place = is_allowed_file(main_path, allowed_pdf_roots()) and not main_is_shared
@@ -17370,7 +17662,11 @@ def attach_publisher_supplement_pdf_to_paper(
         storage.update_download_status(
             str(paper_id),
             status="success",
-            message="downloaded and merged Science supplementary PDF; temporary PDF removed",
+            message=(
+                "downloaded and merged Science supplementary PDF; temporary PDF removed"
+                if clean_text(context.get("publisher_download_kind") or "") == "aaas-supplement-pdf"
+                else "downloaded and merged publisher supplementary file; temporary file removed"
+            ),
             main_pdf_path=str(target_path),
             supplement_pdf_paths=[],
             merged_pdf_path=str(target_path),
@@ -17384,6 +17680,9 @@ def attach_publisher_supplement_pdf_to_paper(
         if working_path != target_path or target_path != main_path:
             working_path.unlink(missing_ok=True)
         raise
+    finally:
+        if converted_path:
+            converted_path.unlink(missing_ok=True)
 
     updated = storage.get_paper(str(paper_id))
     if not updated:
@@ -36409,7 +36708,10 @@ INDEX_HTML = """<!doctype html>
             url: browserFallback.url,
             context: {
               ...context,
-              publisher_download_kind: browserFallback.kind || ""
+              publisher_download_kind: browserFallback.kind || "",
+              publisher_download_name: browserFallback.publisher || "",
+              publisher_download_referer: browserFallback.referer || "",
+              publisher_download_target_url: browserFallback.target_url || ""
             }
           });
         } catch (error) {
@@ -36462,6 +36764,9 @@ INDEX_HTML = """<!doctype html>
         : [];
       const candidateUrls = [...new Set(discoveredUrls.length ? discoveredUrls : fallbackUrls)];
       if (!candidateUrls.length) {
+        if (discoveryFallback?.kind === "publisher-supplement-discovery" && !discoveryError) {
+          return discovery || {supplement_urls: []};
+        }
         throw new Error(
           discoveryError?.message
           || "The main PDF is saved, but Science did not list any PDF supplementary files."
@@ -36471,9 +36776,15 @@ INDEX_HTML = """<!doctype html>
       const failures = [];
       for (const url of candidateUrls) {
         try {
+          const genericPublisherSupplement =
+            discoveryFallback?.kind === "publisher-supplement-discovery";
           downloaded = await downloadPublishedPdfInBackground({
-            kind: "aaas-supplement-pdf",
-            url
+            kind: genericPublisherSupplement
+              ? "publisher-supplement-file"
+              : "aaas-supplement-pdf",
+            publisher: discoveryFallback?.publisher || (genericPublisherSupplement ? "" : "aaas"),
+            referer: discoveryFallback?.referer || discoveryFallback?.url || "",
+            url,
           }, payload);
         } catch (error) {
           failures.push(error?.message || "supplementary PDF download failed");
@@ -39882,6 +40193,78 @@ INDEX_HTML = """<!doctype html>
       }, 0);
     }
 
+    function applyAuthorMonitorPhoto(author) {
+      state.authorMonitors = state.authorMonitors.map((item) => (
+        Number(item.id) === Number(author?.id) ? author : item
+      ));
+      if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+      updateAuthorMonitorActivityStatus("Author photo updated.", {live: false});
+    }
+
+    async function importAuthorMonitorPhotoPath(authorId, path) {
+      try {
+        const res = await fetch("/api/author-monitor/photo/path", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_id: Number(authorId), path}),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not import author photo");
+        applyAuthorMonitorPhoto(data.author);
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "Could not import author photo", {
+          live: false,
+          clear: false,
+        });
+        window.alert(error.message || "Could not import author photo");
+      }
+    }
+
+    window.handleNativeAuthorPhotoSelection = (payload = {}) => {
+      if (payload.cancelled || !payload.path) {
+        updateAuthorMonitorActivityStatus("Photo selection cancelled.", {live: false});
+        return;
+      }
+      updateAuthorMonitorActivityStatus("Importing author photo...", {
+        live: true,
+        clear: false,
+      });
+      importAuthorMonitorPhotoPath(Number(payload.author_id || 0), String(payload.path || ""));
+    };
+
+    async function chooseAuthorMonitorPhoto(author) {
+      if (!author?.id) return;
+      updateAuthorMonitorActivityStatus(`Choose a photo for ${author.name || "author"}...`, {
+        live: true,
+        clear: false,
+      });
+      const nativeChooser = window.webkit?.messageHandlers?.authorPhotoChooser;
+      if (nativeChooser) {
+        nativeChooser.postMessage({author_id: Number(author.id)});
+        return;
+      }
+      try {
+        const res = await fetch("/api/author-monitor/photo/choose", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({author_id: Number(author.id)}),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not import author photo");
+        if (data.cancelled) {
+          updateAuthorMonitorActivityStatus("Photo selection cancelled.", {live: false});
+          return;
+        }
+        applyAuthorMonitorPhoto(data.author);
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "Could not import author photo", {
+          live: false,
+          clear: false,
+        });
+        window.alert(error.message || "Could not import author photo");
+      }
+    }
+
     function showAuthorMonitorContextMenu(event, author) {
       hideThemeContextMenu();
       const menu = document.createElement("div");
@@ -39903,6 +40286,7 @@ INDEX_HTML = """<!doctype html>
         <button type="button" data-action="open-author-profile">Open ${scholarAuthor ? "Google Scholar" : "ResearchGate"}</button>
         ${author.homepage_url ? '<button type="button" data-action="open-author-homepage">Open Homepage</button>' : ""}
         <button type="button" data-action="edit-author-homepage">Edit Homepage</button>
+        <button type="button" data-action="edit-author-photo">${author.avatar_url ? "Change Photo" : "Add Photo"}</button>
         <div class="library-menu-separator"></div>
         <button type="button" data-action="remove-author">Remove from Monitor</button>
       `;
@@ -39924,6 +40308,7 @@ INDEX_HTML = """<!doctype html>
         if (button.dataset.action === "open-author-profile") openUrlExternally(author.url);
         if (button.dataset.action === "open-author-homepage") openUrlExternally(author.homepage_url);
         if (button.dataset.action === "edit-author-homepage") openAuthorHomepageEditor(author);
+        if (button.dataset.action === "edit-author-photo") chooseAuthorMonitorPhoto(author);
         if (button.dataset.action === "remove-author") {
           deleteAuthorMonitor(author).catch((error) => window.alert(error.message || "Could not remove author"));
         }

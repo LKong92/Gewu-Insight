@@ -272,7 +272,7 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         target, paper = ui_server.attach_publisher_supplement_pdf_to_paper(
             self.storage,
             paper_id="paper-science",
-            context={},
+            context={"publisher_download_kind": "aaas-supplement-pdf"},
             source_path=supplement,
         )
 
@@ -284,6 +284,44 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         self.assertEqual(paper["merged_pdf_path"], str(target))
         self.assertEqual(paper["supplement_pdf_paths"], "[]")
         self.assertIn("merged Science supplementary PDF", paper["download_message"])
+
+    def test_docx_supplement_is_converted_then_merged(self) -> None:
+        self.add_paper("paper-docx")
+        main = self.write_pdf("data/pdfs/paper-docx/Main.pdf")
+        supplement = self.root / "native-temp" / "Supplement.docx"
+        supplement.parent.mkdir(parents=True, exist_ok=True)
+        supplement.write_bytes(b"PK\x03\x04" + b"x" * 2048)
+        self.storage.update_download_status(
+            "paper-docx",
+            status="partial",
+            message="main PDF saved as merged PDF; no PDF supplement found",
+            main_pdf_path=str(main),
+            supplement_pdf_paths=[],
+            merged_pdf_path=str(main),
+        )
+
+        def fake_conversion(_source: Path, target: Path) -> Path:
+            writer = PdfWriter()
+            writer.add_blank_page(width=200, height=200)
+            with target.open("wb") as handle:
+                writer.write(handle)
+            return target
+
+        with patch.object(
+            ui_server,
+            "convert_word_document_to_pdf",
+            side_effect=fake_conversion,
+        ):
+            target, paper = ui_server.attach_publisher_supplement_pdf_to_paper(
+                self.storage,
+                paper_id="paper-docx",
+                context={"publisher_download_kind": "publisher-supplement-file"},
+                source_path=supplement,
+            )
+
+        self.assertEqual(len(ui_server.PdfReader(str(target)).pages), 2)
+        self.assertTrue(supplement.exists())
+        self.assertIn("publisher supplementary file", paper["download_message"])
 
 
 if __name__ == "__main__":

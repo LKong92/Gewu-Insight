@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 3
+STORAGE_SCHEMA_VERSION = 4
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -225,6 +225,7 @@ CREATE TABLE IF NOT EXISTS author_monitors (
   scholar_citation_total INTEGER,
   source_citation_total INTEGER,
   avatar_url TEXT,
+  avatar_override_path TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'idle',
   message TEXT,
@@ -389,7 +390,7 @@ class Storage:
                 )
                 self.conn.commit()
             self._sync_arxiv_calendar_timezone()
-            self._reclassify_aps_crossref_records()
+            self._reclassify_aps_records()
 
     def _ensure_schema_columns(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -479,6 +480,9 @@ class Storage:
             self.conn.commit()
         if "scholar_citation_total" not in author_monitor_columns:
             self.conn.execute("ALTER TABLE author_monitors ADD COLUMN scholar_citation_total INTEGER")
+            self.conn.commit()
+        if "avatar_override_path" not in author_monitor_columns:
+            self.conn.execute("ALTER TABLE author_monitors ADD COLUMN avatar_override_path TEXT")
             self.conn.commit()
         for column, definition in [
             ("source_type", "TEXT NOT NULL DEFAULT 'google_scholar'"),
@@ -612,7 +616,7 @@ class Storage:
         )
         self.conn.commit()
 
-    def _reclassify_aps_crossref_records(self) -> None:
+    def _reclassify_aps_records(self) -> None:
         """Hide legacy Accepted APS rows without removing user-linked paper data."""
         journal_names = list(APS_MONITORED_JOURNALS.values())
         placeholders = ", ".join(["?"] * len(journal_names))
@@ -621,7 +625,6 @@ class Storage:
             SELECT paper_id, source, raw_json, publisher_section, section_allowed
             FROM papers
             WHERE journal IN ({placeholders})
-              AND lower(source) LIKE '%crossref%'
               AND (
                 publisher_section IS NULL
                 OR publisher_section NOT IN ('accepted', 'published')
@@ -634,9 +637,6 @@ class Storage:
         ).fetchall()
         updates: list[tuple[str, int, str]] = []
         for row in rows:
-            sources = {part.strip().lower() for part in str(row["source"] or "").split("+")}
-            if "crossref" not in sources:
-                continue
             try:
                 raw = json.loads(row["raw_json"] or "{}")
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -2054,6 +2054,25 @@ class Storage:
             """
             UPDATE author_monitors
             SET homepage_override_url = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (value, now_iso(), int(author_monitor_id)),
+        )
+        self.conn.commit()
+        return self.get_author_monitor(int(author_monitor_id)) or {}
+
+    def set_author_monitor_avatar_override(
+        self,
+        author_monitor_id: int,
+        avatar_override_path: str | None,
+    ) -> dict[str, Any]:
+        if not self.get_author_monitor(int(author_monitor_id)):
+            return {}
+        value = str(avatar_override_path or "").strip() or None
+        self.conn.execute(
+            """
+            UPDATE author_monitors
+            SET avatar_override_path = ?, updated_at = ?
             WHERE id = ?
             """,
             (value, now_iso(), int(author_monitor_id)),

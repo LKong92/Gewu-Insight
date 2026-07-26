@@ -110,6 +110,7 @@ class AuthorMonitorStorageTests(unittest.TestCase):
         self.assertIn("semantic_scholar_author_id", columns)
         self.assertIn("metadata_provider", columns)
         self.assertIn("source_citation_total", columns)
+        self.assertIn("avatar_override_path", columns)
 
     def test_researchgate_monitor_uses_source_identity_without_scholar_collision(self):
         profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
@@ -191,6 +192,81 @@ class AuthorMonitorStorageTests(unittest.TestCase):
         )
         self.assertEqual(restored["homepage_url"], "https://scholar.example.edu/refreshed")
         self.assertEqual(restored["homepage_override_url"], "")
+
+    def test_manual_author_photo_survives_source_avatar_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            photo_dir = Path(tmp) / "author_photos"
+            photo_dir.mkdir()
+            photo_path = photo_dir / "author-1.png"
+            photo_path.write_bytes(b"\x89PNG\r\n\x1a\nexample")
+            storage = Storage(db_path)
+            try:
+                profile = scholar_profile("photo-override", "Photo Override")
+                profile["avatar_url"] = "https://scholar.example.edu/original.jpg"
+                author = storage.add_author_monitor(profile)
+                author_id = int(author["id"])
+                storage.set_author_monitor_avatar_override(author_id, str(photo_path))
+                refreshed = dict(profile)
+                refreshed["avatar_url"] = "https://scholar.example.edu/refreshed.jpg"
+                storage.update_author_monitor(author_id, profile=refreshed)
+                saved = storage.get_author_monitor(author_id)
+                effective = ui_server.author_monitor_to_api(saved)
+            finally:
+                storage.close()
+
+        self.assertEqual(saved["avatar_url"], "https://scholar.example.edu/refreshed.jpg")
+        self.assertEqual(saved["avatar_override_path"], str(photo_path))
+        self.assertIn(
+            f"/api/author-monitor/photo?author_id={author_id}",
+            effective["avatar_url"],
+        )
+        self.assertEqual(
+            effective["source_avatar_url"],
+            "https://scholar.example.edu/refreshed.jpg",
+        )
+
+    def test_author_photo_upload_accepts_only_supported_image_content(self):
+        self.assertEqual(
+            ui_server.author_photo_type(b"\x89PNG\r\n\x1a\nexample"),
+            ("png", "image/png"),
+        )
+        self.assertEqual(
+            ui_server.author_photo_type(b"\xff\xd8\xffexample"),
+            ("jpg", "image/jpeg"),
+        )
+        self.assertEqual(
+            ui_server.author_photo_type(b"RIFF\x04\x00\x00\x00WEBPexample"),
+            ("webp", "image/webp"),
+        )
+        with self.assertRaisesRegex(ValueError, "PNG, JPEG, or WebP"):
+            ui_server.author_photo_type(b"not an image")
+
+    def test_saving_author_photo_copies_it_to_managed_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(
+                    scholar_profile("managed-photo", "Managed Photo")
+                )
+                author_id = int(author["id"])
+            finally:
+                storage.close()
+
+            updated = ui_server.save_author_monitor_photo(
+                db_path,
+                author_id,
+                b"\x89PNG\r\n\x1a\nmanaged",
+            )
+            saved_path = Path(updated["avatar_override_path"])
+
+            self.assertEqual(
+                saved_path.parent.resolve(),
+                (Path(tmp) / "author_photos").resolve(),
+            )
+            self.assertEqual(saved_path.name, f"author-{author_id}.png")
+            self.assertEqual(saved_path.read_bytes(), b"\x89PNG\r\n\x1a\nmanaged")
 
     def test_author_citation_total_falls_back_to_saved_scholar_paper_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1923,6 +1999,34 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn('toLocaleString("en-US")', summary)
         self.assertIn('citations (${author.citation_source || author.source_label || "Source"})', summary)
         self.assertIn("citationRaw === null", summary)
+
+    def test_author_context_menu_can_upload_or_change_a_photo(self):
+        html = ui_server.INDEX_HTML
+        chooser = html.split("function chooseAuthorMonitorPhoto", 1)[1].split(
+            "function showAuthorMonitorContextMenu", 1
+        )[0]
+        context_menu = html.split("function showAuthorMonitorContextMenu", 1)[1].split(
+            "function renderPaper", 1
+        )[0]
+        self.assertIn("window.webkit?.messageHandlers?.authorPhotoChooser", chooser)
+        self.assertIn("nativeChooser.postMessage", chooser)
+        self.assertIn("window.handleNativeAuthorPhotoSelection", html)
+        self.assertIn('fetch("/api/author-monitor/photo/path"', html)
+        self.assertIn('fetch("/api/author-monitor/photo/choose"', chooser)
+        self.assertIn("Choose a photo for", chooser)
+        self.assertIn("Photo selection cancelled.", chooser)
+        self.assertIn('"Change Photo" : "Add Photo"', context_menu)
+        self.assertIn('data-action="edit-author-photo"', context_menu)
+        self.assertNotIn("Add Photo...", html)
+        self.assertNotIn("Change Photo...", html)
+
+        native_app = (
+            Path(__file__).resolve().parents[1] / "scripts" / "PaperMonitorApp.m"
+        ).read_text(encoding="utf-8")
+        self.assertIn('addScriptMessageHandler:self name:@"authorPhotoChooser"', native_app)
+        self.assertIn("NSOpenPanel *panel", native_app)
+        self.assertIn('panel.prompt = @"Choose Photo"', native_app)
+        self.assertIn("handleNativeAuthorPhotoSelection", native_app)
 
     def test_full_scholar_citation_update_has_confirmed_and_direct_entry_points(self):
         html = ui_server.INDEX_HTML
