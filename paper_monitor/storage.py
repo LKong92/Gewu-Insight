@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -202,6 +203,12 @@ CREATE INDEX IF NOT EXISTS idx_my_publications_starred ON my_publications(starre
 CREATE TABLE IF NOT EXISTS author_monitors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scholar_user_id TEXT NOT NULL UNIQUE,
+  source_type TEXT NOT NULL DEFAULT 'google_scholar',
+  source_author_id TEXT,
+  openalex_author_id TEXT,
+  semantic_scholar_author_id TEXT,
+  metadata_provider TEXT,
+  orcid TEXT,
   name TEXT NOT NULL,
   affiliation TEXT,
   email TEXT,
@@ -211,6 +218,7 @@ CREATE TABLE IF NOT EXISTS author_monitors (
   homepage_url TEXT,
   homepage_override_url TEXT,
   scholar_citation_total INTEGER,
+  source_citation_total INTEGER,
   avatar_url TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'idle',
@@ -412,6 +420,42 @@ class Storage:
         if "scholar_citation_total" not in author_monitor_columns:
             self.conn.execute("ALTER TABLE author_monitors ADD COLUMN scholar_citation_total INTEGER")
             self.conn.commit()
+        for column, definition in [
+            ("source_type", "TEXT NOT NULL DEFAULT 'google_scholar'"),
+            ("source_author_id", "TEXT"),
+            ("openalex_author_id", "TEXT"),
+            ("semantic_scholar_author_id", "TEXT"),
+            ("metadata_provider", "TEXT"),
+            ("orcid", "TEXT"),
+            ("source_citation_total", "INTEGER"),
+        ]:
+            if column not in author_monitor_columns:
+                self.conn.execute(
+                    f"ALTER TABLE author_monitors ADD COLUMN {column} {definition}"
+                )
+                self.conn.commit()
+        self.conn.execute(
+            """
+            UPDATE author_monitors
+            SET source_type = 'google_scholar'
+            WHERE source_type IS NULL OR source_type = ''
+            """
+        )
+        self.conn.execute(
+            """
+            UPDATE author_monitors
+            SET source_author_id = scholar_user_id
+            WHERE source_author_id IS NULL OR source_author_id = ''
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_author_monitors_source_identity
+            ON author_monitors(source_type, source_author_id)
+            WHERE source_author_id IS NOT NULL AND source_author_id != ''
+            """
+        )
+        self.conn.commit()
 
     def _sync_arxiv_calendar_timezone(self) -> None:
         timezone_name = system_timezone_name()
@@ -1625,11 +1669,31 @@ class Storage:
         self.conn.commit()
 
     def add_author_monitor(self, profile: dict[str, Any]) -> dict[str, Any]:
-        user_id = str(profile.get("user_id") or "").strip()
+        source_type = str(profile.get("source_type") or "google_scholar").strip().lower()
+        source_author_id = str(
+            profile.get("source_author_id") or profile.get("user_id") or ""
+        ).strip()
+        user_id = str(profile.get("user_id") or source_author_id).strip()
         name = str(profile.get("name") or "").strip()
         profile_url = str(profile.get("url") or "").strip()
-        if not user_id or not name or not profile_url:
-            raise ValueError("A Google Scholar user id, name, and profile URL are required")
+        if not source_author_id or not name or not profile_url:
+            raise ValueError("An author source ID, name, and profile URL are required")
+        if source_type == "google_scholar":
+            legacy_user_id = user_id or source_author_id
+        else:
+            identity_hash = hashlib.sha256(
+                f"{source_type}:{source_author_id}".encode("utf-8")
+            ).hexdigest()[:24]
+            legacy_user_id = f"{source_type}:{identity_hash}"
+        existing = self.conn.execute(
+            """
+            SELECT id FROM author_monitors
+            WHERE source_type = ? AND source_author_id = ?
+            """,
+            (source_type, source_author_id),
+        ).fetchone()
+        if existing:
+            return self.get_author_monitor(int(existing["id"])) or {}
         timestamp = now_iso()
         next_order_row = self.conn.execute(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM author_monitors"
@@ -1639,15 +1703,24 @@ class Storage:
         self.conn.execute(
             """
             INSERT INTO author_monitors (
-              scholar_user_id, name, affiliation, email, cited_by, interests_json,
+              scholar_user_id, source_type, source_author_id, openalex_author_id,
+              semantic_scholar_author_id, metadata_provider, orcid,
+              name, affiliation, email, cited_by, interests_json,
               profile_url, homepage_url, homepage_override_url, scholar_citation_total,
+              source_citation_total,
               avatar_url, sort_order, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'idle', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 'idle', ?, ?)
             ON CONFLICT(scholar_user_id) DO NOTHING
             """,
             (
-                user_id,
+                legacy_user_id,
+                source_type,
+                source_author_id,
+                str(profile.get("openalex_author_id") or "").strip(),
+                str(profile.get("semantic_scholar_author_id") or "").strip(),
+                str(profile.get("metadata_provider") or "").strip(),
+                str(profile.get("orcid") or "").strip(),
                 name,
                 str(profile.get("affiliation") or "").strip(),
                 str(profile.get("email") or "").strip(),
@@ -1656,6 +1729,7 @@ class Storage:
                 profile_url,
                 str(profile.get("homepage_url") or "").strip(),
                 profile.get("scholar_citation_total"),
+                profile.get("source_citation_total"),
                 str(profile.get("avatar_url") or "").strip(),
                 next_order,
                 timestamp,
@@ -1664,8 +1738,11 @@ class Storage:
         )
         self.conn.commit()
         row = self.conn.execute(
-            "SELECT id FROM author_monitors WHERE scholar_user_id = ?",
-            (user_id,),
+            """
+            SELECT id FROM author_monitors
+            WHERE source_type = ? AND source_author_id = ?
+            """,
+            (source_type, source_author_id),
         ).fetchone()
         return self.get_author_monitor(int(row["id"])) if row else {}
 
@@ -1738,6 +1815,22 @@ class Storage:
         if profile:
             values.update(
                 {
+                    "openalex_author_id": str(
+                        profile.get("openalex_author_id")
+                        or values.get("openalex_author_id")
+                        or ""
+                    ).strip(),
+                    "semantic_scholar_author_id": str(
+                        profile.get("semantic_scholar_author_id")
+                        or values.get("semantic_scholar_author_id")
+                        or ""
+                    ).strip(),
+                    "metadata_provider": str(
+                        profile.get("metadata_provider")
+                        or values.get("metadata_provider")
+                        or ""
+                    ).strip(),
+                    "orcid": str(profile.get("orcid") or values.get("orcid") or "").strip(),
                     "name": str(profile.get("name") or values.get("name") or "").strip(),
                     "affiliation": str(profile.get("affiliation") or values.get("affiliation") or "").strip(),
                     "email": str(profile.get("email") or values.get("email") or "").strip(),
@@ -1755,6 +1848,8 @@ class Storage:
                 )
             if profile.get("scholar_citation_total") is not None:
                 values["scholar_citation_total"] = int(profile["scholar_citation_total"])
+            if profile.get("source_citation_total") is not None:
+                values["source_citation_total"] = int(profile["source_citation_total"])
         if status is not None:
             values["status"] = str(status)
         if message is not None:
@@ -1768,13 +1863,20 @@ class Storage:
         self.conn.execute(
             """
             UPDATE author_monitors
-            SET name = ?, affiliation = ?, email = ?, cited_by = ?, interests_json = ?,
+            SET openalex_author_id = ?, semantic_scholar_author_id = ?,
+                metadata_provider = ?, orcid = ?,
+                name = ?, affiliation = ?, email = ?, cited_by = ?, interests_json = ?,
                 profile_url = ?, homepage_url = ?, scholar_citation_total = ?,
+                source_citation_total = ?,
                 avatar_url = ?, status = ?, message = ?,
                 last_checked_at = ?, last_success_at = ?, cooldown_until = ?, updated_at = ?
             WHERE id = ?
             """,
             (
+                values.get("openalex_author_id") or "",
+                values.get("semantic_scholar_author_id") or "",
+                values.get("metadata_provider") or "",
+                values.get("orcid") or "",
                 values.get("name") or "",
                 values.get("affiliation") or "",
                 values.get("email") or "",
@@ -1783,6 +1885,7 @@ class Storage:
                 values.get("profile_url") or "",
                 values.get("homepage_url") or "",
                 values.get("scholar_citation_total"),
+                values.get("source_citation_total"),
                 values.get("avatar_url") or "",
                 values.get("status") or "idle",
                 values.get("message") or "",

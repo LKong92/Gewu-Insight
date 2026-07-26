@@ -24,6 +24,7 @@ def request_with_retries(
     timeout: int = TIMEOUT,
     max_retries: int = MAX_RETRIES,
     retry_sleep: float = RETRY_SLEEP,
+    retry_on_429: bool = True,
     stream: bool = False,
 ) -> requests.Response:
     merged_headers = {"User-Agent": USER_AGENT}
@@ -44,6 +45,8 @@ def request_with_retries(
             )
             if response.status_code == 429:
                 last_error = RuntimeError(f"HTTP 429 Too Many Requests for {response.url}")
+                if not retry_on_429 or attempt == max_retries:
+                    raise last_error
                 time.sleep(retry_sleep * attempt)
                 continue
             response.raise_for_status()

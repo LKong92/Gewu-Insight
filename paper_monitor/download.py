@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from .config import DEFAULT_PDF_DIR
 from .http import request_with_retries
 from .pdf_utils import merge_pdfs
+from .sources.openalex import openalex_request
 from .storage import Storage
 from .text import safe_slug
 
@@ -382,7 +383,7 @@ def openalex_open_pdf_candidates(
         return []
     work_id = quote(f"https://doi.org/{doi}", safe="")
     try:
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             f"https://api.openalex.org/works/{work_id}",
             params={"select": "best_oa_location,locations"},

@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
+
+import requests
 
 from ..aps import apply_aps_publication_status
 from ..http import request_with_retries
 from ..text import clean_markup_text, clean_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
+
+
+OPENALEX_API_KEY_SETTING = "openalex_api_key"
+OPENALEX_RATE_STATUS_TTL_SECONDS = 300
+_OPENALEX_STATE_LOCK = threading.RLock()
+_OPENALEX_RUNTIME_API_KEY = ""
+_OPENALEX_RATE_STATUS: dict[str, Any] = {}
+
+
+class OpenAlexDailyLimitError(RuntimeError):
+    pass
 
 
 def openalex_mailto_param() -> str | None:
@@ -15,6 +31,211 @@ def openalex_mailto_param() -> str | None:
     if not mailto or mailto.lower() == "your_email@example.com" or "@" not in mailto:
         return None
     return mailto
+
+
+def openalex_api_key_param() -> str | None:
+    with _OPENALEX_STATE_LOCK:
+        runtime_key = _OPENALEX_RUNTIME_API_KEY
+    if runtime_key:
+        return runtime_key
+    api_key = clean_text(os.getenv("OPENALEX_API_KEY", ""))
+    return api_key or None
+
+
+def configure_openalex_api_key(api_key: str | None) -> None:
+    global _OPENALEX_RUNTIME_API_KEY, _OPENALEX_RATE_STATUS
+    normalized = clean_text(api_key or "")
+    with _OPENALEX_STATE_LOCK:
+        if normalized != _OPENALEX_RUNTIME_API_KEY:
+            _OPENALEX_RATE_STATUS = {}
+        _OPENALEX_RUNTIME_API_KEY = normalized
+
+
+def openalex_rate_limit_snapshot() -> dict[str, Any]:
+    with _OPENALEX_STATE_LOCK:
+        snapshot = dict(_OPENALEX_RATE_STATUS)
+    snapshot["configured"] = bool(openalex_api_key_param())
+    snapshot["paused"] = bool(snapshot.get("paused"))
+    return snapshot
+
+
+def _normalize_openalex_rate_status(payload: Any) -> dict[str, Any]:
+    outer = payload if isinstance(payload, dict) else {}
+    rate = outer.get("rate_limit") if isinstance(outer.get("rate_limit"), dict) else outer
+
+    def number(name: str) -> float | None:
+        try:
+            value = rate.get(name)
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    raw_costs = (
+        rate.get("endpoint_costs_usd")
+        if isinstance(rate.get("endpoint_costs_usd"), dict)
+        else {}
+    )
+    endpoint_costs_usd: dict[str, float] = {}
+    for name, value in raw_costs.items():
+        try:
+            endpoint_costs_usd[clean_text(name)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return {
+        "daily_budget_usd": number("daily_budget_usd"),
+        "daily_used_usd": number("daily_used_usd"),
+        "daily_remaining_usd": number("daily_remaining_usd"),
+        "prepaid_balance_usd": number("prepaid_balance_usd"),
+        "prepaid_remaining_usd": number("prepaid_remaining_usd"),
+        "resets_at": clean_text(rate.get("resets_at") or ""),
+        "resets_in_seconds": int(number("resets_in_seconds") or 0),
+        "endpoint_costs_usd": endpoint_costs_usd,
+        "checked_at_monotonic": time.monotonic(),
+        "paused": (
+            number("daily_remaining_usd") is not None
+            and float(number("daily_remaining_usd") or 0) <= 0
+        ),
+    }
+
+
+def refresh_openalex_rate_limit_status(
+    api_key: str | None = None,
+    *,
+    timeout: int = 12,
+    record: bool = True,
+) -> dict[str, Any]:
+    key = clean_text(api_key or openalex_api_key_param() or "")
+    if not key:
+        return {"configured": False, "status": "not_configured", "paused": False}
+    response = request_with_retries(
+        "GET",
+        "https://api.openalex.org/rate-limit",
+        params={"api_key": key},
+        timeout=timeout,
+        max_retries=1,
+    )
+    status = _normalize_openalex_rate_status(response.json())
+    status.update({"configured": True, "status": "connected", "ok": True})
+    if record:
+        global _OPENALEX_RATE_STATUS
+        with _OPENALEX_STATE_LOCK:
+            _OPENALEX_RATE_STATUS = dict(status)
+    return dict(status)
+
+
+def test_openalex_api_key(api_key: str) -> dict[str, Any]:
+    key = clean_text(api_key)
+    if not key:
+        return {
+            "configured": False,
+            "status": "not_configured",
+            "ok": False,
+            "paused": False,
+        }
+    try:
+        return refresh_openalex_rate_limit_status(key, record=False)
+    except Exception:
+        return {
+            "configured": bool(openalex_api_key_param()),
+            "status": "invalid",
+            "ok": False,
+            "paused": False,
+        }
+
+
+def _openalex_request_cost_usd(url: str, params: dict[str, Any]) -> float:
+    path = urlparse(url).path.rstrip("/")
+    if re.search(r"/(works|authors|sources|institutions|topics)/[^/]+$", path):
+        return 0.0
+    costs = openalex_rate_limit_snapshot().get("endpoint_costs_usd")
+    costs = costs if isinstance(costs, dict) else {}
+    if "semantic" in path:
+        return float(costs.get("semantic") or 0.01)
+    if clean_text(params.get("search") or ""):
+        return float(costs.get("search") or 0.001)
+    return float(costs.get("list") or 0.0001)
+
+
+def _openalex_reserve_free_budget(url: str, params: dict[str, Any]) -> float:
+    key = openalex_api_key_param()
+    if not key:
+        return 0.0
+    cost = _openalex_request_cost_usd(url, params)
+    if cost <= 0:
+        return 0.0
+    snapshot = openalex_rate_limit_snapshot()
+    checked_at = float(snapshot.get("checked_at_monotonic") or 0)
+    if not checked_at or time.monotonic() - checked_at > OPENALEX_RATE_STATUS_TTL_SECONDS:
+        snapshot = refresh_openalex_rate_limit_status(key)
+    remaining = snapshot.get("daily_remaining_usd")
+    if snapshot.get("paused") or (
+        remaining is not None and float(remaining) + 1e-12 < cost
+    ):
+        raise OpenAlexDailyLimitError(
+            "OpenAlex free daily allowance is exhausted; waiting for the UTC reset"
+        )
+    if remaining is not None:
+        global _OPENALEX_RATE_STATUS
+        with _OPENALEX_STATE_LOCK:
+            current = float(
+                _OPENALEX_RATE_STATUS.get("daily_remaining_usd")
+                if _OPENALEX_RATE_STATUS.get("daily_remaining_usd") is not None
+                else remaining
+            )
+            if current + 1e-12 < cost:
+                _OPENALEX_RATE_STATUS["paused"] = True
+                raise OpenAlexDailyLimitError(
+                    "OpenAlex free daily allowance is exhausted; waiting for the UTC reset"
+                )
+            _OPENALEX_RATE_STATUS["daily_remaining_usd"] = max(0.0, current - cost)
+            _OPENALEX_RATE_STATUS["paused"] = current - cost <= 0
+    return cost
+
+
+def apply_openalex_auth(params: dict[str, Any]) -> dict[str, Any]:
+    api_key = openalex_api_key_param()
+    if api_key:
+        params["api_key"] = api_key
+    mailto = openalex_mailto_param()
+    if mailto:
+        params["mailto"] = mailto
+    return params
+
+
+def openalex_request(
+    method: str,
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 30,
+    max_retries: int = 3,
+    stream: bool = False,
+) -> requests.Response:
+    request_params = dict(params or {})
+    apply_openalex_auth(request_params)
+    _openalex_reserve_free_budget(url, request_params)
+    try:
+        return request_with_retries(
+            method,
+            url,
+            params=request_params or None,
+            headers=headers,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_on_429=False,
+            stream=stream,
+        )
+    except RuntimeError as exc:
+        if "HTTP 429" in str(exc):
+            global _OPENALEX_RATE_STATUS
+            with _OPENALEX_STATE_LOCK:
+                _OPENALEX_RATE_STATUS["paused"] = True
+                _OPENALEX_RATE_STATUS["status"] = "daily_limit_reached"
+            raise OpenAlexDailyLimitError(
+                "OpenAlex is rate limited; waiting for the UTC reset"
+            ) from exc
+        raise
 
 
 def fetch_openalex_journal(
@@ -42,10 +263,8 @@ def fetch_openalex_journal(
             "cursor": cursor,
             "sort": "publication_date:desc",
         }
-        mailto = openalex_mailto_param()
-        if mailto:
-            params["mailto"] = mailto
-        response = request_with_retries(
+        apply_openalex_auth(params)
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params=params,
@@ -83,14 +302,12 @@ def search_openalex_works(
         params = {
             "search": cleaned_query,
             "filter": f"from_publication_date:{start_date.isoformat()},to_publication_date:{end_date.isoformat()}",
-            "per-page": max(1, min(200, int(per_page or 50))),
+            "per-page": max(1, min(100, int(per_page or 50))),
             "cursor": cursor,
             "sort": "publication_date:desc",
         }
-        mailto = openalex_mailto_param()
-        if mailto:
-            params["mailto"] = mailto
-        response = request_with_retries(
+        apply_openalex_auth(params)
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params=params,
@@ -131,10 +348,8 @@ def search_openalex_author_publications(
         "search": query,
         "per-page": max(1, min(25, int(max_authors or 6))),
     }
-    mailto = openalex_mailto_param()
-    if mailto:
-        author_params["mailto"] = mailto
-    author_response = request_with_retries(
+    apply_openalex_auth(author_params)
+    author_response = openalex_request(
         "GET",
         "https://api.openalex.org/authors",
         params=author_params,
@@ -159,9 +374,8 @@ def search_openalex_author_publications(
             "per-page": max(1, min(50, int(per_author or 20))),
             "sort": "publication_date:desc",
         }
-        if mailto:
-            params["mailto"] = mailto
-        response = request_with_retries(
+        apply_openalex_auth(params)
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params=params,
@@ -182,6 +396,146 @@ def search_openalex_author_publications(
                 continue
             seen.add(key)
             papers.append(paper)
+    return papers
+
+
+def normalize_openalex_author_id(value: Any) -> str:
+    text = clean_text(value).rstrip("/")
+    if not text:
+        return ""
+    author_id = text.rsplit("/", 1)[-1].upper()
+    return author_id if re.fullmatch(r"A\d+", author_id) else ""
+
+
+def openalex_author_profile(item: dict[str, Any]) -> dict[str, Any]:
+    author_id = normalize_openalex_author_id(item.get("id"))
+    institutions = item.get("last_known_institutions") or []
+    affiliation = ""
+    for institution in institutions:
+        if isinstance(institution, dict) and clean_text(institution.get("display_name")):
+            affiliation = clean_text(institution.get("display_name"))
+            break
+    if not affiliation:
+        affiliations = openalex_affiliation_strings(item)
+        affiliation = affiliations[0] if affiliations else ""
+    orcid = clean_text(item.get("orcid")).rstrip("/").rsplit("/", 1)[-1]
+    return {
+        "openalex_author_id": author_id,
+        "name": clean_text(item.get("display_name")),
+        "affiliation": affiliation,
+        "orcid": orcid if re.fullmatch(r"\d{4}-\d{4}-\d{4}-\d{3}[\dX]", orcid, re.I) else "",
+        "works_count": int(item.get("works_count") or 0),
+        "cited_by_count": int(item.get("cited_by_count") or 0),
+    }
+
+
+def search_openalex_authors(
+    author_name: str,
+    *,
+    affiliations: list[str] | None = None,
+    limit: int = 12,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    query = clean_text(author_name)
+    if not query:
+        return []
+    params: dict[str, Any] = {
+        "search": query,
+        "per-page": max(1, min(25, int(limit or 12))),
+    }
+    apply_openalex_auth(params)
+    response = openalex_request(
+        "GET",
+        "https://api.openalex.org/authors",
+        params=params,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    affiliation_terms = [
+        clean_text(value) for value in (affiliations or []) if clean_text(value)
+    ]
+    profiles: list[dict[str, Any]] = []
+    for item in response.json().get("results", []):
+        if not isinstance(item, dict):
+            continue
+        profile = openalex_author_profile(item)
+        if not profile.get("openalex_author_id") or not profile.get("name"):
+            continue
+        if affiliation_terms and not openalex_author_affiliation_matches(item, affiliation_terms):
+            continue
+        profiles.append(profile)
+    return profiles[: max(1, int(limit or 12))]
+
+
+def fetch_openalex_author_profile(
+    author_id: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any]:
+    normalized_id = normalize_openalex_author_id(author_id)
+    if not normalized_id:
+        raise ValueError("A valid OpenAlex author ID is required")
+    params: dict[str, Any] = {}
+    apply_openalex_auth(params)
+    response = openalex_request(
+        "GET",
+        f"https://api.openalex.org/authors/{normalized_id}",
+        params=params or None,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    item = response.json()
+    if not isinstance(item, dict):
+        raise ValueError("OpenAlex did not return an author profile")
+    profile = openalex_author_profile(item)
+    if not profile.get("openalex_author_id"):
+        raise ValueError("OpenAlex did not return a valid author profile")
+    return profile
+
+
+def fetch_openalex_author_publications(
+    author_id: str,
+    *,
+    limit: int = 5000,
+    sort_by_date: bool = False,
+    timeout: int = 30,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    normalized_id = normalize_openalex_author_id(author_id)
+    if not normalized_id:
+        raise ValueError("A valid OpenAlex author ID is required")
+    remaining = max(1, int(limit or 1))
+    cursor = "*"
+    papers: list[dict[str, Any]] = []
+    while remaining > 0:
+        per_page = min(100, remaining)
+        params: dict[str, Any] = {
+            "filter": f"authorships.author.id:{normalized_id}",
+            "per-page": per_page,
+            "cursor": cursor,
+            "sort": "publication_date:desc" if sort_by_date else "cited_by_count:desc",
+        }
+        apply_openalex_auth(params)
+        response = openalex_request(
+            "GET",
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        data = response.json()
+        results = data.get("results", []) if isinstance(data, dict) else []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            papers.append(normalize_openalex_item(item, "Unknown Journal"))
+        remaining -= len(results)
+        next_cursor = (data.get("meta") or {}).get("next_cursor") if isinstance(data, dict) else None
+        if not results or len(results) < per_page or not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
     return papers
 
 

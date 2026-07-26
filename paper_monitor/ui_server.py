@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
+import requests
 
 from .analysis import queue_codex_analysis
 from .config import (
@@ -56,7 +57,24 @@ from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
-from .sources.openalex import normalize_openalex_item, normalize_openalex_journal_name, search_openalex_author_publications, search_openalex_works
+from .sources.openalex import (
+    OPENALEX_API_KEY_SETTING,
+    OpenAlexDailyLimitError,
+    configure_openalex_api_key,
+    fetch_openalex_author_profile,
+    fetch_openalex_author_publications,
+    normalize_openalex_author_id,
+    normalize_openalex_item,
+    normalize_openalex_journal_name,
+    openalex_api_key_param,
+    openalex_rate_limit_snapshot,
+    openalex_request,
+    refresh_openalex_rate_limit_status,
+    search_openalex_author_publications,
+    search_openalex_authors,
+    search_openalex_works,
+    test_openalex_api_key,
+)
 from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
 from .storage import Storage
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
@@ -188,6 +206,8 @@ FILE_ICON_STYLES = {
     "none": {"label": "?", "kind": "unknown", "accent": "#6b7280", "fill": "#f9fafb"},
 }
 ADS_API_TOKEN_SETTING = "ads_api_token"
+RESEARCHGATE_SEMANTIC_BACKFILL_SETTING_PREFIX = "researchgate_semantic_backfill:"
+RESEARCHGATE_SEMANTIC_BACKFILL_RETRY_DAYS = 30
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
 AUTO_JOURNAL_MONITOR_LAST_RUN_SETTING = "auto_journal_monitor_last_run_date"
 AUTO_JOURNAL_MONITOR_STATUS_SETTING = "auto_journal_monitor_status"
@@ -264,6 +284,13 @@ def run_ui_server(
 ) -> None:
     config = load_config()
     journals = configured_source_names(config)
+    credential_storage = Storage(db_path)
+    try:
+        configure_openalex_api_key(
+            credential_storage.get_setting(OPENALEX_API_KEY_SETTING, "")
+        )
+    finally:
+        credential_storage.close()
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
@@ -1172,6 +1199,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not search_text:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "q is required")
             return
+        if normalize_researchgate_profile_url(search_text):
+            try:
+                profiles = researchgate_openalex_profiles(search_text, limit=12)
+            except Exception as exc:
+                self.send_error_json(
+                    HTTPStatus.BAD_GATEWAY,
+                    f"Author metadata lookup failed: {exc}",
+                )
+                return
+            storage = Storage(self.configured_db_path)
+            try:
+                global_cooldown = google_scholar_global_cooldown(storage)
+            finally:
+                storage.close()
+            self.send_json({
+                "profiles": profiles,
+                "scholarCooldown": global_cooldown,
+                "source": "researchgate",
+            })
+            return
         storage = Storage(self.configured_db_path)
         try:
             local_profiles = local_google_scholar_profiles(storage, search_text, limit=20)
@@ -1231,14 +1278,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(payload)
 
     def handle_add_author_monitor(self, payload: dict[str, Any]) -> None:
-        profile = sanitize_google_scholar_profile(payload.get("profile"))
-        if not profile.get("user_id") or not profile.get("name"):
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose a Google Scholar profile first")
+        profile = sanitize_author_monitor_profile(payload.get("profile"))
+        source_type = clean_text(profile.get("source_type") or "google_scholar")
+        if not profile.get("source_author_id") or not profile.get("name"):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose an author profile first")
             return
         storage = Storage(self.configured_db_path)
         try:
             global_cooldown = google_scholar_global_cooldown(storage)
-            if global_cooldown.get("active"):
+            if source_type == "google_scholar" and global_cooldown.get("active"):
                 self.send_error_json(
                     HTTPStatus.TOO_MANY_REQUESTS,
                     google_scholar_global_cooldown_message(global_cooldown),
@@ -1247,18 +1295,50 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             existing = next(
                 (
                     item for item in storage.list_author_monitors()
-                    if str(item.get("scholar_user_id") or "") == str(profile.get("user_id") or "")
+                    if clean_text(item.get("source_type") or "google_scholar") == source_type
+                    and clean_text(item.get("source_author_id") or item.get("scholar_user_id") or "")
+                    == clean_text(profile.get("source_author_id") or "")
                 ),
                 None,
             )
             monitor = existing or storage.add_author_monitor(profile)
             author_monitor_id = int(monitor.get("id") or 0)
-            needs_initial_import = not existing or storage.author_monitor_paper_count(author_monitor_id) == 0
+            can_refresh = (
+                source_type == "google_scholar"
+                or bool(
+                    clean_text(
+                        profile.get("openalex_author_id")
+                        or monitor.get("openalex_author_id")
+                        or profile.get("semantic_scholar_author_id")
+                        or monitor.get("semantic_scholar_author_id")
+                        or ""
+                    )
+                )
+            )
+            needs_initial_import = can_refresh and (
+                not existing or storage.author_monitor_paper_count(author_monitor_id) == 0
+            )
             if needs_initial_import:
+                source_label = (
+                    "Google Scholar"
+                    if source_type == "google_scholar"
+                    else (
+                        "OpenAlex"
+                        if profile.get("openalex_author_id")
+                        or monitor.get("openalex_author_id")
+                        else "Semantic Scholar"
+                    )
+                )
                 storage.update_author_monitor(
                     author_monitor_id,
                     status="queued",
-                    message="Initial Google Scholar import queued...",
+                    message=f"Initial {source_label} import queued...",
+                )
+            elif not can_refresh:
+                storage.update_author_monitor(
+                    author_monitor_id,
+                    status="success",
+                    message="ResearchGate profile saved. A publication-data match is required to enable automatic refresh.",
                 )
         finally:
             storage.close()
@@ -1275,6 +1355,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 daemon=True,
             ).start()
             result = {"status": "queued", "added": 0}
+        elif not can_refresh:
+            result = {"status": "manual", "added": 0}
         else:
             result = {"status": "existing", "added": 0}
         storage = Storage(self.configured_db_path)
@@ -1289,8 +1371,38 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         full_metadata = bool(payload.get("full_metadata"))
         storage = Storage(self.configured_db_path)
         try:
+            monitors = storage.list_author_monitors()
+            selected_monitor = next(
+                (
+                    item for item in monitors
+                    if int(item.get("id") or 0) == author_monitor_id
+                ),
+                None,
+            )
             global_cooldown = google_scholar_global_cooldown(storage)
-            if global_cooldown.get("active"):
+            selected_source = clean_text(
+                (selected_monitor or {}).get("source_type") or "google_scholar"
+            )
+            if (
+                selected_monitor
+                and selected_source != "google_scholar"
+                and not normalize_openalex_author_id(
+                    selected_monitor.get("openalex_author_id")
+                )
+                and not normalize_semantic_scholar_author_id(
+                    selected_monitor.get("semantic_scholar_author_id")
+                )
+            ):
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "This ResearchGate author has no publication-data match, so automatic refresh is unavailable",
+                )
+                return
+            if (
+                global_cooldown.get("active")
+                and author_monitor_id
+                and selected_source == "google_scholar"
+            ):
                 self.send_error_json(
                     HTTPStatus.TOO_MANY_REQUESTS,
                     google_scholar_global_cooldown_message(global_cooldown),
@@ -1300,6 +1412,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.send_error_json(
                     HTTPStatus.BAD_REQUEST,
                     "Updating all Scholar citations must be run for one author at a time",
+                )
+                return
+            if full_metadata and selected_source != "google_scholar":
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Full Scholar citation updates are only available for Google Scholar authors",
                 )
                 return
             if full_metadata:
@@ -1318,8 +1436,30 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     return
             author_ids = (
                 [author_monitor_id]
-                if author_monitor_id and storage.get_author_monitor(author_monitor_id)
-                else [int(item["id"]) for item in storage.list_author_monitors()]
+                if author_monitor_id and selected_monitor
+                else [
+                    int(item["id"])
+                    for item in monitors
+                    if (
+                        clean_text(item.get("source_type") or "google_scholar")
+                        == "google_scholar"
+                        or bool(
+                            normalize_openalex_author_id(
+                                item.get("openalex_author_id")
+                            )
+                        )
+                        or bool(
+                            normalize_semantic_scholar_author_id(
+                                item.get("semantic_scholar_author_id")
+                            )
+                        )
+                    )
+                    if not (
+                        global_cooldown.get("active")
+                        and clean_text(item.get("source_type") or "google_scholar")
+                        == "google_scholar"
+                    )
+                ]
             )
         finally:
             storage.close()
@@ -2646,11 +2786,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             token = ads_api_token(storage)
+            openalex = openalex_settings_payload(storage, refresh=True)
         finally:
             storage.close()
-        self.send_json({"ads": {"configured": bool(token), "status": "configured" if token else "not_configured"}})
+        self.send_json({
+            "ads": {
+                "configured": bool(token),
+                "status": "configured" if token else "not_configured",
+            },
+            "openalex": openalex,
+        })
 
     def handle_set_citation_settings(self, payload: dict[str, Any]) -> None:
+        provider = clean_text(str(payload.get("provider") or "ads")).lower()
+        if provider == "openalex":
+            self.handle_set_openalex_citation_settings(payload)
+            return
         action = clean_text(str(payload.get("action") or "save")).lower()
         requested_token = clean_text(str(payload.get("ads_token") or ""))
         storage = Storage(self.configured_db_path)
@@ -2687,6 +2838,51 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     "ok": ok,
                 }
             })
+        finally:
+            storage.close()
+
+    def handle_set_openalex_citation_settings(
+        self,
+        payload: dict[str, Any],
+    ) -> None:
+        action = clean_text(str(payload.get("action") or "save")).lower()
+        requested_key = clean_text(str(payload.get("openalex_key") or ""))
+        storage = Storage(self.configured_db_path)
+        try:
+            stored_key = openalex_api_key(storage)
+            if action == "clear":
+                storage.set_setting(OPENALEX_API_KEY_SETTING, "")
+                configure_openalex_api_key("")
+                self.send_json({
+                    "openalex": openalex_settings_payload(storage),
+                })
+                return
+            key = requested_key or stored_key or clean_text(
+                os.getenv("OPENALEX_API_KEY", "")
+            )
+            if action == "test":
+                result = test_openalex_api_key(key)
+                result["configured"] = bool(stored_key or os.getenv("OPENALEX_API_KEY"))
+                self.send_json({"openalex": openalex_settings_to_api(result)})
+                return
+            if not requested_key:
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Paste an OpenAlex API key before saving",
+                )
+                return
+            storage.set_setting(OPENALEX_API_KEY_SETTING, requested_key)
+            configure_openalex_api_key(requested_key)
+            try:
+                result = refresh_openalex_rate_limit_status(requested_key)
+            except Exception:
+                result = {
+                    "configured": True,
+                    "status": "invalid",
+                    "ok": False,
+                    "paused": False,
+                }
+            self.send_json({"openalex": openalex_settings_to_api(result)})
         finally:
             storage.close()
 
@@ -4718,7 +4914,7 @@ def theme_keyword_recommendation_fetchers() -> list[tuple[str, Any]]:
 
 
 def fetch_openalex_keyword_records(query: str) -> list[dict[str, Any]]:
-    response = request_with_retries(
+    response = openalex_request(
         "GET",
         "https://api.openalex.org/works",
         params={"search": query, "per-page": 25},
@@ -7462,10 +7658,35 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
     finally:
         storage.close()
     results: list[dict[str, Any]] = []
-    for index, author in enumerate(authors if not global_cooldown.get("active") else []):
+    eligible_authors = [
+        author for author in authors
+        if not (
+            global_cooldown.get("active")
+            and clean_text(author.get("source_type") or "google_scholar") == "google_scholar"
+        )
+    ]
+    scholar_request_seen = False
+    for author in eligible_authors:
         if author_monitor_checked_today(author, run_date):
             continue
-        if author_monitor_cooldown_active(author):
+        is_scholar = clean_text(
+            author.get("source_type") or "google_scholar"
+        ) == "google_scholar"
+        if not is_scholar and not normalize_openalex_author_id(
+            author.get("openalex_author_id")
+        ) and not normalize_semantic_scholar_author_id(
+            author.get("semantic_scholar_author_id")
+        ):
+            results.append(
+                {
+                    "author_id": int(author.get("id") or 0),
+                    "status": "unavailable",
+                    "added": 0,
+                    "message": "No publication-data match is saved for this ResearchGate author.",
+                }
+            )
+            continue
+        if is_scholar and author_monitor_cooldown_active(author):
             results.append(
                 {
                     "author_id": int(author.get("id") or 0),
@@ -7474,13 +7695,15 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
                 }
             )
             continue
-        if index:
+        if is_scholar and scholar_request_seen:
             time.sleep(
                 random.uniform(
                     AUTO_AUTHOR_MONITOR_STAGGER_MIN_SECONDS,
                     AUTO_AUTHOR_MONITOR_STAGGER_MAX_SECONDS,
                 )
             )
+        if is_scholar:
+            scholar_request_seen = True
         results.append(
             refresh_author_monitor_for_db(
                 db_path,
@@ -7766,6 +7989,47 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     """Return the compact fields needed by the Author Monitor list."""
     raw = parse_raw_json(paper)
     google_scholar = raw.get("google_scholar") if isinstance(raw.get("google_scholar"), dict) else {}
+    openalex_monitor = (
+        raw.get("openalex_author_monitor")
+        if isinstance(raw.get("openalex_author_monitor"), dict)
+        else {}
+    )
+    scholar_count = int_or_none(google_scholar.get("citation_count"))
+    openalex_count = int_or_none(
+        openalex_monitor.get("cited_by_count")
+        if openalex_monitor
+        else raw.get("cited_by_count")
+    )
+    semantic_monitor = (
+        raw.get("semantic_scholar_author_monitor")
+        if isinstance(raw.get("semantic_scholar_author_monitor"), dict)
+        else {}
+    )
+    semantic_raw = (
+        raw.get("semantic_scholar")
+        if isinstance(raw.get("semantic_scholar"), dict)
+        else {}
+    )
+    semantic_count = int_or_none(
+        semantic_monitor.get("citation_count")
+        if semantic_monitor
+        else semantic_raw.get("citationCount")
+    )
+    openalex_checked_at = clean_text(openalex_monitor.get("checked_at") or "")
+    semantic_checked_at = clean_text(semantic_monitor.get("checked_at") or "")
+    semantic_is_latest_monitor = bool(semantic_monitor) and (
+        not openalex_monitor
+        or semantic_checked_at >= openalex_checked_at
+    )
+    if semantic_is_latest_monitor and semantic_count is not None:
+        fallback_count = semantic_count
+        fallback_source = "Semantic Scholar"
+    elif openalex_count is not None:
+        fallback_count = openalex_count
+        fallback_source = "OpenAlex"
+    else:
+        fallback_count = semantic_count
+        fallback_source = "Semantic Scholar" if semantic_count is not None else ""
     enrichment = raw.get("author_monitor_enrichment") if isinstance(raw.get("author_monitor_enrichment"), dict) else {}
     return {
         "paper_id": paper.get("paper_id") or "",
@@ -7778,7 +8042,9 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
         "citation_label": citation_label(paper, full_lead=True),
-        "google_scholar_citation_count": int_or_none(google_scholar.get("citation_count")),
+        "google_scholar_citation_count": scholar_count,
+        "citation_count": scholar_count if scholar_count is not None else fallback_count,
+        "citation_count_source": "Google Scholar" if scholar_count is not None else fallback_source,
         "identifier_lookup": {
             "status": clean_text(enrichment.get("status") or ""),
             "message": clean_text(enrichment.get("message") or ""),
@@ -8143,7 +8409,7 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
     except Exception:
         pass
     try:
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params={"search": query, "per-page": 5, "mailto": "your_email@example.com"},
@@ -8270,7 +8536,7 @@ def publication_metrics_metadata_from_doi(
         crossref_count = None
         crossref_raw = {}
     try:
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             f"https://api.openalex.org/works/https://doi.org/{doi}",
             params={"mailto": "your_email@example.com"},
@@ -8326,7 +8592,7 @@ def publication_metrics_metadata_from_arxiv_id(
     title = clean_text(paper.get("title") or "")
     if title:
         try:
-            response = request_with_retries(
+            response = openalex_request(
                 "GET",
                 "https://api.openalex.org/works",
                 params={"search": title, "per-page": 1, "mailto": "your_email@example.com"},
@@ -9935,6 +10201,64 @@ def ads_api_token(storage: Storage) -> str:
     return clean_text(storage.get_setting(ADS_API_TOKEN_SETTING, ""))
 
 
+def openalex_api_key(storage: Storage) -> str:
+    return clean_text(storage.get_setting(OPENALEX_API_KEY_SETTING, ""))
+
+
+def openalex_settings_to_api(status: dict[str, Any]) -> dict[str, Any]:
+    def rounded(value: Any) -> float | None:
+        try:
+            return round(float(value), 6) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "configured": bool(status.get("configured")),
+        "status": clean_text(status.get("status") or (
+            "configured" if status.get("configured") else "not_configured"
+        )),
+        "ok": status.get("ok") if isinstance(status.get("ok"), bool) else None,
+        "paused": bool(status.get("paused")),
+        "daily_budget_usd": rounded(status.get("daily_budget_usd")),
+        "daily_used_usd": rounded(status.get("daily_used_usd")),
+        "daily_remaining_usd": rounded(status.get("daily_remaining_usd")),
+        "resets_at": clean_text(status.get("resets_at") or ""),
+    }
+
+
+def openalex_settings_payload(
+    storage: Storage,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    stored_key = openalex_api_key(storage)
+    environment_key = clean_text(os.getenv("OPENALEX_API_KEY", ""))
+    configure_openalex_api_key(stored_key)
+    configured = bool(stored_key or environment_key)
+    status = openalex_rate_limit_snapshot()
+    if refresh and configured:
+        try:
+            status = refresh_openalex_rate_limit_status()
+        except Exception:
+            status = {
+                **status,
+                "configured": True,
+                "status": "unavailable",
+                "ok": False,
+            }
+    status["configured"] = configured
+    if not configured:
+        status.update({"status": "not_configured", "paused": False, "ok": None})
+    elif stored_key:
+        status["source"] = "sqlite"
+    else:
+        status["source"] = "environment"
+    return {
+        **openalex_settings_to_api(status),
+        "source": clean_text(status.get("source") or ""),
+    }
+
+
 def sanitize_google_scholar_profile(profile: Any) -> dict[str, Any]:
     if not isinstance(profile, dict):
         return {}
@@ -9962,6 +10286,562 @@ def sanitize_google_scholar_profile(profile: Any) -> dict[str, Any]:
     return sanitized if sanitized["name"] or sanitized["url"] or sanitized["user_id"] or sanitized["avatar_url"] else {}
 
 
+def normalize_researchgate_profile_url(value: Any) -> str:
+    text = clean_text(str(value or ""))
+    if not text:
+        return ""
+    candidate = text.split(";", 1)[0].strip()
+    if not candidate.lower().startswith(("http://", "https://")):
+        if re.match(r"^(?:www\.)?researchgate\.net/", candidate, re.I):
+            candidate = f"https://{candidate}"
+        else:
+            return ""
+    parsed = urlparse(candidate)
+    host = parsed.netloc.lower().split(":", 1)[0]
+    if host not in {"researchgate.net", "www.researchgate.net"}:
+        return ""
+    path = re.sub(r"/+", "/", parsed.path or "").rstrip("/")
+    if not (
+        path.lower().startswith("/profile/")
+        or path.lower().startswith("/scientific-contributions/")
+    ):
+        return ""
+    return f"https://www.researchgate.net{path}"
+
+
+def researchgate_name_from_url(profile_url: str) -> str:
+    path = urlparse(profile_url).path.rstrip("/")
+    slug = unquote(path.rsplit("/", 1)[-1])
+    slug = re.sub(r"-\d+$", "", slug)
+    return clean_text(re.sub(r"[-_]+", " ", slug))
+
+
+def researchgate_profile_query_parts(search_text: str) -> tuple[str, str, list[str]]:
+    profile_url = normalize_researchgate_profile_url(search_text)
+    if not profile_url:
+        return "", "", []
+    parts = [clean_text(part) for part in re.split(r"[;；]+", search_text) if clean_text(part)]
+    name = parts[1] if len(parts) > 1 else researchgate_name_from_url(profile_url)
+    affiliations = parts[2:] if len(parts) > 2 else []
+    return profile_url, name, affiliations
+
+
+def normalize_semantic_scholar_author_id(value: Any) -> str:
+    author_id = clean_text(value).rstrip("/").rsplit("/", 1)[-1]
+    return author_id if re.fullmatch(r"\d+", author_id) else ""
+
+
+def search_semantic_scholar_authors(
+    author_name: str,
+    *,
+    affiliations: list[str] | None = None,
+    limit: int = 12,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    query = clean_text(author_name)
+    if not query:
+        return []
+    response = request_with_retries(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/author/search",
+        params={
+            "query": query,
+            "limit": max(1, min(100, int(limit or 12))),
+            "fields": "name,affiliations,paperCount,citationCount,url,externalIds",
+        },
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    affiliation_terms = [
+        clean_text(value).lower()
+        for value in (affiliations or [])
+        if clean_text(value)
+    ]
+    profiles: list[dict[str, Any]] = []
+    for item in response.json().get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        author_id = normalize_semantic_scholar_author_id(item.get("authorId"))
+        name = clean_text(item.get("name") or "")
+        if not author_id or not name:
+            continue
+        raw_affiliations = item.get("affiliations") or []
+        affiliation_values = [
+            clean_text(value)
+            for value in raw_affiliations
+            if clean_text(value)
+        ]
+        affiliation = affiliation_values[0] if affiliation_values else ""
+        affiliation_haystack = " ".join(affiliation_values).lower()
+        affiliation_match = bool(affiliation_terms) and any(
+            term in affiliation_haystack or affiliation_haystack in term
+            for term in affiliation_terms
+            if term and affiliation_haystack
+        )
+        profiles.append(
+            {
+                "semantic_scholar_author_id": author_id,
+                "name": name,
+                "affiliation": affiliation,
+                "orcid": clean_text(
+                    (item.get("externalIds") or {}).get("ORCID")
+                    if isinstance(item.get("externalIds"), dict)
+                    else ""
+                ).rstrip("/").rsplit("/", 1)[-1],
+                "works_count": int(item.get("paperCount") or 0),
+                "cited_by_count": int(item.get("citationCount") or 0),
+                "semantic_scholar_url": clean_text(item.get("url") or ""),
+                "affiliation_match": affiliation_match,
+            }
+        )
+    profiles.sort(
+        key=lambda profile: (
+            bool(profile.get("affiliation_match")),
+            int(profile.get("cited_by_count") or 0),
+            int(profile.get("works_count") or 0),
+        ),
+        reverse=True,
+    )
+    return profiles[: max(1, int(limit or 12))]
+
+
+def fetch_semantic_scholar_author_profile(
+    author_id: str,
+    *,
+    timeout: int = 20,
+    max_retries: int = 3,
+) -> dict[str, Any]:
+    normalized_id = normalize_semantic_scholar_author_id(author_id)
+    if not normalized_id:
+        raise ValueError("A valid Semantic Scholar author ID is required")
+    response = request_with_retries(
+        "GET",
+        f"https://api.semanticscholar.org/graph/v1/author/{normalized_id}",
+        params={
+            "fields": (
+                "name,affiliations,paperCount,citationCount,url,externalIds"
+            )
+        },
+        timeout=timeout,
+        max_retries=max_retries,
+    )
+    item = response.json()
+    if not isinstance(item, dict) or not normalize_semantic_scholar_author_id(
+        item.get("authorId")
+    ):
+        raise ValueError("Semantic Scholar did not return a valid author profile")
+    return {
+        "semantic_scholar_author_id": normalized_id,
+        "name": clean_text(item.get("name") or ""),
+        "affiliation": clean_text(
+            next(
+                (
+                    value
+                    for value in (item.get("affiliations") or [])
+                    if clean_text(value)
+                ),
+                "",
+            )
+        ),
+        "orcid": clean_text(
+            (item.get("externalIds") or {}).get("ORCID")
+            if isinstance(item.get("externalIds"), dict)
+            else ""
+        ).rstrip("/").rsplit("/", 1)[-1],
+        "works_count": int(item.get("paperCount") or 0),
+        "cited_by_count": int(item.get("citationCount") or 0),
+        "semantic_scholar_url": clean_text(item.get("url") or ""),
+    }
+
+
+def fetch_semantic_scholar_author_publications(
+    author_id: str,
+    *,
+    limit: int = 5000,
+    timeout: int = 30,
+    max_retries: int = 3,
+) -> list[dict[str, Any]]:
+    normalized_id = normalize_semantic_scholar_author_id(author_id)
+    if not normalized_id:
+        raise ValueError("A valid Semantic Scholar author ID is required")
+    fields = (
+        "paperId,corpusId,externalIds,url,title,abstract,venue,year,citationCount,"
+        "openAccessPdf,publicationTypes,publicationDate,journal,authors"
+    )
+    remaining = max(1, int(limit or 1))
+    offset = 0
+    papers: list[dict[str, Any]] = []
+    while remaining > 0:
+        page_size = min(100, remaining)
+        response = request_with_retries(
+            "GET",
+            f"https://api.semanticscholar.org/graph/v1/author/{normalized_id}/papers",
+            params={
+                "limit": page_size,
+                "offset": offset,
+                "fields": fields,
+            },
+            timeout=timeout,
+            max_retries=max_retries,
+        )
+        data = response.json()
+        items = (data.get("data") or []) if isinstance(data, dict) else []
+        for item in items:
+            if isinstance(item, dict) and item.get("paperId"):
+                papers.append(normalize_semantic_scholar_item(item))
+        remaining -= len(items)
+        next_offset = data.get("next") if isinstance(data, dict) else None
+        if (
+            not items
+            or len(items) < page_size
+            or next_offset is None
+            or int(next_offset) <= offset
+        ):
+            break
+        offset = int(next_offset)
+        time.sleep(1.05)
+    return papers
+
+
+def normalize_orcid(value: Any) -> str:
+    normalized = clean_text(value or "").rstrip("/").rsplit("/", 1)[-1].upper()
+    return (
+        normalized
+        if re.fullmatch(r"\d{4}-\d{4}-\d{4}-\d{3}[\dX]", normalized)
+        else ""
+    )
+
+
+def researchgate_publication_identity_sets(
+    papers: list[dict[str, Any]],
+) -> tuple[set[str], set[str]]:
+    dois: set[str] = set()
+    title_years: set[str] = set()
+    for paper in papers:
+        candidate = (
+            paper.get("paper")
+            if isinstance(paper.get("paper"), dict)
+            else paper
+        )
+        doi = normalize_publication_doi(str(candidate.get("doi") or ""))
+        if doi:
+            dois.add(doi)
+        title = normalize_publication_title(
+            clean_text(candidate.get("title") or "")
+        ).lower()
+        year = clean_text(candidate.get("publication_date") or "")[:4]
+        if title and year:
+            title_years.add(f"{title}|{year}")
+    return dois, title_years
+
+
+def resolve_semantic_scholar_author_for_researchgate(
+    *,
+    name: str,
+    affiliation: str = "",
+    orcid: str = "",
+    reference_papers: list[dict[str, Any]] | None = None,
+    max_candidates: int = 3,
+) -> dict[str, Any]:
+    profiles = search_semantic_scholar_authors(
+        name,
+        affiliations=[affiliation] if clean_text(affiliation) else [],
+        limit=max(3, int(max_candidates)),
+    )
+    name_matches = [
+        profile
+        for profile in profiles
+        if author_matches_name(
+            clean_text(profile.get("name") or ""),
+            clean_text(name),
+        )
+    ]
+    normalized_orcid = normalize_orcid(orcid)
+    if normalized_orcid:
+        for profile in name_matches:
+            if normalize_orcid(profile.get("orcid")) == normalized_orcid:
+                return {
+                    **profile,
+                    "match_evidence": "orcid",
+                    "matched_publications": [],
+                }
+    reference_dois, reference_titles = researchgate_publication_identity_sets(
+        reference_papers or []
+    )
+    if not reference_dois and len(reference_titles) < 2:
+        return {}
+    for profile in name_matches[: max(1, int(max_candidates))]:
+        semantic_id = normalize_semantic_scholar_author_id(
+            profile.get("semantic_scholar_author_id")
+        )
+        if not semantic_id:
+            continue
+        publications = fetch_semantic_scholar_author_publications(
+            semantic_id,
+            limit=200,
+        )
+        semantic_dois, semantic_titles = researchgate_publication_identity_sets(
+            publications
+        )
+        doi_overlap = reference_dois & semantic_dois
+        title_overlap = reference_titles & semantic_titles
+        if doi_overlap or len(title_overlap) >= 2:
+            return {
+                **profile,
+                "match_evidence": (
+                    f"doi:{len(doi_overlap)}"
+                    if doi_overlap
+                    else f"title_year:{len(title_overlap)}"
+                ),
+                "matched_publications": publications,
+            }
+    return {}
+
+
+def researchgate_semantic_backfill_setting(author_monitor_id: int) -> str:
+    return (
+        f"{RESEARCHGATE_SEMANTIC_BACKFILL_SETTING_PREFIX}"
+        f"{int(author_monitor_id)}"
+    )
+
+
+def researchgate_semantic_backfill_due(
+    storage: Storage,
+    author_monitor_id: int,
+) -> bool:
+    raw = storage.get_setting(
+        researchgate_semantic_backfill_setting(author_monitor_id),
+        "",
+    )
+    if not raw:
+        return True
+    try:
+        payload = json.loads(raw)
+        attempted_at = datetime.fromisoformat(
+            clean_text(payload.get("attempted_at") or "")
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return True
+    if attempted_at.tzinfo is None:
+        attempted_at = attempted_at.replace(tzinfo=local_timezone())
+    retry_after = attempted_at + timedelta(
+        days=RESEARCHGATE_SEMANTIC_BACKFILL_RETRY_DAYS
+    )
+    return datetime.now(local_timezone()) >= retry_after.astimezone(
+        local_timezone()
+    )
+
+
+def record_researchgate_semantic_backfill(
+    storage: Storage,
+    author_monitor_id: int,
+    *,
+    semantic_scholar_author_id: str = "",
+    evidence: str = "",
+) -> None:
+    storage.set_setting(
+        researchgate_semantic_backfill_setting(author_monitor_id),
+        json.dumps(
+            {
+                "attempted_at": now_iso(),
+                "status": (
+                    "matched"
+                    if normalize_semantic_scholar_author_id(
+                        semantic_scholar_author_id
+                    )
+                    else "no_safe_match"
+                ),
+                "semantic_scholar_author_id": (
+                    normalize_semantic_scholar_author_id(
+                        semantic_scholar_author_id
+                    )
+                ),
+                "evidence": clean_text(evidence),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+    )
+
+
+def backfill_researchgate_semantic_author(
+    storage: Storage,
+    monitor: dict[str, Any],
+    *,
+    reference_papers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    author_monitor_id = int(monitor.get("id") or 0)
+    existing_id = normalize_semantic_scholar_author_id(
+        monitor.get("semantic_scholar_author_id")
+    )
+    if existing_id:
+        return {"semantic_scholar_author_id": existing_id}
+    if not author_monitor_id or not researchgate_semantic_backfill_due(
+        storage,
+        author_monitor_id,
+    ):
+        return {}
+    try:
+        match = resolve_semantic_scholar_author_for_researchgate(
+            name=clean_text(monitor.get("name") or ""),
+            affiliation=clean_text(monitor.get("affiliation") or ""),
+            orcid=clean_text(monitor.get("orcid") or ""),
+            reference_papers=reference_papers,
+        )
+    except Exception:
+        return {}
+    semantic_id = normalize_semantic_scholar_author_id(
+        match.get("semantic_scholar_author_id")
+    )
+    record_researchgate_semantic_backfill(
+        storage,
+        author_monitor_id,
+        semantic_scholar_author_id=semantic_id,
+        evidence=clean_text(match.get("match_evidence") or ""),
+    )
+    if semantic_id:
+        storage.update_author_monitor(
+            author_monitor_id,
+            profile={"semantic_scholar_author_id": semantic_id},
+        )
+    return match
+
+
+def researchgate_openalex_profiles(search_text: str, *, limit: int = 12) -> list[dict[str, Any]]:
+    profile_url, name, affiliations = researchgate_profile_query_parts(search_text)
+    if not profile_url:
+        return []
+    source_author_id = profile_url
+    candidates: list[dict[str, Any]] = []
+    provider = ""
+    if name and openalex_api_key_param():
+        try:
+            candidates = search_openalex_authors(
+                name,
+                affiliations=affiliations,
+                limit=limit,
+            )
+            provider = "openalex"
+        except Exception:
+            candidates = []
+    if name and not candidates:
+        candidates = search_semantic_scholar_authors(
+            name,
+            affiliations=affiliations,
+            limit=limit,
+        )
+        provider = "semantic_scholar"
+    profiles: list[dict[str, Any]] = []
+    for candidate in candidates:
+        openalex_author_id = normalize_openalex_author_id(
+            candidate.get("openalex_author_id")
+        )
+        semantic_scholar_author_id = normalize_semantic_scholar_author_id(
+            candidate.get("semantic_scholar_author_id")
+        )
+        if not openalex_author_id and not semantic_scholar_author_id:
+            continue
+        profiles.append(
+            {
+                "candidate_type": f"researchgate-{provider}-profile",
+                "source_type": "researchgate",
+                "source_author_id": source_author_id,
+                "user_id": source_author_id,
+                "name": clean_text(candidate.get("name") or name),
+                "affiliation": clean_text(candidate.get("affiliation") or ""),
+                "email": "",
+                "cited_by": "",
+                "interests": [],
+                "url": profile_url,
+                "homepage_url": "",
+                "avatar_url": "",
+                "openalex_author_id": openalex_author_id,
+                "semantic_scholar_author_id": semantic_scholar_author_id,
+                "metadata_provider": (
+                    "OpenAlex" if openalex_author_id else "Semantic Scholar"
+                ),
+                "orcid": clean_text(candidate.get("orcid") or ""),
+                "source_citation_total": int_or_none(candidate.get("cited_by_count")),
+                "works_count": int(candidate.get("works_count") or 0),
+            }
+        )
+    if profiles:
+        return profiles
+    if not name:
+        return []
+    return [
+        {
+            "candidate_type": "researchgate-manual-profile",
+            "source_type": "researchgate",
+            "source_author_id": source_author_id,
+            "user_id": source_author_id,
+            "name": name,
+            "affiliation": affiliations[0] if affiliations else "",
+            "email": "",
+            "cited_by": "",
+            "interests": [],
+            "url": profile_url,
+            "homepage_url": "",
+            "avatar_url": "",
+            "openalex_author_id": "",
+            "semantic_scholar_author_id": "",
+            "metadata_provider": "",
+            "orcid": "",
+            "source_citation_total": None,
+            "works_count": 0,
+        }
+    ]
+
+
+def sanitize_researchgate_author_profile(profile: Any) -> dict[str, Any]:
+    if not isinstance(profile, dict):
+        return {}
+    profile_url = normalize_researchgate_profile_url(profile.get("url") or "")
+    source_author_id = clean_text(profile.get("source_author_id") or profile_url)
+    name = clean_text(profile.get("name") or "")
+    if not profile_url or not source_author_id or not name:
+        return {}
+    return {
+        "candidate_type": clean_text(profile.get("candidate_type") or "researchgate-openalex-profile"),
+        "source_type": "researchgate",
+        "source_author_id": source_author_id,
+        "user_id": source_author_id,
+        "name": name,
+        "affiliation": clean_text(profile.get("affiliation") or ""),
+        "email": "",
+        "cited_by": "",
+        "interests": [],
+        "url": profile_url,
+        "homepage_url": "",
+        "avatar_url": "",
+        "openalex_author_id": normalize_openalex_author_id(
+            profile.get("openalex_author_id")
+        ),
+        "semantic_scholar_author_id": normalize_semantic_scholar_author_id(
+            profile.get("semantic_scholar_author_id")
+        ),
+        "metadata_provider": clean_text(
+            profile.get("metadata_provider") or ""
+        ),
+        "orcid": clean_text(profile.get("orcid") or ""),
+        "source_citation_total": int_or_none(profile.get("source_citation_total")),
+    }
+
+
+def sanitize_author_monitor_profile(profile: Any) -> dict[str, Any]:
+    source_type = clean_text(
+        profile.get("source_type") if isinstance(profile, dict) else ""
+    ).lower()
+    if source_type == "researchgate":
+        return sanitize_researchgate_author_profile(profile)
+    sanitized = sanitize_google_scholar_profile(profile)
+    if sanitized:
+        sanitized["source_type"] = "google_scholar"
+        sanitized["source_author_id"] = clean_text(sanitized.get("user_id") or "")
+    return sanitized
+
+
 def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
     try:
         interests = json.loads(str(row.get("interests_json") or "[]"))
@@ -9974,14 +10854,39 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
     scholar_citation_total = int_or_none(row.get("scholar_citation_total"))
     if scholar_citation_total is None:
         scholar_citation_total = int_or_none(row.get("scholar_citation_sum"))
+    source_type = clean_text(row.get("source_type") or "google_scholar").lower()
+    source_author_id = clean_text(
+        row.get("source_author_id") or row.get("scholar_user_id") or ""
+    )
+    if source_type == "google_scholar":
+        citation_total = scholar_citation_total
+        citation_source = "Google Scholar"
+    else:
+        citation_total = int_or_none(row.get("source_citation_total"))
+        citation_source = clean_text(row.get("metadata_provider") or "") or (
+            "OpenAlex" if row.get("openalex_author_id") else (
+                "Semantic Scholar" if row.get("semantic_scholar_author_id") else ""
+            )
+        )
     return {
         "id": int(row.get("id") or 0),
-        "user_id": clean_text(row.get("scholar_user_id") or ""),
+        "user_id": source_author_id,
+        "source_type": source_type,
+        "source_author_id": source_author_id,
+        "source_label": "ResearchGate" if source_type == "researchgate" else "Google Scholar",
+        "openalex_author_id": clean_text(row.get("openalex_author_id") or ""),
+        "semantic_scholar_author_id": clean_text(
+            row.get("semantic_scholar_author_id") or ""
+        ),
+        "metadata_provider": citation_source,
+        "orcid": clean_text(row.get("orcid") or ""),
         "name": clean_text(row.get("name") or ""),
         "affiliation": clean_text(row.get("affiliation") or ""),
         "email": clean_text(row.get("email") or ""),
         "cited_by": clean_text(row.get("cited_by") or ""),
         "scholar_citation_total": scholar_citation_total,
+        "citation_total": citation_total,
+        "citation_source": citation_source,
         "interests": [clean_text(item) for item in interests if clean_text(item)],
         "url": clean_text(row.get("profile_url") or ""),
         "homepage_url": homepage_override_url or scholar_homepage_url,
@@ -10176,6 +11081,57 @@ def save_google_scholar_publication_observation(
     return storage.update_paper_raw_json(paper_id, raw) or current
 
 
+def save_openalex_author_monitor_observation(
+    storage: Storage,
+    paper_id: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any] | None:
+    paper_id = clean_text(paper_id)
+    current = storage.get_paper(paper_id) if paper_id else None
+    candidate_raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    if not current or not candidate_raw:
+        return current
+    raw = parse_raw_json(current)
+    raw["openalex_author_monitor"] = {
+        "id": clean_text(candidate_raw.get("id") or ""),
+        "cited_by_count": int_or_none(candidate_raw.get("cited_by_count")),
+        "checked_at": now_iso(),
+    }
+    return storage.update_paper_raw_json(paper_id, raw) or current
+
+
+def semantic_scholar_author_candidate_raw(
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
+    semantic = (
+        raw.get("semantic_scholar")
+        if isinstance(raw.get("semantic_scholar"), dict)
+        else {}
+    )
+    return semantic
+
+
+def save_semantic_scholar_author_monitor_observation(
+    storage: Storage,
+    paper_id: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any] | None:
+    paper_id = clean_text(paper_id)
+    current = storage.get_paper(paper_id) if paper_id else None
+    semantic = semantic_scholar_author_candidate_raw(candidate)
+    if not current or not semantic:
+        return current
+    raw = parse_raw_json(current)
+    raw["semantic_scholar_author_monitor"] = {
+        "paper_id": clean_text(semantic.get("paperId") or ""),
+        "citation_count": int_or_none(semantic.get("citationCount")),
+        "checked_at": now_iso(),
+    }
+    storage.update_paper_raw_json(paper_id, raw)
+    return storage.update_semantic_scholar_enrichment(paper_id, semantic) or current
+
+
 def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None = None) -> bool:
     raw = clean_text(monitor.get("cooldown_until") or "")
     if not raw:
@@ -10208,8 +11164,12 @@ def refresh_author_monitor_for_db(
         monitor = storage.get_author_monitor(author_monitor_id)
         if not monitor:
             return {"author_id": author_monitor_id, "status": "missing", "added": 0}
+        source_type = clean_text(
+            monitor.get("source_type") or "google_scholar"
+        ).lower()
+        is_scholar = source_type == "google_scholar"
         global_cooldown = google_scholar_global_cooldown(storage)
-        if global_cooldown.get("active"):
+        if is_scholar and global_cooldown.get("active"):
             return {
                 "author_id": author_monitor_id,
                 "status": "global-cooldown",
@@ -10217,7 +11177,7 @@ def refresh_author_monitor_for_db(
                 "message": google_scholar_global_cooldown_message(global_cooldown),
                 "cooldown_until": clean_text(global_cooldown.get("until") or ""),
             }
-        if author_monitor_cooldown_active(monitor):
+        if is_scholar and author_monitor_cooldown_active(monitor):
             return {
                 "author_id": author_monitor_id,
                 "status": "cooldown",
@@ -10226,10 +11186,27 @@ def refresh_author_monitor_for_db(
                 "cooldown_until": clean_text(monitor.get("cooldown_until") or ""),
             }
         checked_at = now_iso()
+        openalex_author_id = normalize_openalex_author_id(
+            monitor.get("openalex_author_id")
+        )
+        semantic_scholar_author_id = normalize_semantic_scholar_author_id(
+            monitor.get("semantic_scholar_author_id")
+        )
+        researchgate_provider = (
+            "OpenAlex"
+            if openalex_author_id
+            else ("Semantic Scholar" if semantic_scholar_author_id else "")
+        )
+        active_metadata_provider = researchgate_provider
+        provider_fallback_note = ""
         storage.update_author_monitor(
             author_monitor_id,
             status="refreshing",
-            message="Checking Google Scholar for profile updates...",
+            message=(
+                "Checking Google Scholar for profile updates..."
+                if is_scholar
+                else f"Checking {researchgate_provider or 'publication metadata'} for ResearchGate author publications..."
+            ),
             last_checked_at=checked_at,
         )
         baseline = bool(initial or storage.author_monitor_paper_count(author_monitor_id) == 0)
@@ -10240,12 +11217,165 @@ def refresh_author_monitor_for_db(
             else AUTHOR_MONITOR_RECENT_CHECK_LIMIT
         )
         try:
-            scholar_payload = fetch_google_scholar_profile_payload(
-                clean_text(monitor.get("profile_url") or ""),
-                limit=limit,
-                sort_by_date=not baseline and not full_metadata,
-            )
-            candidates = scholar_payload.get("candidates") or []
+            if is_scholar:
+                source_payload = fetch_google_scholar_profile_payload(
+                    clean_text(monitor.get("profile_url") or ""),
+                    limit=limit,
+                    sort_by_date=not baseline and not full_metadata,
+                )
+                candidates = source_payload.get("candidates") or []
+                refreshed_profile = source_payload.get("profile") or {}
+            else:
+                if openalex_author_id:
+                    openalex_profile: dict[str, Any] = {}
+                    try:
+                        openalex_profile = fetch_openalex_author_profile(
+                            openalex_author_id
+                        )
+                        candidates = fetch_openalex_author_publications(
+                            openalex_author_id,
+                            limit=limit,
+                            sort_by_date=not baseline,
+                        )
+                        provider_profile = openalex_profile
+                        active_metadata_provider = "OpenAlex"
+                        if not semantic_scholar_author_id:
+                            match = backfill_researchgate_semantic_author(
+                                storage,
+                                {
+                                    **monitor,
+                                    "name": clean_text(
+                                        openalex_profile.get("name")
+                                        or monitor.get("name")
+                                        or ""
+                                    ),
+                                    "affiliation": clean_text(
+                                        openalex_profile.get("affiliation")
+                                        or monitor.get("affiliation")
+                                        or ""
+                                    ),
+                                    "orcid": clean_text(
+                                        openalex_profile.get("orcid")
+                                        or monitor.get("orcid")
+                                        or ""
+                                    ),
+                                },
+                                reference_papers=candidates,
+                            )
+                            semantic_scholar_author_id = (
+                                normalize_semantic_scholar_author_id(
+                                    match.get(
+                                        "semantic_scholar_author_id"
+                                    )
+                                )
+                            )
+                    except (
+                        OpenAlexDailyLimitError,
+                        requests.RequestException,
+                    ) as openalex_error:
+                        matched_publications: list[dict[str, Any]] = []
+                        if not semantic_scholar_author_id:
+                            match = backfill_researchgate_semantic_author(
+                                storage,
+                                {
+                                    **monitor,
+                                    "name": clean_text(
+                                        openalex_profile.get("name")
+                                        or monitor.get("name")
+                                        or ""
+                                    ),
+                                    "affiliation": clean_text(
+                                        openalex_profile.get("affiliation")
+                                        or monitor.get("affiliation")
+                                        or ""
+                                    ),
+                                    "orcid": clean_text(
+                                        openalex_profile.get("orcid")
+                                        or monitor.get("orcid")
+                                        or ""
+                                    ),
+                                },
+                                reference_papers=storage.list_author_monitor_papers(
+                                    author_monitor_id
+                                ),
+                            )
+                            semantic_scholar_author_id = (
+                                normalize_semantic_scholar_author_id(
+                                    match.get(
+                                        "semantic_scholar_author_id"
+                                    )
+                                )
+                            )
+                            matched_publications = (
+                                match.get("matched_publications")
+                                if isinstance(
+                                    match.get("matched_publications"),
+                                    list,
+                                )
+                                else []
+                            )
+                        if not semantic_scholar_author_id:
+                            raise openalex_error
+                        provider_profile = (
+                            fetch_semantic_scholar_author_profile(
+                                semantic_scholar_author_id
+                            )
+                        )
+                        candidates = matched_publications or (
+                            fetch_semantic_scholar_author_publications(
+                                semantic_scholar_author_id,
+                                limit=limit,
+                            )
+                        )
+                        active_metadata_provider = "Semantic Scholar"
+                        provider_fallback_note = (
+                            "OpenAlex was unavailable, so this refresh used "
+                            "Semantic Scholar."
+                        )
+                elif semantic_scholar_author_id:
+                    provider_profile = fetch_semantic_scholar_author_profile(
+                        semantic_scholar_author_id
+                    )
+                    candidates = fetch_semantic_scholar_author_publications(
+                        semantic_scholar_author_id,
+                        limit=limit,
+                    )
+                    active_metadata_provider = "Semantic Scholar"
+                else:
+                    raise ValueError(
+                        "This ResearchGate author has no publication-data match, so automatic refresh is unavailable"
+                    )
+                refreshed_profile = {
+                    "source_type": "researchgate",
+                    "source_author_id": clean_text(
+                        monitor.get("source_author_id")
+                        or monitor.get("profile_url")
+                        or ""
+                    ),
+                    "user_id": clean_text(
+                        monitor.get("source_author_id")
+                        or monitor.get("profile_url")
+                        or ""
+                    ),
+                    "url": clean_text(monitor.get("profile_url") or ""),
+                    "name": clean_text(
+                        provider_profile.get("name") or monitor.get("name") or ""
+                    ),
+                    "affiliation": clean_text(
+                        provider_profile.get("affiliation")
+                        or monitor.get("affiliation")
+                        or ""
+                    ),
+                    "openalex_author_id": openalex_author_id,
+                    "semantic_scholar_author_id": semantic_scholar_author_id,
+                    "metadata_provider": active_metadata_provider,
+                    "orcid": clean_text(
+                        provider_profile.get("orcid") or monitor.get("orcid") or ""
+                    ),
+                    "source_citation_total": int_or_none(
+                        provider_profile.get("cited_by_count")
+                    ),
+                }
             added = 0
             for candidate in candidates:
                 try:
@@ -10255,10 +11385,31 @@ def refresh_author_monitor_for_db(
                 existing = existing_paper_for_author_monitor(storage, normalized)
                 if existing:
                     paper_id = clean_text(existing.get("paper_id") or "")
-                    save_google_scholar_publication_observation(storage, paper_id, candidate)
+                    if is_scholar:
+                        save_google_scholar_publication_observation(
+                            storage, paper_id, candidate
+                        )
+                    elif active_metadata_provider == "OpenAlex":
+                        save_openalex_author_monitor_observation(
+                            storage, paper_id, candidate
+                        )
+                    else:
+                        save_semantic_scholar_author_monitor_observation(
+                            storage, paper_id, candidate
+                        )
                 else:
                     storage.upsert_paper(normalized)
                     paper_id = clean_text(normalized.get("paper_id") or "")
+                    if (
+                        active_metadata_provider == "Semantic Scholar"
+                        and paper_id
+                    ):
+                        semantic = semantic_scholar_author_candidate_raw(candidate)
+                        if semantic:
+                            storage.update_semantic_scholar_enrichment(
+                                paper_id,
+                                semantic,
+                            )
                 if not paper_id:
                     continue
                 inserted = storage.add_author_monitor_paper(
@@ -10271,7 +11422,7 @@ def refresh_author_monitor_for_db(
                 if inserted:
                     added += 1
             success_at = now_iso()
-            if full_metadata:
+            if full_metadata and is_scholar:
                 new_label = (
                     f" · {added} new publication{'' if added == 1 else 's'}"
                     if added
@@ -10279,12 +11430,19 @@ def refresh_author_monitor_for_db(
                 )
                 message = f"Updated Scholar citations for {len(candidates)} profile publications{new_label}."
             elif baseline:
-                message = f"Imported {added} existing profile publications."
+                source_label = (
+                    "Google Scholar"
+                    if is_scholar
+                    else active_metadata_provider
+                )
+                message = f"Imported {added} existing {source_label} publications."
             else:
                 message = f"{added} new publication{'s' if added != 1 else ''} found." if added else "No new publications."
+            if provider_fallback_note:
+                message = f"{message} {provider_fallback_note}"
             storage.update_author_monitor(
                 author_monitor_id,
-                profile=scholar_payload.get("profile") or {},
+                profile=refreshed_profile,
                 status="success",
                 message=message,
                 last_checked_at=success_at,
@@ -10298,6 +11456,12 @@ def refresh_author_monitor_for_db(
                 "seen": len(candidates),
                 "baseline": baseline,
                 "full_metadata": full_metadata,
+                "source_type": source_type,
+                "metadata_provider": (
+                    active_metadata_provider
+                    if not is_scholar
+                    else "Google Scholar"
+                ),
                 "message": message,
             }
         except GoogleScholarBlockedError as exc:
@@ -10440,10 +11604,30 @@ def paper_to_my_publication_summary_api(paper: dict[str, Any]) -> dict[str, Any]
 def compact_citation_metrics(paper: dict[str, Any]) -> dict[str, Any]:
     raw = parse_raw_json(paper)
     semantic = parse_semantic_scholar_json(paper)
+    if not semantic and isinstance(raw.get("semantic_scholar"), dict):
+        semantic = raw.get("semantic_scholar") or {}
+    semantic_monitor = (
+        raw.get("semantic_scholar_author_monitor")
+        if isinstance(raw.get("semantic_scholar_author_monitor"), dict)
+        else {}
+    )
+    openalex_monitor = (
+        raw.get("openalex_author_monitor")
+        if isinstance(raw.get("openalex_author_monitor"), dict)
+        else {}
+    )
+    openalex_count = int_or_none(raw.get("cited_by_count"))
+    if openalex_count is None:
+        openalex_count = int_or_none(openalex_monitor.get("cited_by_count"))
     sources: dict[str, Any] = {}
     for key, value in [
-        ("openalex", int_or_none(raw.get("cited_by_count"))),
-        ("semantic_scholar", int_or_none(semantic.get("citationCount"))),
+        ("openalex", openalex_count),
+        (
+            "semantic_scholar",
+            int_or_none(semantic.get("citationCount"))
+            if semantic
+            else int_or_none(semantic_monitor.get("citation_count")),
+        ),
         ("crossref", int_or_none(raw.get("is-referenced-by-count"))),
     ]:
         if value is not None:
@@ -12220,12 +13404,12 @@ def fetch_openalex_citing_papers(
     seen: set[str] = set()
     cursor = "*"
     for _ in range(max(1, int(max_pages))):
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params={
                 "filter": f"cites:{work_id}",
-                "per-page": max(1, min(200, int(per_page))),
+                "per-page": max(1, min(100, int(per_page))),
                 "cursor": cursor,
                 "sort": "publication_date:desc",
                 "mailto": "your_email@example.com",
@@ -12259,7 +13443,7 @@ def openalex_work_id_for_paper(paper: dict[str, Any]) -> str:
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
     if doi:
         try:
-            response = request_with_retries(
+            response = openalex_request(
                 "GET",
                 f"https://api.openalex.org/works/https://doi.org/{doi}",
                 params={"mailto": "your_email@example.com"},
@@ -12274,7 +13458,7 @@ def openalex_work_id_for_paper(paper: dict[str, Any]) -> str:
             pass
     title = clean_text(paper.get("title") or "")
     if title:
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/works",
             params={"search": title, "per-page": 1, "mailto": "your_email@example.com"},
@@ -15519,7 +16703,7 @@ def clean_journal_name(value: str) -> str:
 
 def resolve_journal_metadata(name: str) -> dict[str, Any]:
     try:
-        response = request_with_retries(
+        response = openalex_request(
             "GET",
             "https://api.openalex.org/sources",
             params={"search": name, "per-page": 1},
@@ -23047,6 +24231,28 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       margin-top: 2px;
     }
+    .author-monitor-source-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 14px;
+      margin-left: 5px;
+      padding: 0 4px;
+      border-radius: 4px;
+      background: #eef2f6;
+      color: #667085;
+      font-size: 8px;
+      font-weight: 750;
+      line-height: 14px;
+      vertical-align: middle;
+    }
+    .author-monitor-source-badge.researchgate {
+      background: #e8f3f4;
+      color: #176b70;
+    }
+    .author-profile-result-copy .author-monitor-source-badge {
+      display: inline-flex;
+      margin-top: 0;
+    }
     @media (max-width: 1180px) {
       .author-monitor-shell {
         grid-template-columns: minmax(180px, 215px) minmax(340px, 1fr) minmax(270px, 320px);
@@ -24127,7 +25333,7 @@ INDEX_HTML = """<!doctype html>
           <div class="settings-modal-head">
             <div>
               <h2 id="authorMonitorDialogTitle">Add Monitored Author</h2>
-              <p>Paste an exact Google Scholar profile URL for the safest lookup, or search once by name and optional affiliations.</p>
+              <p>Search Google Scholar by name, or paste an exact Google Scholar or ResearchGate profile URL. ResearchGate authors use OpenAlex when configured, with Semantic Scholar as the automatic fallback.</p>
             </div>
             <button class="settings-modal-close" id="closeAuthorMonitorDialog" type="button" title="Close">×</button>
           </div>
@@ -24135,7 +25341,7 @@ INDEX_HTML = """<!doctype html>
             <div class="theme-form">
               <label>
                 <span>Profile URL or name and affiliations</span>
-                <input id="authorMonitorQuery" type="text" autocomplete="off" placeholder="https://scholar.google.com/citations?user=… or Name; affiliation">
+                <input id="authorMonitorQuery" type="text" autocomplete="off" placeholder="Scholar/ResearchGate URL or Name; affiliation">
               </label>
               <div class="theme-dialog-actions">
                 <button class="smallbtn" id="searchAuthorProfiles" type="button">Find Profiles</button>
@@ -24158,7 +25364,18 @@ INDEX_HTML = """<!doctype html>
           <div class="settings-modal-body">
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>Built-in Sources</strong><span>Always available</span></div>
-              <p>OpenAlex, Semantic Scholar, Crossref, arXiv, and DataCite continue to work without extra setup.</p>
+              <p>Semantic Scholar, Crossref, arXiv, and DataCite continue to work without extra setup. OpenAlex can use a free API key below.</p>
+            </div>
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>OpenAlex</strong><span id="openalexConfiguredLabel">Not configured</span></div>
+              <p>Optional but recommended. Daiqo uses only the daily free allowance and falls back to other metadata sources when that allowance is exhausted.</p>
+              <div class="citation-token-row">
+                <input class="search" id="openalexKeyInput" type="password" autocomplete="off" placeholder="OpenAlex API key">
+                <button class="smallbtn" id="saveOpenalexKey" type="button">Save</button>
+                <button class="smallbtn" id="testOpenalexKey" type="button">Test</button>
+                <button class="smallbtn" id="clearOpenalexKey" type="button">Clear</button>
+              </div>
+              <div class="citation-settings-status" id="openalexCitationSettingsStatus"></div>
             </div>
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>NASA ADS</strong><span id="adsConfiguredLabel">Not configured</span></div>
@@ -36173,11 +37390,16 @@ INDEX_HTML = """<!doctype html>
       if (!scholarGlobalCooldownActive()) return "";
       const until = Date.parse(state.scholarGlobalCooldown?.until || "");
       const label = Number.isFinite(until) ? new Date(until).toLocaleString() : "later";
-      return `Google Scholar paused for this network until ${label}. Profile search, add, and refresh are disabled.`;
+      return `Google Scholar paused for this network until ${label}. ResearchGate metadata sources remain available.`;
     }
 
     function updateScholarCooldownControls() {
       const paused = scholarGlobalCooldownActive();
+      const selected = selectedAuthorMonitor();
+      const queryIsResearchGate = authorMonitorQueryIsResearchGate();
+      const hasIndependentMetadataAuthor = state.authorMonitors.some(
+        (author) => !authorMonitorIsScholar(author) && authorMonitorCanRefresh(author)
+      );
       const add = $("openAuthorMonitorDialog");
       const search = $("searchAuthorProfiles");
       const query = $("authorMonitorQuery");
@@ -36185,15 +37407,22 @@ INDEX_HTML = """<!doctype html>
       const refreshAll = $("refreshAllAuthors");
       const updateAllCitations = document.querySelector('[data-action="update-all-scholar-citations"]');
       if (add) {
-        add.disabled = paused;
-        add.title = paused ? scholarGlobalCooldownText() : "Add monitored author";
+        add.disabled = false;
+        add.title = "Add monitored author";
       }
-      if (search) search.disabled = paused || state.authorMonitorDialogBusy;
-      if (query) query.disabled = paused;
-      if (refresh) refresh.disabled = paused || state.authorMonitorRefreshing;
-      if (refreshAll) refreshAll.disabled = paused || state.authorMonitorRefreshing;
+      if (search) search.disabled = state.authorMonitorDialogBusy || (paused && !queryIsResearchGate);
+      if (query) query.disabled = false;
+      if (refresh) refresh.disabled = state.authorMonitorRefreshing
+        || (selected && !authorMonitorCanRefresh(selected))
+        || (paused && (!selected || authorMonitorIsScholar(selected)));
+      if (refreshAll) {
+        refreshAll.disabled = state.authorMonitorRefreshing
+          || (paused && !hasIndependentMetadataAuthor);
+      }
       if (updateAllCitations) {
-        updateAllCitations.disabled = paused
+        updateAllCitations.disabled = !selected
+          || !authorMonitorIsScholar(selected)
+          || paused
           || state.authorMonitorRefreshing
           || authorMonitorIsBackgroundScholarJob(selectedAuthorMonitor());
       }
@@ -36294,13 +37523,13 @@ INDEX_HTML = """<!doctype html>
       const direction = state.authorMonitorSortDir === "asc" ? 1 : -1;
       return filtered.sort((left, right) => {
         if (state.authorMonitorSort === "citations") {
-          const leftCount = Number(left.google_scholar_citation_count);
-          const rightCount = Number(right.google_scholar_citation_count);
-          const leftKnown = left.google_scholar_citation_count !== null
-            && left.google_scholar_citation_count !== undefined
+          const leftCount = Number(left.citation_count);
+          const rightCount = Number(right.citation_count);
+          const leftKnown = left.citation_count !== null
+            && left.citation_count !== undefined
             && Number.isFinite(leftCount);
-          const rightKnown = right.google_scholar_citation_count !== null
-            && right.google_scholar_citation_count !== undefined
+          const rightKnown = right.citation_count !== null
+            && right.citation_count !== undefined
             && Number.isFinite(rightCount);
           if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
           if (leftKnown && rightKnown && leftCount !== rightCount) return (leftCount - rightCount) * direction;
@@ -36339,13 +37568,48 @@ INDEX_HTML = """<!doctype html>
         : `<span class="author-monitor-avatar">${escapeHtml(initials)}</span>`;
     }
 
+    function authorMonitorIsScholar(author) {
+      return String(author?.source_type || "google_scholar") === "google_scholar";
+    }
+
+    function authorMonitorCanRefresh(author) {
+      return Boolean(author) && (
+        authorMonitorIsScholar(author)
+        || /^A\d+$/i.test(String(author?.openalex_author_id || "").trim())
+        || /^\d+$/.test(String(author?.semantic_scholar_author_id || "").trim())
+      );
+    }
+
+    function authorMonitorMetadataProvider(author) {
+      if (authorMonitorIsScholar(author)) return "Google Scholar";
+      if (String(author?.openalex_author_id || "").trim()) return "OpenAlex";
+      if (String(author?.semantic_scholar_author_id || "").trim()) return "Semantic Scholar";
+      return "publication metadata";
+    }
+
+    function authorMonitorSourceShortLabel(author) {
+      return authorMonitorIsScholar(author) ? "GS" : "RG";
+    }
+
+    function authorMonitorProfileIdentity(author) {
+      return `${String(author?.source_type || "google_scholar")}:${String(author?.source_author_id || author?.user_id || "")}`;
+    }
+
+    function authorMonitorQueryIsResearchGate(value = $("authorMonitorQuery")?.value) {
+      return /^(?:https?:\\/\\/)?(?:www\\.)?researchgate\\.net\\/(?:profile|scientific-contributions)\\//i.test(
+        String(value || "").trim()
+      );
+    }
+
     function authorMonitorAvatarDestination(author) {
       return String(author?.homepage_url || author?.url || "").trim();
     }
 
     function authorMonitorLinkedAvatarMarkup(author, location = "rail") {
       const destination = authorMonitorAvatarDestination(author);
-      const destinationName = author?.homepage_url ? "Homepage" : "Google Scholar";
+      const destinationName = author?.homepage_url
+        ? "Homepage"
+        : (authorMonitorIsScholar(author) ? "Google Scholar" : "ResearchGate");
       const label = `Open ${destinationName} for ${author?.name || "author"}`;
       return `
         <button
@@ -36391,8 +37655,8 @@ INDEX_HTML = """<!doctype html>
           <div class="author-monitor-author${Number(author.id) === Number(state.authorMonitorSelectedId) ? " active" : ""}" role="button" tabindex="0" data-author-id="${Number(author.id)}">
             ${authorMonitorLinkedAvatarMarkup(author)}
             <span class="author-monitor-author-copy">
-              <span class="author-monitor-author-name">${escapeHtml(author.name || "Unknown author")}</span>
-              <span class="author-monitor-author-affiliation">${escapeHtml(author.affiliation || author.message || "Google Scholar")}</span>
+              <span class="author-monitor-author-name">${escapeHtml(author.name || "Unknown author")}<span class="author-monitor-source-badge${authorMonitorIsScholar(author) ? "" : " researchgate"}">${authorMonitorSourceShortLabel(author)}</span></span>
+              <span class="author-monitor-author-affiliation">${escapeHtml(author.affiliation || author.message || author.source_label || "Author profile")}</span>
             </span>
             ${Number(author.unread_count || 0) ? `<span class="author-monitor-unread">${Number(author.unread_count || 0)}</span>` : ""}
           </div>
@@ -36500,14 +37764,14 @@ INDEX_HTML = """<!doctype html>
       const author = selectedAuthorMonitor();
       if (!author) return `${state.authorMonitors.length} monitored authors`;
       const parts = [`${Number(author.paper_count || 0)} publications`];
-      const scholarCitationRaw = author.scholar_citation_total;
-      const scholarCitationTotal = scholarCitationRaw === null
-        || scholarCitationRaw === undefined
-        || scholarCitationRaw === ""
+      const citationRaw = author.citation_total;
+      const citationTotal = citationRaw === null
+        || citationRaw === undefined
+        || citationRaw === ""
         ? Number.NaN
-        : Number(scholarCitationRaw);
-      if (Number.isFinite(scholarCitationTotal) && scholarCitationTotal >= 0) {
-        parts.push(`${scholarCitationTotal.toLocaleString("en-US")} citations (Google Scholar)`);
+        : Number(citationRaw);
+      if (Number.isFinite(citationTotal) && citationTotal >= 0) {
+        parts.push(`${citationTotal.toLocaleString("en-US")} citations (${author.citation_source || author.source_label || "Source"})`);
       }
       if (Number(author.unread_count || 0)) parts.push(`${Number(author.unread_count || 0)} new`);
       if (author.last_checked_at) parts.push(`checked ${autoStatusTime(author.last_checked_at) || "recently"}`);
@@ -36553,9 +37817,10 @@ INDEX_HTML = """<!doctype html>
         : (identifierMessage ? `${identifierMessage} · Click to retry` : "Find identifier");
       const conferenceAbstract = authorMonitorPaperIsConferenceAbstract(paper);
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
-      const scholarCitationKnown = paper.google_scholar_citation_count !== null
-        && paper.google_scholar_citation_count !== undefined
-        && Number.isFinite(Number(paper.google_scholar_citation_count));
+      const citationKnown = paper.citation_count !== null
+        && paper.citation_count !== undefined
+        && Number.isFinite(Number(paper.citation_count));
+      const citationSource = String(paper.citation_count_source || "Citation source");
       article.className = `author-paper-card${selected ? " report-selected" : ""}${paper.author_unread ? " author-unread" : ""}${conferenceAbstract ? " conference-abstract" : ""}`;
       article.dataset.paperId = paper.paper_id || "";
       article.tabIndex = -1;
@@ -36592,7 +37857,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="author-paper-citation-row">
           <span class="author-paper-citation">${escapeHtml(authorMonitorCitationText(paper))}</span>
-          ${scholarCitationKnown ? `<span class="author-paper-scholar-citations" title="Google Scholar citations">Cited by ${escapeHtml(String(paper.google_scholar_citation_count))}</span>` : ""}
+          ${citationKnown ? `<span class="author-paper-scholar-citations" title="${escapeAttr(citationSource)} citations">Cited by ${escapeHtml(String(paper.citation_count))}</span>` : ""}
         </div>
       `;
       article.addEventListener("click", () => selectAuthorMonitorPaper(paper.paper_id));
@@ -37211,13 +38476,14 @@ INDEX_HTML = """<!doctype html>
       $("reportTitle").textContent = "Author Monitor";
       const selected = selectedAuthorMonitor();
       const scholarPaused = scholarGlobalCooldownActive();
+      const scholarPauseApplies = scholarPaused && (!selected || authorMonitorIsScholar(selected));
       const partition = authorMonitorPartitionedPapers();
       root.innerHTML = `
         <div class="author-monitor-shell" data-keyboard-pane="${escapeAttr(state.authorMonitorKeyboardPane)}">
           <aside class="author-monitor-rail">
             <div class="author-monitor-rail-head">
               <strong>Monitored Authors</strong>
-              <button class="author-monitor-add" id="openAuthorMonitorDialog" type="button" title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : "Add monitored author")}" ${scholarPaused ? "disabled" : ""}>+</button>
+              <button class="author-monitor-add" id="openAuthorMonitorDialog" type="button" title="Add monitored author">+</button>
             </div>
             <div class="author-monitor-authors" id="authorMonitorAuthors"></div>
           </aside>
@@ -37232,10 +38498,10 @@ INDEX_HTML = """<!doctype html>
                       <button
                         class="author-monitor-scholar-update-button${authorMonitorIsBackgroundScholarJob(selected) ? " updating" : ""}"
                         type="button"
-                        data-action="update-all-scholar-citations"
-                        title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : `Update all Google Scholar citations for ${selected.name || "this author"}`)}"
-                        aria-label="Update all Google Scholar citations for ${escapeAttr(selected.name || "this author")}"
-                        ${scholarPaused || state.authorMonitorRefreshing || authorMonitorIsBackgroundScholarJob(selected) ? "disabled" : ""}
+                        data-action="${authorMonitorIsScholar(selected) ? "update-all-scholar-citations" : "refresh-openalex-author"}"
+                        title="${escapeAttr(authorMonitorIsScholar(selected) ? (scholarPaused ? scholarGlobalCooldownText() : `Update all Google Scholar citations for ${selected.name || "this author"}`) : (authorMonitorCanRefresh(selected) ? `Refresh ${selected.name || "this author"} through ${authorMonitorMetadataProvider(selected)}` : "No publication-data match is saved for this ResearchGate author"))}"
+                        aria-label="${escapeAttr(authorMonitorIsScholar(selected) ? `Update all Google Scholar citations for ${selected.name || "this author"}` : `Refresh ${selected.name || "this author"} through ${authorMonitorMetadataProvider(selected)}`)}"
+                        ${!authorMonitorCanRefresh(selected) || (authorMonitorIsScholar(selected) && scholarPaused) || state.authorMonitorRefreshing || authorMonitorIsBackgroundScholarJob(selected) ? "disabled" : ""}
                       ><span class="author-monitor-scholar-update-icon" aria-hidden="true">↻</span></button>
                     ` : ""}
                   </div>
@@ -37251,7 +38517,7 @@ INDEX_HTML = """<!doctype html>
                   </button>
                 ` : ""}
               </div>
-              ${scholarPaused || selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : selected.message || "")}">Paused</span>` : ""}
+              ${(selected && authorMonitorIsScholar(selected) && scholarPaused) || selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(selected && authorMonitorIsScholar(selected) && scholarPaused ? scholarGlobalCooldownText() : selected.message || "")}">Paused</span>` : ""}
             </div>
             <div class="author-monitor-paper-list" id="authorMonitorPaperList"></div>
             ${state.authorMonitorConferenceExpanded && partition.conferences.length ? `
@@ -37269,7 +38535,7 @@ INDEX_HTML = """<!doctype html>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">
-            <span class="${scholarPaused ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPaused ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}">${escapeHtml(scholarPaused ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}</span>
+            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}</span>
             <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(state.authorMonitorSecondaryActivityText || "")}">${escapeHtml(state.authorMonitorSecondaryActivityText || "")}</span>
           </div>
         </div>
@@ -37285,6 +38551,11 @@ INDEX_HTML = """<!doctype html>
             {live: false, clear: false}
           );
         });
+      });
+      root.querySelector('[data-action="refresh-openalex-author"]')?.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        refreshAuthorMonitor(Number(selected?.id || 0));
       });
       root.querySelectorAll("[data-author-sort]").forEach((button) => {
         button.addEventListener("click", () => setAuthorMonitorSort(button.dataset.authorSort || "date"));
@@ -37315,7 +38586,7 @@ INDEX_HTML = """<!doctype html>
       }
       state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
       if (!state.authorMonitors.length) {
-        list.innerHTML = `<div class="author-monitor-empty">Add a Google Scholar profile to begin monitoring an author.</div>`;
+        list.innerHTML = `<div class="author-monitor-empty">Add a Google Scholar or ResearchGate profile to begin monitoring an author.</div>`;
       } else if (!partition.articles.length && !partition.conferences.length) {
         if (
           selected
@@ -37324,7 +38595,7 @@ INDEX_HTML = """<!doctype html>
         ) {
           list.innerHTML = `
             <div class="author-monitor-empty author-monitor-importing-empty">
-              <strong>Importing ${escapeHtml(selected.name || "author")} from Google Scholar…</strong>
+              <strong>Importing ${escapeHtml(selected.name || "author")} from ${authorMonitorMetadataProvider(selected)}…</strong>
               <span>${escapeHtml(selected.message || "Fetching profile publications...")}</span>
               <span>This import continues in the background. You can browse other authors while it runs.</span>
             </div>
@@ -37495,18 +38766,27 @@ INDEX_HTML = """<!doctype html>
       const root = $("authorProfileResults");
       if (!root) return;
       root.innerHTML = state.authorMonitorProfileResults.map((profile, index) => {
+        const profileIdentity = authorMonitorProfileIdentity(profile);
         const alreadyMonitored = state.authorMonitors.some(
-          (author) => String(author.user_id || "") === String(profile.user_id || "")
+          (author) => authorMonitorProfileIdentity(author) === profileIdentity
         );
+        const isScholarProfile = authorMonitorIsScholar(profile);
+        const sourceBlocked = isScholarProfile && scholarGlobalCooldownActive();
+        const metadataProvider = String(profile.metadata_provider || "publication metadata");
+        const sourceLabel = isScholarProfile ? "GS" : `RG · ${metadataProvider}`;
+        const metricText = !isScholarProfile && Number(profile.works_count || 0)
+          ? `${Number(profile.works_count || 0).toLocaleString("en-US")} works · ${Number(profile.source_citation_total || 0).toLocaleString("en-US")} ${metadataProvider} citations`
+          : "";
         return `
           <div class="author-profile-result">
             ${authorMonitorAvatarMarkup(profile)}
             <div class="author-profile-result-copy">
-              <strong>${escapeHtml(profile.name || "Unknown author")}</strong>
-              <span>${escapeHtml(profile.affiliation || profile.email || "Google Scholar profile")}</span>
+              <strong>${escapeHtml(profile.name || "Unknown author")}<span class="author-monitor-source-badge${isScholarProfile ? "" : " researchgate"}">${escapeHtml(sourceLabel)}</span></strong>
+              <span>${escapeHtml(profile.affiliation || profile.email || profile.source_label || (isScholarProfile ? "Google Scholar profile" : "ResearchGate profile"))}</span>
               ${profile.interests?.length ? `<span>${escapeHtml(profile.interests.slice(0, 4).join(" · "))}</span>` : ""}
+              ${metricText ? `<span>${escapeHtml(metricText)}</span>` : ""}
             </div>
-            <button class="smallbtn" type="button" data-add-author-profile="${index}" ${alreadyMonitored || scholarGlobalCooldownActive() ? "disabled" : ""}>${alreadyMonitored ? "Monitored" : "Monitor"}</button>
+            <button class="smallbtn" type="button" data-add-author-profile="${index}" ${alreadyMonitored || sourceBlocked ? "disabled" : ""}>${alreadyMonitored ? "Monitored" : "Monitor"}</button>
           </div>
         `;
       }).join("");
@@ -37527,13 +38807,16 @@ INDEX_HTML = """<!doctype html>
 
     async function searchAuthorMonitorProfiles() {
       const query = String($("authorMonitorQuery")?.value || "").trim();
-      if (!query || state.authorMonitorDialogBusy || scholarGlobalCooldownActive()) return;
+      const researchGateQuery = authorMonitorQueryIsResearchGate(query);
+      if (!query || state.authorMonitorDialogBusy || (scholarGlobalCooldownActive() && !researchGateQuery)) return;
       const status = $("authorMonitorDialogStatus");
       state.authorMonitorDialogBusy = true;
       $("searchAuthorProfiles").disabled = true;
       state.authorMonitorProfileResults = [];
       renderAuthorProfileResults();
-      status.textContent = "Searching Google Scholar profiles...";
+      status.textContent = researchGateQuery
+        ? "Matching this ResearchGate profile with publication metadata..."
+        : "Searching Google Scholar profiles...";
       status.className = "citation-settings-status";
       try {
         const res = await fetch(`/api/google-scholar-profiles?q=${encodeURIComponent(query)}`);
@@ -37543,12 +38826,16 @@ INDEX_HTML = """<!doctype html>
           state.scholarGlobalCooldown = data.scholarCooldown;
         }
         state.authorMonitorProfileResults = data.profiles || [];
-        status.textContent = scholarGlobalCooldownActive()
+        status.textContent = scholarGlobalCooldownActive() && !researchGateQuery
           ? scholarGlobalCooldownText()
           : state.authorMonitorProfileResults.length
-            ? "Choose the correct profile."
-            : "No matching Google Scholar profiles were found.";
-        status.className = scholarGlobalCooldownActive()
+            ? (researchGateQuery
+              ? "Choose the correct publication-author match for this ResearchGate profile."
+              : "Choose the correct profile.")
+            : (researchGateQuery
+              ? "No author match was found. Add the author name after the URL, separated by a semicolon."
+              : "No matching Google Scholar profiles were found.");
+        status.className = scholarGlobalCooldownActive() && !researchGateQuery
           ? "citation-settings-status err"
           : "citation-settings-status";
         renderAuthorProfileResults();
@@ -37575,7 +38862,7 @@ INDEX_HTML = """<!doctype html>
       try {
         const summary = await fetchJson("/api/author-monitor?summary=1", 12000);
         const author = (summary.authors || []).find(
-          (item) => String(item.user_id || "") === String(profile?.user_id || "")
+          (item) => authorMonitorProfileIdentity(item) === authorMonitorProfileIdentity(profile)
         );
         if (!author) return false;
         const snapshot = await fetchAuthorMonitorSnapshot(Number(author.id));
@@ -37584,7 +38871,7 @@ INDEX_HTML = """<!doctype html>
         closeAuthorMonitorDialog();
         if (state.mode === "author") renderAuthorMonitor();
         updateAuthorMonitorActivityStatus(
-          `${author.name || profile.name || "Author"} was added. Importing the Google Scholar baseline...`,
+          `${author.name || profile.name || "Author"} was added. Importing the ${authorMonitorIsScholar(author) ? "Google Scholar" : "OpenAlex"} baseline...`,
           {live: true, clear: false, channel: "secondary", kind: "scholar-background"}
         );
         pollAuthorMonitorInitialImport(Number(author.id));
@@ -37615,7 +38902,7 @@ INDEX_HTML = """<!doctype html>
         }
         if (authorMonitorIsBackgroundScholarJob(author)) {
           updateAuthorMonitorActivityStatus(
-            author.message || `Importing ${author.name || "author"} from Google Scholar...`,
+            author.message || `Importing ${author.name || "author"} from ${authorMonitorIsScholar(author) ? "Google Scholar" : "OpenAlex"}...`,
             {live: true, clear: false, channel: "secondary", kind: "scholar-background"}
           );
           state.authorMonitorImportPoller = window.setTimeout(
@@ -37651,14 +38938,16 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function addAuthorMonitorProfile(profile) {
-      if (!profile || state.authorMonitorDialogBusy || scholarGlobalCooldownActive()) return;
+      const scholarProfile = authorMonitorIsScholar(profile);
+      if (!profile || state.authorMonitorDialogBusy || (scholarProfile && scholarGlobalCooldownActive())) return;
       const status = $("authorMonitorDialogStatus");
       state.authorMonitorDialogBusy = true;
+      const sourceName = scholarProfile ? "Google Scholar" : "OpenAlex";
       updateAuthorMonitorActivityStatus(
-        `Importing ${profile.name || "author"} from Google Scholar...`,
+        `Importing ${profile.name || "author"} from ${sourceName}...`,
         {live: true, clear: false, channel: "secondary", kind: "scholar-background"}
       );
-      status.textContent = `Importing ${profile.name || "author"} publications as the initial baseline...`;
+      status.textContent = `Importing ${profile.name || "author"} publications from ${sourceName} as the initial baseline...`;
       status.className = "citation-settings-status";
       $("authorProfileResults")?.querySelectorAll("button").forEach((button) => button.disabled = true);
       try {
@@ -37675,10 +38964,15 @@ INDEX_HTML = """<!doctype html>
         if (state.mode === "author") renderAuthorMonitor();
         if (data.refresh?.status === "queued") {
           updateAuthorMonitorActivityStatus(
-            `${profile.name || "Author"} was added. Importing the Google Scholar baseline...`,
+            `${profile.name || "Author"} was added. Importing the ${sourceName} baseline...`,
             {live: true, clear: false, channel: "secondary", kind: "scholar-background"}
           );
           pollAuthorMonitorInitialImport(state.authorMonitorSelectedId);
+        } else if (data.refresh?.status === "manual") {
+          updateAuthorMonitorActivityStatus(
+            `${profile.name || "Author"} was saved with a ResearchGate link. Automatic refresh needs a publication-data match.`,
+            {live: false, channel: "secondary", kind: "scholar-background", delay: 5000}
+          );
         } else {
           updateAuthorMonitorActivityStatus(
             `${profile.name || "Author"} is already monitored.`,
@@ -37698,7 +38992,9 @@ INDEX_HTML = """<!doctype html>
       } finally {
         state.authorMonitorDialogBusy = false;
         $("authorProfileResults")?.querySelectorAll("button").forEach((button) => {
-          button.disabled = scholarGlobalCooldownActive();
+          const profileIndex = Number(button.dataset.addAuthorProfile || 0);
+          const candidate = state.authorMonitorProfileResults[profileIndex];
+          button.disabled = authorMonitorIsScholar(candidate) && scholarGlobalCooldownActive();
         });
         updateScholarCooldownControls();
       }
@@ -37706,15 +39002,33 @@ INDEX_HTML = """<!doctype html>
 
     async function refreshAuthorMonitor(authorId = state.authorMonitorSelectedId) {
       if (state.authorMonitorRefreshing) return;
-      if (scholarGlobalCooldownActive()) {
+      const selectedId = Number(authorId || 0);
+      const selectedAuthor = state.authorMonitors.find(
+        (author) => Number(author.id) === selectedId
+      );
+      if (selectedId && !authorMonitorCanRefresh(selectedAuthor)) {
+        updateAuthorMonitorActivityStatus(
+          "This ResearchGate author has no publication-data match, so automatic refresh is unavailable.",
+          {live: false, clear: false}
+        );
+        return;
+      }
+      const canRefreshDuringScholarPause = selectedId
+        ? !authorMonitorIsScholar(selectedAuthor) && authorMonitorCanRefresh(selectedAuthor)
+        : state.authorMonitors.some(
+            (author) => !authorMonitorIsScholar(author) && authorMonitorCanRefresh(author)
+          );
+      if (scholarGlobalCooldownActive() && !canRefreshDuringScholarPause) {
         updateAuthorMonitorActivityStatus(scholarGlobalCooldownText(), {live: false, clear: false});
         return;
       }
       state.authorMonitorRefreshing = true;
-      const selectedId = Number(authorId || 0);
-      const selectedName = state.authorMonitors.find((author) => Number(author.id) === selectedId)?.name || "authors";
+      const selectedName = selectedAuthor?.name || "authors";
+      const sourceName = selectedId
+        ? (authorMonitorIsScholar(selectedAuthor) ? "Google Scholar" : "OpenAlex")
+        : "available sources";
       updateAuthorMonitorActivityStatus(
-        `Checking ${selectedName} on Google Scholar...`,
+        `Checking ${selectedName} on ${sourceName}...`,
         {live: true, clear: false}
       );
       const refreshButton = $("refreshAuthorMonitor");
@@ -37731,7 +39045,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Author refresh failed");
         applyAuthorMonitorSnapshot(data);
         if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
-        updateAuthorMonitorActivityStatus("Scholar check complete. Updating paper metadata...", {live: true, clear: false});
+        updateAuthorMonitorActivityStatus("Author check complete. Updating paper metadata...", {live: true, clear: false});
         startAuthorMonitorEnrichment(selectedId);
       } catch (error) {
         state.authorMonitorStatus = error.message || "Author refresh failed";
@@ -37899,6 +39213,8 @@ INDEX_HTML = """<!doctype html>
     function openAuthorHomepageEditor(author) {
       if (!author?.id) return;
       document.querySelector(".author-homepage-dialog-backdrop")?.remove();
+      const isScholarAuthor = authorMonitorIsScholar(author);
+      const profileHomepage = String(author.scholar_homepage_url || "").trim();
       const scholarHomepage = String(author.scholar_homepage_url || "").trim();
       const overrideHomepage = String(author.homepage_override_url || "").trim();
       const backdrop = document.createElement("div");
@@ -37906,7 +39222,9 @@ INDEX_HTML = """<!doctype html>
       backdrop.innerHTML = `
         <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="authorHomepageTitle">
           <h2 id="authorHomepageTitle">Edit Homepage for ${escapeHtml(author.name || "Author")}</h2>
-          <p>A custom Homepage overrides the address detected on Google Scholar. Clearing it restores the Scholar address automatically.</p>
+          <p>${isScholarAuthor
+            ? "A custom Homepage overrides the address detected on Google Scholar. Clearing it restores the Scholar address automatically."
+            : "Set the author's institutional or personal Homepage here. Clearing it makes the avatar open the ResearchGate profile."}</p>
           <label class="author-homepage-field">
             Homepage URL
             <input
@@ -37915,18 +39233,22 @@ INDEX_HTML = """<!doctype html>
               inputmode="url"
               autocomplete="url"
               spellcheck="false"
-              value="${escapeAttr(overrideHomepage || scholarHomepage)}"
+              value="${escapeAttr(overrideHomepage || profileHomepage)}"
               placeholder="https://example.edu"
             >
           </label>
           <div class="author-homepage-scholar-source">
-            ${scholarHomepage
-              ? `Google Scholar detected: ${escapeHtml(scholarHomepage)}`
-              : "Google Scholar did not provide a Homepage."}
+            ${isScholarAuthor
+              ? (profileHomepage
+                ? `Google Scholar detected: ${escapeHtml(profileHomepage)}`
+                : "Google Scholar did not provide a Homepage.")
+              : `Profile fallback: ${escapeHtml(author.url || "ResearchGate")}`}
           </div>
           <div class="author-homepage-status" aria-live="polite"></div>
           <div class="finder-drop-actions">
-            <button type="button" data-homepage-action="scholar" ${overrideHomepage ? "" : "disabled"}>Use Scholar Homepage</button>
+            ${isScholarAuthor
+              ? `<button type="button" data-homepage-action="scholar" ${overrideHomepage ? "" : "disabled"}>Use Scholar Homepage</button>`
+              : ""}
             <button type="button" data-homepage-action="cancel">Cancel</button>
             <button type="button" class="primary" data-homepage-action="save">Save Homepage</button>
           </div>
@@ -38004,12 +39326,21 @@ INDEX_HTML = """<!doctype html>
       hideThemeContextMenu();
       const menu = document.createElement("div");
       menu.className = "library-context-menu open author-monitor-context-menu";
+      const scholarAuthor = authorMonitorIsScholar(author);
+      const canRefresh = authorMonitorCanRefresh(author);
+      const sourceName = authorMonitorMetadataProvider(author);
+      const refreshDisabled = !canRefresh || (scholarAuthor && scholarGlobalCooldownActive());
+      const refreshTitle = !canRefresh
+        ? "No publication-data match is saved for this ResearchGate author"
+        : (scholarAuthor && scholarGlobalCooldownActive()
+          ? scholarGlobalCooldownText()
+          : `Refresh this author from ${sourceName}`);
       menu.innerHTML = `
-        <button type="button" data-action="refresh-author" ${scholarGlobalCooldownActive() ? "disabled" : ""} title="${escapeAttr(scholarGlobalCooldownActive() ? scholarGlobalCooldownText() : "Refresh this author from Google Scholar")}">Refresh This Author</button>
-        <button type="button" data-action="update-all-scholar-citations" ${scholarGlobalCooldownActive() ? "disabled" : ""} title="${escapeAttr(scholarGlobalCooldownActive() ? scholarGlobalCooldownText() : "Rate-limited full citation update for this author only")}">Update All Scholar Citations</button>
+        <button type="button" data-action="refresh-author" ${refreshDisabled ? "disabled" : ""} title="${escapeAttr(refreshTitle)}">Refresh This Author</button>
+        ${scholarAuthor ? `<button type="button" data-action="update-all-scholar-citations" ${scholarGlobalCooldownActive() ? "disabled" : ""} title="${escapeAttr(scholarGlobalCooldownActive() ? scholarGlobalCooldownText() : "Rate-limited full citation update for this author only")}">Update All Scholar Citations</button>` : ""}
         <button type="button" data-action="find-author-identifiers">Find Missing Identifiers</button>
         <div class="library-menu-separator"></div>
-        <button type="button" data-action="open-author-profile">Open Google Scholar</button>
+        <button type="button" data-action="open-author-profile">Open ${scholarAuthor ? "Google Scholar" : "ResearchGate"}</button>
         ${author.homepage_url ? '<button type="button" data-action="open-author-homepage">Open Homepage</button>' : ""}
         <button type="button" data-action="edit-author-homepage">Edit Homepage</button>
         <div class="library-menu-separator"></div>
@@ -38965,30 +40296,143 @@ INDEX_HTML = """<!doctype html>
       backdrop.setAttribute("aria-hidden", "false");
       $("citationSettingsStatus").textContent = "Loading citation settings...";
       $("citationSettingsStatus").className = "citation-settings-status";
+      $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
+      $("openalexCitationSettingsStatus").className = "citation-settings-status";
       $("adsTokenInput").value = "";
+      $("openalexKeyInput").value = "";
       try {
         const res = await fetch("/api/settings/citation");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not load citation settings");
         updateCitationSettingsUi(data.ads || {});
+        updateOpenalexSettingsUi(data.openalex || {});
         $("citationSettingsStatus").textContent = data.ads?.configured ? "ADS token is saved locally." : "ADS is optional and currently disabled.";
         $("citationSettingsStatus").className = `citation-settings-status${data.ads?.configured ? " ok" : ""}`;
+        $("openalexCitationSettingsStatus").textContent = openalexSettingsStatusText(data.openalex || {});
+        $("openalexCitationSettingsStatus").className = `citation-settings-status${data.openalex?.paused || data.openalex?.ok === false ? " err" : (data.openalex?.configured ? " ok" : "")}`;
       } catch (error) {
         $("citationSettingsStatus").textContent = error.message || "Could not load citation settings";
         $("citationSettingsStatus").className = "citation-settings-status err";
+        $("openalexCitationSettingsStatus").textContent = error.message || "Could not load OpenAlex settings";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status err";
       }
-      $("adsTokenInput")?.focus({preventScroll: true});
+      $("openalexKeyInput")?.focus({preventScroll: true});
     }
 
     function closeCitationSettings() {
       $("citationSettingsBackdrop")?.classList.remove("open");
       $("citationSettingsBackdrop")?.setAttribute("aria-hidden", "true");
       $("adsTokenInput").value = "";
+      $("openalexKeyInput").value = "";
     }
 
     function updateCitationSettingsUi(ads) {
       const configured = Boolean(ads?.configured);
       $("adsConfiguredLabel").textContent = configured ? "Configured" : "Not configured";
+    }
+
+    function updateOpenalexSettingsUi(openalex) {
+      const configured = Boolean(openalex?.configured);
+      const paused = Boolean(openalex?.paused);
+      $("openalexConfiguredLabel").textContent = paused
+        ? "Free limit reached"
+        : (configured ? "Configured" : "Not configured");
+    }
+
+    function openalexSettingsStatusText(openalex) {
+      if (!openalex?.configured) {
+        return "OpenAlex is using the small anonymous allowance.";
+      }
+      if (openalex?.status === "invalid") {
+        return "The OpenAlex key is saved, but the connection test failed.";
+      }
+      const remaining = Number(openalex?.daily_remaining_usd);
+      const budget = Number(openalex?.daily_budget_usd);
+      const quota = Number.isFinite(remaining) && Number.isFinite(budget)
+        ? `$${remaining.toFixed(3)} of the $${budget.toFixed(2)} daily free allowance remains`
+        : "OpenAlex key is saved locally";
+      const reset = openalex?.resets_at
+        ? ` · resets ${new Date(openalex.resets_at).toLocaleString()}`
+        : "";
+      if (openalex?.paused) {
+        return `Daily free allowance reached${reset}. Daiqo is using other metadata sources.`;
+      }
+      return `${quota}${reset}. Paid credits are not used by Daiqo.`;
+    }
+
+    async function saveCitationOpenalexKey() {
+      const key = $("openalexKeyInput")?.value || "";
+      if (!key.trim()) {
+        $("openalexCitationSettingsStatus").textContent = "Paste an OpenAlex API key before saving.";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+        return;
+      }
+      $("openalexCitationSettingsStatus").textContent = "Saving and checking the OpenAlex key...";
+      $("openalexCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: "openalex", openalex_key: key})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save OpenAlex key");
+        updateOpenalexSettingsUi(data.openalex || {});
+        $("openalexKeyInput").value = "";
+        $("openalexCitationSettingsStatus").textContent = openalexSettingsStatusText(data.openalex || {});
+        $("openalexCitationSettingsStatus").className = `citation-settings-status${data.openalex?.ok === false ? " err" : " ok"}`;
+      } catch (error) {
+        $("openalexCitationSettingsStatus").textContent = error.message || "Could not save OpenAlex key";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function testCitationOpenalexKey() {
+      const key = $("openalexKeyInput")?.value || "";
+      $("openalexCitationSettingsStatus").textContent = "Testing OpenAlex connection...";
+      $("openalexCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            provider: "openalex",
+            action: "test",
+            openalex_key: key
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not test OpenAlex key");
+        updateOpenalexSettingsUi(data.openalex || {});
+        $("openalexCitationSettingsStatus").textContent = data.openalex?.ok
+          ? openalexSettingsStatusText({...data.openalex, configured: true})
+          : "OpenAlex key is missing or invalid.";
+        $("openalexCitationSettingsStatus").className = `citation-settings-status${data.openalex?.ok ? " ok" : " err"}`;
+      } catch (error) {
+        $("openalexCitationSettingsStatus").textContent = error.message || "Could not test OpenAlex key";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function clearCitationOpenalexKey() {
+      $("openalexCitationSettingsStatus").textContent = "Clearing OpenAlex key...";
+      $("openalexCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: "openalex", action: "clear"})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not clear OpenAlex key");
+        updateOpenalexSettingsUi(data.openalex || {});
+        $("openalexKeyInput").value = "";
+        $("openalexCitationSettingsStatus").textContent = "OpenAlex key cleared. The small anonymous allowance remains available.";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status";
+      } catch (error) {
+        $("openalexCitationSettingsStatus").textContent = error.message || "Could not clear OpenAlex key";
+        $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+      }
     }
 
     async function saveCitationAdsToken({test = false} = {}) {
@@ -40904,6 +42348,7 @@ INDEX_HTML = """<!doctype html>
     });
     $("closeAuthorMonitorDialog")?.addEventListener("click", closeAuthorMonitorDialog);
     $("searchAuthorProfiles")?.addEventListener("click", searchAuthorMonitorProfiles);
+    $("authorMonitorQuery")?.addEventListener("input", updateScholarCooldownControls);
     $("authorMonitorQuery")?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -40988,6 +42433,15 @@ INDEX_HTML = """<!doctype html>
     $("saveAdsToken").addEventListener("click", () => saveCitationAdsToken());
     $("testAdsToken").addEventListener("click", testCitationAdsToken);
     $("clearAdsToken").addEventListener("click", clearCitationAdsToken);
+    $("saveOpenalexKey").addEventListener("click", saveCitationOpenalexKey);
+    $("testOpenalexKey").addEventListener("click", testCitationOpenalexKey);
+    $("clearOpenalexKey").addEventListener("click", clearCitationOpenalexKey);
+    $("openalexKeyInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveCitationOpenalexKey();
+      }
+    });
     $("adsTokenInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();

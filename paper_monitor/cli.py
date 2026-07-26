@@ -12,6 +12,7 @@ from .download import download_paper
 from .importers.inventory import import_library_inventory
 from .monitor import apply_fast_section_hints, default_windows, run_journal_monitor
 from .reporting import export_json, write_journal_markdown_report
+from .sources.openalex import OPENALEX_API_KEY_SETTING, configure_openalex_api_key
 from .storage import Storage
 from .time_utils import parse_date, today_local
 from .ui_server import cleanup_monitor_pdf_cache, run_ui_server
@@ -79,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
     storage = Storage(args.db)
+    configure_openalex_api_key(
+        storage.get_setting(OPENALEX_API_KEY_SETTING, "")
+    )
     try:
         if args.command == "journal":
             return handle_journal(args, config, storage)

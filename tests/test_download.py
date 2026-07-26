@@ -64,7 +64,7 @@ class DownloadCandidateTests(unittest.TestCase):
                 ],
             }
         )
-        with patch.object(download, "request_with_retries", return_value=response):
+        with patch.object(download, "openalex_request", return_value=response):
             candidates = download.openalex_open_pdf_candidates(
                 "10.1126/science.aao1797",
                 published_only=True,

@@ -1,6 +1,8 @@
 import json
+import sqlite3
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +20,26 @@ def scholar_profile(user_id: str, name: str) -> dict:
     }
 
 
+def researchgate_profile(
+    profile_url: str,
+    name: str,
+    *,
+    openalex_author_id: str = "A123456789",
+    semantic_scholar_author_id: str = "",
+) -> dict:
+    return {
+        "source_type": "researchgate",
+        "source_author_id": profile_url,
+        "user_id": profile_url,
+        "name": name,
+        "url": profile_url,
+        "affiliation": "Example University",
+        "openalex_author_id": openalex_author_id,
+        "semantic_scholar_author_id": semantic_scholar_author_id,
+        "source_citation_total": 321,
+    }
+
+
 def paper(paper_id: str, title: str, date: str) -> dict:
     return {
         "paper_id": paper_id,
@@ -30,6 +52,90 @@ def paper(paper_id: str, title: str, date: str) -> dict:
 
 
 class AuthorMonitorStorageTests(unittest.TestCase):
+    def test_existing_author_monitor_schema_migrates_before_source_index_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            connection = sqlite3.connect(db_path)
+            connection.executescript(
+                """
+                CREATE TABLE author_monitors (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  scholar_user_id TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  affiliation TEXT,
+                  email TEXT,
+                  cited_by TEXT,
+                  interests_json TEXT,
+                  profile_url TEXT NOT NULL,
+                  homepage_url TEXT,
+                  homepage_override_url TEXT,
+                  scholar_citation_total INTEGER,
+                  avatar_url TEXT,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  status TEXT NOT NULL DEFAULT 'idle',
+                  message TEXT,
+                  last_checked_at TEXT,
+                  last_success_at TEXT,
+                  cooldown_until TEXT,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                INSERT INTO author_monitors (
+                  scholar_user_id, name, profile_url, created_at, updated_at
+                ) VALUES (
+                  'legacy-user', 'Legacy Author',
+                  'https://scholar.google.com/citations?user=legacy-user',
+                  '2026-07-26T00:00:00+08:00', '2026-07-26T00:00:00+08:00'
+                );
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            storage = Storage(db_path)
+            try:
+                saved = storage.get_author_monitor(1)
+                columns = {
+                    row["name"]
+                    for row in storage.conn.execute(
+                        "PRAGMA table_info(author_monitors)"
+                    ).fetchall()
+                }
+            finally:
+                storage.close()
+
+        self.assertEqual(saved["source_type"], "google_scholar")
+        self.assertEqual(saved["source_author_id"], "legacy-user")
+        self.assertIn("openalex_author_id", columns)
+        self.assertIn("semantic_scholar_author_id", columns)
+        self.assertIn("metadata_provider", columns)
+        self.assertIn("source_citation_total", columns)
+
+    def test_researchgate_monitor_uses_source_identity_without_scholar_collision(self):
+        profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                first = storage.add_author_monitor(
+                    researchgate_profile(profile_url, "Ada Lovelace")
+                )
+                duplicate = storage.add_author_monitor(
+                    researchgate_profile(profile_url, "Different Name")
+                )
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(int(first["id"]))
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(first["id"], duplicate["id"])
+        self.assertEqual(saved["source_type"], "researchgate")
+        self.assertEqual(saved["source_author_id"], profile_url)
+        self.assertEqual(saved["openalex_author_id"], "A123456789")
+        self.assertEqual(saved["citation_total"], 321)
+        self.assertEqual(saved["citation_source"], "OpenAlex")
+        self.assertTrue(str(first["scholar_user_id"]).startswith("researchgate:"))
+
     def test_author_homepage_is_persisted(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -452,6 +558,567 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
         self.assertEqual(results, [profile])
         self.assertIn("Ada Author Example University", fetch.call_args.args[0])
 
+    def test_researchgate_url_search_matches_openalex_without_fetching_researchgate(self):
+        search_text = (
+            "https://www.researchgate.net/profile/Ada-Lovelace-2;"
+            " Ada Lovelace; Example University"
+        )
+        with patch.object(
+            ui_server,
+            "openalex_api_key_param",
+            return_value="test-key",
+        ), patch.object(
+            ui_server,
+            "search_openalex_authors",
+            return_value=[
+                {
+                    "openalex_author_id": "A123456789",
+                    "name": "Ada Lovelace",
+                    "affiliation": "Example University",
+                    "orcid": "0000-0000-0000-0001",
+                    "works_count": 42,
+                    "cited_by_count": 1234,
+                }
+            ],
+        ) as search:
+            results = ui_server.researchgate_openalex_profiles(search_text)
+
+        search.assert_called_once_with(
+            "Ada Lovelace",
+            affiliations=["Example University"],
+            limit=12,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["source_type"], "researchgate")
+        self.assertEqual(results[0]["openalex_author_id"], "A123456789")
+        self.assertEqual(results[0]["source_citation_total"], 1234)
+        self.assertEqual(
+            results[0]["url"],
+            "https://www.researchgate.net/profile/Ada-Lovelace-2",
+        )
+        self.assertEqual(
+            ui_server.normalize_researchgate_profile_url(
+                "researchgate.net/profile/Ada-Lovelace-2?trackingId=ignored"
+            ),
+            "https://www.researchgate.net/profile/Ada-Lovelace-2",
+        )
+
+    def test_researchgate_url_search_falls_back_to_semantic_scholar_without_openalex_key(self):
+        search_text = (
+            "https://www.researchgate.net/scientific-contributions/"
+            "Joseph-G-Checkelsky-13021838"
+        )
+        with patch.object(
+            ui_server,
+            "openalex_api_key_param",
+            return_value=None,
+        ), patch.object(
+            ui_server,
+            "search_openalex_authors",
+            side_effect=AssertionError("OpenAlex must not be called without a key"),
+        ), patch.object(
+            ui_server,
+            "search_semantic_scholar_authors",
+            return_value=[
+                {
+                    "semantic_scholar_author_id": "47984093",
+                    "name": "J. Checkelsky",
+                    "affiliation": "MIT",
+                    "works_count": 161,
+                    "cited_by_count": 9973,
+                }
+            ],
+        ) as search:
+            results = ui_server.researchgate_openalex_profiles(search_text)
+
+        search.assert_called_once_with(
+            "Joseph G Checkelsky",
+            affiliations=[],
+            limit=12,
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["semantic_scholar_author_id"], "47984093")
+        self.assertEqual(results[0]["metadata_provider"], "Semantic Scholar")
+        self.assertEqual(results[0]["source_citation_total"], 9973)
+        self.assertEqual(
+            results[0]["url"],
+            "https://www.researchgate.net/scientific-contributions/"
+            "Joseph-G-Checkelsky-13021838",
+        )
+
+    def test_researchgate_semantic_cross_match_requires_orcid_or_publication_overlap(self):
+        profiles = [
+            {
+                "semantic_scholar_author_id": "47984093",
+                "name": "J. Checkelsky",
+                "affiliation": "MIT",
+                "orcid": "",
+            }
+        ]
+        with patch.object(
+            ui_server,
+            "search_semantic_scholar_authors",
+            return_value=profiles,
+        ), patch.object(
+            ui_server,
+            "fetch_semantic_scholar_author_publications",
+        ) as publications:
+            no_evidence = (
+                ui_server.resolve_semantic_scholar_author_for_researchgate(
+                    name="Joseph G. Checkelsky",
+                    affiliation="MIT",
+                    reference_papers=[],
+                )
+            )
+
+        self.assertEqual(no_evidence, {})
+        publications.assert_not_called()
+
+        semantic_match = ui_server.normalize_semantic_scholar_item(
+            {
+                "paperId": "semantic-overlap",
+                "externalIds": {"DOI": "10.1234/shared"},
+                "title": "Shared publication",
+                "venue": "Example Journal",
+                "year": 2025,
+            }
+        )
+        with patch.object(
+            ui_server,
+            "search_semantic_scholar_authors",
+            return_value=profiles,
+        ), patch.object(
+            ui_server,
+            "fetch_semantic_scholar_author_publications",
+            return_value=[semantic_match],
+        ):
+            matched = (
+                ui_server.resolve_semantic_scholar_author_for_researchgate(
+                    name="Joseph G. Checkelsky",
+                    affiliation="MIT",
+                    reference_papers=[
+                        {
+                            "doi": "10.1234/shared",
+                            "title": "Shared publication",
+                            "publication_date": "2025",
+                        }
+                    ],
+                )
+            )
+
+        self.assertEqual(
+            matched["semantic_scholar_author_id"],
+            "47984093",
+        )
+        self.assertEqual(matched["match_evidence"], "doi:1")
+
+    def test_researchgate_semantic_cross_match_accepts_exact_orcid_without_paper_calls(self):
+        with patch.object(
+            ui_server,
+            "search_semantic_scholar_authors",
+            return_value=[
+                {
+                    "semantic_scholar_author_id": "47984093",
+                    "name": "J. Checkelsky",
+                    "affiliation": "",
+                    "orcid": "0000-0002-1234-567X",
+                }
+            ],
+        ), patch.object(
+            ui_server,
+            "fetch_semantic_scholar_author_publications",
+        ) as publications:
+            matched = (
+                ui_server.resolve_semantic_scholar_author_for_researchgate(
+                    name="Joseph G. Checkelsky",
+                    orcid="https://orcid.org/0000-0002-1234-567X",
+                    reference_papers=[],
+                )
+            )
+
+        self.assertEqual(matched["match_evidence"], "orcid")
+        publications.assert_not_called()
+
+    def test_researchgate_semantic_backfill_persists_confirmed_id_and_attempt(self):
+        profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                author = storage.add_author_monitor(
+                    researchgate_profile(
+                        profile_url,
+                        "Ada Lovelace",
+                        openalex_author_id="A123456789",
+                    )
+                )
+                with patch.object(
+                    ui_server,
+                    "resolve_semantic_scholar_author_for_researchgate",
+                    return_value={
+                        "semantic_scholar_author_id": "987654321",
+                        "match_evidence": "doi:2",
+                    },
+                ):
+                    match = ui_server.backfill_researchgate_semantic_author(
+                        storage,
+                        author,
+                        reference_papers=[
+                            {
+                                "doi": "10.1234/shared",
+                                "title": "Shared publication",
+                                "publication_date": "2025",
+                            }
+                        ],
+                    )
+                saved = storage.get_author_monitor(int(author["id"]))
+                backfill_state = json.loads(
+                    storage.get_setting(
+                        ui_server.researchgate_semantic_backfill_setting(
+                            int(author["id"])
+                        ),
+                        "",
+                    )
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(match["semantic_scholar_author_id"], "987654321")
+        self.assertEqual(saved["semantic_scholar_author_id"], "987654321")
+        self.assertEqual(backfill_state["status"], "matched")
+        self.assertEqual(backfill_state["evidence"], "doi:2")
+
+    def test_researchgate_refresh_uses_openalex_during_scholar_cooldown(self):
+        profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(
+                    researchgate_profile(profile_url, "Ada Lovelace")
+                )
+                author_id = int(author["id"])
+                ui_server.start_google_scholar_global_cooldown(
+                    storage,
+                    message="Scholar unusual traffic",
+                )
+            finally:
+                storage.close()
+
+            first_paper = paper("oa-old", "OpenAlex Existing Paper", "2025-01-01")
+            first_paper["source"] = "openalex"
+            first_paper["raw"] = {
+                "id": "https://openalex.org/W1",
+                "cited_by_count": 17,
+            }
+            second_paper = paper("oa-new", "OpenAlex New Paper", "2026-07-26")
+            second_paper["source"] = "openalex"
+            second_paper["raw"] = {
+                "id": "https://openalex.org/W2",
+                "cited_by_count": 29,
+            }
+            publication_payloads = [[first_paper], [first_paper, second_paper]]
+
+            with patch.object(
+                ui_server,
+                "fetch_google_scholar_profile_payload",
+                side_effect=AssertionError("ResearchGate monitors must not request Scholar"),
+            ), patch.object(
+                ui_server,
+                "backfill_researchgate_semantic_author",
+                return_value={},
+            ), patch.object(
+                ui_server,
+                "fetch_openalex_author_profile",
+                return_value={
+                    "openalex_author_id": "A123456789",
+                    "name": "Ada Lovelace",
+                    "affiliation": "Example University",
+                    "orcid": "0000-0000-0000-0001",
+                    "works_count": 2,
+                    "cited_by_count": 456,
+                },
+            ) as fetch_profile, patch.object(
+                ui_server,
+                "fetch_openalex_author_publications",
+                side_effect=lambda *_args, **_kwargs: publication_payloads.pop(0),
+            ) as fetch_publications:
+                baseline = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=True,
+                    force=True,
+                )
+                update = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=False,
+                    force=True,
+                )
+
+            storage = Storage(db_path)
+            try:
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(author_id)
+                )
+                rows = {
+                    row["paper_id"]: row
+                    for row in storage.list_author_monitor_papers(author_id)
+                }
+                paper_api = {
+                    row["paper_id"]: ui_server.author_monitor_paper_to_api(row)
+                    for row in storage.list_author_monitor_papers(author_id)
+                }
+            finally:
+                storage.close()
+
+        self.assertEqual(baseline["status"], "success")
+        self.assertTrue(baseline["baseline"])
+        self.assertEqual(update["status"], "success")
+        self.assertEqual(update["added"], 1)
+        self.assertEqual(fetch_profile.call_count, 2)
+        self.assertEqual(fetch_publications.call_count, 2)
+        self.assertEqual(saved["citation_total"], 456)
+        self.assertEqual(saved["citation_source"], "OpenAlex")
+        self.assertFalse(rows["oa-old"]["author_unread"])
+        self.assertTrue(rows["oa-new"]["author_unread"])
+        self.assertEqual(paper_api["oa-new"]["citation_count"], 29)
+        self.assertEqual(paper_api["oa-new"]["citation_count_source"], "OpenAlex")
+
+    def test_researchgate_refresh_uses_semantic_scholar_during_scholar_cooldown(self):
+        profile_url = (
+            "https://www.researchgate.net/scientific-contributions/"
+            "Joseph-G-Checkelsky-13021838"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(
+                    researchgate_profile(
+                        profile_url,
+                        "J. Checkelsky",
+                        openalex_author_id="",
+                        semantic_scholar_author_id="47984093",
+                    )
+                )
+                author_id = int(author["id"])
+                ui_server.start_google_scholar_global_cooldown(
+                    storage,
+                    message="Scholar unusual traffic",
+                )
+            finally:
+                storage.close()
+
+            def semantic_paper(paper_id: str, title: str, year: int, citations: int):
+                return ui_server.normalize_semantic_scholar_item(
+                    {
+                        "paperId": paper_id,
+                        "title": title,
+                        "venue": "Example Journal",
+                        "year": year,
+                        "citationCount": citations,
+                        "url": f"https://www.semanticscholar.org/paper/{paper_id}",
+                    }
+                )
+
+            first_paper = semantic_paper(
+                "semantic-old",
+                "Semantic Existing Paper",
+                2025,
+                17,
+            )
+            second_paper = semantic_paper(
+                "semantic-new",
+                "Semantic New Paper",
+                2026,
+                29,
+            )
+            publication_payloads = [[first_paper], [first_paper, second_paper]]
+
+            with patch.object(
+                ui_server,
+                "fetch_google_scholar_profile_payload",
+                side_effect=AssertionError("ResearchGate monitors must not request Scholar"),
+            ), patch.object(
+                ui_server,
+                "fetch_semantic_scholar_author_profile",
+                return_value={
+                    "semantic_scholar_author_id": "47984093",
+                    "name": "J. Checkelsky",
+                    "works_count": 2,
+                    "cited_by_count": 456,
+                },
+            ) as fetch_profile, patch.object(
+                ui_server,
+                "fetch_semantic_scholar_author_publications",
+                side_effect=lambda *_args, **_kwargs: publication_payloads.pop(0),
+            ) as fetch_publications:
+                baseline = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=True,
+                    force=True,
+                )
+                update = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=False,
+                    force=True,
+                )
+
+            storage = Storage(db_path)
+            try:
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(author_id)
+                )
+                rows = {
+                    row["paper_id"]: row
+                    for row in storage.list_author_monitor_papers(author_id)
+                }
+                paper_api = {
+                    row["paper_id"]: ui_server.author_monitor_paper_to_api(row)
+                    for row in storage.list_author_monitor_papers(author_id)
+                }
+            finally:
+                storage.close()
+
+        self.assertEqual(baseline["status"], "success")
+        self.assertTrue(baseline["baseline"])
+        self.assertEqual(update["status"], "success")
+        self.assertEqual(update["added"], 1)
+        self.assertEqual(fetch_profile.call_count, 2)
+        self.assertEqual(fetch_publications.call_count, 2)
+        self.assertEqual(saved["citation_total"], 456)
+        self.assertEqual(saved["citation_source"], "Semantic Scholar")
+        self.assertFalse(rows["semantic_semantic-old"]["author_unread"])
+        self.assertTrue(rows["semantic_semantic-new"]["author_unread"])
+        self.assertEqual(paper_api["semantic_semantic-new"]["citation_count"], 29)
+        self.assertEqual(
+            paper_api["semantic_semantic-new"]["citation_count_source"],
+            "Semantic Scholar",
+        )
+
+    def test_researchgate_openalex_refresh_falls_back_to_confirmed_semantic_author(self):
+        profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(
+                    researchgate_profile(
+                        profile_url,
+                        "Ada Lovelace",
+                        openalex_author_id="A123456789",
+                        semantic_scholar_author_id="987654321",
+                    )
+                )
+                author_id = int(author["id"])
+            finally:
+                storage.close()
+
+            semantic_paper = ui_server.normalize_semantic_scholar_item(
+                {
+                    "paperId": "semantic-fallback",
+                    "title": "Fallback publication",
+                    "venue": "Example Journal",
+                    "year": 2026,
+                    "citationCount": 44,
+                }
+            )
+            with patch.object(
+                ui_server,
+                "fetch_openalex_author_profile",
+                return_value={
+                    "openalex_author_id": "A123456789",
+                    "name": "Ada Lovelace",
+                },
+            ), patch.object(
+                ui_server,
+                "fetch_openalex_author_publications",
+                side_effect=ui_server.OpenAlexDailyLimitError(
+                    "free limit reached"
+                ),
+            ), patch.object(
+                ui_server,
+                "fetch_semantic_scholar_author_profile",
+                return_value={
+                    "semantic_scholar_author_id": "987654321",
+                    "name": "Ada Lovelace",
+                    "cited_by_count": 777,
+                },
+            ), patch.object(
+                ui_server,
+                "fetch_semantic_scholar_author_publications",
+                return_value=[semantic_paper],
+            ):
+                result = ui_server.refresh_author_monitor_for_db(
+                    db_path,
+                    author_id,
+                    initial=True,
+                    force=True,
+                )
+
+            storage = Storage(db_path)
+            try:
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(author_id)
+                )
+                rows = storage.list_author_monitor_papers(author_id)
+                paper_api = ui_server.author_monitor_paper_to_api(rows[0])
+            finally:
+                storage.close()
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["metadata_provider"], "Semantic Scholar")
+        self.assertIn("OpenAlex was unavailable", result["message"])
+        self.assertEqual(saved["metadata_provider"], "Semantic Scholar")
+        self.assertEqual(saved["citation_source"], "Semantic Scholar")
+        self.assertEqual(saved["citation_total"], 777)
+        self.assertEqual(paper_api["citation_count"], 44)
+        self.assertEqual(
+            paper_api["citation_count_source"],
+            "Semantic Scholar",
+        )
+
+    def test_automatic_refresh_keeps_scholar_spacing_across_openalex_authors(self):
+        profile_url = "https://www.researchgate.net/profile/Ada-Lovelace-2"
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                storage.add_author_monitor(scholar_profile("scholar-a", "Scholar A"))
+                storage.add_author_monitor(
+                    researchgate_profile(profile_url, "OpenAlex Author")
+                )
+                storage.add_author_monitor(scholar_profile("scholar-b", "Scholar B"))
+            finally:
+                storage.close()
+
+            refreshed: list[int] = []
+            with patch.object(
+                ui_server,
+                "refresh_author_monitor_for_db",
+                side_effect=lambda _db, author_id, **_kwargs: (
+                    refreshed.append(author_id)
+                    or {"author_id": author_id, "status": "success", "added": 0}
+                ),
+            ), patch.object(
+                ui_server.random,
+                "uniform",
+                return_value=52.0,
+            ), patch.object(
+                ui_server.time,
+                "sleep",
+            ) as sleep:
+                result = ui_server.run_auto_author_monitor_once(
+                    db_path,
+                    date(2026, 7, 26),
+                )
+
+        self.assertEqual(len(refreshed), 3)
+        self.assertEqual(len(result["results"]), 3)
+        sleep.assert_called_once_with(52.0)
+
     def test_all_scholar_requests_share_a_random_minimum_interval(self):
         previous = ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT
         ui_server.GOOGLE_SCHOLAR_LAST_REQUEST_AT = 10.0
@@ -857,6 +1524,31 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertNotIn("citation_metrics", author_item)
         self.assertIn("google_scholar_citation_count", author_item)
 
+    def test_author_card_uses_the_most_recent_confirmed_metadata_provider(self):
+        item = ui_server.author_monitor_paper_to_api(
+            {
+                "paper_id": "provider-paper",
+                "title": "Provider fallback",
+                "journal": "Example Journal",
+                "publication_date": "2026",
+                "raw_json": json.dumps(
+                    {
+                        "openalex_author_monitor": {
+                            "cited_by_count": 11,
+                            "checked_at": "2026-07-26T10:00:00+08:00",
+                        },
+                        "semantic_scholar_author_monitor": {
+                            "citation_count": 14,
+                            "checked_at": "2026-07-27T10:00:00+08:00",
+                        },
+                    }
+                ),
+            }
+        )
+
+        self.assertEqual(item["citation_count"], 14)
+        self.assertEqual(item["citation_count_source"], "Semantic Scholar")
+
     def test_author_monitor_has_fifth_view_and_independent_three_column_layout(self):
         html = ui_server.INDEX_HTML
         self.assertIn('id="authorMode"', html)
@@ -874,8 +1566,9 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("scholarGlobalCooldownActive()", html)
         self.assertIn("Profile URL or name and affiliations", html)
         self.assertIn("publisher", html.lower())
-        self.assertIn("Profile search, add, and refresh are disabled.", html)
-        self.assertIn('data-action="refresh-author" ${scholarGlobalCooldownActive() ? "disabled"', html)
+        self.assertIn("ResearchGate metadata sources remain available.", html)
+        self.assertIn("authorMonitorQueryIsResearchGate", html)
+        self.assertIn('data-action="refresh-author" ${refreshDisabled ? "disabled"', html)
         self.assertIn('data-action="update-all-scholar-citations"', html)
         self.assertIn("No other author will be refreshed automatically.", html)
         self.assertIn("full_metadata: true", html)
@@ -1069,6 +1762,30 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("Open Homepage", html)
         self.assertIn("Open Google Scholar", html)
 
+    def test_author_monitor_distinguishes_researchgate_and_metadata_refresh(self):
+        html = ui_server.INDEX_HTML
+        dialog = html.split('id="authorMonitorBackdrop"', 1)[1].split("</div>", 8)[0]
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        context_menu = html.split("function showAuthorMonitorContextMenu", 1)[1].split(
+            "function renderPaper", 1
+        )[0]
+        self.assertIn("ResearchGate profile URL", dialog)
+        self.assertIn(
+            "ResearchGate authors use OpenAlex when configured, with Semantic Scholar as the automatic fallback.",
+            html,
+        )
+        self.assertIn('author-monitor-source-badge${authorMonitorIsScholar(author) ? "" : " researchgate"}', html)
+        header_name = rendering.split(
+            '<div class="author-monitor-list-head-name-row">', 1
+        )[1].split("</div>", 1)[0]
+        self.assertNotIn("author-monitor-source-badge", header_name)
+        self.assertIn("authorMonitorMetadataProvider(selected)", rendering)
+        self.assertIn('data-action="open-author-profile"', context_menu)
+        self.assertIn('"Google Scholar" : "ResearchGate"', context_menu)
+        self.assertIn("${scholarAuthor ?", context_menu)
+
     def test_author_homepage_editor_uses_exact_labels_without_ellipses(self):
         html = ui_server.INDEX_HTML
         editor = html.split("function openAuthorHomepageEditor", 1)[1].split(
@@ -1088,8 +1805,8 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertNotIn("Edit Homepage…", html)
         self.assertNotIn("Edit Homepage...", html)
         self.assertIn('toLocaleString("en-US")', summary)
-        self.assertIn("citations (Google Scholar)", summary)
-        self.assertIn("scholarCitationRaw === null", summary)
+        self.assertIn('citations (${author.citation_source || author.source_label || "Source"})', summary)
+        self.assertIn("citationRaw === null", summary)
 
     def test_full_scholar_citation_update_has_confirmed_and_direct_entry_points(self):
         html = ui_server.INDEX_HTML
