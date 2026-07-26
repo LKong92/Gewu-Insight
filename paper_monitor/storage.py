@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -11,6 +12,10 @@ from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
 from .text import is_placeholder_publication_title, normalize_publication_title
 from .time_utils import local_timezone, now_iso, system_timezone_name
+
+
+STORAGE_SCHEMA_VERSION = 3
+_STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
 SCHEMA = """
@@ -253,6 +258,52 @@ ON author_monitor_papers(paper_id);
 CREATE INDEX IF NOT EXISTS idx_author_monitor_papers_scholar
 ON author_monitor_papers(author_monitor_id, scholar_key);
 
+CREATE TABLE IF NOT EXISTS author_monitor_card_cache (
+  paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS author_monitor_card_cache_dirty (
+  paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_author_monitor_card_cache_paper_insert
+AFTER INSERT ON papers
+BEGIN
+  INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+  SELECT NEW.paper_id, 1
+  WHERE EXISTS (
+    SELECT 1 FROM author_monitor_papers
+    WHERE author_monitor_papers.paper_id = NEW.paper_id
+  )
+  ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_author_monitor_card_cache_paper_update
+AFTER UPDATE ON papers
+BEGIN
+  INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+  SELECT NEW.paper_id, 1
+  WHERE EXISTS (
+    SELECT 1 FROM author_monitor_papers
+    WHERE author_monitor_papers.paper_id = NEW.paper_id
+  )
+  ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_author_monitor_card_cache_monitor_insert
+AFTER INSERT ON author_monitor_papers
+BEGIN
+  INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+  VALUES (NEW.paper_id, 1)
+  ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+END;
+
+INSERT OR IGNORE INTO author_monitor_card_cache_dirty (paper_id)
+SELECT DISTINCT paper_id FROM author_monitor_papers;
+
 CREATE TABLE IF NOT EXISTS inventory_import_batches (
   id TEXT PRIMARY KEY,
   inventory_path TEXT NOT NULL,
@@ -324,12 +375,21 @@ class Storage:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=15000")
-        self.conn.executescript(SCHEMA)
-        self._ensure_schema_columns()
-        self._sync_arxiv_calendar_timezone()
-        self._reclassify_aps_crossref_records()
-        self._ensure_library_root()
-        self._seed_library_from_existing_papers()
+        with _STORAGE_SCHEMA_LOCK:
+            schema_version = int(
+                self.conn.execute("PRAGMA user_version").fetchone()[0] or 0
+            )
+            if schema_version < STORAGE_SCHEMA_VERSION:
+                self.conn.executescript(SCHEMA)
+                self._ensure_schema_columns()
+                self._ensure_library_root()
+                self._seed_library_from_existing_papers()
+                self.conn.execute(
+                    f"PRAGMA user_version = {STORAGE_SCHEMA_VERSION}"
+                )
+                self.conn.commit()
+            self._sync_arxiv_calendar_timezone()
+            self._reclassify_aps_crossref_records()
 
     def _ensure_schema_columns(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -455,6 +515,58 @@ class Storage:
             WHERE source_author_id IS NOT NULL AND source_author_id != ''
             """
         )
+        card_cache_dirty_columns = {
+            row["name"]
+            for row in self.conn.execute(
+                "PRAGMA table_info(author_monitor_card_cache_dirty)"
+            ).fetchall()
+        }
+        if card_cache_dirty_columns and "revision" not in card_cache_dirty_columns:
+            self.conn.execute(
+                """
+                ALTER TABLE author_monitor_card_cache_dirty
+                ADD COLUMN revision INTEGER NOT NULL DEFAULT 1
+                """
+            )
+        self.conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS trg_author_monitor_card_cache_paper_insert;
+            DROP TRIGGER IF EXISTS trg_author_monitor_card_cache_paper_update;
+            DROP TRIGGER IF EXISTS trg_author_monitor_card_cache_monitor_insert;
+
+            CREATE TRIGGER trg_author_monitor_card_cache_paper_insert
+            AFTER INSERT ON papers
+            BEGIN
+              INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+              SELECT NEW.paper_id, 1
+              WHERE EXISTS (
+                SELECT 1 FROM author_monitor_papers
+                WHERE author_monitor_papers.paper_id = NEW.paper_id
+              )
+              ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+            END;
+
+            CREATE TRIGGER trg_author_monitor_card_cache_paper_update
+            AFTER UPDATE ON papers
+            BEGIN
+              INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+              SELECT NEW.paper_id, 1
+              WHERE EXISTS (
+                SELECT 1 FROM author_monitor_papers
+                WHERE author_monitor_papers.paper_id = NEW.paper_id
+              )
+              ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+            END;
+
+            CREATE TRIGGER trg_author_monitor_card_cache_monitor_insert
+            AFTER INSERT ON author_monitor_papers
+            BEGIN
+              INSERT INTO author_monitor_card_cache_dirty (paper_id, revision)
+              VALUES (NEW.paper_id, 1)
+              ON CONFLICT(paper_id) DO UPDATE SET revision = revision + 1;
+            END;
+            """
+        )
         self.conn.commit()
 
     def _sync_arxiv_calendar_timezone(self) -> None:
@@ -509,6 +621,14 @@ class Storage:
             SELECT paper_id, source, raw_json, publisher_section, section_allowed
             FROM papers
             WHERE journal IN ({placeholders})
+              AND lower(source) LIKE '%crossref%'
+              AND (
+                publisher_section IS NULL
+                OR publisher_section NOT IN ('accepted', 'published')
+                OR section_allowed IS NULL
+                OR (publisher_section = 'accepted' AND section_allowed != 0)
+                OR (publisher_section = 'published' AND section_allowed != 1)
+              )
             """,
             journal_names,
         ).fetchall()
@@ -1749,49 +1869,72 @@ class Storage:
     def get_author_monitor(self, author_monitor_id: int) -> dict[str, Any] | None:
         row = self.conn.execute(
             """
+            WITH paper_counts AS (
+              SELECT author_monitor_id,
+                     COUNT(*) AS paper_count,
+                     SUM(CASE WHEN is_unread = 1 THEN 1 ELSE 0 END) AS unread_count
+              FROM author_monitor_papers
+              WHERE author_monitor_id = ?
+              GROUP BY author_monitor_id
+            )
             SELECT author_monitors.*,
-                   (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id) AS paper_count,
-                   (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count,
-                   (SELECT SUM(
-                       CASE
-                         WHEN json_valid(papers.raw_json)
-                         THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
-                         ELSE NULL
-                       END
+                   COALESCE(paper_counts.paper_count, 0) AS paper_count,
+                   COALESCE(paper_counts.unread_count, 0) AS unread_count,
+                   CASE
+                     WHEN author_monitors.scholar_citation_total IS NOT NULL
+                     THEN author_monitors.scholar_citation_total
+                     ELSE (
+                       SELECT SUM(
+                         CASE
+                           WHEN json_valid(papers.raw_json)
+                           THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
+                           ELSE NULL
+                         END
+                       )
+                       FROM author_monitor_papers
+                       JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+                       WHERE author_monitor_papers.author_monitor_id = author_monitors.id
                      )
-                    FROM author_monitor_papers
-                    JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
-                    WHERE author_monitor_papers.author_monitor_id = author_monitors.id
-                   ) AS scholar_citation_sum
+                   END AS scholar_citation_sum
             FROM author_monitors
+            LEFT JOIN paper_counts ON paper_counts.author_monitor_id = author_monitors.id
             WHERE id = ?
             """,
-            (int(author_monitor_id),),
+            (int(author_monitor_id), int(author_monitor_id)),
         ).fetchone()
         return dict(row) if row else None
 
     def list_author_monitors(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
+            WITH paper_counts AS (
+              SELECT author_monitor_id,
+                     COUNT(*) AS paper_count,
+                     SUM(CASE WHEN is_unread = 1 THEN 1 ELSE 0 END) AS unread_count
+              FROM author_monitor_papers
+              GROUP BY author_monitor_id
+            )
             SELECT author_monitors.*,
-                   (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id) AS paper_count,
-                   (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count,
-                   (SELECT SUM(
-                       CASE
-                         WHEN json_valid(papers.raw_json)
-                         THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
-                         ELSE NULL
-                       END
+                   COALESCE(paper_counts.paper_count, 0) AS paper_count,
+                   COALESCE(paper_counts.unread_count, 0) AS unread_count,
+                   CASE
+                     WHEN author_monitors.scholar_citation_total IS NOT NULL
+                     THEN author_monitors.scholar_citation_total
+                     ELSE (
+                       SELECT SUM(
+                         CASE
+                           WHEN json_valid(papers.raw_json)
+                           THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
+                           ELSE NULL
+                         END
+                       )
+                       FROM author_monitor_papers
+                       JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+                       WHERE author_monitor_papers.author_monitor_id = author_monitors.id
                      )
-                    FROM author_monitor_papers
-                    JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
-                    WHERE author_monitor_papers.author_monitor_id = author_monitors.id
-                   ) AS scholar_citation_sum
+                   END AS scholar_citation_sum
             FROM author_monitors
+            LEFT JOIN paper_counts ON paper_counts.author_monitor_id = author_monitors.id
             ORDER BY sort_order ASC, id ASC
             """
         ).fetchall()
@@ -2029,6 +2172,168 @@ class Storage:
             if monitor_name and monitor_name not in current["monitored_authors"]:
                 current["monitored_authors"].append(monitor_name)
             current["author_unread"] = bool(current.get("author_unread")) or bool(item.get("author_unread"))
+        return [merged[paper_id] for paper_id in order]
+
+    def list_author_monitor_card_cache_candidates(
+        self,
+        *,
+        limit: int = 400,
+    ) -> list[dict[str, Any]]:
+        """Return monitored papers whose rebuildable card payload is stale or absent."""
+        rows = self.conn.execute(
+            """
+            WITH monitored_papers AS (
+              SELECT DISTINCT paper_id
+              FROM author_monitor_papers
+            )
+            SELECT papers.*,
+                   COALESCE(author_monitor_card_cache_dirty.revision, 0)
+                     AS card_cache_revision
+            FROM monitored_papers
+            JOIN papers ON papers.paper_id = monitored_papers.paper_id
+            LEFT JOIN author_monitor_card_cache
+              ON author_monitor_card_cache.paper_id = papers.paper_id
+            LEFT JOIN author_monitor_card_cache_dirty
+              ON author_monitor_card_cache_dirty.paper_id = papers.paper_id
+            WHERE author_monitor_card_cache.paper_id IS NULL
+               OR author_monitor_card_cache_dirty.paper_id IS NOT NULL
+            ORDER BY papers.last_seen_at DESC, papers.paper_id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_author_monitor_card_cache(
+        self,
+        payloads: Iterable[tuple[str, str, int]],
+    ) -> int:
+        rows = [
+            (
+                str(paper_id),
+                str(payload_json),
+                now_iso(),
+                int(revision),
+            )
+            for paper_id, payload_json, revision in payloads
+            if str(paper_id or "").strip() and str(payload_json or "").strip()
+        ]
+        if not rows:
+            return 0
+        self.conn.executemany(
+            """
+            INSERT INTO author_monitor_card_cache (paper_id, payload_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(paper_id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = excluded.updated_at
+            """,
+            [
+                (paper_id, payload_json, updated_at)
+                for paper_id, payload_json, updated_at, _revision in rows
+            ],
+        )
+        self.conn.executemany(
+            """
+            DELETE FROM author_monitor_card_cache_dirty
+            WHERE paper_id = ? AND revision = ?
+            """,
+            [
+                (paper_id, revision)
+                for paper_id, _payload_json, _updated_at, revision in rows
+            ],
+        )
+        self.conn.commit()
+        return len(rows)
+
+    def author_monitor_card_cache_status(self) -> dict[str, int | bool]:
+        row = self.conn.execute(
+            """
+            WITH monitored_papers AS (
+              SELECT DISTINCT paper_id
+              FROM author_monitor_papers
+            )
+            SELECT
+              COUNT(*) AS total_count,
+              SUM(
+                CASE
+                  WHEN author_monitor_card_cache.paper_id IS NOT NULL
+                   AND author_monitor_card_cache_dirty.paper_id IS NULL
+                  THEN 1 ELSE 0
+                END
+              ) AS ready_count
+            FROM monitored_papers
+            LEFT JOIN author_monitor_card_cache
+              ON author_monitor_card_cache.paper_id = monitored_papers.paper_id
+            LEFT JOIN author_monitor_card_cache_dirty
+              ON author_monitor_card_cache_dirty.paper_id = monitored_papers.paper_id
+            """
+        ).fetchone()
+        total_count = int(row["total_count"] or 0)
+        ready_count = int(row["ready_count"] or 0)
+        return {
+            "ready": ready_count >= total_count,
+            "total_count": total_count,
+            "ready_count": ready_count,
+            "pending_count": max(0, total_count - ready_count),
+        }
+
+    def list_author_monitor_cached_cards(self) -> list[dict[str, Any]]:
+        """Return compact cached cards with live author-monitor associations."""
+        rows = self.conn.execute(
+            """
+            SELECT author_monitor_card_cache.payload_json,
+                   author_monitor_papers.paper_id,
+                   author_monitor_papers.author_monitor_id,
+                   author_monitor_papers.is_unread AS author_unread,
+                   author_monitor_papers.first_seen_at AS author_first_seen_at,
+                   author_monitors.name AS monitored_author_name
+            FROM author_monitor_papers
+            JOIN author_monitors
+              ON author_monitors.id = author_monitor_papers.author_monitor_id
+            JOIN author_monitor_card_cache
+              ON author_monitor_card_cache.paper_id = author_monitor_papers.paper_id
+            LEFT JOIN author_monitor_card_cache_dirty
+              ON author_monitor_card_cache_dirty.paper_id = author_monitor_papers.paper_id
+            WHERE author_monitor_card_cache_dirty.paper_id IS NULL
+            ORDER BY author_monitor_papers.is_unread DESC,
+                     author_monitor_papers.first_seen_at DESC,
+                     author_monitor_papers.paper_id ASC
+            """
+        ).fetchall()
+        merged: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for row in rows:
+            paper_id = str(row["paper_id"] or "")
+            if not paper_id:
+                continue
+            if paper_id not in merged:
+                try:
+                    payload = json.loads(str(row["payload_json"] or "{}"))
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload["paper_id"] = paper_id
+                payload["author_monitor_ids"] = []
+                payload["monitored_authors"] = []
+                payload["author_unread"] = False
+                payload["author_first_seen_at"] = ""
+                merged[paper_id] = payload
+                order.append(paper_id)
+            current = merged[paper_id]
+            monitor_id = int(row["author_monitor_id"] or 0)
+            monitor_name = str(row["monitored_author_name"] or "")
+            if monitor_id and monitor_id not in current["author_monitor_ids"]:
+                current["author_monitor_ids"].append(monitor_id)
+            if monitor_name and monitor_name not in current["monitored_authors"]:
+                current["monitored_authors"].append(monitor_name)
+            current["author_unread"] = bool(current.get("author_unread")) or bool(
+                row["author_unread"]
+            )
+            first_seen_at = str(row["author_first_seen_at"] or "")
+            if first_seen_at > str(current.get("author_first_seen_at") or ""):
+                current["author_first_seen_at"] = first_seen_at
         return [merged[paper_id] for paper_id in order]
 
     def mark_author_monitor_papers_read(

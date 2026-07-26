@@ -336,6 +336,118 @@ class AuthorMonitorStorageTests(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_author_monitor_snapshot_loads_only_the_selected_author_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                first = storage.add_author_monitor(
+                    scholar_profile("author-a", "Ada Author")
+                )
+                second = storage.add_author_monitor(
+                    scholar_profile("author-b", "Ben Author")
+                )
+                storage.upsert_paper(
+                    paper("ada-paper", "Ada Paper", "2026-07-24")
+                )
+                storage.upsert_paper(
+                    paper("ben-paper", "Ben Paper", "2026-07-23")
+                )
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(first["id"]),
+                    paper_id="ada-paper",
+                )
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(second["id"]),
+                    paper_id="ben-paper",
+                )
+
+                initial = ui_server.author_monitor_snapshot(
+                    storage,
+                    author_monitor_id=-1,
+                )
+                selected = ui_server.author_monitor_snapshot(
+                    storage,
+                    author_monitor_id=int(second["id"]),
+                )
+                combined = ui_server.author_monitor_snapshot(
+                    storage,
+                    author_monitor_id=0,
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(initial["selectedAuthorId"], int(first["id"]))
+        self.assertEqual(
+            [item["paper_id"] for item in initial["papers"]],
+            ["ada-paper"],
+        )
+        self.assertEqual(selected["selectedAuthorId"], int(second["id"]))
+        self.assertEqual(
+            [item["paper_id"] for item in selected["papers"]],
+            ["ben-paper"],
+        )
+        self.assertEqual(
+            {item["paper_id"] for item in combined["papers"]},
+            {"ada-paper", "ben-paper"},
+        )
+
+    def test_author_monitor_card_index_is_persisted_and_incrementally_invalidated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                first = storage.add_author_monitor(
+                    scholar_profile("author-a", "Ada Author")
+                )
+                second = storage.add_author_monitor(
+                    scholar_profile("author-b", "Ben Author")
+                )
+                storage.upsert_paper(
+                    paper("shared-paper", "Original Title", "2026-07-24")
+                )
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(first["id"]),
+                    paper_id="shared-paper",
+                    unread=True,
+                )
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(second["id"]),
+                    paper_id="shared-paper",
+                )
+                self.assertFalse(storage.author_monitor_card_cache_status()["ready"])
+
+                rebuilt = ui_server.rebuild_author_monitor_card_cache(db_path)
+                self.assertEqual(rebuilt, 1)
+                index = ui_server.author_monitor_index_snapshot(storage)
+                self.assertTrue(index["indexReady"])
+                self.assertEqual(len(index["papers"]), 1)
+                self.assertEqual(
+                    set(index["papers"][0]["author_monitor_ids"]),
+                    {int(first["id"]), int(second["id"])},
+                )
+                self.assertTrue(index["papers"][0]["author_unread"])
+                self.assertNotIn("full_authors", index["papers"][0])
+
+                storage.conn.execute(
+                    "UPDATE papers SET title = ? WHERE paper_id = ?",
+                    ("Updated Title", "shared-paper"),
+                )
+                storage.conn.commit()
+                self.assertFalse(storage.author_monitor_card_cache_status()["ready"])
+                self.assertEqual(
+                    ui_server.author_monitor_index_snapshot(storage)["papers"],
+                    [],
+                )
+
+                self.assertEqual(
+                    ui_server.rebuild_author_monitor_card_cache(db_path),
+                    1,
+                )
+                refreshed = ui_server.author_monitor_index_snapshot(storage)
+                self.assertEqual(refreshed["papers"][0]["title"], "Updated Title")
+            finally:
+                storage.close()
+
     def test_empty_read_request_does_not_clear_all_unread_papers(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -1727,10 +1839,14 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "async function addAuthorMonitorProfile", 1
         )[0]
         self.assertIn(
-            "snapshot.selectedAuthorId = Number(state.authorMonitorSelectedId || 0)",
+            "if (activeAuthorId === Number(authorId))",
             polling,
         )
-        self.assertNotIn("snapshot.selectedAuthorId = Number(authorId)", polling)
+        self.assertIn(
+            "state.authorMonitors = Array.isArray(snapshot.authors)",
+            polling,
+        )
+        self.assertNotIn("snapshot.selectedAuthorId =", polling)
         self.assertIn('channel: "secondary"', polling)
         self.assertIn('kind: "scholar-background"', polling)
 
@@ -1928,6 +2044,27 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn(".author-paper-card.conference-abstract", html)
         author_list_css = html.split(".author-monitor-paper-list {", 1)[1].split("}", 1)[0]
         self.assertNotIn("scroll-padding-block", author_list_css)
+
+    def test_author_monitor_prefetches_a_persistent_full_card_index(self):
+        html = ui_server.INDEX_HTML
+        self.assertIn('AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id"', html)
+        self.assertIn("async function loadAuthorMonitorScope", html)
+        self.assertIn("function prefetchAuthorMonitorIndex", html)
+        self.assertIn('fetchJson("/api/author-monitor?index=1"', html)
+        self.assertIn("state.authorMonitorIndexLoaded", html)
+        self.assertIn("applyAuthorMonitorIndex(data)", html)
+        self.assertIn("authorMonitorSelectedPaperByAuthor: new Map()", html)
+        snapshot_apply = html.split("function applyAuthorMonitorSnapshot", 1)[1].split(
+            "function applyAuthorMonitorIndex", 1
+        )[0]
+        self.assertIn("preserveFullIndex", snapshot_apply)
+        self.assertIn("state.authorMonitorPapers = [...merged.values()]", snapshot_apply)
+        self.assertIn("rememberCurrentAuthorMonitorPapers()", html)
+        self.assertIn("restoreCachedAuthorMonitorPapers(requestedId)", html)
+        self.assertIn("state.authorMonitorViewCache?.key === cacheKey", html)
+        self.assertIn("scheduleAuthorMonitorIdleEnrichment", html)
+        self.assertIn("startAuthorMonitorEnrichment(targetAuthorId, {maxPapers: 80})", html)
+        self.assertIn("max_papers: request.maxPapers", html)
 
     def test_author_monitor_cards_do_not_open_pdf_on_double_click(self):
         html = ui_server.INDEX_HTML

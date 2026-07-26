@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import inspect
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from paper_monitor import ui_server
+from paper_monitor.storage import STORAGE_SCHEMA_VERSION, Storage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +38,37 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('@"api/health"', launcher_source)
         self.assertIn('HEALTH_URL="$URL/api/health"', helper_source)
         self.assertNotIn('curl -fsS "$URL"', helper_source)
+
+    def test_storage_runs_schema_and_seed_work_only_once_per_database_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                schema_version = int(
+                    storage.conn.execute("PRAGMA user_version").fetchone()[0]
+                )
+            finally:
+                storage.close()
+
+            with patch.object(
+                Storage,
+                "_ensure_schema_columns",
+                side_effect=AssertionError("schema migration repeated"),
+            ):
+                reopened = Storage(db_path)
+                reopened.close()
+
+        self.assertEqual(schema_version, STORAGE_SCHEMA_VERSION)
+
+    def test_author_monitor_card_cache_is_a_rebuildable_sqlite_index(self) -> None:
+        schema = ui_server.Storage.__module__
+        self.assertEqual(schema, "paper_monitor.storage")
+        storage_source = inspect.getsource(Storage)
+        self.assertIn("list_author_monitor_card_cache_candidates", storage_source)
+        self.assertIn("upsert_author_monitor_card_cache", storage_source)
+        self.assertIn("list_author_monitor_cached_cards", storage_source)
+        self.assertIn("author_monitor_card_cache_status", storage_source)
+        self.assertIn("request_author_monitor_card_cache_build(db_path)", inspect.getsource(ui_server.run_ui_server))
 
     def test_navigation_refresh_does_not_replace_library_with_navigation_only_data(self) -> None:
         refresh = self.js_function("refreshLibrarySnapshotForNavigation")
