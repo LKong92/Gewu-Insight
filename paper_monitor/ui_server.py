@@ -568,6 +568,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/author-monitor/refresh":
                 self.handle_refresh_author_monitor(payload)
                 return
+            if parsed.path == "/api/author-monitor/homepage":
+                self.handle_set_author_monitor_homepage(payload)
+                return
             if parsed.path == "/api/author-monitor/delete":
                 self.handle_delete_author_monitor(payload)
                 return
@@ -1013,7 +1016,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
-            if clean_text(str(payload.get("publisher_download_kind") or "")) == "aaas-supplement-pdf":
+            publisher_download_kind = clean_text(str(payload.get("publisher_download_kind") or ""))
+            if publisher_download_kind == "aaas-supplement-pdf":
                 target_path, paper = attach_publisher_supplement_pdf_to_paper(
                     storage,
                     paper_id=paper_id,
@@ -1029,6 +1033,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     source_path=Path(source_path),
                     preserve_filename=payload.get("preserve_filename") is not False,
                 )
+                if publisher_download_kind == "aaas-published-pdf":
+                    storage.update_download_status(
+                        paper_id,
+                        status="partial",
+                        message="published Science main PDF saved; supplementary PDF pending",
+                        main_pdf_path=str(target_path),
+                        supplement_pdf_paths=[],
+                        merged_pdf_path=str(target_path),
+                    )
+                    paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -1381,6 +1395,33 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json(snapshot)
+
+    def handle_set_author_monitor_homepage(self, payload: dict[str, Any]) -> None:
+        author_monitor_id = int(payload.get("author_id") or 0)
+        if not author_monitor_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
+            return
+        homepage_override_url = clean_text(payload.get("homepage_url") or "")
+        if homepage_override_url:
+            parsed = urlparse(homepage_override_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Homepage must be a complete http or https URL",
+                )
+                return
+        storage = Storage(self.configured_db_path)
+        try:
+            if not storage.get_author_monitor(author_monitor_id):
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Monitored author not found")
+                return
+            updated = storage.set_author_monitor_homepage_override(
+                author_monitor_id,
+                homepage_override_url or None,
+            )
+        finally:
+            storage.close()
+        self.send_json({"author": author_monitor_to_api(updated)})
 
     def handle_reorder_author_monitors(self, payload: dict[str, Any]) -> None:
         author_ids = [
@@ -7572,9 +7613,10 @@ def published_pdf_browser_fallback(
         return None
     supplement_urls = science_supplement_pdf_candidates(doi)
     supplement = {
-        "kind": "aaas-supplement-pdf",
-        "url": supplement_urls[0],
-    } if supplement_urls else None
+        "kind": "aaas-supplement-discovery",
+        "url": f"https://www.science.org/doi/{doi}",
+        "fallback_urls": supplement_urls,
+    }
     status = str((result or {}).get("status") or "")
     if status == "partial" and "no PDF supplement found" in str((result or {}).get("message") or ""):
         return supplement
@@ -9910,6 +9952,7 @@ def sanitize_google_scholar_profile(profile: Any) -> dict[str, Any]:
         "affiliation": clean_text(str(profile.get("affiliation") or "")),
         "email": clean_text(str(profile.get("email") or "")),
         "cited_by": clean_text(str(profile.get("cited_by") or "")),
+        "scholar_citation_total": int_or_none(profile.get("scholar_citation_total")),
         "interests": clean_interests[:20],
         "url": clean_text(str(profile.get("url") or "")),
         "homepage_url": homepage_url,
@@ -9926,6 +9969,11 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         interests = []
     if not isinstance(interests, list):
         interests = []
+    scholar_homepage_url = clean_text(row.get("homepage_url") or "")
+    homepage_override_url = clean_text(row.get("homepage_override_url") or "")
+    scholar_citation_total = int_or_none(row.get("scholar_citation_total"))
+    if scholar_citation_total is None:
+        scholar_citation_total = int_or_none(row.get("scholar_citation_sum"))
     return {
         "id": int(row.get("id") or 0),
         "user_id": clean_text(row.get("scholar_user_id") or ""),
@@ -9933,9 +9981,12 @@ def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "affiliation": clean_text(row.get("affiliation") or ""),
         "email": clean_text(row.get("email") or ""),
         "cited_by": clean_text(row.get("cited_by") or ""),
+        "scholar_citation_total": scholar_citation_total,
         "interests": [clean_text(item) for item in interests if clean_text(item)],
         "url": clean_text(row.get("profile_url") or ""),
-        "homepage_url": clean_text(row.get("homepage_url") or ""),
+        "homepage_url": homepage_override_url or scholar_homepage_url,
+        "scholar_homepage_url": scholar_homepage_url,
+        "homepage_override_url": homepage_override_url,
         "avatar_url": clean_text(row.get("avatar_url") or ""),
         "sort_order": int(row.get("sort_order") or 0),
         "status": clean_text(row.get("status") or "idle"),
@@ -11018,6 +11069,7 @@ def fetch_google_scholar_profile_payload(
         "affiliation": "",
         "email": "",
         "cited_by": "",
+        "scholar_citation_total": None,
         "interests": [],
         "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
         "user_id": user_id,
@@ -11105,6 +11157,12 @@ def google_scholar_profile_page_metadata(soup: BeautifulSoup, page_url: str, use
         if "cited by" in line.lower():
             cited_by = line
     avatar_url = google_scholar_profile_avatar_url(soup, page_url)
+    scholar_citation_total = None
+    citation_total_node = soup.select_one("#gsc_rsb_st .gsc_rsb_std")
+    citation_total_text = clean_text(citation_total_node.get_text(" ") if citation_total_node else "")
+    citation_total_match = re.search(r"\d[\d,]*", citation_total_text)
+    if citation_total_match:
+        scholar_citation_total = int(citation_total_match.group(0).replace(",", ""))
     homepage_url = ""
     for node in soup.select("#gsc_prf_ivh a[href], a.gsc_prf_ila[href]"):
         href = urljoin(page_url or "https://scholar.google.com", clean_text(node.get("href") or ""))
@@ -11121,6 +11179,7 @@ def google_scholar_profile_page_metadata(soup: BeautifulSoup, page_url: str, use
         "affiliation": affiliation,
         "email": email,
         "cited_by": cited_by,
+        "scholar_citation_total": scholar_citation_total,
         "interests": [item for item in interests if item],
         "url": f"https://scholar.google.com/citations?user={quote(user_id)}&hl=en",
         "user_id": user_id,
@@ -21206,6 +21265,46 @@ INDEX_HTML = """<!doctype html>
       background: #b42318;
       color: #fff;
     }
+    .author-homepage-field {
+      display: grid;
+      gap: 6px;
+      color: #475467;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .author-homepage-input {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .author-homepage-input:focus {
+      outline: 2px solid rgba(15, 107, 110, 0.18);
+      border-color: var(--accent);
+    }
+    .author-homepage-scholar-source {
+      margin-top: 9px;
+      border-radius: 7px;
+      background: #f7f8fa;
+      color: var(--muted);
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }
+    .author-homepage-status {
+      min-height: 17px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .author-homepage-status.err { color: #b42318; }
     .library-column-body {
       min-height: 0;
       overflow-y: auto;
@@ -22539,11 +22638,15 @@ INDEX_HTML = """<!doctype html>
       z-index: 24;
       top: 43px;
       right: 9px;
-      width: min(470px, calc(100% - 18px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      box-sizing: border-box;
+      width: min(410px, calc(100% - 18px));
       max-height: calc(100% - 54px);
-      padding: 9px;
+      padding: 7px;
+      overflow: hidden;
       border: 1px solid #ccd2dc;
-      border-radius: 10px;
+      border-radius: 9px;
       background: rgba(252, 252, 251, 0.98);
       box-shadow: 0 16px 38px rgba(20, 27, 38, 0.18);
     }
@@ -22565,18 +22668,19 @@ INDEX_HTML = """<!doctype html>
       display: flex;
       align-items: center;
       justify-content: space-between;
-      min-height: 27px;
-      padding: 0 3px 7px;
+      min-height: 24px;
+      padding: 0 2px 5px;
       color: #586273;
-      font-size: 11px;
+      font-size: 10px;
     }
     .author-monitor-conference-popover-close {
-      width: 24px;
-      min-height: 24px;
+      width: 21px;
+      min-height: 21px;
       border: 0;
-      border-radius: 6px;
+      border-radius: 5px;
       background: transparent;
       color: #667085;
+      font-size: 11px;
       cursor: pointer;
     }
     .author-monitor-conference-popover-close:hover {
@@ -22585,19 +22689,21 @@ INDEX_HTML = """<!doctype html>
     }
     .author-monitor-conference-cards {
       display: grid;
-      gap: 8px;
-      max-height: calc(100vh - 154px);
+      align-content: start;
+      min-height: 0;
+      gap: 6px;
       overflow-y: auto;
       overscroll-behavior: contain;
-      padding: 1px 2px 2px;
+      padding: 1px 3px 2px 1px;
+      scrollbar-gutter: stable;
     }
     .author-monitor-conference-more {
-      min-height: 28px;
+      min-height: 24px;
       border: 0;
-      border-radius: 6px;
+      border-radius: 5px;
       background: #f4f5f6;
       color: #667085;
-      font-size: 11px;
+      font-size: 9.5px;
       cursor: pointer;
     }
     .author-paper-card {
@@ -22722,6 +22828,62 @@ INDEX_HTML = """<!doctype html>
       background: var(--accent);
       box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.16);
       z-index: 2;
+    }
+    .author-monitor-conference-cards .author-paper-card {
+      height: 54px;
+      min-height: 54px;
+      align-content: start;
+      gap: 2px;
+      padding: 5px 36px 5px 8px;
+      overflow: hidden;
+      border-radius: 7px;
+    }
+    .author-monitor-conference-cards .author-paper-title {
+      display: -webkit-box;
+      overflow: hidden;
+      color: #596575;
+      font-size: 9.5px;
+      font-weight: 540;
+      line-height: 1.12;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .author-monitor-conference-cards .author-paper-citation-row {
+      column-gap: 5px;
+      font-size: 8px;
+      line-height: 1.12;
+    }
+    .author-monitor-conference-cards .author-paper-citation {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .author-monitor-conference-cards .author-paper-scholar-citations {
+      font-size: 7.5px;
+    }
+    .author-monitor-conference-cards .author-paper-action-stack {
+      top: 6px;
+      right: 7px;
+      width: 22px;
+      gap: 3px;
+    }
+    .author-monitor-conference-cards .author-paper-mini-button,
+    .author-monitor-conference-cards .author-paper-mini-button-spacer {
+      width: 22px;
+      height: 19px;
+    }
+    .author-monitor-conference-cards .author-paper-mini-button {
+      padding: 0 4px;
+      border-radius: 5px;
+      font-size: 8.5px;
+      line-height: 17px;
+    }
+    .author-monitor-conference-cards .author-paper-library-button {
+      font-size: 13px;
+    }
+    .author-monitor-conference-cards .author-paper-library-button[data-library-state="show"] {
+      font-size: 10px;
     }
     .author-monitor-detail {
       display: grid;
@@ -24307,6 +24469,7 @@ INDEX_HTML = """<!doctype html>
       authorMonitorSortDir: "desc",
       authorMonitorConferenceExpanded: false,
       authorMonitorConferenceRenderedCount: 72,
+      authorMonitorConferenceScrollTop: 0,
       authorMonitorKeyboardPane: "papers",
       authorMonitorRailScrollTop: 0,
       authorMonitorListScrollTop: 0,
@@ -28006,6 +28169,7 @@ INDEX_HTML = """<!doctype html>
           state.authorMonitorRailScrollTop = Number($("authorMonitorAuthors")?.scrollTop || state.authorMonitorRailScrollTop || 0);
           state.authorMonitorSelectedId = authorIds[nextIndex];
           state.authorMonitorConferenceRenderedCount = AUTHOR_MONITOR_INITIAL_CARD_COUNT;
+          state.authorMonitorConferenceScrollTop = 0;
           const papers = authorMonitorNavigablePapers();
           state.authorMonitorSelectedPaperId = papers[0]?.paper_id || "";
           state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
@@ -34915,9 +35079,13 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "download failed");
       if (data.browser_fallback) {
+        if (data?.paper && payload?.paper_id) updatePaperState(payload.paper_id, data.paper);
         let downloaded = await downloadPublishedPdfInBackground(data.browser_fallback, payload);
+        if (downloaded?.paper && payload?.paper_id) updatePaperState(payload.paper_id, downloaded.paper);
         if (data.browser_fallback.followup) {
-          downloaded = await downloadPublishedPdfInBackground(data.browser_fallback.followup, payload);
+          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback.followup, payload);
+        } else if (data.browser_fallback.kind === "aaas-supplement-discovery") {
+          downloaded = await downloadScienceSupplementaryPdfs(data.browser_fallback, payload);
         }
         return downloaded;
       }
@@ -34925,6 +35093,48 @@ INDEX_HTML = """<!doctype html>
         throw new Error(data.result.message || "download failed");
       }
       return data;
+    }
+
+    async function downloadScienceSupplementaryPdfs(discoveryFallback, payload) {
+      let discovery = null;
+      let discoveryError = null;
+      try {
+        discovery = await downloadPublishedPdfInBackground(discoveryFallback, payload);
+      } catch (error) {
+        discoveryError = error;
+      }
+      if (discovery?.supplement_attached) return discovery;
+      const discoveredUrls = Array.isArray(discovery?.supplement_urls)
+        ? discovery.supplement_urls.map((url) => String(url || "").trim()).filter(Boolean)
+        : [];
+      const fallbackUrls = Array.isArray(discoveryFallback?.fallback_urls)
+        ? discoveryFallback.fallback_urls.map((url) => String(url || "").trim()).filter(Boolean)
+        : [];
+      const candidateUrls = [...new Set(discoveredUrls.length ? discoveredUrls : fallbackUrls)];
+      if (!candidateUrls.length) {
+        throw new Error(
+          discoveryError?.message
+          || "The main PDF is saved, but Science did not list any PDF supplementary files."
+        );
+      }
+      let downloaded = null;
+      const failures = [];
+      for (const url of candidateUrls) {
+        try {
+          downloaded = await downloadPublishedPdfInBackground({
+            kind: "aaas-supplement-pdf",
+            url
+          }, payload);
+        } catch (error) {
+          failures.push(error?.message || "supplementary PDF download failed");
+        }
+      }
+      if (!downloaded) {
+        throw new Error(
+          `The main PDF is saved, but its Science supplementary PDF could not be downloaded. ${failures.at(-1) || ""}`.trim()
+        );
+      }
+      return downloaded;
     }
 
     async function downloadLibraryPdf(paper, options = {}) {
@@ -36195,6 +36405,7 @@ INDEX_HTML = """<!doctype html>
           state.authorMonitorKeyboardPane = "authors";
           state.authorMonitorSelectedId = Number(row.dataset.authorId || 0);
           state.authorMonitorConferenceRenderedCount = AUTHOR_MONITOR_INITIAL_CARD_COUNT;
+          state.authorMonitorConferenceScrollTop = 0;
           const papers = authorMonitorNavigablePapers();
           state.authorMonitorSelectedPaperId = papers[0]?.paper_id || "";
           state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
@@ -36289,6 +36500,15 @@ INDEX_HTML = """<!doctype html>
       const author = selectedAuthorMonitor();
       if (!author) return `${state.authorMonitors.length} monitored authors`;
       const parts = [`${Number(author.paper_count || 0)} publications`];
+      const scholarCitationRaw = author.scholar_citation_total;
+      const scholarCitationTotal = scholarCitationRaw === null
+        || scholarCitationRaw === undefined
+        || scholarCitationRaw === ""
+        ? Number.NaN
+        : Number(scholarCitationRaw);
+      if (Number.isFinite(scholarCitationTotal) && scholarCitationTotal >= 0) {
+        parts.push(`${scholarCitationTotal.toLocaleString("en-US")} citations (Google Scholar)`);
+      }
       if (Number(author.unread_count || 0)) parts.push(`${Number(author.unread_count || 0)} new`);
       if (author.last_checked_at) parts.push(`checked ${autoStatusTime(author.last_checked_at) || "recently"}`);
       return parts.join(" · ");
@@ -36309,7 +36529,10 @@ INDEX_HTML = """<!doctype html>
       return [
         "aps global physics summit",
         "aps march meeting",
-        "bulletin of the american physical society"
+        "bulletin of the american physical society",
+        "meeting",
+        "abstract",
+        "conference"
       ].some((label) => citation.includes(label));
     }
 
@@ -36940,6 +37163,7 @@ INDEX_HTML = """<!doctype html>
       }
       state.authorMonitorRenderedCount = 0;
       state.authorMonitorConferenceRenderedCount = AUTHOR_MONITOR_INITIAL_CARD_COUNT;
+      state.authorMonitorConferenceScrollTop = 0;
       state.authorMonitorListScrollTop = 0;
       state.authorMonitorReturnPaperId = "";
       state.authorMonitorReturnPaperOffset = 0;
@@ -36953,6 +37177,7 @@ INDEX_HTML = """<!doctype html>
       if (state.mode !== "author") return;
       const root = $("papers");
       const existingList = document.querySelector(".author-monitor-paper-list");
+      const existingConferenceCards = document.querySelector(".author-monitor-conference-cards");
       const restoreStoredScroll = !existingList && (
         Number(state.authorMonitorListScrollTop || 0) > 0
         || Boolean(state.authorMonitorReturnPaperId)
@@ -36963,6 +37188,13 @@ INDEX_HTML = """<!doctype html>
         : 0;
       const previousScroll = preservePosition
         ? Number(existingList ? existingList.scrollTop : state.authorMonitorListScrollTop || 0)
+        : 0;
+      const previousConferenceScroll = preservePosition
+        ? Number(
+            existingConferenceCards
+              ? existingConferenceCards.scrollTop
+              : state.authorMonitorConferenceScrollTop || 0
+          )
         : 0;
       delete root.dataset.monitorMode;
       delete root.dataset.monitorSignature;
@@ -37058,13 +37290,22 @@ INDEX_HTML = """<!doctype html>
         button.addEventListener("click", () => setAuthorMonitorSort(button.dataset.authorSort || "date"));
       });
       root.querySelector(".author-monitor-conference-toggle")?.addEventListener("click", () => {
-        state.authorMonitorConferenceExpanded = !state.authorMonitorConferenceExpanded;
+        const opening = !state.authorMonitorConferenceExpanded;
+        state.authorMonitorConferenceExpanded = opening;
+        state.authorMonitorConferenceScrollTop = 0;
         renderAuthorMonitor({preserveScroll: true});
       });
-      root.querySelector(".author-monitor-conference-popover-close")?.addEventListener("click", () => {
+      const closeConferencePopover = (event) => {
+        event?.preventDefault();
+        event?.stopPropagation();
         state.authorMonitorConferenceExpanded = false;
+        state.authorMonitorConferenceScrollTop = 0;
         renderAuthorMonitor({preserveScroll: true});
-      });
+      };
+      root.querySelector(".author-monitor-conference-popover-close")?.addEventListener(
+        "click",
+        closeConferencePopover
+      );
       updateScholarCooldownControls();
       renderAuthorMonitorRail();
       const list = $("authorMonitorPaperList");
@@ -37094,6 +37335,11 @@ INDEX_HTML = """<!doctype html>
       } else {
         const conferenceCards = root.querySelector('[data-role="conference-cards"]');
         if (conferenceCards) {
+          conferenceCards.scrollTop = previousConferenceScroll;
+          state.authorMonitorConferenceScrollTop = Number(conferenceCards.scrollTop || 0);
+          conferenceCards.addEventListener("scroll", () => {
+            state.authorMonitorConferenceScrollTop = Number(conferenceCards.scrollTop || 0);
+          }, {passive: true});
           const selectedConferenceIndex = partition.conferences.findIndex(
             (paper) => paper.paper_id === state.authorMonitorSelectedPaperId
           );
@@ -37114,11 +37360,20 @@ INDEX_HTML = """<!doctype html>
             more.className = "author-monitor-conference-more";
             more.textContent = `Show more conferences · ${partition.conferences.length - conferenceTargetCount} remaining`;
             more.addEventListener("click", () => {
+              state.authorMonitorConferenceScrollTop = Number(conferenceCards.scrollTop || 0);
               state.authorMonitorConferenceRenderedCount = conferenceTargetCount + AUTHOR_MONITOR_CARD_BATCH_SIZE;
               renderAuthorMonitor({preserveScroll: true});
             });
             conferenceCards.appendChild(more);
           }
+          window.requestAnimationFrame(() => {
+            const currentConferenceCards = root.querySelector('[data-role="conference-cards"]');
+            if (!currentConferenceCards) return;
+            currentConferenceCards.scrollTop = previousConferenceScroll;
+            state.authorMonitorConferenceScrollTop = Number(
+              currentConferenceCards.scrollTop || 0
+            );
+          });
           requestKatexForPapers(visibleConferences);
         }
         const selectedIndex = partition.articles.findIndex(
@@ -37641,6 +37896,110 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function openAuthorHomepageEditor(author) {
+      if (!author?.id) return;
+      document.querySelector(".author-homepage-dialog-backdrop")?.remove();
+      const scholarHomepage = String(author.scholar_homepage_url || "").trim();
+      const overrideHomepage = String(author.homepage_override_url || "").trim();
+      const backdrop = document.createElement("div");
+      backdrop.className = "finder-drop-modal-backdrop author-homepage-dialog-backdrop";
+      backdrop.innerHTML = `
+        <div class="finder-drop-modal" role="dialog" aria-modal="true" aria-labelledby="authorHomepageTitle">
+          <h2 id="authorHomepageTitle">Edit Homepage for ${escapeHtml(author.name || "Author")}</h2>
+          <p>A custom Homepage overrides the address detected on Google Scholar. Clearing it restores the Scholar address automatically.</p>
+          <label class="author-homepage-field">
+            Homepage URL
+            <input
+              class="author-homepage-input"
+              type="url"
+              inputmode="url"
+              autocomplete="url"
+              spellcheck="false"
+              value="${escapeAttr(overrideHomepage || scholarHomepage)}"
+              placeholder="https://example.edu"
+            >
+          </label>
+          <div class="author-homepage-scholar-source">
+            ${scholarHomepage
+              ? `Google Scholar detected: ${escapeHtml(scholarHomepage)}`
+              : "Google Scholar did not provide a Homepage."}
+          </div>
+          <div class="author-homepage-status" aria-live="polite"></div>
+          <div class="finder-drop-actions">
+            <button type="button" data-homepage-action="scholar" ${overrideHomepage ? "" : "disabled"}>Use Scholar Homepage</button>
+            <button type="button" data-homepage-action="cancel">Cancel</button>
+            <button type="button" class="primary" data-homepage-action="save">Save Homepage</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(backdrop);
+      const input = backdrop.querySelector(".author-homepage-input");
+      const status = backdrop.querySelector(".author-homepage-status");
+      const controls = [...backdrop.querySelectorAll("[data-homepage-action]")];
+      let busy = false;
+      const close = () => {
+        backdrop.remove();
+        window.removeEventListener("keydown", onKeyDown);
+      };
+      const save = async (homepageUrl, successText) => {
+        if (busy) return;
+        busy = true;
+        controls.forEach((button) => button.disabled = true);
+        status.textContent = "Saving Homepage";
+        status.className = "author-homepage-status";
+        try {
+          const res = await fetch("/api/author-monitor/homepage", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              author_id: Number(author.id),
+              homepage_url: String(homepageUrl || "").trim()
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not save Homepage");
+          const index = state.authorMonitors.findIndex(
+            (item) => Number(item.id) === Number(author.id)
+          );
+          if (index >= 0 && data.author) {
+            state.authorMonitors[index] = data.author;
+          }
+          updateAuthorMonitorActivityStatus(successText, {live: false});
+          close();
+          if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        } catch (error) {
+          busy = false;
+          controls.forEach((button) => {
+            button.disabled = button.dataset.homepageAction === "scholar" && !overrideHomepage;
+          });
+          status.textContent = error.message || "Could not save Homepage";
+          status.className = "author-homepage-status err";
+        }
+      };
+      const onKeyDown = (event) => {
+        if (event.key === "Escape" && !busy) close();
+        if (event.key === "Enter" && event.target === input && !busy) {
+          event.preventDefault();
+          save(input.value, "Homepage saved.");
+        }
+      };
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop && !busy) close();
+      });
+      backdrop.querySelector('[data-homepage-action="cancel"]')?.addEventListener("click", close);
+      backdrop.querySelector('[data-homepage-action="scholar"]')?.addEventListener("click", () => {
+        save("", scholarHomepage ? "Using the Google Scholar Homepage." : "Custom Homepage cleared.");
+      });
+      backdrop.querySelector('[data-homepage-action="save"]')?.addEventListener("click", () => {
+        save(input.value, "Homepage saved.");
+      });
+      window.addEventListener("keydown", onKeyDown);
+      window.setTimeout(() => {
+        input?.focus({preventScroll: true});
+        input?.select();
+      }, 0);
+    }
+
     function showAuthorMonitorContextMenu(event, author) {
       hideThemeContextMenu();
       const menu = document.createElement("div");
@@ -37652,6 +38011,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-menu-separator"></div>
         <button type="button" data-action="open-author-profile">Open Google Scholar</button>
         ${author.homepage_url ? '<button type="button" data-action="open-author-homepage">Open Homepage</button>' : ""}
+        <button type="button" data-action="edit-author-homepage">Edit Homepage</button>
         <div class="library-menu-separator"></div>
         <button type="button" data-action="remove-author">Remove from Monitor</button>
       `;
@@ -37672,6 +38032,7 @@ INDEX_HTML = """<!doctype html>
         if (button.dataset.action === "find-author-identifiers") findMissingAuthorMonitorIdentifiers(author);
         if (button.dataset.action === "open-author-profile") openUrlExternally(author.url);
         if (button.dataset.action === "open-author-homepage") openUrlExternally(author.homepage_url);
+        if (button.dataset.action === "edit-author-homepage") openAuthorHomepageEditor(author);
         if (button.dataset.action === "remove-author") {
           deleteAuthorMonitor(author).catch((error) => window.alert(error.message || "Could not remove author"));
         }
@@ -40704,6 +41065,22 @@ INDEX_HTML = """<!doctype html>
       hideLibraryTabContextMenu();
       hideMyPublicationContextMenu();
       closeAnalysis();
+    }, true);
+    window.addEventListener("click", (event) => {
+      if (state.mode !== "author" || !state.authorMonitorConferenceExpanded) return;
+      const target = event.target;
+      if (
+        target.closest?.(".author-monitor-conference-popover")
+        || target.closest?.(".author-monitor-conference-toggle")
+        || target.closest?.(".author-monitor-detail")
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      state.authorMonitorConferenceExpanded = false;
+      state.authorMonitorConferenceScrollTop = 0;
+      renderAuthorMonitor({preserveScroll: true});
     }, true);
     window.addEventListener("click", (event) => {
       if (!event.target.closest?.(".library-add-control")) closeLibraryAddMenus();

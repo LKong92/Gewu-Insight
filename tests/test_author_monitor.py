@@ -43,6 +43,93 @@ class AuthorMonitorStorageTests(unittest.TestCase):
 
         self.assertEqual(saved["homepage_url"], "https://example.edu/author")
 
+    def test_manual_homepage_override_survives_scholar_profile_updates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                profile = scholar_profile("homepage-override", "Homepage Override")
+                profile["homepage_url"] = "https://scholar.example.edu/original"
+                author = storage.add_author_monitor(profile)
+                author_id = int(author["id"])
+                storage.set_author_monitor_homepage_override(
+                    author_id,
+                    "https://custom.example.edu/home",
+                )
+                refreshed = dict(profile)
+                refreshed["homepage_url"] = "https://scholar.example.edu/refreshed"
+                storage.update_author_monitor(author_id, profile=refreshed)
+                saved = storage.get_author_monitor(author_id)
+                effective = ui_server.author_monitor_to_api(saved)
+                storage.set_author_monitor_homepage_override(author_id, None)
+                restored = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(author_id)
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(
+            saved["homepage_url"],
+            "https://scholar.example.edu/refreshed",
+        )
+        self.assertEqual(
+            saved["homepage_override_url"],
+            "https://custom.example.edu/home",
+        )
+        self.assertEqual(
+            effective["homepage_url"],
+            "https://custom.example.edu/home",
+        )
+        self.assertEqual(
+            effective["scholar_homepage_url"],
+            "https://scholar.example.edu/refreshed",
+        )
+        self.assertEqual(restored["homepage_url"], "https://scholar.example.edu/refreshed")
+        self.assertEqual(restored["homepage_override_url"], "")
+
+    def test_author_citation_total_falls_back_to_saved_scholar_paper_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                author = storage.add_author_monitor(
+                    scholar_profile("citation-total", "Citation Total")
+                )
+                candidate = paper("citation-paper", "Citation Paper", "2026-07-24")
+                candidate["raw"] = {"google_scholar": {"citation_count": 1234}}
+                storage.upsert_paper(candidate)
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(author["id"]),
+                    paper_id="citation-paper",
+                )
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(int(author["id"]))
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(saved["scholar_citation_total"], 1234)
+
+    def test_author_profile_citation_total_takes_priority_over_paper_sum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                profile = scholar_profile("citation-priority", "Citation Priority")
+                profile["scholar_citation_total"] = 5678
+                author = storage.add_author_monitor(profile)
+                candidate = paper("citation-priority-paper", "Citation Paper", "2026-07-24")
+                candidate["raw"] = {"google_scholar": {"citation_count": 1234}}
+                storage.upsert_paper(candidate)
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(author["id"]),
+                    paper_id="citation-priority-paper",
+                )
+                saved = ui_server.author_monitor_to_api(
+                    storage.get_author_monitor(int(author["id"]))
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(saved["scholar_citation_total"], 5678)
+
     def test_duplicate_scholar_id_does_not_overwrite_existing_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -184,6 +271,7 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
             <div id="gsc_prf_in">Ada Author</div>
             <div id="gsc_prf_ivh"><a class="gsc_prf_ila" href="https://example.edu/ada">Homepage</a></div>
             <div id="gsc_prf_int"><a href="/citations?view_op=search_authors">Quantum</a></div>
+            <table id="gsc_rsb_st"><tr><td class="gsc_rsb_std">12,345</td></tr></table>
             """,
             "html.parser",
         )
@@ -194,6 +282,7 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
         )
 
         self.assertEqual(profile["homepage_url"], "https://example.edu/ada")
+        self.assertEqual(profile["scholar_citation_total"], 12345)
 
     def test_google_scholar_count_participates_in_merged_citations(self):
         candidate = paper("scholar-count", "Scholar Count", "2026-07-24")
@@ -806,6 +895,57 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("Conference publications", html)
         self.assertNotIn("author-monitor-conference-group", html)
 
+    def test_conference_popover_is_compact_clipped_and_preserves_its_scroll(self):
+        html = ui_server.INDEX_HTML
+        popover_css = html.split(".author-monitor-conference-popover {", 1)[1].split(
+            "}", 1
+        )[0]
+        cards_css = html.split(".author-monitor-conference-cards {", 1)[1].split(
+            "}", 1
+        )[0]
+        conference_logic = html.split(
+            "function authorMonitorPaperIsConferenceAbstract", 1
+        )[1].split(
+            "function authorMonitorPaperHasIdentifier", 1
+        )[0]
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr)", popover_css)
+        self.assertIn("overflow: hidden", popover_css)
+        self.assertIn("width: min(410px", popover_css)
+        self.assertIn("min-height: 0", cards_css)
+        self.assertIn("overflow-y: auto", cards_css)
+        self.assertNotIn("100vh", cards_css)
+        self.assertIn(".author-monitor-conference-cards .author-paper-title", html)
+        conference_card_css = html.split(
+            ".author-monitor-conference-cards .author-paper-card {", 1
+        )[1].split("}", 1)[0]
+        conference_title_css = html.split(
+            ".author-monitor-conference-cards .author-paper-title {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("height: 54px", conference_card_css)
+        self.assertIn("align-content: start", conference_card_css)
+        self.assertIn("overflow: hidden", conference_card_css)
+        self.assertIn("font-size: 9.5px", conference_title_css)
+        self.assertIn("font-weight: 540", conference_title_css)
+        self.assertIn("color: #596575", conference_title_css)
+        self.assertIn("-webkit-line-clamp: 2", conference_title_css)
+        self.assertIn('"meeting"', conference_logic)
+        self.assertIn('"abstract"', conference_logic)
+        self.assertIn('"conference"', conference_logic)
+        self.assertIn("authorMonitorConferenceScrollTop", rendering)
+        self.assertIn("conferenceCards.scrollTop", rendering)
+        self.assertIn("previousConferenceScroll", rendering)
+        outside_click = html.split(
+            'if (state.mode !== "author" || !state.authorMonitorConferenceExpanded) return;',
+            1,
+        )[1].split('window.addEventListener("click"', 1)[0]
+        self.assertIn('target.closest?.(".author-monitor-detail")', outside_click)
+        self.assertIn('target.closest?.(".author-monitor-conference-popover")', outside_click)
+        self.assertIn("event.stopImmediatePropagation()", outside_click)
+        self.assertIn("state.authorMonitorConferenceExpanded = false", outside_click)
+
     def test_global_search_is_explicitly_clickable_after_commit(self):
         html = ui_server.INDEX_HTML
         self.assertIn("-webkit-app-region: no-drag;", html)
@@ -928,6 +1068,28 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("wireAuthorMonitorAvatarLinks(root)", rendering)
         self.assertIn("Open Homepage", html)
         self.assertIn("Open Google Scholar", html)
+
+    def test_author_homepage_editor_uses_exact_labels_without_ellipses(self):
+        html = ui_server.INDEX_HTML
+        editor = html.split("function openAuthorHomepageEditor", 1)[1].split(
+            "function showAuthorMonitorContextMenu", 1
+        )[0]
+        context_menu = html.split("function showAuthorMonitorContextMenu", 1)[1].split(
+            "function renderPaper", 1
+        )[0]
+        summary = html.split("function authorMonitorSummaryText()", 1)[1].split(
+            "function selectedAuthorMonitorPaper", 1
+        )[0]
+        self.assertIn("/api/author-monitor/homepage", editor)
+        self.assertIn(">Use Scholar Homepage</button>", editor)
+        self.assertIn(">Cancel</button>", editor)
+        self.assertIn(">Save Homepage</button>", editor)
+        self.assertIn(">Edit Homepage</button>", context_menu)
+        self.assertNotIn("Edit Homepage…", html)
+        self.assertNotIn("Edit Homepage...", html)
+        self.assertIn('toLocaleString("en-US")', summary)
+        self.assertIn("citations (Google Scholar)", summary)
+        self.assertIn("scholarCitationRaw === null", summary)
 
     def test_full_scholar_citation_update_has_confirmed_and_direct_entry_points(self):
         html = ui_server.INDEX_HTML

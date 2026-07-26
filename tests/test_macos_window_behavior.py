@@ -77,6 +77,12 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('[path hasPrefix:@"/doi/suppl/"]', source)
         self.assertIn('rangeOfString:@"/suppl_file/"', source)
         self.assertIn("publisher_download_kind: browserFallback.kind", INDEX_HTML)
+        self.assertIn("aaas-supplement-discovery", source)
+        self.assertIn("document.querySelectorAll('a[href], iframe[src], embed[src]')", source)
+        self.assertIn("/\\\\.pdf$/i.test(path)", source)
+        self.assertIn("supplement_urls", INDEX_HTML)
+        self.assertIn('payload[@"publisher_download_kind"] = @"aaas-supplement-pdf";', source)
+        self.assertIn("supplement_attached", INDEX_HTML)
 
 
 if __name__ == "__main__":

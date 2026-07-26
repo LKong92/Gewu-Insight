@@ -209,6 +209,8 @@ CREATE TABLE IF NOT EXISTS author_monitors (
   interests_json TEXT,
   profile_url TEXT NOT NULL,
   homepage_url TEXT,
+  homepage_override_url TEXT,
+  scholar_citation_total INTEGER,
   avatar_url TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'idle',
@@ -403,6 +405,12 @@ class Storage:
         }
         if "homepage_url" not in author_monitor_columns:
             self.conn.execute("ALTER TABLE author_monitors ADD COLUMN homepage_url TEXT")
+            self.conn.commit()
+        if "homepage_override_url" not in author_monitor_columns:
+            self.conn.execute("ALTER TABLE author_monitors ADD COLUMN homepage_override_url TEXT")
+            self.conn.commit()
+        if "scholar_citation_total" not in author_monitor_columns:
+            self.conn.execute("ALTER TABLE author_monitors ADD COLUMN scholar_citation_total INTEGER")
             self.conn.commit()
 
     def _sync_arxiv_calendar_timezone(self) -> None:
@@ -1632,9 +1640,10 @@ class Storage:
             """
             INSERT INTO author_monitors (
               scholar_user_id, name, affiliation, email, cited_by, interests_json,
-              profile_url, homepage_url, avatar_url, sort_order, status, created_at, updated_at
+              profile_url, homepage_url, homepage_override_url, scholar_citation_total,
+              avatar_url, sort_order, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'idle', ?, ?)
             ON CONFLICT(scholar_user_id) DO NOTHING
             """,
             (
@@ -1646,6 +1655,7 @@ class Storage:
                 json.dumps([str(item) for item in interests if str(item).strip()], ensure_ascii=False),
                 profile_url,
                 str(profile.get("homepage_url") or "").strip(),
+                profile.get("scholar_citation_total"),
                 str(profile.get("avatar_url") or "").strip(),
                 next_order,
                 timestamp,
@@ -1666,7 +1676,18 @@ class Storage:
                    (SELECT COUNT(*) FROM author_monitor_papers
                     WHERE author_monitor_id = author_monitors.id) AS paper_count,
                    (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count
+                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count,
+                   (SELECT SUM(
+                       CASE
+                         WHEN json_valid(papers.raw_json)
+                         THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
+                         ELSE NULL
+                       END
+                     )
+                    FROM author_monitor_papers
+                    JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+                    WHERE author_monitor_papers.author_monitor_id = author_monitors.id
+                   ) AS scholar_citation_sum
             FROM author_monitors
             WHERE id = ?
             """,
@@ -1681,7 +1702,18 @@ class Storage:
                    (SELECT COUNT(*) FROM author_monitor_papers
                     WHERE author_monitor_id = author_monitors.id) AS paper_count,
                    (SELECT COUNT(*) FROM author_monitor_papers
-                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count
+                    WHERE author_monitor_id = author_monitors.id AND is_unread = 1) AS unread_count,
+                   (SELECT SUM(
+                       CASE
+                         WHEN json_valid(papers.raw_json)
+                         THEN CAST(json_extract(papers.raw_json, '$.google_scholar.citation_count') AS INTEGER)
+                         ELSE NULL
+                       END
+                     )
+                    FROM author_monitor_papers
+                    JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+                    WHERE author_monitor_papers.author_monitor_id = author_monitors.id
+                   ) AS scholar_citation_sum
             FROM author_monitors
             ORDER BY sort_order ASC, id ASC
             """
@@ -1721,6 +1753,8 @@ class Storage:
                     [str(item) for item in interests if str(item).strip()],
                     ensure_ascii=False,
                 )
+            if profile.get("scholar_citation_total") is not None:
+                values["scholar_citation_total"] = int(profile["scholar_citation_total"])
         if status is not None:
             values["status"] = str(status)
         if message is not None:
@@ -1735,7 +1769,8 @@ class Storage:
             """
             UPDATE author_monitors
             SET name = ?, affiliation = ?, email = ?, cited_by = ?, interests_json = ?,
-                profile_url = ?, homepage_url = ?, avatar_url = ?, status = ?, message = ?,
+                profile_url = ?, homepage_url = ?, scholar_citation_total = ?,
+                avatar_url = ?, status = ?, message = ?,
                 last_checked_at = ?, last_success_at = ?, cooldown_until = ?, updated_at = ?
             WHERE id = ?
             """,
@@ -1747,6 +1782,7 @@ class Storage:
                 values.get("interests_json") or "[]",
                 values.get("profile_url") or "",
                 values.get("homepage_url") or "",
+                values.get("scholar_citation_total"),
                 values.get("avatar_url") or "",
                 values.get("status") or "idle",
                 values.get("message") or "",
@@ -1756,6 +1792,25 @@ class Storage:
                 now_iso(),
                 int(author_monitor_id),
             ),
+        )
+        self.conn.commit()
+        return self.get_author_monitor(int(author_monitor_id)) or {}
+
+    def set_author_monitor_homepage_override(
+        self,
+        author_monitor_id: int,
+        homepage_override_url: str | None,
+    ) -> dict[str, Any]:
+        if not self.get_author_monitor(int(author_monitor_id)):
+            return {}
+        value = str(homepage_override_url or "").strip() or None
+        self.conn.execute(
+            """
+            UPDATE author_monitors
+            SET homepage_override_url = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (value, now_iso(), int(author_monitor_id)),
         )
         self.conn.commit()
         return self.get_author_monitor(int(author_monitor_id)) or {}

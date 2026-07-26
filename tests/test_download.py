@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -141,6 +143,33 @@ class DownloadCandidateTests(unittest.TestCase):
                 "suppl_file/science.aao1797_sm.pdf",
             ],
         )
+
+    def test_existing_unmerged_science_pdf_is_reused_for_supplement_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "main.pdf"
+            path.write_bytes(b"%PDF-1.4\n" + b"x" * 2048)
+            paper = {
+                "doi": "10.1126/science.aao1797",
+                "download_message": "manual PDF replaced: old.pdf",
+                "merged_pdf_path": str(path),
+            }
+
+            self.assertEqual(
+                download.existing_science_main_only_pdf_path(paper),
+                path.resolve(),
+            )
+
+    def test_existing_science_pdf_already_merged_is_not_reused_as_main_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "merged.pdf"
+            path.write_bytes(b"%PDF-1.4\n" + b"x" * 2048)
+            paper = {
+                "doi": "10.1126/science.aao1797",
+                "download_message": "downloaded and merged Science supplementary PDF; temporary PDF removed",
+                "merged_pdf_path": str(path),
+            }
+
+            self.assertIsNone(download.existing_science_main_only_pdf_path(paper))
 
     def test_non_science_doi_does_not_trigger_science_fallback(self):
         paper = {

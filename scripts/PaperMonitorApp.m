@@ -318,6 +318,9 @@
 @property(nonatomic, copy) NSString *hiddenPublisherTemporaryPath;
 @property(nonatomic, strong) NSTimer *hiddenPublisherTimeout;
 @property(nonatomic) BOOL hiddenPublisherDownloadTransitionPending;
+@property(nonatomic, strong) NSMutableSet<NSString *> *hiddenPublisherDiscoveryVisitedURLs;
+@property(nonatomic) NSInteger hiddenPublisherDiscoveryDepth;
+@property(nonatomic) NSInteger hiddenPublisherDiscoveryPageRetryCount;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic) NSInteger attempts;
 @property(nonatomic, strong) NSURL *url;
@@ -553,10 +556,15 @@
     NSURL *publisherURL = [NSURL URLWithString:urlString];
     NSString *host = publisherURL.host.lowercaseString ?: @"";
     NSString *path = publisherURL.path.lowercaseString ?: @"";
-    BOOL allowedHost = [host isEqualToString:@"science.org"] || [host hasSuffix:@".science.org"];
+    BOOL allowedHost = [host isEqualToString:@"science.org"]
+        || [host hasSuffix:@".science.org"]
+        || [host isEqualToString:@"sciencemag.org"]
+        || [host hasSuffix:@".sciencemag.org"];
     BOOL allowedPath = [path hasPrefix:@"/doi/pdf/"]
         || [path hasPrefix:@"/doi/epdf/"]
-        || [path hasPrefix:@"/doi/suppl/"];
+        || [path hasPrefix:@"/doi/suppl/"]
+        || [path hasPrefix:@"/doi/"]
+        || [path hasSuffix:@".pdf"];
     if (token.length == 0 || !publisherURL || ![publisherURL.scheme.lowercaseString isEqualToString:@"https"] || !allowedHost || !allowedPath) {
         [self notifyHiddenPublisherDownloadToken:token success:NO data:nil error:@"Invalid published PDF download request."];
         return;
@@ -568,6 +576,9 @@
 
     self.hiddenPublisherToken = token;
     self.hiddenPublisherContext = [context copy];
+    self.hiddenPublisherDiscoveryVisitedURLs = [NSMutableSet set];
+    self.hiddenPublisherDiscoveryDepth = 0;
+    self.hiddenPublisherDiscoveryPageRetryCount = 0;
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     configuration.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
     self.hiddenPublisherWebView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1) configuration:configuration];
@@ -596,6 +607,106 @@
     [self.hiddenPublisherWebView loadRequest:request];
 }
 
+- (BOOL)isAllowedScienceSupplementURL:(NSURL *)url {
+    NSString *host = url.host.lowercaseString ?: @"";
+    NSString *path = url.path.lowercaseString ?: @"";
+    BOOL allowedHost = [host isEqualToString:@"science.org"]
+        || [host hasSuffix:@".science.org"]
+        || [host isEqualToString:@"sciencemag.org"]
+        || [host hasSuffix:@".sciencemag.org"];
+    BOOL allowedPath = [path hasPrefix:@"/doi/"]
+        || [path hasPrefix:@"/content/suppl/"]
+        || [path hasPrefix:@"/cgi/content/full/"]
+        || [path hasSuffix:@".pdf"];
+    return [url.scheme.lowercaseString isEqualToString:@"https"] && allowedHost && allowedPath;
+}
+
+- (BOOL)isHiddenPublisherSupplementDiscovery {
+    NSString *kind = [self.hiddenPublisherContext[@"publisher_download_kind"] isKindOfClass:[NSString class]]
+        ? self.hiddenPublisherContext[@"publisher_download_kind"]
+        : @"";
+    return [kind isEqualToString:@"aaas-supplement-discovery"];
+}
+
+- (void)completeHiddenPublisherSupplementDiscoveryWithURLs:(NSArray<NSString *> *)urls {
+    NSString *token = self.hiddenPublisherToken ?: @"";
+    [self notifyHiddenPublisherDownloadToken:token
+                                     success:YES
+                                        data:@{@"supplement_urls": urls ?: @[]}
+                                       error:nil];
+    [self clearHiddenPublisherDownload];
+}
+
+- (void)inspectHiddenPublisherSupplementPage {
+    if (![self isHiddenPublisherSupplementDiscovery] || !self.hiddenPublisherWebView) return;
+    NSString *script =
+        @"(() => {"
+         "const acceptedHost = h => h === 'science.org' || h.endsWith('.science.org') || h === 'sciencemag.org' || h.endsWith('.sciencemag.org');"
+         "const pagePath = location.pathname.toLowerCase();"
+         "const pageIsSupplement = pagePath.includes('/doi/suppl/') || pagePath.includes('/content/suppl/') || /\\/dc\\d+(?:$|[/?#])/.test(pagePath);"
+         "const pdfs = [], landings = [];"
+         "for (const a of document.querySelectorAll('a[href], iframe[src], embed[src]')) {"
+           "const raw = a.getAttribute('href') || a.getAttribute('src') || '';"
+           "let u; try { u = new URL(raw, location.href); } catch (_) { continue; }"
+           "if (u.protocol === 'http:') u.protocol = 'https:';"
+           "if (!acceptedHost(u.hostname.toLowerCase())) continue;"
+           "const path = u.pathname.toLowerCase();"
+           "const label = `${a.textContent || ''} ${a.getAttribute('title') || ''} ${a.getAttribute('type') || ''}`.toLowerCase();"
+           "const supplementMarker = pageIsSupplement || path.includes('/suppl') || path.includes('/supplement') || /(?:^|[/.])dc\\d+(?:$|[/?#])/.test(path) || label.includes('supplement') || label.includes('supporting information');"
+           "const explicitPdf = /\\.pdf$/i.test(path) || String(a.getAttribute('type') || '').toLowerCase().includes('pdf') || /\\bpdf\\b/.test(label);"
+           "const likelyMainPdf = path.includes('/doi/pdf/') || label.includes('full text pdf') || label.includes('article pdf');"
+           "if (supplementMarker && explicitPdf && !likelyMainPdf) pdfs.push(u.href);"
+           "else if (path.includes('/doi/suppl/') || path.includes('/content/suppl/') || path.includes('/cgi/content/full/') && /\\/dc\\d+/.test(path)) landings.push(u.href);"
+         "}"
+         "return {pdfs: [...new Set(pdfs)], landings: [...new Set(landings)], page: location.href};"
+        "})()";
+    __weak PaperMonitorDelegate *weakSelf = self;
+    [self.hiddenPublisherWebView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PaperMonitorDelegate *strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.hiddenPublisherWebView || ![strongSelf isHiddenPublisherSupplementDiscovery]) return;
+            NSDictionary *payload = [result isKindOfClass:[NSDictionary class]] ? result : @{};
+            NSArray *rawPDFs = [payload[@"pdfs"] isKindOfClass:[NSArray class]] ? payload[@"pdfs"] : @[];
+            NSMutableArray<NSString *> *pdfs = [NSMutableArray array];
+            for (id value in rawPDFs) {
+                if (![value isKindOfClass:[NSString class]]) continue;
+                NSURL *url = [NSURL URLWithString:(NSString *)value];
+                if ([strongSelf isAllowedScienceSupplementURL:url]) [pdfs addObject:url.absoluteString];
+            }
+            if (pdfs.count > 0) {
+                [strongSelf completeHiddenPublisherSupplementDiscoveryWithURLs:pdfs];
+                return;
+            }
+            NSArray *landings = [payload[@"landings"] isKindOfClass:[NSArray class]] ? payload[@"landings"] : @[];
+            for (id value in landings) {
+                if (![value isKindOfClass:[NSString class]]) continue;
+                NSURL *url = [NSURL URLWithString:(NSString *)value];
+                NSString *absolute = url.absoluteString ?: @"";
+                if (![strongSelf isAllowedScienceSupplementURL:url] || [strongSelf.hiddenPublisherDiscoveryVisitedURLs containsObject:absolute]) continue;
+                if (strongSelf.hiddenPublisherDiscoveryDepth >= 4) break;
+                [strongSelf.hiddenPublisherDiscoveryVisitedURLs addObject:absolute];
+                strongSelf.hiddenPublisherDiscoveryDepth += 1;
+                strongSelf.hiddenPublisherDiscoveryPageRetryCount = 0;
+                [strongSelf.hiddenPublisherWebView loadRequest:[NSURLRequest requestWithURL:url]];
+                return;
+            }
+            if (!error && strongSelf.hiddenPublisherDiscoveryPageRetryCount < 2) {
+                strongSelf.hiddenPublisherDiscoveryPageRetryCount += 1;
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                    dispatch_get_main_queue(),
+                    ^{
+                        [strongSelf inspectHiddenPublisherSupplementPage];
+                    }
+                );
+                return;
+            }
+            NSString *message = error.localizedDescription ?: @"Science did not list any PDF supplementary files.";
+            [strongSelf failHiddenPublisherDownload:message];
+        });
+    }];
+}
+
 - (void)hiddenPublisherDownloadTimedOut:(NSTimer *)timer {
     [self failHiddenPublisherDownload:@"The publisher did not provide a PDF before the background download timed out."];
 }
@@ -620,6 +731,14 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     } else {
         decisionHandler(WKNavigationResponsePolicyAllow);
     }
+}
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    if (webView != self.hiddenPublisherWebView || ![self isHiddenPublisherSupplementDiscovery]) return;
+    NSString *absolute = webView.URL.absoluteString ?: @"";
+    if (absolute.length > 0) [self.hiddenPublisherDiscoveryVisitedURLs addObject:absolute];
+    self.hiddenPublisherDiscoveryPageRetryCount = 0;
+    [self inspectHiddenPublisherSupplementPage];
 }
 
 - (void)webView:(WKWebView *)webView
@@ -708,6 +827,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)attachHiddenPublisherPDFAtPath:(NSString *)path {
     NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:self.hiddenPublisherContext ?: @{}];
+    BOOL wasSupplementDiscovery = [self isHiddenPublisherSupplementDiscovery];
+    if (wasSupplementDiscovery) {
+        payload[@"publisher_download_kind"] = @"aaas-supplement-pdf";
+    }
     payload[@"source_path"] = path;
     payload[@"preserve_filename"] = @NO;
     NSError *jsonError = nil;
@@ -734,7 +857,9 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                 return;
             }
             NSString *token = self.hiddenPublisherToken ?: @"";
-            [self notifyHiddenPublisherDownloadToken:token success:YES data:responsePayload error:nil];
+            NSMutableDictionary *resultPayload = [NSMutableDictionary dictionaryWithDictionary:responsePayload];
+            if (wasSupplementDiscovery) resultPayload[@"supplement_attached"] = @YES;
+            [self notifyHiddenPublisherDownloadToken:token success:YES data:resultPayload error:nil];
             [self clearHiddenPublisherDownload];
         });
     }] resume];
@@ -776,6 +901,9 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     self.hiddenPublisherContext = nil;
     self.hiddenPublisherToken = nil;
     self.hiddenPublisherDownloadTransitionPending = NO;
+    self.hiddenPublisherDiscoveryVisitedURLs = nil;
+    self.hiddenPublisherDiscoveryDepth = 0;
+    self.hiddenPublisherDiscoveryPageRetryCount = 0;
 }
 
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen {

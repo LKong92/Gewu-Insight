@@ -18,11 +18,12 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
                 "kind": "aaas-published-pdf",
                 "url": "https://www.science.org/doi/pdf/10.1126/sciadv.adw9449?download=true",
                 "followup": {
-                    "kind": "aaas-supplement-pdf",
-                    "url": (
+                    "kind": "aaas-supplement-discovery",
+                    "url": "https://www.science.org/doi/10.1126/sciadv.adw9449",
+                    "fallback_urls": [
                         "https://www.science.org/doi/suppl/10.1126/sciadv.adw9449/"
                         "suppl_file/sciadv.adw9449_sm.pdf"
-                    ),
+                    ],
                 },
             },
         )
@@ -39,11 +40,12 @@ class PublishedPdfBrowserFallbackTests(unittest.TestCase):
         self.assertEqual(
             fallback,
             {
-                "kind": "aaas-supplement-pdf",
-                "url": (
+                "kind": "aaas-supplement-discovery",
+                "url": "https://www.science.org/doi/10.1126/science.aao1797",
+                "fallback_urls": [
                     "https://www.science.org/doi/suppl/10.1126/science.aao1797/"
                     "suppl_file/science.aao1797_sm.pdf"
-                ),
+                ],
             },
         )
 

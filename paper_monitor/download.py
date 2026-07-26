@@ -39,15 +39,17 @@ def download_paper(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     candidates = collect_pdf_candidates(paper)
-    main_pdf_path: Path | None = None
+    preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
+    main_pdf_path: Path | None = preserved_main_pdf_path
     supplement_paths: list[Path] = []
     messages: list[str] = []
 
-    for index, url in enumerate(candidates["main"]):
-        path = target_dir / "main.pdf"
-        if try_download_pdf(url, path, messages):
-            main_pdf_path = path
-            break
+    if not main_pdf_path:
+        for index, url in enumerate(candidates["main"]):
+            path = target_dir / "main.pdf"
+            if try_download_pdf(url, path, messages):
+                main_pdf_path = path
+                break
 
     for index, url in enumerate(candidates["supplements"], start=1):
         path = target_dir / f"supplement_{index}.pdf"
@@ -67,22 +69,52 @@ def download_paper(
         storage.update_download_status(paper_id, status=status, message=message)
         return {"status": status, "message": message}
 
+    if preserved_main_pdf_path and not supplement_paths:
+        status = "partial"
+        message = "existing main PDF kept; no PDF supplement found"
+        storage.update_download_status(
+            paper_id,
+            status=status,
+            message=message,
+            main_pdf_path=str(preserved_main_pdf_path),
+            supplement_pdf_paths=[],
+            merged_pdf_path=str(preserved_main_pdf_path),
+        )
+        return {
+            "status": status,
+            "message": message,
+            "main_pdf_path": str(preserved_main_pdf_path),
+            "supplement_pdf_paths": [],
+            "merged_pdf_path": str(preserved_main_pdf_path),
+        }
+
     current_merged_path = str(paper.get("merged_pdf_path") or "")
     merged_path = unique_download_path(
         target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf",
         current_path=current_merged_path,
     )
+    working_merged_path = merged_path
+    if preserved_main_pdf_path and merged_path == preserved_main_pdf_path:
+        working_merged_path = merged_path.with_name(f".{merged_path.stem}-supplement-merge.pdf")
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
-        merge_pdfs(merge_inputs, merged_path)
+        merge_pdfs(merge_inputs, working_merged_path)
+        if working_merged_path != merged_path:
+            working_merged_path.replace(merged_path)
         status = "success" if supplement_paths else "partial"
         message = "downloaded and merged; temporary PDFs removed" if supplement_paths else "main PDF saved as merged PDF; no PDF supplement found"
     except Exception as exc:
-        shutil.copyfile(main_pdf_path, merged_path)
+        if working_merged_path != merged_path:
+            working_merged_path.unlink(missing_ok=True)
+        if main_pdf_path != merged_path:
+            shutil.copyfile(main_pdf_path, merged_path)
         status = "partial"
         message = f"main PDF saved as merged PDF; supplement merge failed: {exc}"
 
-    remove_intermediate_pdfs([main_pdf_path] + supplement_paths, keep=merged_path)
+    intermediate_paths = list(supplement_paths)
+    if not preserved_main_pdf_path:
+        intermediate_paths.insert(0, main_pdf_path)
+    remove_intermediate_pdfs(intermediate_paths, keep=merged_path)
 
     storage.update_download_status(
         paper_id,
@@ -99,6 +131,30 @@ def download_paper(
         "supplement_pdf_paths": [],
         "merged_pdf_path": str(merged_path),
     }
+
+
+def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:
+    doi = normalize_doi(paper.get("doi") or "")
+    if not doi.startswith("10.1126/"):
+        return None
+    message = str(paper.get("download_message") or "").lower()
+    if "merged science supplementary pdf" in message or message.startswith("downloaded and merged"):
+        return None
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        raw = str(paper.get(key) or "").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        try:
+            if not path.exists() or not path.is_file() or path.stat().st_size < 1024:
+                continue
+            with path.open("rb") as handle:
+                if b"%PDF-" not in handle.read(1024):
+                    continue
+            return path.resolve()
+        except OSError:
+            continue
+    return None
 
 
 def unique_download_path(path: Path, *, current_path: str = "") -> Path:
