@@ -2443,26 +2443,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"folder": folder_api, **snapshot})
 
     def handle_add_library_workspace_doi(self, payload: dict[str, Any]) -> None:
-        identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
-        doi = normalize_publication_doi(identifier)
-        arxiv_id = normalize_arxiv_identifier(identifier)
-        if not (doi and looks_like_doi(doi)) and not arxiv_id:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "DOI or arXiv ID is required")
+        query = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
+        if not query:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "DOI, arXiv ID, or title is required")
             return
         try:
-            if arxiv_id and not looks_like_doi(identifier):
-                paper = publication_metrics_metadata_from_arxiv_id(arxiv_id)
-            elif doi_is_likely_data_repository(doi):
-                paper = publication_metrics_metadata_from_doi(doi, allow_data_repository=True)
-            else:
-                candidates = search_crossref_publications(doi, kind="doi")
-                paper = paper_from_publication_candidate(candidates[0]) if candidates else None
+            paper = library_workspace_publication_from_query(query)
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Identifier lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Paper lookup failed: {exc}")
             return
         if not paper:
-            self.send_error_json(HTTPStatus.NOT_FOUND, "No publication found for this DOI or arXiv ID")
+            self.send_error_json(
+                HTTPStatus.NOT_FOUND,
+                "No confident publication match was found for this DOI, arXiv ID, or title",
+            )
             return
+        doi = normalize_publication_doi(str(paper.get("doi") or ""))
         storage = Storage(self.configured_db_path)
         try:
             tabs = library_workspace_tabs(storage)
@@ -3089,17 +3085,29 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         name = str(payload.get("name") or "")
         storage = Storage(self.configured_db_path)
         try:
-            item = storage.rename_library_item(item_id=item_id, name=name)
-            paper = storage.get_paper(str(item.get("paper_id") or ""))
-            if not paper:
-                raise ValueError("Library paper not found")
+            item, paper, sync = rename_library_item_and_sync_files(
+                storage,
+                item_id=item_id,
+                name=name,
+            )
             item_api = library_item_to_api(item, paper)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except PermissionError as exc:
+            self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
+            return
+        except OSError as exc:
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+            return
         finally:
             storage.close()
-        self.send_json({"item_id": int(item.get("id") or item_id), "item": item_api})
+        self.send_json({
+            "item_id": int(item.get("id") or item_id),
+            "item": item_api,
+            "paper": paper_to_api(paper),
+            "file_sync": sync,
+        })
 
     def handle_rename_library_pdf(self, payload: dict[str, Any]) -> None:
         item_id = int(payload.get("item_id") or 0)
@@ -8707,6 +8715,44 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
     except Exception:
         pass
     return {"kind": "", "identifier": "", "source": ""}
+
+
+def library_workspace_publication_from_query(query: str) -> dict[str, Any] | None:
+    value = clean_text(query)
+    if not value:
+        return None
+    arxiv_id = normalize_arxiv_identifier(value)
+    doi = normalize_publication_doi(value)
+    if arxiv_id and not looks_like_doi(value):
+        return publication_metrics_metadata_from_arxiv_id(arxiv_id)
+    if doi and looks_like_doi(doi):
+        if doi_is_likely_data_repository(doi):
+            return publication_metrics_metadata_from_doi(
+                doi,
+                allow_data_repository=True,
+            )
+        candidates = search_crossref_publications(doi, kind="doi")
+        return paper_from_publication_candidate(candidates[0]) if candidates else None
+    candidate = {
+        "paper": {
+            "title": value,
+            "journal": "",
+            "publication_date": "",
+            "doi": "",
+            "url": "",
+        },
+        "raw": {},
+    }
+    identifier = identifier_from_title_lookup(value)
+    if identifier.get("kind") == "doi":
+        paper = publication_metrics_metadata_from_doi(
+            identifier.get("identifier") or "",
+            timeout=14,
+            max_retries=1,
+        )
+        if paper:
+            return paper
+    return resolve_google_scholar_candidate_to_arxiv(candidate)
 
 
 def title_match_is_confident(left: str, right: str) -> bool:
@@ -17479,6 +17525,38 @@ def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: s
     return False
 
 
+def paper_ids_referencing_pdf_path(storage: Storage, path: Path) -> list[str]:
+    requested = path.expanduser().resolve()
+    values = {
+        str(path),
+        str(path.expanduser().absolute()),
+        str(requested),
+    }
+    # macOS exposes the same filesystem locations through both /var and
+    # /private/var (likewise /tmp and /private/tmp).  SQLite may contain the
+    # spelling used before Path.resolve(), so include both aliases without
+    # falling back to an expensive scan of every paper on each rename.
+    for value in list(values):
+        if value.startswith("/private/var/") or value.startswith("/private/tmp/"):
+            values.add(value.removeprefix("/private"))
+        elif value.startswith("/var/") or value.startswith("/tmp/"):
+            values.add(f"/private{value}")
+    values = sorted(values)
+    rows = storage.conn.execute(
+        f"""
+        SELECT paper_id
+        FROM papers
+        WHERE main_pdf_path IN ({",".join("?" for _ in values)})
+           OR merged_pdf_path IN ({",".join("?" for _ in values)})
+           OR source_path IN ({",".join("?" for _ in values)})
+        """,
+        [*values, *values, *values],
+    ).fetchall()
+    return sorted(
+        dict.fromkeys(str(row["paper_id"] or "") for row in rows if row["paper_id"])
+    )
+
+
 def retire_replaced_managed_pdf_paths(
     storage: Storage,
     *,
@@ -17862,11 +17940,21 @@ def update_paper_file_path_references(storage: Storage, paper_id: str, old_path:
     new_value = str(new_path)
     updates: dict[str, str] = {}
     for key in ("main_pdf_path", "merged_pdf_path", "source_path"):
-        if str(paper.get(key) or "") == old_value:
+        raw_value = str(paper.get(key) or "")
+        try:
+            matches_old = bool(raw_value) and Path(raw_value).expanduser().resolve() == old_path.expanduser().resolve()
+        except OSError:
+            matches_old = raw_value == old_value
+        if matches_old:
             updates[key] = new_value
     raw = parse_raw_json(paper)
     imported = raw.get("import") if isinstance(raw.get("import"), dict) else {}
-    if clean_text(imported.get("stored_path") or "") == old_value:
+    stored_path = clean_text(imported.get("stored_path") or "")
+    try:
+        stored_matches_old = bool(stored_path) and Path(stored_path).expanduser().resolve() == old_path.expanduser().resolve()
+    except OSError:
+        stored_matches_old = stored_path == old_value
+    if stored_matches_old:
         imported["stored_path"] = new_value
         raw["import"] = imported
         updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
@@ -17905,32 +17993,21 @@ def rename_library_item_pdf_from_metadata(storage: Storage, item_id: int) -> dic
             "missing": missing,
         }
     target_name = pdf_rename_filename_from_values(template, values, current_path.suffix or ".pdf")
-    target_path = current_path.with_name(target_name)
     display_name = Path(target_name).stem
-    if target_path == current_path:
-        storage.rename_library_item(item_id=int(item_id), name=display_name)
-        return {
-            "item_id": int(item_id),
-            "paper_id": paper_id,
-            "old_path": str(current_path),
-            "new_path": str(current_path),
-            "filename": current_path.name,
-            "display_name": display_name,
-            "changed": False,
-        }
-    target_path = unique_path_in_dir(target_path)
-    current_path.rename(target_path)
-    update_paper_file_path_references(storage, paper_id, current_path, target_path)
-    sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=current_path)
-    storage.rename_library_item(item_id=int(item_id), name=display_name)
+    renamed_item, updated_paper, _sync = rename_library_item_and_sync_files(
+        storage,
+        item_id=int(item_id),
+        name=display_name,
+    )
+    target_path = library_item_local_pdf_path(storage, renamed_item, updated_paper) or current_path
     return {
         "item_id": int(item_id),
         "paper_id": paper_id,
         "old_path": str(current_path),
         "new_path": str(target_path),
         "filename": target_path.name,
-        "display_name": display_name,
-        "changed": True,
+        "display_name": renamed_item.get("display_name") or display_name,
+        "changed": target_path != current_path or target_path.name != current_path.name,
     }
 
 
@@ -18128,51 +18205,470 @@ def remove_direct_symlinks_to(target: Path, folders: list[Path]) -> list[str]:
     return removed
 
 
-def create_pdf_alias(canonical_path: Path, target_dir: Path) -> Path | None:
+def library_item_pdf_filename(
+    item: dict[str, Any],
+    paper: dict[str, Any],
+    canonical_path: Path | None = None,
+) -> str:
+    display_name = clean_text(item.get("display_name") or "")
+    if not display_name:
+        if canonical_path:
+            return finder_safe_name(canonical_path.name, "paper.pdf")
+        display_name = default_library_item_display_name(paper)
+    filename = finder_safe_name(display_name, "paper")
+    if not filename.lower().endswith(".pdf"):
+        filename = f"{filename}.pdf"
+    stem = Path(filename).stem[:116].strip(" .") or "paper"
+    return f"{stem}.pdf"
+
+
+def library_item_display_name_for_synced_filename(
+    item: dict[str, Any],
+    filename: str,
+) -> str:
+    original = clean_text(item.get("display_name") or "")
+    return filename if original.lower().endswith(".pdf") or not original else Path(filename).stem
+
+
+def library_item_local_pdf_path(
+    storage: Storage,
+    item: dict[str, Any],
+    paper: dict[str, Any] | None = None,
+) -> Path | None:
+    paper = paper or storage.get_paper(str(item.get("paper_id") or ""))
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not canonical:
+        return None
+    target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+    if not target_dir.exists():
+        return None
+    desired_name = library_item_pdf_filename(item, paper, canonical)
+    desired_path = target_dir / desired_name
+    if desired_path.exists() or desired_path.is_symlink():
+        try:
+            if desired_path.resolve() == canonical:
+                return desired_path
+        except OSError:
+            pass
+    shared_paper_ids = paper_ids_referencing_pdf_path(storage, canonical)
+    canonical_owner_paper_id = shared_paper_ids[0] if shared_paper_ids else str(item.get("paper_id") or "")
+    if (
+        str(item.get("paper_id") or "") == canonical_owner_paper_id
+        and canonical.parent.resolve() == target_dir
+    ):
+        return canonical
+    for candidate in target_dir.iterdir():
+        if not candidate.is_symlink():
+            continue
+        try:
+            if candidate.resolve() == canonical:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def create_pdf_alias(
+    canonical_path: Path,
+    target_dir: Path,
+    filename: str | None = None,
+) -> Path | None:
     canonical = canonical_path.expanduser().resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
-    if canonical.parent.resolve() == target_dir.resolve():
-        return None
+    desired_name = finder_safe_name(filename or canonical.name, canonical.name)
+    if not desired_name.lower().endswith(".pdf"):
+        desired_name = f"{desired_name}.pdf"
+    desired_path = target_dir / desired_name
+    if canonical.parent.resolve() == target_dir.resolve() and desired_path == canonical:
+        return canonical
     if target_dir.exists():
         for candidate in target_dir.iterdir():
             if candidate.is_symlink():
                 try:
-                    if candidate.resolve() == canonical:
+                    if candidate.name == desired_name and candidate.resolve() == canonical:
                         return candidate
                 except OSError:
                     continue
-    alias_path = unique_path_in_dir(target_dir / canonical.name)
+    alias_path = unique_path_in_dir(desired_path)
     os.symlink(str(canonical), str(alias_path))
     return alias_path
 
 
 def sync_alias_for_library_item(storage: Storage, paper_id: str, folder_id: int) -> Path | None:
+    sync_all_pdf_aliases_for_paper(storage, paper_id)
+    item = storage.conn.execute(
+        """
+        SELECT *
+        FROM library_items
+        WHERE paper_id = ? AND folder_id = ?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (str(paper_id), int(folder_id or 0)),
+    ).fetchone()
     paper = storage.get_paper(paper_id)
-    canonical = canonical_pdf_path_for_paper(paper)
-    if not paper or not canonical:
-        return None
-    return create_pdf_alias(canonical, local_copy_dir_for_library_folder(storage, folder_id))
+    return library_item_local_pdf_path(storage, dict(item), paper) if item and paper else None
 
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
     canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return None
-    return create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
+    return create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
 
 
-def sync_all_pdf_aliases_for_paper(storage: Storage, paper_id: str, *, old_target: Path | None = None) -> None:
+def sync_all_pdf_aliases_for_paper(
+    storage: Storage,
+    paper_id: str,
+    *,
+    old_target: Path | None = None,
+) -> dict[str, Any]:
+    paper = storage.get_paper(str(paper_id))
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not paper or not canonical:
+        return {"paper_id": str(paper_id), "canonical_renamed": False, "aliases_updated": 0}
+    shared_paper_ids = paper_ids_referencing_pdf_path(storage, canonical)
+    if str(paper_id) not in shared_paper_ids:
+        shared_paper_ids.append(str(paper_id))
+        shared_paper_ids.sort()
+    canonical_owner_paper_id = shared_paper_ids[0] if shared_paper_ids else str(paper_id)
+    placeholders = ",".join("?" for _ in shared_paper_ids)
+    rows = storage.conn.execute(
+        f"""
+        SELECT *
+        FROM library_items
+        WHERE paper_id IN ({placeholders})
+        ORDER BY paper_id ASC, CASE WHEN trashed_at IS NULL THEN 0 ELSE 1 END, id ASC
+        """,
+        shared_paper_ids,
+    ).fetchall()
+    items = [dict(row) for row in rows]
+    papers = {
+        shared_paper_id: storage.get_paper(shared_paper_id)
+        for shared_paper_id in shared_paper_ids
+    }
+    item_dirs = {
+        int(item.get("id") or 0): local_copy_dir_for_library_folder(
+            storage,
+            int(item.get("folder_id") or 1),
+        ).resolve()
+        for item in items
+    }
+    alias_dirs = list(dict.fromkeys(item_dirs.values()))
+    has_my_publication = bool(
+        storage.conn.execute(
+            f"SELECT 1 FROM my_publications WHERE paper_id IN ({placeholders}) LIMIT 1",
+            shared_paper_ids,
+        ).fetchone()
+    )
+    if has_my_publication:
+        alias_dirs.append(MY_PUBLICATIONS_LOCAL_COPY_ROOT.resolve())
+    removed: list[str] = []
     if old_target:
-        removed = remove_symlinks_to(
-            old_target,
-            [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT],
+        removed.extend(
+            remove_symlinks_to(
+                old_target,
+                [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT],
+            )
         )
-        cleanup_local_copy_empty_parents(removed)
-    rows = storage.conn.execute("SELECT folder_id FROM library_items WHERE paper_id = ?", (str(paper_id),)).fetchall()
+
+    owner: dict[str, Any] | None = None
+    canonical_parent = canonical.parent.resolve()
+    for item in items:
+        if (
+            str(item.get("paper_id") or "") == canonical_owner_paper_id
+            and item_dirs[int(item.get("id") or 0)] == canonical_parent
+        ):
+            owner = item
+            break
+
+    naming_owner = owner or next(
+        (
+            item
+            for item in items
+            if str(item.get("paper_id") or "") == canonical_owner_paper_id
+        ),
+        None,
+    )
+    canonical_renamed = False
+    old_canonical = canonical
+    owner_paper = papers.get(canonical_owner_paper_id) or paper
+    if naming_owner and owner_paper and is_allowed_file(canonical, allowed_pdf_roots()):
+        desired_name = library_item_pdf_filename(naming_owner, owner_paper, canonical)
+        target_path = canonical.with_name(desired_name)
+        if target_path != canonical:
+            if target_path.is_symlink():
+                try:
+                    if target_path.resolve() == canonical:
+                        target_path.unlink()
+                except OSError:
+                    pass
+            target_path = unique_path_in_dir(target_path)
+            canonical.rename(target_path)
+            for referenced_paper_id in shared_paper_ids or [str(paper_id)]:
+                update_paper_file_path_references(
+                    storage,
+                    referenced_paper_id,
+                    canonical,
+                    target_path,
+                )
+            canonical = target_path.resolve()
+            canonical_renamed = True
+            removed.extend(remove_direct_symlinks_to(old_canonical, alias_dirs))
+        synced_display = library_item_display_name_for_synced_filename(naming_owner, canonical.name)
+        if clean_text(naming_owner.get("display_name") or "") != synced_display:
+            naming_owner = storage.rename_library_item(item_id=int(naming_owner["id"]), name=synced_display)
+            items = [
+                naming_owner if int(item.get("id") or 0) == int(naming_owner["id"]) else item
+                for item in items
+            ]
+            owner = (
+                naming_owner
+                if owner and int(owner.get("id") or 0) == int(naming_owner["id"])
+                else owner
+            )
+
+    aliases_updated = 0
+    item_names_adjusted = 0
+    for item in items:
+        item_id = int(item.get("id") or 0)
+        target_dir = item_dirs[item_id]
+        is_owner_item = bool(
+            owner
+            and item_id == int(owner.get("id") or 0)
+            and str(item.get("paper_id") or "") == canonical_owner_paper_id
+            and canonical.parent.resolve() == target_dir
+        )
+        if is_owner_item:
+            continue
+        item_paper = papers.get(str(item.get("paper_id") or ""))
+        if not item_paper:
+            continue
+        desired_name = library_item_pdf_filename(item, item_paper, canonical)
+        before = library_item_local_pdf_path(storage, item, item_paper)
+        alias = create_pdf_alias(canonical, target_dir, desired_name)
+        if alias and (not before or before != alias or before.name != alias.name):
+            aliases_updated += 1
+        if alias:
+            synced_display = library_item_display_name_for_synced_filename(item, alias.name)
+            if clean_text(item.get("display_name") or "") != synced_display:
+                storage.rename_library_item(item_id=int(item["id"]), name=synced_display)
+                item_names_adjusted += 1
+    if has_my_publication:
+        before = None
+        if MY_PUBLICATIONS_LOCAL_COPY_ROOT.exists():
+            for candidate in MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir():
+                if not candidate.is_symlink():
+                    continue
+                try:
+                    if candidate.resolve() == canonical:
+                        before = candidate
+                        break
+                except OSError:
+                    continue
+        alias = create_pdf_alias(canonical, MY_PUBLICATIONS_LOCAL_COPY_ROOT, canonical.name)
+        if alias and (not before or before != alias or before.name != alias.name):
+            aliases_updated += 1
+
+    # Remove obsolete shortcut names only after every valid alias for this
+    # shared physical PDF has been created.  Multiple DOI/arXiv records may
+    # legitimately point to the same target from the same Finder folder.
+    valid_names_by_dir: dict[Path, set[str]] = {}
+    refreshed_rows = storage.conn.execute(
+        f"""
+        SELECT *
+        FROM library_items
+        WHERE paper_id IN ({placeholders})
+        ORDER BY paper_id ASC, id ASC
+        """,
+        shared_paper_ids,
+    ).fetchall()
+    for row in refreshed_rows:
+        item = dict(row)
+        target_dir = local_copy_dir_for_library_folder(
+            storage,
+            int(item.get("folder_id") or 1),
+        ).resolve()
+        item_paper = papers.get(str(item.get("paper_id") or ""))
+        if not item_paper:
+            continue
+        valid_names_by_dir.setdefault(target_dir, set()).add(
+            library_item_pdf_filename(item, item_paper, canonical)
+        )
+    if has_my_publication:
+        valid_names_by_dir.setdefault(MY_PUBLICATIONS_LOCAL_COPY_ROOT.resolve(), set()).add(canonical.name)
+    for target_dir, valid_names in valid_names_by_dir.items():
+        if not target_dir.exists():
+            continue
+        for candidate in target_dir.iterdir():
+            if not candidate.is_symlink() or candidate.name in valid_names:
+                continue
+            try:
+                if candidate.resolve() == canonical:
+                    candidate.unlink()
+                    removed.append(str(candidate))
+            except OSError:
+                continue
+    cleanup_local_copy_empty_parents(removed)
+    return {
+        "paper_id": str(paper_id),
+        "canonical_renamed": canonical_renamed,
+        "old_path": str(old_canonical),
+        "new_path": str(canonical),
+        "aliases_updated": aliases_updated,
+        "item_names_adjusted": item_names_adjusted,
+    }
+
+
+def rename_library_item_and_sync_files(
+    storage: Storage,
+    *,
+    item_id: int,
+    name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    original = storage.get_library_item(int(item_id or 0))
+    if not original:
+        raise ValueError("Library item not found")
+    paper_id = str(original.get("paper_id") or "")
+    try:
+        storage.rename_library_item(item_id=int(item_id), name=name)
+        sync = sync_all_pdf_aliases_for_paper(storage, paper_id)
+    except Exception:
+        storage.rename_library_item(
+            item_id=int(item_id),
+            name=clean_text(original.get("display_name") or ""),
+        )
+        try:
+            sync_all_pdf_aliases_for_paper(storage, paper_id)
+        except Exception:
+            pass
+        raise
+    item = storage.get_library_item(int(item_id))
+    paper = storage.get_paper(paper_id)
+    if not item or not paper:
+        raise ValueError("Library paper not found")
+    return item, paper, sync
+
+
+def reconcile_all_library_pdf_names(storage: Storage) -> dict[str, Any]:
+    rows = storage.conn.execute(
+        """
+        SELECT DISTINCT paper_id
+        FROM library_items
+        ORDER BY paper_id ASC
+        """
+    ).fetchall()
+    result = {
+        "papers_checked": 0,
+        "papers_with_files": 0,
+        "canonical_renamed": 0,
+        "aliases_updated": 0,
+        "item_names_adjusted": 0,
+        "errors": [],
+    }
     for row in rows:
-        sync_alias_for_library_item(storage, paper_id, int(row["folder_id"] or 0))
-    if storage.conn.execute("SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1", (str(paper_id),)).fetchone():
-        sync_my_publication_alias(storage, paper_id)
+        paper_id = str(row["paper_id"] or "")
+        result["papers_checked"] += 1
+        if not canonical_pdf_path_for_paper(storage.get_paper(paper_id)):
+            continue
+        result["papers_with_files"] += 1
+        try:
+            synced = sync_all_pdf_aliases_for_paper(storage, paper_id)
+            result["canonical_renamed"] += int(bool(synced.get("canonical_renamed")))
+            result["aliases_updated"] += int(synced.get("aliases_updated") or 0)
+            result["item_names_adjusted"] += int(synced.get("item_names_adjusted") or 0)
+        except Exception as exc:
+            result["errors"].append({
+                "paper_id": paper_id,
+                "error": clean_text(str(exc)) or type(exc).__name__,
+            })
+    return result
+
+
+def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict[str, Any]:
+    rows = storage.conn.execute(
+        """
+        SELECT *
+        FROM library_items
+        ORDER BY paper_id ASC, id ASC
+        """
+    ).fetchall()
+    result = {
+        "items_checked": 0,
+        "items_with_files": 0,
+        "mismatched_real_files": 0,
+        "mismatched_shortcuts": 0,
+        "missing_shortcuts": 0,
+        "unowned_real_files": 0,
+        "samples": [],
+    }
+    item_paper_ids = {
+        str(row["paper_id"] or "")
+        for row in rows
+        if row["paper_id"]
+    }
+    papers: dict[str, dict[str, Any] | None] = {}
+    canonical_paper_ids: dict[str, list[str]] = {}
+    for paper_row in storage.conn.execute("SELECT * FROM papers").fetchall():
+        paper_id = str(paper_row["paper_id"] or "")
+        if paper_id not in item_paper_ids:
+            continue
+        paper = dict(paper_row)
+        papers[paper_id] = paper
+        canonical = canonical_pdf_path_for_paper(paper)
+        if canonical:
+            canonical_paper_ids.setdefault(str(canonical), []).append(paper_id)
+    canonical_owner_ids = {
+        path: sorted(paper_ids)[0]
+        for path, paper_ids in canonical_paper_ids.items()
+    }
+    canonical_paths_seen: set[str] = set()
+    canonical_paths_owned: set[str] = set()
+    for row in rows:
+        item = dict(row)
+        paper_id = str(item.get("paper_id") or "")
+        paper = papers.get(paper_id)
+        canonical = canonical_pdf_path_for_paper(paper)
+        result["items_checked"] += 1
+        if not paper or not canonical:
+            continue
+        result["items_with_files"] += 1
+        canonical_key = str(canonical)
+        canonical_paths_seen.add(canonical_key)
+        target_dir = local_copy_dir_for_library_folder(
+            storage,
+            int(item.get("folder_id") or 1),
+        ).resolve()
+        expected = library_item_pdf_filename(item, paper, canonical)
+        actual = library_item_local_pdf_path(storage, item, paper)
+        mismatch_type = ""
+        canonical_owner_paper_id = canonical_owner_ids.get(canonical_key, paper_id)
+        is_real_owner = (
+            paper_id == canonical_owner_paper_id
+            and target_dir == canonical.parent.resolve()
+        )
+        if is_real_owner:
+            canonical_paths_owned.add(canonical_key)
+            if canonical.name != expected:
+                result["mismatched_real_files"] += 1
+                mismatch_type = "real"
+        elif not actual:
+            result["missing_shortcuts"] += 1
+            mismatch_type = "missing_shortcut"
+        elif actual.name != expected:
+            result["mismatched_shortcuts"] += 1
+            mismatch_type = "shortcut"
+        if mismatch_type and len(result["samples"]) < max(0, int(sample_limit)):
+            result["samples"].append({
+                "item_id": int(item.get("id") or 0),
+                "paper_id": paper_id,
+                "type": mismatch_type,
+                "expected": expected,
+                "actual": actual.name if actual else "",
+                "folder": str(target_dir),
+            })
+    result["unowned_real_files"] = len(canonical_paths_seen - canonical_paths_owned)
+    return result
 
 
 def remove_pdf_aliases_for_paper_in_folders(storage: Storage, paper_id: str, folder_ids: list[int]) -> list[str]:
@@ -18258,7 +18754,11 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
             cleanup_local_copy_empty_parents([str(old_path)])
         return
     remove_symlinks_to(canonical, [source_dir])
-    create_pdf_alias(canonical, target_dir)
+    create_pdf_alias(
+        canonical,
+        target_dir,
+        library_item_pdf_filename(item, paper, canonical),
+    )
 
 
 def library_items_in_folder_tree(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
@@ -20727,10 +21227,12 @@ INDEX_HTML = """<!doctype html>
       position: relative;
       width: 34px;
       min-width: 34px;
+      height: 32px;
       flex: 0 0 34px;
       transition: width 160ms ease;
       pointer-events: auto;
       z-index: 1;
+      isolation: isolate;
       -webkit-app-region: no-drag;
     }
     .library-search-wrap::before {
@@ -20761,7 +21263,10 @@ INDEX_HTML = """<!doctype html>
     .library-search-wrap input {
       position: relative;
       z-index: 1;
+      display: block;
+      box-sizing: border-box;
       width: 100%;
+      height: 32px;
       min-height: 32px;
       padding-left: 30px;
       padding-right: 34px;
@@ -22655,11 +23160,30 @@ INDEX_HTML = """<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .library-search-results .library-row { height: 50px; }
+    .library-search-results .library-row {
+      height: 50px;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+    }
     .library-search-results .library-name {
       display: grid;
       gap: 2px;
       line-height: 1.2;
+    }
+    .library-search-show-button {
+      min-height: 25px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 8px;
+      background: #e8edef;
+      color: #3e4b59;
+      font-size: 10.5px;
+      font-weight: 650;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .library-search-show-button:hover {
+      background: #dbe7e7;
+      color: var(--accent-strong);
     }
     .library-column {
       flex: 0 0 var(--library-column-width, 260px);
@@ -23393,6 +23917,23 @@ INDEX_HTML = """<!doctype html>
     .library-file-line {
       display: block;
       margin-bottom: 4px;
+    }
+    .library-file-location-link {
+      display: block;
+      max-width: 100%;
+      margin: 0 0 4px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--accent-strong);
+      font: inherit;
+      line-height: inherit;
+      text-align: left;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+    .library-file-location-link:hover {
+      text-decoration: underline;
     }
     .library-folder-tree {
       display: grid;
@@ -25622,7 +26163,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
-                <input class="search" id="librarySearchBox" placeholder="Search Library" type="search" aria-label="Search current view">
+                <input class="search" id="librarySearchBox" placeholder="Search Library" type="search" aria-label="Search Library and all Spaces">
                 <button class="library-search-clear" id="clearLibrarySearch" type="button" title="Clear search">×</button>
               </div>
               <span class="library-search-count" id="librarySearchCount"></span>
@@ -27556,12 +28097,10 @@ INDEX_HTML = """<!doctype html>
       state.librarySearchCache = {key: "", results: []};
     }
 
-    function librarySearchCacheKey(query, displayRootId) {
+    function librarySearchCacheKey(query) {
       return [
         state.librarySearchVersion,
-        Number(displayRootId || 0),
-        librarySearchNormalize(query),
-        state.libraryTab || ""
+        librarySearchNormalize(query)
       ].join("|");
     }
 
@@ -27710,6 +28249,19 @@ INDEX_HTML = """<!doctype html>
       return parts.reverse().join(" / ");
     }
 
+    function libraryGlobalFolderPath(folderId) {
+      const parts = [];
+      let current = libraryFolderById(folderId);
+      let guard = 0;
+      while (current && guard < 64) {
+        guard += 1;
+        parts.push(current.name || "Folder");
+        if (current.parent_id === null) break;
+        current = libraryFolderById(current.parent_id);
+      }
+      return parts.reverse().join(" / ");
+    }
+
     function libraryDescendantFolderIds(rootId) {
       const ids = new Set([Number(rootId)]);
       const queue = [Number(rootId)];
@@ -27728,21 +28280,20 @@ INDEX_HTML = """<!doctype html>
     function librarySearchResults() {
       const query = state.query.trim();
       if (!query) return [];
-      const displayRootId = libraryDisplayRootId();
-      const cacheKey = librarySearchCacheKey(query, displayRootId);
+      const cacheKey = librarySearchCacheKey(query);
       if (state.librarySearchCache.key === cacheKey) return state.librarySearchCache.results;
-      const folderIds = libraryDescendantFolderIds(displayRootId);
+      const folderIds = new Set(state.libraryFolders.map((folder) => Number(folder.id)));
       const results = [];
       state.libraryFolders
-        .filter((folder) => folderIds.has(Number(folder.id)) && Number(folder.id) !== Number(displayRootId))
+        .filter((folder) => folderIds.has(Number(folder.id)) && folder.parent_id !== null)
         .forEach((folder) => {
-          const path = libraryFolderPath(folder.id);
+          const path = libraryGlobalFolderPath(folder.id);
           const haystack = `${folder.name || ""} ${path}`;
           if (librarySearchMatches(haystack, query)) {
             results.push({
               type: "folder",
               id: Number(folder.id),
-              parentFolderId: Number(folder.parent_id || displayRootId),
+              parentFolderId: Number(folder.parent_id),
               path
             });
           }
@@ -27750,13 +28301,13 @@ INDEX_HTML = """<!doctype html>
       state.libraryItems
         .filter((item) => folderIds.has(Number(item.folder_id)))
         .forEach((item) => {
-          const folderPath = libraryFolderPath(item.folder_id);
+          const folderPath = libraryGlobalFolderPath(item.folder_id);
           const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`;
           if (librarySearchMatches(haystack, query)) {
             results.push({
               type: "item",
               id: Number(item.id),
-              parentFolderId: Number(item.folder_id || displayRootId),
+              parentFolderId: Number(item.folder_id),
               path: folderPath
             });
           }
@@ -28007,6 +28558,7 @@ INDEX_HTML = """<!doctype html>
       if (type === "item") {
         if (!data.item?.id) throw new Error("Renamed Library item was not returned");
         upsertLibraryItemLocal(data.item);
+        if (data.paper) updatePaperState(data.paper.paper_id || data.item.paper_id, data.paper);
       } else {
         upsertLibraryFolderLocal(data.folder);
       }
@@ -28126,6 +28678,32 @@ INDEX_HTML = """<!doctype html>
       button.setAttribute("aria-label", "Add to Library");
     }
 
+    async function navigateToPaperInLibrary(paperId, preferredItemId = 0) {
+      await refreshLibrarySnapshotForNavigation(paperId);
+      const preferredItem = Number(preferredItemId || 0)
+        ? libraryItemById(Number(preferredItemId))
+        : null;
+      const item = (
+        preferredItem
+        && String(preferredItem.paper_id || preferredItem.paper?.paper_id || "") === String(paperId || "")
+      )
+        ? preferredItem
+        : firstLibraryItemForPaper(paperId);
+      const workspaceIndex = libraryWorkspaceIndexForFolder(Number(item?.folder_id || 0));
+      state.libraryTab = workspaceIndex >= 0 ? `workspace-${workspaceIndex}` : "library";
+      if (!item || !selectLibraryItemInColumns(item)) {
+        throw new Error("This paper is not available in Library.");
+      }
+      state.mode = "library";
+      setPrimaryView("library");
+      window.clearTimeout(librarySearchTimer);
+      state.query = "";
+      if ($("librarySearchBox")) $("librarySearchBox").value = "";
+      clearLibraryRangeSelection();
+      renderLibrary();
+      refreshLibraryQuickLookForSelection();
+    }
+
     async function showPaperInLibrary(article, paperId) {
       const button = article.querySelector('[data-action="add-library"]');
       const authorList = article.closest(".author-monitor-paper-list");
@@ -28145,21 +28723,7 @@ INDEX_HTML = """<!doctype html>
           : "Opening...";
       }
       try {
-        await refreshLibrarySnapshotForNavigation(paperId);
-        const item = firstLibraryItemForPaper(paperId);
-        const workspaceIndex = libraryWorkspaceIndexForFolder(Number(item?.folder_id || 0));
-        state.libraryTab = workspaceIndex >= 0 ? `workspace-${workspaceIndex}` : "library";
-        if (!item || !selectLibraryItemInColumns(item)) {
-          throw new Error("This paper is not available in Library.");
-        }
-        state.mode = "library";
-        setPrimaryView("library");
-        window.clearTimeout(librarySearchTimer);
-        state.query = "";
-        if ($("librarySearchBox")) $("librarySearchBox").value = "";
-        clearLibraryRangeSelection();
-        renderLibrary();
-        refreshLibraryQuickLookForSelection();
+        await navigateToPaperInLibrary(paperId);
       } catch (error) {
         const status = article.querySelector('[data-role="status"]');
         if (status) {
@@ -30737,7 +31301,7 @@ INDEX_HTML = """<!doctype html>
             <button class="smallbtn" id="workspaceRenameButton" type="button">Rename</button>
           </div>
           <div class="workspace-tool-group">
-            <input class="search" id="workspaceDoiInput" placeholder="DOI or arXiv ID">
+            <input class="search" id="workspaceDoiInput" placeholder="DOI, arXiv ID, or title">
             <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
           </div>
           ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
@@ -32254,7 +32818,7 @@ INDEX_HTML = """<!doctype html>
     async function addLibraryWorkspaceDoi(index) {
       const identifier = $("workspaceDoiInput")?.value || "";
       if (!identifier.trim()) return;
-      state.workspaceStatus = "Looking up identifier...";
+      state.workspaceStatus = "Looking up paper...";
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
       try {
@@ -32279,7 +32843,7 @@ INDEX_HTML = """<!doctype html>
         state.libraryTab = `workspace-${index}`;
         renderLibrary();
       } catch (error) {
-        state.workspaceStatus = error.message || "Could not add DOI";
+        state.workspaceStatus = error.message || "Could not add paper";
         state.libraryTab = `workspace-${index}`;
         renderLibrary();
       }
@@ -33180,6 +33744,15 @@ INDEX_HTML = """<!doctype html>
       refreshLibraryQuickLookForSelection();
     }
 
+    async function showLibrarySearchResultInLibrary(itemId) {
+      const item = libraryItemById(Number(itemId || 0));
+      const paperId = String(item?.paper_id || item?.paper?.paper_id || "");
+      if (!item || !paperId) {
+        throw new Error("This paper is not available in Library.");
+      }
+      await navigateToPaperInLibrary(paperId, Number(item.id || 0));
+    }
+
     function startLibraryColumnResize(event, folderId) {
       const column = event.currentTarget.closest(".library-column");
       if (!column || !folderId) return;
@@ -33349,11 +33922,11 @@ INDEX_HTML = """<!doctype html>
       const name = type === "folder" ? entry.name : (entry.display_name || libraryPaperDisplayName(paper));
       const iconClass = libraryEntryIconClass(type, entry);
       const iconStyle = libraryEntryIconStyle(type, entry);
-      const meta = type === "folder" ? "Folder" : (paper.journal || "Paper");
       const nativeDragAttrs = libraryNativeDragHandleAttrs(type, entry, name);
       return `
-        <button class="library-row${selected ? " active" : ""}"
-          type="button"
+        <div class="library-row${selected ? " active" : ""}"
+          role="button"
+          tabindex="0"
           draggable="false"
           data-library-type="${type}"
           data-library-id="${id}"
@@ -33365,8 +33938,10 @@ INDEX_HTML = """<!doctype html>
             ${escapeHtml(name)}
             <span class="library-search-path">${escapeHtml(path || "")}</span>
           </span>
-          <span class="library-meta">${escapeHtml(meta)}</span>
-        </button>
+          ${type === "folder"
+            ? `<span class="library-meta">Folder</span>`
+            : `<button class="library-search-show-button" type="button" data-action="show-library-search-result" data-library-item-id="${id}">Show in Library</button>`}
+        </div>
       `;
     }
 
@@ -33688,13 +34263,61 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
-    function libraryDetailFilesMarkup(paper) {
+    function libraryDetailFilesMarkup(paper, options = {}) {
       const lines = [];
-      if (paper?.merged_pdf_path) lines.push(`<span class="library-file-line">PDF: ${escapeHtml(paper.merged_pdf_path)}</span>`);
-      else if (paper?.native_file_path || paper?.source_path) lines.push(`<span class="library-file-line">File: ${escapeHtml(paper.native_file_path || paper.source_path)}</span>`);
-      else lines.push(`<span class="library-file-line">${libraryPaperIsPdfLike(paper) ? "PDF" : "File"}: No local file</span>`);
+      const localPath = paper?.merged_pdf_path || paper?.native_file_path || paper?.source_path || "";
+      const localLabel = paper?.merged_pdf_path ? "PDF" : "File";
+      const selectedItemId = Number(options.selectedLibraryItemId || 0);
+      const canShowInLibrary = Boolean(
+        localPath
+        && paper?.paper_id
+        && (
+          selectedItemId
+          || paper?.in_library
+          || Number(paper?.library_item_count || 0) > 0
+        )
+      );
+      if (localPath && canShowInLibrary) {
+        lines.push(`
+          <button
+            class="library-file-location-link"
+            type="button"
+            data-action="show-file-in-library"
+            data-paper-id="${escapeAttr(paper.paper_id || "")}"
+            data-library-item-id="${selectedItemId}"
+            title="Show in Library"
+          >${escapeHtml(`${localLabel}: ${localPath}`)}</button>
+        `);
+      } else if (localPath) {
+        lines.push(`<span class="library-file-line">${escapeHtml(`${localLabel}: ${localPath}`)}</span>`);
+      } else {
+        lines.push(`<span class="library-file-line">${libraryPaperIsPdfLike(paper) ? "PDF" : "File"}: No local file</span>`);
+      }
       if (paper?.pdf_url) lines.push(`<span class="library-file-line">Source PDF: ${escapeHtml(paper.pdf_url)}</span>`);
       return lines.join("");
+    }
+
+    function wireLibraryFileLocationLinks(root) {
+      root?.querySelectorAll('[data-action="show-file-in-library"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.disabled = true;
+          try {
+            await navigateToPaperInLibrary(
+              button.dataset.paperId || "",
+              Number(button.dataset.libraryItemId || 0)
+            );
+          } catch (error) {
+            button.disabled = false;
+            const status = root.querySelector(".library-detail-status");
+            if (status) {
+              status.textContent = error.message || "Could not show paper in Library";
+              status.className = "library-detail-status err";
+            }
+          }
+        });
+      });
     }
 
     function libraryIdentifierFromFilesButtonMarkup(paper) {
@@ -33718,7 +34341,7 @@ INDEX_HTML = """<!doctype html>
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           ${options.showLibraryFolders ? libraryDetailFolderOccurrencesMarkup(paper, options.selectedLibraryItemId) : ""}
-          ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper)}</dd>`}
+          ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper, options)}</dd>`}
         </dl>
       `;
     }
@@ -34075,6 +34698,7 @@ INDEX_HTML = """<!doctype html>
           ${libraryDetailMetadataMarkup(paper, [], null, {showLibraryFolders: true, selectedLibraryItemId: item?.id})}
         `;
         wireLibraryFolderOccurrenceControls(root);
+        wireLibraryFileLocationLinks(root);
         loadLibraryItemPaperDetail(item);
         return;
       }
@@ -34135,6 +34759,7 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       wireLibraryFolderOccurrenceControls(root);
+      wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -34272,6 +34897,7 @@ INDEX_HTML = """<!doctype html>
           ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
           ${publicationAuthorsSectionMarkup(publication, authors, paper)}
         `;
+        wireLibraryFileLocationLinks(root);
         loadMyPublicationPaperDetail(publication);
         return;
       }
@@ -34324,6 +34950,7 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
+      wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -35932,6 +36559,24 @@ INDEX_HTML = """<!doctype html>
         renameInput.addEventListener("click", (event) => event.stopPropagation());
         renameInput.addEventListener("blur", () => finish(true));
       }
+      shell.querySelectorAll('[data-action="show-library-search-result"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.disabled = true;
+          try {
+            await showLibrarySearchResultInLibrary(
+              Number(button.dataset.libraryItemId || 0)
+            );
+          } catch (error) {
+            button.disabled = false;
+            updateLibraryActivityStatus(
+              error.message || "Could not show paper in Library",
+              {live: false, clear: false}
+            );
+          }
+        });
+      });
       shell.querySelectorAll(".library-row").forEach((row) => {
         row.querySelectorAll("[data-native-file-drag-handle]").forEach((handle) => {
           handle.addEventListener("mousedown", (event) => {
@@ -35943,6 +36588,15 @@ INDEX_HTML = """<!doctype html>
             event.stopPropagation();
           });
         });
+        row.addEventListener("keydown", (event) => {
+          if (
+            row.tagName !== "DIV"
+            || event.target !== row
+            || (event.key !== "Enter" && event.key !== " ")
+          ) return;
+          event.preventDefault();
+          row.click();
+        });
         row.addEventListener("click", (event) => {
           if (state.suppressClickOnce) {
             event.preventDefault();
@@ -35950,6 +36604,7 @@ INDEX_HTML = """<!doctype html>
             return;
           }
           if (event.target.closest("[data-library-rename-input]")) return;
+          if (event.target.closest('[data-action="show-library-search-result"]')) return;
           const type = row.dataset.libraryType;
           const id = Number(row.dataset.libraryId);
           const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
@@ -39124,6 +39779,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshAuthorMonitorMetadataFromIdentifier(paper);
       });
+      wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       hydrateLibraryDetailFigureIfNeeded(paper);
@@ -43324,9 +43980,14 @@ INDEX_HTML = """<!doctype html>
     $("themeUntilDate")?.addEventListener("change", (event) => { state.themeUntilDate = event.target.value || state.themeUntilDate; });
     $("librarySearchBox").closest(".library-search-wrap")?.addEventListener("pointerdown", (event) => {
       if (event.target?.closest?.("#clearLibrarySearch")) return;
+      if (Number(event.button || 0) !== 0) return;
       const input = $("librarySearchBox");
       if (!input) return;
+      event.preventDefault();
+      event.stopPropagation();
       input.focus({preventScroll: true});
+      const caret = searchInputCaretIndexFromPoint(input, event.clientX);
+      input.setSelectionRange?.(caret, caret);
     }, {capture: true});
     $("librarySearchBox").addEventListener("click", (event) => {
       const input = event.currentTarget;

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from paper_monitor import ui_server
 from paper_monitor.storage import Storage
@@ -84,6 +85,120 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertIsNone(self.storage.get_library_folder(folder_id))
         self.assertFalse(target.exists())
         self.assertEqual(ui_server.library_workspace_tabs(self.storage), [])
+
+    def test_space_title_query_uses_shared_title_identifier_resolution(self) -> None:
+        resolved = {
+            "paper_id": "resolved-paper",
+            "doi": "10.1234/resolved",
+            "title": "Resolved Paper Title",
+            "journal": "Resolved Journal",
+            "publication_date": "2026-07-27",
+        }
+        with patch.object(
+            ui_server,
+            "identifier_from_title_lookup",
+            return_value={
+                "kind": "doi",
+                "identifier": "10.1234/resolved",
+                "source": "title_crossref",
+            },
+        ) as lookup, patch.object(
+            ui_server,
+            "publication_metrics_metadata_from_doi",
+            return_value=resolved,
+        ) as metadata:
+            paper = ui_server.library_workspace_publication_from_query(
+                "Resolved Paper Title"
+            )
+
+        self.assertEqual(paper, resolved)
+        lookup.assert_called_once_with("Resolved Paper Title")
+        metadata.assert_called_once_with(
+            "10.1234/resolved",
+            timeout=14,
+            max_retries=1,
+        )
+
+    def test_space_title_query_can_resolve_doi_through_openalex(self) -> None:
+        response = MagicMock()
+        response.json.return_value = {
+            "results": [
+                {
+                    "title": "A Precise OpenAlex Paper Title",
+                    "doi": "https://doi.org/10.1234/openalex",
+                    "type": "article",
+                }
+            ]
+        }
+        resolved = {
+            "paper_id": "openalex-paper",
+            "doi": "10.1234/openalex",
+            "title": "A Precise OpenAlex Paper Title",
+        }
+        with patch.object(
+            ui_server,
+            "search_crossref_publications",
+            return_value=[],
+        ), patch.object(
+            ui_server,
+            "openalex_request",
+            return_value=response,
+        ) as openalex, patch.object(
+            ui_server,
+            "publication_metrics_metadata_from_doi",
+            return_value=resolved,
+        ) as metadata:
+            paper = ui_server.library_workspace_publication_from_query(
+                "A Precise OpenAlex Paper Title"
+            )
+
+        self.assertEqual(paper, resolved)
+        openalex.assert_called_once()
+        metadata.assert_called_once_with(
+            "10.1234/openalex",
+            timeout=14,
+            max_retries=1,
+        )
+
+    def test_space_add_and_library_location_ui_contract(self) -> None:
+        html = ui_server.INDEX_HTML
+        workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
+            "function updateToolbarLibraryImport()", 1
+        )[0]
+        search_row = html.split("function librarySearchResultRowMarkup", 1)[1].split(
+            "function libraryRowMarkup", 1
+        )[0]
+        files = html.split("function libraryDetailFilesMarkup", 1)[1].split(
+            "function libraryIdentifierFromFilesButtonMarkup", 1
+        )[0]
+        navigation = html.split("async function navigateToPaperInLibrary", 1)[1].split(
+            "async function showPaperInLibrary", 1
+        )[0]
+
+        self.assertIn('placeholder="DOI, arXiv ID, or title"', workspace)
+        self.assertIn('data-action="show-library-search-result"', search_row)
+        self.assertIn(">Show in Library</button>", search_row)
+        self.assertNotIn("paper.journal", search_row)
+        self.assertIn('data-action="show-file-in-library"', files)
+        self.assertIn('title="Show in Library"', files)
+        self.assertIn("selectLibraryItemInColumns(item)", navigation)
+        self.assertIn('state.query = ""', navigation)
+
+    def test_library_search_covers_library_and_every_space(self) -> None:
+        html = ui_server.INDEX_HTML
+        search = html.split("function librarySearchResults()", 1)[1].split(
+            "function libraryVisibleEntries()", 1
+        )[0]
+
+        self.assertIn(
+            "new Set(state.libraryFolders.map((folder) => Number(folder.id)))",
+            search,
+        )
+        self.assertIn("libraryGlobalFolderPath(folder.id)", search)
+        self.assertIn("libraryGlobalFolderPath(item.folder_id)", search)
+        self.assertNotIn("libraryDisplayRootId()", search)
+        self.assertNotIn("libraryDescendantFolderIds(", search)
+        self.assertIn('aria-label="Search Library and all Spaces"', html)
 
     def test_space_remove_rejects_database_or_finder_contents(self) -> None:
         tab = ui_server.add_library_workspace_tab(self.storage, name="Occupied")

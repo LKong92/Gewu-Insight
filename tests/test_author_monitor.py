@@ -1867,6 +1867,12 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         html = ui_server.INDEX_HTML
         self.assertIn("-webkit-app-region: no-drag;", html)
         self.assertIn('closest(".library-search-wrap")?.addEventListener("pointerdown"', html)
+        search_pointer = html.split(
+            '$("librarySearchBox").closest(".library-search-wrap")?.addEventListener("pointerdown"',
+            1,
+        )[1].split("}, {capture: true});", 1)[0]
+        self.assertIn("event.preventDefault()", search_pointer)
+        self.assertIn("event.stopPropagation()", search_pointer)
         self.assertIn('input.focus({preventScroll: true})', html)
         self.assertIn("function searchInputCaretIndexFromPoint", html)
         self.assertIn("input.setSelectionRange?.(caret, caret)", html)

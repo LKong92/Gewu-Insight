@@ -166,6 +166,219 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(stored_pdf.parent.resolve(), (ui_server.SPACES_LOCAL_COPY_ROOT / "Wigner Crystal").resolve())
         self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
 
+    def test_library_display_names_drive_real_pdf_and_shortcut_names(self) -> None:
+        real_folder = self.storage.create_library_folder(parent_id=1, name="Real")
+        shortcut_folder = self.storage.create_library_root_folder(name="Space")
+        real_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(real_folder["id"]))
+        shortcut_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(shortcut_folder["id"]))
+        real_dir.mkdir(parents=True)
+        source_pdf = real_dir / "publisher-name.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "named-paper",
+                "doi": "10.1234/named",
+                "title": "Named Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "named-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        real_item = self.storage.add_library_item(
+            paper_id="named-paper",
+            folder_id=int(real_folder["id"]),
+        )
+        shortcut_item = self.storage.add_library_item(
+            paper_id="named-paper",
+            folder_id=int(shortcut_folder["id"]),
+        )
+        self.storage.rename_library_item(
+            item_id=int(real_item["id"]),
+            name="01.Primary Library Name.pdf",
+        )
+        self.storage.rename_library_item(
+            item_id=int(shortcut_item["id"]),
+            name="02.Space Shortcut Name.pdf",
+        )
+
+        result = ui_server.sync_all_pdf_aliases_for_paper(self.storage, "named-paper")
+        paper = self.storage.get_paper("named-paper") or {}
+        canonical = Path(paper["merged_pdf_path"])
+        shortcut = shortcut_dir / "02.Space Shortcut Name.pdf"
+
+        self.assertTrue(result["canonical_renamed"])
+        self.assertEqual(
+            canonical.resolve(),
+            (real_dir / "01.Primary Library Name.pdf").resolve(),
+        )
+        self.assertTrue(canonical.exists())
+        self.assertFalse(source_pdf.exists())
+        self.assertTrue(shortcut.is_symlink())
+        self.assertEqual(shortcut.resolve(), canonical.resolve())
+        self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
+        audit = ui_server.audit_library_pdf_names(self.storage)
+        self.assertEqual(audit["mismatched_real_files"], 0)
+        self.assertEqual(audit["mismatched_shortcuts"], 0)
+        self.assertEqual(audit["missing_shortcuts"], 0)
+
+    def test_inline_library_rename_updates_only_that_items_file_name(self) -> None:
+        real_folder = self.storage.create_library_folder(parent_id=1, name="Real")
+        shortcut_folder = self.storage.create_library_folder(parent_id=1, name="Shortcut")
+        real_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(real_folder["id"]))
+        shortcut_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(shortcut_folder["id"]))
+        real_dir.mkdir(parents=True)
+        source_pdf = real_dir / "source.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "inline-rename-paper",
+                "doi": "10.1234/inline",
+                "title": "Inline Rename Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "inline-rename-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        real_item = self.storage.add_library_item(
+            paper_id="inline-rename-paper",
+            folder_id=int(real_folder["id"]),
+        )
+        shortcut_item = self.storage.add_library_item(
+            paper_id="inline-rename-paper",
+            folder_id=int(shortcut_folder["id"]),
+        )
+        self.storage.rename_library_item(item_id=int(real_item["id"]), name="Real Name")
+        self.storage.rename_library_item(item_id=int(shortcut_item["id"]), name="Old Shortcut")
+        ui_server.sync_all_pdf_aliases_for_paper(self.storage, "inline-rename-paper")
+
+        renamed, paper, _sync = ui_server.rename_library_item_and_sync_files(
+            self.storage,
+            item_id=int(shortcut_item["id"]),
+            name="New Shortcut",
+        )
+
+        self.assertEqual(renamed["display_name"], "New Shortcut")
+        self.assertEqual(Path(paper["merged_pdf_path"]).name, "Real Name.pdf")
+        self.assertTrue((real_dir / "Real Name.pdf").exists())
+        self.assertFalse((shortcut_dir / "Old Shortcut.pdf").exists())
+        self.assertTrue((shortcut_dir / "New Shortcut.pdf").is_symlink())
+
+    def test_shortcut_name_collision_is_numbered_without_overwrite(self) -> None:
+        real_folder = self.storage.create_library_folder(parent_id=1, name="Real")
+        shortcut_folder = self.storage.create_library_folder(parent_id=1, name="Shortcut")
+        real_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(real_folder["id"]))
+        shortcut_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(shortcut_folder["id"]))
+        real_dir.mkdir(parents=True)
+        shortcut_dir.mkdir(parents=True)
+        occupied = shortcut_dir / "Shared Name.pdf"
+        occupied.write_bytes(b"%PDF existing")
+        source_pdf = real_dir / "source.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "collision-paper",
+                "doi": "10.1234/collision",
+                "title": "Collision Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "collision-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        real_item = self.storage.add_library_item(
+            paper_id="collision-paper",
+            folder_id=int(real_folder["id"]),
+        )
+        shortcut_item = self.storage.add_library_item(
+            paper_id="collision-paper",
+            folder_id=int(shortcut_folder["id"]),
+        )
+        self.storage.rename_library_item(item_id=int(real_item["id"]), name="Canonical")
+        self.storage.rename_library_item(item_id=int(shortcut_item["id"]), name="Shared Name")
+
+        ui_server.sync_all_pdf_aliases_for_paper(self.storage, "collision-paper")
+        adjusted = self.storage.get_library_item(int(shortcut_item["id"])) or {}
+
+        self.assertEqual(occupied.read_bytes(), b"%PDF existing")
+        self.assertEqual(adjusted["display_name"], "Shared Name 2")
+        self.assertTrue((shortcut_dir / "Shared Name 2.pdf").is_symlink())
+
+    def test_shared_real_pdf_rename_updates_every_paper_path(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Shared")
+        target_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(folder["id"]))
+        target_dir.mkdir(parents=True)
+        source_pdf = target_dir / "old-shared.pdf"
+        source_pdf.write_bytes(b"%PDF shared fixture")
+        for paper_id in ("a-shared-paper", "b-shared-paper"):
+            self.storage.upsert_paper(
+                {
+                    "paper_id": paper_id,
+                    "doi": f"10.1234/{paper_id}",
+                    "title": paper_id,
+                    "journal": "Fixture Journal",
+                    "publication_date": "2026-01-01",
+                    "abstract": "",
+                    "source": "test",
+                    "type": "article",
+                }
+            )
+            self.storage.update_download_status(
+                paper_id,
+                status="success",
+                main_pdf_path=str(source_pdf),
+                merged_pdf_path=str(source_pdf),
+                supplement_pdf_paths=[],
+            )
+        owner = self.storage.add_library_item(
+            paper_id="a-shared-paper",
+            folder_id=int(folder["id"]),
+        )
+        self.storage.rename_library_item(item_id=int(owner["id"]), name="Shared Canonical Name")
+        shortcut = self.storage.add_library_item(
+            paper_id="b-shared-paper",
+            folder_id=int(folder["id"]),
+        )
+        self.storage.rename_library_item(item_id=int(shortcut["id"]), name="Shared Shortcut Name")
+
+        ui_server.sync_all_pdf_aliases_for_paper(self.storage, "a-shared-paper")
+        first = self.storage.get_paper("a-shared-paper") or {}
+        second = self.storage.get_paper("b-shared-paper") or {}
+        renamed_path = target_dir / "Shared Canonical Name.pdf"
+        shortcut_path = target_dir / "Shared Shortcut Name.pdf"
+
+        self.assertTrue(renamed_path.exists())
+        self.assertFalse(source_pdf.exists())
+        self.assertTrue(shortcut_path.is_symlink())
+        self.assertEqual(shortcut_path.resolve(), renamed_path.resolve())
+        self.assertEqual(Path(first["merged_pdf_path"]).resolve(), renamed_path.resolve())
+        self.assertEqual(Path(second["merged_pdf_path"]).resolve(), renamed_path.resolve())
+
     def test_delete_hands_pdf_to_earliest_remaining_non_recycle_link(self) -> None:
         folder_a = self.storage.create_library_folder(parent_id=1, name="A")
         folder_b = self.storage.create_library_folder(parent_id=1, name="B")
