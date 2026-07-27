@@ -21988,6 +21988,10 @@ INDEX_HTML = """<!doctype html>
       position: relative;
       z-index: 1;
     }
+    .view-switcher.keyboard-active .view-switch.active {
+      color: #075b5e;
+      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.68);
+    }
     .view-switch.active::before,
     .view-switch.active::after {
       content: "";
@@ -27120,6 +27124,566 @@ INDEX_HTML = """<!doctype html>
     }
     .citation-settings-status.ok { color: #137333; }
     .citation-settings-status.err { color: #b42318; }
+
+    /* Shared flat visual language for the primary reading surfaces. */
+    .app {
+      --flat-divider: rgba(95, 107, 124, 0.14);
+      --flat-hover: rgba(31, 41, 55, 0.045);
+      --flat-selected: #eaf4f3;
+      --flat-tonal: #f1f3f5;
+    }
+
+    /* Journal and Subject Monitor calendar. */
+    .app.report-mode .monthbar,
+    .app.theme-mode .monthbar {
+      gap: 6px;
+    }
+    .app.report-mode .monthbar strong,
+    .app.theme-mode .monthbar strong {
+      font-size: 18px;
+      font-weight: 720;
+      letter-spacing: 0.01em;
+    }
+    .app.report-mode .monthbar .iconbtn,
+    .app.theme-mode .monthbar .iconbtn,
+    .app.report-mode #jumpToday,
+    .app.theme-mode #jumpToday {
+      min-height: 34px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      box-shadow: none;
+      color: #687386;
+      font-size: 14px;
+    }
+    .app.report-mode .monthbar .iconbtn:hover,
+    .app.theme-mode .monthbar .iconbtn:hover,
+    .app.report-mode #jumpToday:hover,
+    .app.theme-mode #jumpToday:hover {
+      background: var(--flat-hover);
+      color: var(--accent);
+    }
+    .app.report-mode .calendar,
+    .app.theme-mode .calendar {
+      gap: 0;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid #dfe5ea;
+      border-radius: 10px;
+      background: #fff;
+    }
+    .app.report-mode .weekday,
+    .app.theme-mode .weekday {
+      min-height: 31px;
+      padding: 8px 0 6px;
+      border-right: 1px solid #e5e9ed;
+      background: #f4f6f8;
+      color: #667085;
+      font-size: 11.5px;
+      font-weight: 700;
+    }
+    .app.report-mode .weekday:nth-child(7),
+    .app.theme-mode .weekday:nth-child(7) {
+      border-right: 0;
+    }
+    .app.report-mode .day,
+    .app.theme-mode .day {
+      min-height: 52px;
+      border: 0;
+      border-top: 1px solid #e5e9ed;
+      border-right: 1px solid #e5e9ed;
+      border-radius: 0;
+      padding: 7px 8px 6px;
+      background: #fff;
+      box-shadow: none;
+      transition: background 110ms ease, box-shadow 110ms ease, color 110ms ease;
+    }
+    .app.report-mode .day:nth-child(7n),
+    .app.theme-mode .day:nth-child(7n) {
+      border-right: 0;
+    }
+    .app.report-mode .day:not(.out):not(:disabled):hover,
+    .app.theme-mode .day:not(.out):not(:disabled):hover {
+      background: #eef6f5;
+    }
+    .app.report-mode .day.out,
+    .app.theme-mode .day.out,
+    .app.report-mode .day.future,
+    .app.theme-mode .day.future {
+      background: #fafbfc;
+      color: #b4bbc5;
+    }
+    .app.report-mode .day.active,
+    .app.theme-mode .day.active {
+      border: 0;
+      background: #dfeeed;
+      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.72);
+      color: #075b5e;
+    }
+    .app.report-mode .day.fetching,
+    .app.theme-mode .day.fetching {
+      border: 0;
+      background: #edf7f2;
+    }
+    .app.report-mode .day.today::after,
+    .app.theme-mode .day.today::after {
+      top: 6px;
+      right: 6px;
+      bottom: auto;
+      left: auto;
+      width: 5px;
+      height: 5px;
+      border: 0;
+      border-radius: 999px;
+      background: #c0392b;
+      transform: none;
+    }
+    .app.report-mode .daynum,
+    .app.theme-mode .daynum {
+      font-size: 15px;
+      font-weight: 720;
+    }
+    .app.report-mode .count,
+    .app.theme-mode .count {
+      color: #758195;
+      font-size: 10.5px;
+      font-weight: 560;
+    }
+
+    /* Journal and Subject tabs stay visually distinct without returning to heavy boxes. */
+    .app.report-mode .report-tabs,
+    .app.theme-mode .report-tabs {
+      gap: 8px;
+      align-items: stretch;
+      padding: 1px 2px 10px;
+      margin: -8px -2px 12px;
+      border-bottom: 0;
+    }
+    .app.report-mode .journal-tab,
+    .app.theme-mode .journal-tab {
+      min-width: 104px;
+      min-height: 48px;
+      border: 1px solid #d7dde4;
+      border-radius: 8px;
+      padding: 8px 11px;
+      background: #e9edf1;
+      box-shadow: inset 0 -2px 0 rgba(95, 107, 124, 0.08);
+      transition: border-color 110ms ease, background 110ms ease, box-shadow 110ms ease, color 110ms ease;
+    }
+    .app.report-mode .journal-tab:hover,
+    .app.theme-mode .journal-tab:hover {
+      border-color: rgba(15, 107, 110, 0.18);
+      background: #edf3f2;
+    }
+    .app.report-mode .journal-tab.active,
+    .app.theme-mode .journal-tab.active {
+      border: 1px solid rgba(15, 107, 110, 0.42);
+      background: #f7fcfb;
+      box-shadow: inset 0 -3px 0 var(--accent), 0 1px 3px rgba(31, 41, 55, 0.08);
+      color: #075b5e;
+    }
+    .app.report-mode .journal-tab img,
+    .app.theme-mode .journal-tab img {
+      max-width: 142px;
+      max-height: 20px;
+    }
+    .app.report-mode .journal-tab-label,
+    .app.theme-mode .journal-tab-label {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .app.report-mode .journal-tab-count,
+    .app.theme-mode .journal-tab-count {
+      min-width: 18px;
+      min-height: 18px;
+      border-radius: 999px;
+      padding: 1px 5px;
+      background: rgba(255, 255, 255, 0.72);
+      color: #687386;
+      font-size: 10px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .app.theme-mode .journal-tab.subject-add-tab {
+      min-width: 44px;
+      width: 44px;
+      color: #687386;
+    }
+    .app.theme-mode .journal-tab.subject-add-tab:hover {
+      border-color: rgba(15, 107, 110, 0.24);
+      background: #edf3f2;
+      color: var(--accent);
+    }
+
+    /* Monitor toolbar and progress controls. */
+    .app.report-mode #reportToolbarActions .smallbtn,
+    .app.theme-mode #themeToolbarActions .smallbtn,
+    .app.report-mode .toolbar-toggle,
+    .app.theme-mode .toolbar-toggle {
+      min-height: 30px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 8px;
+      background: transparent;
+      box-shadow: none;
+      color: #5e6979;
+      font-size: 12px;
+    }
+    .app.report-mode #reportToolbarActions .smallbtn:hover,
+    .app.theme-mode #themeToolbarActions .smallbtn:hover,
+    .app.report-mode .toolbar-toggle:hover,
+    .app.theme-mode .toolbar-toggle:hover {
+      border: 0;
+      background: var(--flat-hover);
+      color: var(--accent);
+    }
+    .app.report-mode .theme-fetch-subject-row,
+    .app.theme-mode .theme-fetch-subject-row {
+      border: 0;
+      border-bottom: 1px solid var(--flat-divider);
+      border-radius: 0;
+      background: transparent;
+    }
+    .app.report-mode .fetch-progress-track,
+    .app.theme-mode .fetch-progress-track {
+      height: 5px;
+    }
+    .app.report-mode .theme-chip,
+    .app.theme-mode .theme-chip {
+      border: 0;
+      border-radius: 5px;
+      background: #f0f2f4;
+    }
+
+    /* Monitor papers use light cards: distinct enough to scan, still visually flat. */
+    .app.report-mode .papers,
+    .app.theme-mode .papers {
+      gap: 10px;
+      padding: 2px 7px 12px 2px;
+      border-top: 0;
+      background: transparent;
+    }
+    .app.report-mode .paper,
+    .app.theme-mode .paper {
+      border: 1px solid #dfe5ea;
+      border-radius: 9px;
+      padding: 15px 13px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(31, 41, 55, 0.035);
+      transition: border-color 110ms ease, background 110ms ease, box-shadow 110ms ease;
+    }
+    .app.report-mode .paper:hover,
+    .app.theme-mode .paper:hover {
+      border-color: rgba(15, 107, 110, 0.3);
+      background: #fff;
+      box-shadow: 0 3px 12px rgba(31, 41, 55, 0.075);
+    }
+    .app.report-mode .paper.in-library,
+    .app.theme-mode .paper.in-library {
+      background: #fbfcff;
+      box-shadow: inset 3px 0 0 rgba(91, 107, 138, 0.48), 0 1px 2px rgba(31, 41, 55, 0.035);
+    }
+    .app.report-mode .paper.in-library:hover,
+    .app.theme-mode .paper.in-library:hover {
+      border-color: rgba(91, 107, 138, 0.28);
+      background: #f8faff;
+      box-shadow: inset 3px 0 0 rgba(91, 107, 138, 0.62), 0 3px 12px rgba(31, 41, 55, 0.07);
+    }
+    .app.report-mode .paper.report-selected,
+    .app.theme-mode .paper.report-selected {
+      border: 1px solid rgba(15, 107, 110, 0.52);
+      padding: 15px 13px;
+      background: #f5fbfa;
+      box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(15, 107, 110, 0.09);
+    }
+    .app.report-mode .paper.in-library.report-selected,
+    .app.theme-mode .paper.in-library.report-selected {
+      box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(15, 107, 110, 0.09);
+    }
+    .app.report-mode .paper .journal-name,
+    .app.theme-mode .paper .journal-name {
+      border-radius: 4px;
+      padding: 2px 6px;
+      background: #e8f3f2;
+      color: #075b5e;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .app.report-mode .paper.with-figure:has(.paper-figure.missing) .paper-layout,
+    .app.theme-mode .paper.with-figure:has(.paper-figure.missing) .paper-layout {
+      grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+    }
+    .app.report-mode .paper-figure.missing,
+    .app.theme-mode .paper-figure.missing {
+      display: block;
+      border: 1px solid #e3e7eb;
+      background: #f3f5f7;
+    }
+    .app.report-mode .paper-figure,
+    .app.theme-mode .paper-figure {
+      border: 0;
+      border-radius: 4px;
+      background: #f3f5f7;
+    }
+    .app.report-mode .badge,
+    .app.theme-mode .badge {
+      min-height: 21px;
+      border: 0;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 10.5px;
+    }
+    .app.report-mode .paper .actions,
+    .app.theme-mode .paper .actions {
+      gap: 4px;
+      margin-top: 11px;
+    }
+    .app.report-mode .paper .action,
+    .app.theme-mode .paper .action {
+      min-height: 27px;
+      border: 0;
+      border-radius: 5px;
+      padding: 0 7px;
+      background: transparent;
+      box-shadow: none;
+      color: #5e6979;
+    }
+    .app.report-mode .paper .action:hover,
+    .app.theme-mode .paper .action:hover {
+      border: 0;
+      background: var(--flat-hover);
+      color: var(--accent);
+    }
+    .app.report-mode .paper .action.primary,
+    .app.theme-mode .paper .action.primary {
+      background: #e2f1ef;
+      color: #075b5e;
+    }
+    .app.report-mode .paper .action.danger,
+    .app.theme-mode .paper .action.danger {
+      border: 0;
+      background: transparent;
+      color: #9b4b45;
+    }
+
+    /* Author Monitor keeps structural dividers, but removes nested cards. */
+    .app.author-mode .author-monitor-rail,
+    .app.author-mode .author-monitor-list-panel,
+    .app.author-mode .author-monitor-detail {
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .app.author-mode .author-monitor-rail,
+    .app.author-mode .author-monitor-list-panel {
+      border-right: 1px solid var(--flat-divider);
+    }
+    .app.author-mode .author-monitor-shell[data-keyboard-pane="authors"] .author-monitor-rail,
+    .app.author-mode .author-monitor-shell[data-keyboard-pane="papers"] .author-monitor-list-panel {
+      box-shadow: inset 0 2px 0 rgba(15, 107, 110, 0.58);
+    }
+    .app.author-mode .author-monitor-add {
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .app.author-mode .author-monitor-add:hover {
+      border: 0;
+      background: var(--flat-hover);
+    }
+    .app.author-mode .author-monitor-authors {
+      gap: 0;
+      padding: 4px 7px;
+    }
+    .app.author-mode .author-monitor-author {
+      border: 0;
+      border-bottom: 1px solid rgba(95, 107, 124, 0.09);
+      border-radius: 0;
+      padding: 8px;
+      box-shadow: none;
+    }
+    .app.author-mode .author-monitor-author:hover {
+      background: var(--flat-hover);
+    }
+    .app.author-mode .author-monitor-author.active {
+      border: 0;
+      border-bottom: 1px solid rgba(95, 107, 124, 0.09);
+      background: var(--flat-selected);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .app.author-mode .author-monitor-sort-button,
+    .app.author-mode .author-monitor-conference-toggle {
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: inset 0 -2px 0 transparent;
+    }
+    .app.author-mode .author-monitor-sort-button:hover,
+    .app.author-mode .author-monitor-conference-toggle:hover {
+      background: var(--flat-hover);
+    }
+    .app.author-mode .author-monitor-sort-button.active,
+    .app.author-mode .author-monitor-conference-toggle.open {
+      background: rgba(234, 244, 243, 0.5);
+      box-shadow: inset 0 -2px 0 var(--accent);
+      color: #075b5e;
+    }
+    .app.author-mode .author-monitor-paper-list {
+      gap: 0;
+      padding: 0 8px;
+      border-top: 1px solid var(--flat-divider);
+      background: #fff;
+    }
+    .app.author-mode .author-paper-card {
+      min-height: 68px;
+      border: 0;
+      border-bottom: 1px solid var(--flat-divider);
+      border-radius: 0;
+      background: #fff;
+      box-shadow: none;
+    }
+    .app.author-mode .author-paper-card:hover {
+      border-color: var(--flat-divider);
+      background: #fafbfc;
+    }
+    .app.author-mode .author-paper-card.report-selected {
+      border: 0;
+      border-bottom: 1px solid var(--flat-divider);
+      background: #f4faf9;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .app.author-mode .author-paper-mini-button {
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      box-shadow: none;
+    }
+    .app.author-mode .author-paper-mini-button:hover,
+    .app.author-mode .author-paper-library-button[data-library-state="show"] {
+      border: 0;
+      background: rgba(15, 107, 110, 0.10);
+    }
+    .app.author-mode .author-monitor-conference-cards .author-paper-card {
+      border-radius: 0;
+    }
+
+    /* Library, My Publications, and Author details use sections instead of cards. */
+    .library-detail .library-detail-abstract,
+    .library-detail .library-detail-authors,
+    .library-detail .citation-panel,
+    .library-detail .bibtex-box,
+    .my-publications-shell .library-detail .library-detail-abstract,
+    .my-publications-shell .library-detail .library-detail-authors,
+    .my-publications-shell .library-detail .citation-panel,
+    .my-publications-shell .library-detail .bibtex-box,
+    .author-monitor-detail-body.library-detail .library-detail-abstract,
+    .author-monitor-detail-body.library-detail .library-detail-authors,
+    .author-monitor-detail-body.library-detail .citation-panel,
+    .author-monitor-detail-body.library-detail .bibtex-box {
+      margin: 14px 0 0;
+      padding: 12px 0 0;
+      border: 0;
+      border-top: 1px solid var(--flat-divider);
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-detail .library-detail-figure,
+    .my-publications-shell .library-detail .library-detail-figure,
+    .author-monitor-detail-body.library-detail .library-detail-figure {
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+    }
+    .library-detail .library-detail-doi input,
+    .my-publications-shell .library-detail .library-detail-doi input,
+    .author-monitor-detail-body.library-detail .library-detail-doi input {
+      border: 0;
+      border-bottom: 1px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-detail .library-detail-doi input:hover,
+    .library-detail .library-detail-doi input:focus {
+      outline: 0;
+      border-bottom-color: var(--accent);
+    }
+    .library-detail .action,
+    .library-detail .action.danger,
+    .my-publications-shell .library-detail .action,
+    .my-publications-shell .library-detail .action.danger,
+    .author-monitor-detail-body.library-detail .action {
+      border: 0;
+      border-radius: 5px;
+      background: #e3e5e7;
+      box-shadow: none;
+      color: #394555;
+    }
+    .library-detail .action:hover,
+    .my-publications-shell .library-detail .action:hover,
+    .author-monitor-detail-body.library-detail .action:hover {
+      border: 0;
+      background: #d9dddf;
+      color: var(--accent-strong);
+    }
+    .library-detail .citation-source-grid {
+      gap: 0;
+      border-bottom: 1px solid var(--flat-divider);
+    }
+    .library-detail .citation-source-cell,
+    .my-publications-shell .library-detail .citation-source-cell,
+    .author-monitor-detail-body.library-detail .citation-source-cell {
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 6px 5px 7px;
+      background: transparent;
+      box-shadow: none;
+      outline: 0;
+    }
+    .library-detail .citation-source-cell:hover,
+    .my-publications-shell .library-detail .citation-source-cell:hover,
+    .author-monitor-detail-body.library-detail .citation-source-cell:hover {
+      border-color: transparent;
+      border-bottom-color: rgba(15, 107, 110, 0.34);
+      background: var(--flat-hover);
+    }
+    .library-detail .citation-source-cell.active,
+    .my-publications-shell .library-detail .citation-source-cell.active,
+    .author-monitor-detail-body.library-detail .citation-source-cell.active {
+      border: 0;
+      border-bottom: 2px solid var(--accent);
+      background: rgba(234, 244, 243, 0.45);
+      box-shadow: none;
+      outline: 0;
+    }
+    .library-detail .semantic-detail-grid {
+      gap: 0 12px;
+    }
+    .library-detail .semantic-detail-row,
+    .library-detail .semantic-influential-card,
+    .my-publications-shell .library-detail .semantic-detail-row,
+    .my-publications-shell .library-detail .semantic-influential-card,
+    .author-monitor-detail-body.library-detail .semantic-detail-row,
+    .author-monitor-detail-body.library-detail .semantic-influential-card {
+      border: 0;
+      border-top: 1px solid var(--flat-divider);
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-pane-loader {
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .library-pane-loader:hover,
+    .library-pane-loader.active {
+      border: 0;
+      background: var(--flat-hover);
+    }
+
     @media (max-width: 480px) {
       .app { grid-template-columns: 1fr; }
       .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -27761,6 +28325,7 @@ INDEX_HTML = """<!doctype html>
       authorMonitorDetailTimer: 0,
       authorMonitorDetailController: null,
       authorMonitorDetailRequestToken: 0,
+      primaryKeyboardLayer: "content",
       mode: "library",
       activeReportJournal: "",
       reportSelectedPaperId: "",
@@ -30773,7 +31338,9 @@ INDEX_HTML = """<!doctype html>
         });
         root.appendChild(button);
       }
-      const trailingBlanks = 42 - startOffset - days;
+      const occupiedCells = startOffset + days;
+      const calendarCells = Math.ceil(occupiedCells / 7) * 7;
+      const trailingBlanks = calendarCells - occupiedCells;
       for (let index = 0; index < trailingBlanks; index += 1) {
         const blank = document.createElement("button");
         blank.className = "day out";
@@ -31396,6 +31963,138 @@ INDEX_HTML = """<!doctype html>
       refreshSelectedReportPaperQuickLook({open: true});
     }
 
+    const PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author"];
+
+    function currentPrimaryKeyboardView() {
+      if (state.mode === "library") {
+        return state.libraryTab === "my-publications" ? "my-publications" : "library";
+      }
+      return PRIMARY_KEYBOARD_VIEWS.includes(state.mode) ? state.mode : "library";
+    }
+
+    function primaryKeyboardButton(view = currentPrimaryKeyboardView()) {
+      const ids = {
+        "library": "libraryMode",
+        "my-publications": "myPublicationsMode",
+        "report": "reportMode",
+        "theme": "themeMode",
+        "author": "authorMode"
+      };
+      return $(ids[view] || "libraryMode");
+    }
+
+    function syncPrimaryKeyboardLayer(options = {}) {
+      const active = state.primaryKeyboardLayer === "root";
+      $("primaryViewSwitcher")?.classList.toggle("keyboard-active", active);
+      if (!active || options.focus === false) return;
+      window.requestAnimationFrame(() => primaryKeyboardButton()?.focus({preventScroll: true}));
+    }
+
+    function activatePrimaryKeyboardRoot() {
+      state.primaryKeyboardLayer = "root";
+      syncPrimaryKeyboardLayer();
+      return true;
+    }
+
+    function leavePrimaryKeyboardRoot(options = {}) {
+      if (state.primaryKeyboardLayer !== "root") return;
+      state.primaryKeyboardLayer = "content";
+      syncPrimaryKeyboardLayer({focus: false});
+      if (options.focus === false) return;
+      $("libraryShell")?.focus({preventScroll: true});
+    }
+
+    function openPrimaryKeyboardView(view) {
+      let task = null;
+      if (view === "library") task = loadLibrary();
+      if (view === "my-publications") task = loadMyPublications();
+      if (view === "report") task = openJournalMonitor();
+      if (view === "theme") task = openThemeMonitor();
+      if (view === "author") task = openAuthorMonitor();
+      Promise.resolve(task).catch((error) => {
+        showMonitorStatusMessage(error?.message || "Could not switch view");
+      });
+      syncPrimaryKeyboardLayer();
+    }
+
+    function switchPrimaryKeyboardView(delta) {
+      const currentIndex = Math.max(0, PRIMARY_KEYBOARD_VIEWS.indexOf(currentPrimaryKeyboardView()));
+      const nextIndex = (currentIndex + delta + PRIMARY_KEYBOARD_VIEWS.length) % PRIMARY_KEYBOARD_VIEWS.length;
+      openPrimaryKeyboardView(PRIMARY_KEYBOARD_VIEWS[nextIndex]);
+      return true;
+    }
+
+    function focusPrimarySurfaceContent() {
+      state.primaryKeyboardLayer = "content";
+      syncPrimaryKeyboardLayer({focus: false});
+      if (state.mode === "report" || state.mode === "theme") {
+        const papers = activeReportPapers();
+        if (papers.length) selectReportPaper(papers[0].paper_id, {scroll: true});
+        window.requestAnimationFrame(() => {
+          const target = papers.length
+            ? document.querySelector(`#papers .paper[data-paper-id="${CSS.escape(String(papers[0].paper_id || ""))}"]`)
+            : $("papers");
+          if (target && !target.hasAttribute("tabindex")) target.tabIndex = -1;
+          target?.focus({preventScroll: true});
+        });
+        return true;
+      }
+      if (state.mode === "author") {
+        state.authorMonitorKeyboardPane = "authors";
+        const shell = document.querySelector(".author-monitor-shell");
+        if (shell) shell.dataset.keyboardPane = "authors";
+        const selectedId = Number(state.authorMonitorSelectedId || 0);
+        window.requestAnimationFrame(() => {
+          const target = document.querySelector(`.author-monitor-author[data-author-id="${selectedId}"]`)
+            || document.querySelector(".author-monitor-author");
+          target?.focus({preventScroll: true});
+        });
+        return true;
+      }
+      if (state.libraryTab === "my-publications") {
+        const rows = visibleMyPublicationRows();
+        if (rows.length) {
+          const firstId = Number(rows[0].id || 0);
+          setMyPublicationSingleSelection(firstId);
+          updateMyPublicationActiveRow();
+          scrollMyPublicationKeyboardTarget(firstId, "down");
+          scheduleMyPublicationDetailRender(firstId);
+        }
+      } else {
+        const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+        const entries = libraryEntriesForFolder(activeFolderId);
+        if (entries.length) {
+          setLibraryColumnSelection(activeFolderId, entries[0]);
+          renderLibrary();
+          refreshLibraryQuickLookForSelection();
+        }
+      }
+      window.requestAnimationFrame(() => {
+        const shell = $("libraryShell");
+        if (shell && !shell.hasAttribute("tabindex")) shell.tabIndex = -1;
+        shell?.focus({preventScroll: true});
+      });
+      return true;
+    }
+
+    function handlePrimaryKeyboardNavigation(event) {
+      if (state.primaryKeyboardLayer !== "root") return false;
+      if (event.metaKey || event.ctrlKey || event.altKey) return false;
+      const keyAliases = {"Up": "ArrowUp", "Down": "ArrowDown", "Left": "ArrowLeft", "Right": "ArrowRight", "Spacebar": " "};
+      const key = keyAliases[event.key] || event.key;
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", " "].includes(key)) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        return switchPrimaryKeyboardView(key === "ArrowRight" ? 1 : -1);
+      }
+      if (key === "ArrowDown" || key === "Enter" || key === " ") {
+        return focusPrimarySurfaceContent();
+      }
+      syncPrimaryKeyboardLayer();
+      return true;
+    }
+
     function reportKeyboardTargetIsEditable(target) {
       if (!target?.closest) return false;
       return Boolean(target.closest("input, textarea, select, button, a, [contenteditable='true']"));
@@ -31426,11 +32125,21 @@ INDEX_HTML = """<!doctype html>
       }
       if (key === "ArrowUp" || key === "ArrowDown") {
         const papers = activeReportPapers();
-        if (!papers.length) return false;
+        if (!papers.length) {
+          if (key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            return activatePrimaryKeyboardRoot();
+          }
+          return false;
+        }
         event.preventDefault();
         event.stopPropagation();
         ensureReportPaperSelection(papers);
         const currentIndex = papers.findIndex((paper) => paper.paper_id === state.reportSelectedPaperId);
+        if (key === "ArrowUp" && currentIndex <= 0) {
+          return activatePrimaryKeyboardRoot();
+        }
         const fallback = key === "ArrowDown" ? 0 : papers.length - 1;
         const nextIndex = currentIndex < 0
           ? fallback
@@ -31483,10 +32192,20 @@ INDEX_HTML = """<!doctype html>
       if (key === "ArrowUp" || key === "ArrowDown") {
         if (state.authorMonitorKeyboardPane === "authors") {
           const authorIds = [0, ...state.authorMonitors.map((author) => Number(author.id || 0))];
-          if (!authorIds.length) return false;
+          if (!authorIds.length) {
+            if (key === "ArrowUp") {
+              event.preventDefault();
+              event.stopPropagation();
+              return activatePrimaryKeyboardRoot();
+            }
+            return false;
+          }
           event.preventDefault();
           event.stopPropagation();
           const currentIndex = Math.max(0, authorIds.indexOf(Number(state.authorMonitorSelectedId || 0)));
+          if (key === "ArrowUp" && currentIndex <= 0) {
+            return activatePrimaryKeyboardRoot();
+          }
           const nextIndex = Math.max(
             0,
             Math.min(authorIds.length - 1, currentIndex + (key === "ArrowDown" ? 1 : -1))
@@ -31502,10 +32221,20 @@ INDEX_HTML = """<!doctype html>
           return true;
         }
         const papers = authorMonitorNavigablePapers();
-        if (!papers.length) return false;
+        if (!papers.length) {
+          if (key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            return activatePrimaryKeyboardRoot();
+          }
+          return false;
+        }
         event.preventDefault();
         event.stopPropagation();
         const currentIndex = papers.findIndex((paper) => paper.paper_id === state.authorMonitorSelectedPaperId);
+        if (key === "ArrowUp" && currentIndex <= 0) {
+          return activatePrimaryKeyboardRoot();
+        }
         const fallback = key === "ArrowDown" ? 0 : papers.length - 1;
         const nextIndex = currentIndex < 0
           ? fallback
@@ -37751,7 +38480,10 @@ INDEX_HTML = """<!doctype html>
 
     function handleMyPublicationKeydown(event, key) {
       const rows = visibleMyPublicationRows();
-      if (!rows.length) return true;
+      if (!rows.length) {
+        if (key === "ArrowUp") return activatePrimaryKeyboardRoot();
+        return true;
+      }
       if (key === " ") {
         const paper = selectedMyPublicationPaper();
         if (paper?.merged_pdf_path) quickLookLibraryPdf(paper, {toggle: true});
@@ -37765,6 +38497,9 @@ INDEX_HTML = """<!doctype html>
       }
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return false;
       const currentIndex = rows.findIndex((entry) => Number(entry.id) === Number(state.myPublicationSelectionId));
+      if (key === "ArrowUp" && currentIndex <= 0) {
+        return activatePrimaryKeyboardRoot();
+      }
       const movingDown = key === "ArrowDown" || key === "ArrowRight";
       const fallback = movingDown ? 0 : rows.length - 1;
       const nextIndex = currentIndex < 0
@@ -39638,9 +40373,15 @@ INDEX_HTML = """<!doctype html>
       }
       if (librarySearchIsActive() && ["ArrowUp", "ArrowDown"].includes(key)) {
         const results = librarySearchResults();
-        if (!results.length) return true;
+        if (!results.length) {
+          if (key === "ArrowUp") return activatePrimaryKeyboardRoot();
+          return true;
+        }
         const currentKey = libraryEntryKey(state.librarySelection);
         const currentIndex = results.findIndex((entry) => libraryEntryKey(entry) === currentKey);
+        if (key === "ArrowUp" && currentIndex <= 0) {
+          return activatePrimaryKeyboardRoot();
+        }
         const fallback = key === "ArrowDown" ? 0 : results.length - 1;
         const nextIndex = currentIndex < 0
           ? fallback
@@ -39692,9 +40433,15 @@ INDEX_HTML = """<!doctype html>
       }
       const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
       const entries = libraryEntriesForFolder(activeFolderId);
-      if (!entries.length) return true;
+      if (!entries.length) {
+        if (key === "ArrowUp") return activatePrimaryKeyboardRoot();
+        return true;
+      }
       const currentSelection = selectedEntryInFolder(activeFolderId);
       const currentIndex = entries.findIndex((entry) => libraryEntryKey(entry) === libraryEntryKey(currentSelection));
+      if (key === "ArrowUp" && currentIndex <= 0) {
+        return activatePrimaryKeyboardRoot();
+      }
       const fallback = key === "ArrowDown" ? 0 : entries.length - 1;
       const nextIndex = currentIndex < 0
         ? fallback
@@ -45228,6 +45975,7 @@ INDEX_HTML = """<!doctype html>
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
       $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
       $("authorToolbarActions")?.classList.toggle("hidden", view !== "author");
+      syncPrimaryKeyboardLayer({focus: false});
       if (view === "author") {
         const figureToggle = $("authorFigureToggle");
         if (figureToggle) figureToggle.checked = Boolean(state.showFigures);
@@ -45305,6 +46053,7 @@ INDEX_HTML = """<!doctype html>
       showMonitorStatusMessage(error.message);
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
+    document.addEventListener("pointerdown", () => leavePrimaryKeyboardRoot({focus: false}), true);
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
@@ -45517,6 +46266,7 @@ INDEX_HTML = """<!doctype html>
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
+      if (handlePrimaryKeyboardNavigation(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (handleReportKeydown(event)) return;
       if (handleAuthorMonitorKeydown(event)) return;

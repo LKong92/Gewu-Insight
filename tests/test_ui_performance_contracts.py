@@ -172,6 +172,7 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("overflow-x: hidden;", ui_server.INDEX_HTML)
         self.assertIn("--monitor-calendar-width: 280px;", ui_server.INDEX_HTML)
         self.assertIn("width: var(--monitor-calendar-width);", ui_server.INDEX_HTML)
+        self.assertNotIn("--monitor-calendar-width: 100%;", ui_server.INDEX_HTML)
 
     def test_journal_and_subject_context_menus_share_library_styling(self) -> None:
         journal_menu = self.js_function("showJournalContextMenu")
@@ -196,13 +197,41 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('button.innerHTML = `<span>${escapeHtml(label)}</span><b>${count}</b>`', subject_filters)
         self.assertIn("box-shadow: inset 3px 0 0 var(--accent);", ui_server.INDEX_HTML)
 
-    def test_monitor_calendars_always_render_six_week_rows(self) -> None:
+    def test_primary_reading_surfaces_share_flat_visual_language(self) -> None:
+        html = ui_server.INDEX_HTML
+
+        self.assertIn("--flat-divider:", html)
+        self.assertIn(".app.report-mode .calendar", html)
+        self.assertIn(".app.report-mode .journal-tab.active", html)
+        self.assertIn(".app.report-mode .paper.report-selected", html)
+        self.assertIn(".app.author-mode .author-paper-card.report-selected", html)
+        self.assertIn(".library-detail .citation-source-cell.active", html)
+        self.assertIn(".library-detail .library-detail-abstract", html)
+        self.assertIn("border: 1px solid rgba(15, 107, 110, 0.42);", html)
+
+    def test_monitor_calendars_render_only_the_weeks_the_month_uses(self) -> None:
         calendar = self.js_function("renderCalendar")
         primary_view = self.js_function("setPrimaryView")
 
-        self.assertIn("const trailingBlanks = 42 - startOffset - days", calendar)
+        self.assertIn("const calendarCells = Math.ceil(occupiedCells / 7) * 7", calendar)
+        self.assertIn("const trailingBlanks = calendarCells - occupiedCells", calendar)
         self.assertIn('blank.setAttribute("aria-hidden", "true")', calendar)
         self.assertIn("if (sidebar) sidebar.scrollTop = 0", primary_view)
+
+    def test_arrow_navigation_can_move_between_content_and_primary_tabs(self) -> None:
+        primary = self.js_function("handlePrimaryKeyboardNavigation")
+        report = self.js_function("handleReportKeydown")
+        author = self.js_function("handleAuthorMonitorKeydown")
+        library = self.js_function("handleLibraryKeydown")
+
+        self.assertIn('PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author"]', ui_server.INDEX_HTML)
+        self.assertIn("switchPrimaryKeyboardView", primary)
+        self.assertIn("focusPrimarySurfaceContent", primary)
+        self.assertIn("activatePrimaryKeyboardRoot()", report)
+        self.assertIn("activatePrimaryKeyboardRoot()", author)
+        self.assertIn("activatePrimaryKeyboardRoot()", library)
+        self.assertIn("handlePrimaryKeyboardNavigation(event)", ui_server.INDEX_HTML)
+        self.assertIn(".view-switcher.keyboard-active .view-switch.active", ui_server.INDEX_HTML)
 
 
 if __name__ == "__main__":
