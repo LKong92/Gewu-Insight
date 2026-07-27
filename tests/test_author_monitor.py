@@ -2226,6 +2226,19 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("startAuthorMonitorEnrichment(targetAuthorId, {maxPapers: 80})", html)
         self.assertIn("max_papers: request.maxPapers", html)
 
+    def test_author_monitor_empty_scope_restores_without_discarding_last_good_papers(self):
+        html = ui_server.INDEX_HTML
+        loader = html.split("async function loadAuthorMonitorScope", 1)[1].split(
+            "function selectAuthorMonitorScope", 1
+        )[0]
+        self.assertNotIn("state.authorMonitorPapers = []", loader)
+        self.assertIn("papers: state.authorMonitorPapers", loader)
+        self.assertIn("state.authorMonitorPapers = previous.papers", loader)
+        self.assertIn("authorMonitorScopeHasExpectedPapers(requestedId)", loader)
+        self.assertIn("function scheduleAuthorMonitorEmptyViewRecovery()", html)
+        self.assertIn("The local paper count is intact. Reloading this view from SQLite.", html)
+        self.assertIn('document.documentElement.dataset.authorMonitorIndex = "stale"', html)
+
     def test_author_monitor_cards_do_not_open_pdf_on_double_click(self):
         html = ui_server.INDEX_HTML
         card = html.split("function renderAuthorMonitorPaperCard", 1)[1].split(

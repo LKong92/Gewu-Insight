@@ -651,6 +651,12 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertEqual(result["pdf_doi_extracted_count"], 0)
         self.assertEqual(result["pdf_doi_missing_count"], 1)
         self.assertEqual(result["pdfs_without_doi"][0]["relative_path"], pdf.relative_to(scan_root).as_posix())
+        self.assertEqual(len(result["metadata_refresh_candidates"]), 1)
+        self.assertEqual(result["metadata_refresh_candidates"][0]["doi"], "")
+        self.assertEqual(
+            Path(result["metadata_refresh_candidates"][0]["source_path"]).resolve(),
+            pdf.resolve(),
+        )
 
     def test_folder_import_can_name_library_shortcut_by_filename(self) -> None:
         pdf = self.touch("topic/original-name.pdf", b"%PDF fixture")

@@ -16,6 +16,7 @@ import socketserver
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -26,7 +27,7 @@ from datetime import date, datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
 from zoneinfo import ZoneInfo
 
@@ -546,6 +547,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/folders/copy-desktop":
                 self.handle_copy_library_folder_to_desktop(payload)
                 return
+            if parsed.path == "/api/library/folders/prepare-drag":
+                self.handle_prepare_library_folder_drag(payload)
+                return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
                 return
@@ -728,6 +732,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/metadata-refresh/start":
                 self.handle_start_library_metadata_refresh(payload)
+                return
+            if parsed.path == "/api/library/identifier-recovery/start":
+                self.handle_start_library_identifier_recovery(payload)
                 return
             if parsed.path == "/api/library/import-folder/stop":
                 self.handle_stop_library_import_folder(payload)
@@ -2472,15 +2479,20 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             root_folder_id = int(tabs[index].get("root_folder_id") or 0)
             if not root_folder_id:
                 raise ValueError("Space root folder not found")
+            target_folder_id = library_workspace_add_target_folder_id(
+                storage,
+                root_folder_id=root_folder_id,
+                requested_folder_id=int(payload.get("folder_id") or root_folder_id),
+            )
             item = None
             if paper_id:
-                item = storage.add_library_item(paper_id=paper_id, folder_id=root_folder_id)
+                item = storage.add_library_item(paper_id=paper_id, folder_id=target_folder_id)
                 reconcile_paper_pdf_storage(
                     storage,
                     paper_id,
-                    target_dir=local_copy_dir_for_library_folder(storage, root_folder_id),
+                    target_dir=local_copy_dir_for_library_folder(storage, target_folder_id),
                 )
-                sync_alias_for_library_item(storage, paper_id, root_folder_id)
+                sync_alias_for_library_item(storage, paper_id, target_folder_id)
             save_library_workspace_tabs(storage, tabs)
             stored_paper = storage.get_paper(paper_id) if paper_id else None
             item_api = library_item_to_api(item, stored_paper) if item and stored_paper else None
@@ -2491,7 +2503,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"paper_id": paper_id, "item": item_api, "paper": paper_api, **navigation})
+        self.send_json({
+            "paper_id": paper_id,
+            "folder_id": target_folder_id,
+            "item": item_api,
+            "paper": paper_api,
+            **navigation,
+        })
 
     def handle_choose_library_import_folder(self) -> None:
         try:
@@ -2666,6 +2684,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "job_id": job_id,
                 "db_path": self.configured_db_path,
                 "metadata_mode": metadata_mode,
+                "skip_days": skip_days,
+            },
+            daemon=True,
+        )
+        thread.start()
+        self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
+
+    def handle_start_library_identifier_recovery(self, payload: dict[str, Any]) -> None:
+        skip_days = int(payload.get("skip_days") or 7)
+        skip_days = max(0, min(90, skip_days))
+        job_id = create_library_identifier_recovery_job(skip_days=skip_days)
+        thread = threading.Thread(
+            target=run_library_identifier_recovery_job,
+            kwargs={
+                "job_id": job_id,
+                "db_path": self.configured_db_path,
                 "skip_days": skip_days,
             },
             daemon=True,
@@ -2862,6 +2896,22 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             try:
                 result = copy_library_folder_real_files_to_desktop(storage, folder_id)
+            except ValueError as exc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+        finally:
+            storage.close()
+        self.send_json({"result": result})
+
+    def handle_prepare_library_folder_drag(self, payload: dict[str, Any]) -> None:
+        folder_id = int(payload.get("folder_id") or 0)
+        if not folder_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "folder_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            try:
+                result = prepare_library_folder_real_files_for_drag(storage, folder_id)
             except ValueError as exc:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
                 return
@@ -8480,6 +8530,10 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "duplicate_paper_candidates",
         "doi_metadata_refreshed",
         "identifier_metadata_refreshed",
+        "identifier_recovery_attempted",
+        "identifiers_recovered",
+        "identifier_recovery_unresolved",
+        "identifier_recovery_sources",
         "report_path",
         "copy_target_root",
         "target_folder_id",
@@ -8494,6 +8548,7 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
     summary["warning_count"] = len(result.get("warnings") or [])
     summary["missing_sources"] = result.get("missing_sources") or []
     summary["pdfs_without_doi"] = result.get("pdfs_without_doi") or []
+    summary["identifier_recoveries"] = result.get("identifier_recoveries") or []
     summary["aliases"] = result.get("aliases") or []
     summary["duplicate_dois"] = result.get("duplicate_dois") or []
     summary["duplicate_arxiv_ids"] = result.get("duplicate_arxiv_ids") or []
@@ -8549,9 +8604,20 @@ def local_pdf_path_for_identifier_extraction(paper: dict[str, Any]) -> Path | No
     return None
 
 
-def extract_identifier_from_pdf_or_title(pdf_path: Path, paper: dict[str, Any]) -> dict[str, str]:
+def extract_identifier_from_pdf_or_title(
+    pdf_path: Path,
+    paper: dict[str, Any],
+    *,
+    title_lookup: Callable[[str], dict[str, str]] | None = None,
+) -> dict[str, str]:
     pdf_metadata_title, page_texts = pdf_identifier_page_texts(pdf_path)
-    title_candidates = article_title_candidates_for_identifier(paper, pdf_metadata_title, pdf_path)
+    layout_titles = pdf_layout_title_candidates(pdf_path)
+    title_candidates = article_title_candidates_for_identifier(
+        paper,
+        pdf_metadata_title,
+        pdf_path,
+        layout_titles=layout_titles,
+    )
     title_page_text = title_page_text_for_identifier(page_texts, title_candidates)
     if title_page_text:
         doi = preferred_published_doi_from_text(title_page_text)
@@ -8560,15 +8626,18 @@ def extract_identifier_from_pdf_or_title(pdf_path: Path, paper: dict[str, Any]) 
         arxiv_id = explicit_arxiv_id_from_text(title_page_text) or arxiv_id_from_arxiv_doi(title_page_text)
         if arxiv_id:
             return {"kind": "arxiv", "identifier": arxiv_id, "source": "pdf_title_page"}
-    titles = [
-        clean_text(paper.get("title") or ""),
-        clean_text(pdf_metadata_title),
+    lookup = title_lookup or identifier_from_title_lookup
+    fallback_titles = [
+        *title_candidates,
         Path(pdf_path).stem,
     ]
-    for title in dedup_clean_texts(titles):
-        found = identifier_from_title_lookup(title)
+    for title in dedup_clean_texts(fallback_titles):
+        found = lookup(title)
         if found.get("identifier"):
-            return found
+            return {
+                **found,
+                "matched_title": title,
+            }
     return {"kind": "", "identifier": "", "source": ""}
 
 
@@ -8590,10 +8659,17 @@ def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5) -> tuple[s
     return metadata_title, page_texts
 
 
-def article_title_candidates_for_identifier(paper: dict[str, Any], pdf_metadata_title: str, pdf_path: Path) -> list[str]:
+def article_title_candidates_for_identifier(
+    paper: dict[str, Any],
+    pdf_metadata_title: str,
+    pdf_path: Path,
+    *,
+    layout_titles: list[str] | None = None,
+) -> list[str]:
     candidates = [
         clean_text(paper.get("title") or ""),
         clean_text(pdf_metadata_title),
+        *(layout_titles or []),
     ]
     filename_stem_key = normalized_title_key(Path(pdf_path).stem)
     filtered: list[str] = []
@@ -8607,6 +8683,178 @@ def article_title_candidates_for_identifier(paper: dict[str, Any], pdf_metadata_
             continue
         filtered.append(candidate)
     return filtered
+
+
+def pdf_layout_title_candidates(pdf_path: Path, *, page_limit: int = 3) -> list[str]:
+    scored: list[tuple[float, str]] = []
+    try:
+        reader = PdfReader(str(pdf_path))
+    except Exception:
+        return []
+    for page_index, page in enumerate(reader.pages[:max(1, int(page_limit or 1))]):
+        fragments: list[dict[str, float | str]] = []
+
+        def collect_fragment(
+            text: str,
+            _cm: list[float],
+            tm: list[float],
+            _font: dict[str, Any] | None,
+            font_size: float,
+        ) -> None:
+            value = clean_text(text)
+            if not value or len(value) > 500:
+                return
+            try:
+                x = float(tm[4])
+                y = float(tm[5])
+                size = abs(float(font_size or 0))
+            except (IndexError, TypeError, ValueError):
+                return
+            if size <= 0:
+                return
+            fragments.append({"text": value, "x": x, "y": y, "size": size})
+
+        try:
+            page.extract_text(visitor_text=collect_fragment)
+        except Exception:
+            continue
+        if not fragments:
+            continue
+        try:
+            page_height = float(page.mediabox.height)
+        except Exception:
+            page_height = 792.0
+        body_sizes = [
+            float(fragment["size"])
+            for fragment in fragments
+            if len(title_tokens(str(fragment["text"]))) >= 2
+        ]
+        if not body_sizes:
+            continue
+        largest_size = max(body_sizes)
+        reliable_font_sizes = largest_size >= 5.0
+        minimum_title_size = (
+            max(8.0, largest_size * 0.68)
+            if reliable_font_sizes
+            else largest_size * 0.9
+        )
+        title_fragments = [
+            fragment
+            for fragment in fragments
+            if float(fragment["size"]) >= minimum_title_size
+            and float(fragment["y"]) >= page_height * (0.34 if reliable_font_sizes else 0.58)
+            and plausible_pdf_title_text(str(fragment["text"]), allow_fragment=True)
+        ]
+        title_fragments.sort(key=lambda fragment: (-float(fragment["y"]), float(fragment["x"])))
+        groups: list[list[dict[str, float | str]]] = []
+        for fragment in title_fragments:
+            if not groups:
+                groups.append([fragment])
+                continue
+            previous = groups[-1][-1]
+            line_gap = abs(float(previous["y"]) - float(fragment["y"]))
+            allowed_gap = max(float(previous["size"]), float(fragment["size"])) * 2.35
+            if not reliable_font_sizes:
+                allowed_gap = max(30.0, allowed_gap)
+            if line_gap <= allowed_gap:
+                groups[-1].append(fragment)
+            else:
+                groups.append([fragment])
+        for group in groups:
+            candidate = normalize_pdf_layout_title(
+                " ".join(str(fragment["text"]) for fragment in group)
+            )
+            if not plausible_pdf_title_text(candidate):
+                continue
+            average_size = sum(float(fragment["size"]) for fragment in group) / len(group)
+            token_count = len(title_tokens(candidate))
+            vertical_position = (
+                sum(float(fragment["y"]) for fragment in group)
+                / len(group)
+                / page_height
+            )
+            if reliable_font_sizes:
+                score = (
+                    average_size
+                    + min(token_count, 24) * 0.18
+                    + min(len(candidate), 180) * 0.005
+                    + vertical_position * 2.0
+                    - page_index * 1.5
+                )
+            else:
+                score = (
+                    vertical_position * 12.0
+                    + min(token_count, 14) * 0.10
+                    - max(0, token_count - 20) * 0.20
+                    - max(0, len(candidate) - 180) * 0.02
+                    - page_index * 1.5
+                )
+            scored.append((score, candidate))
+    results: list[str] = []
+    seen: set[str] = set()
+    for _score, candidate in sorted(scored, key=lambda item: item[0], reverse=True):
+        key = normalized_title_key(candidate)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        results.append(candidate)
+    return results[:6]
+
+
+def normalize_pdf_layout_title(value: str) -> str:
+    text = re.sub(r"(?<=\w)-\s+(?=[a-z])", "", value or "")
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n–—|")
+    return normalize_publication_title(text)
+
+
+def plausible_pdf_title_text(value: str, *, allow_fragment: bool = False) -> bool:
+    text = clean_text(value)
+    key = normalized_title_key(text)
+    tokens = title_tokens(text)
+    if not text or not key or is_placeholder_publication_title(text):
+        return False
+    if not allow_fragment and len(text) > 350:
+        return False
+    if len(text) < (8 if allow_fragment else 16) or len(tokens) < (2 if allow_fragment else 3):
+        return False
+    if text.count("/C") > 2:
+        return False
+    if re.search(r"\b(?:doi|arxiv)\s*[:/]", text, flags=re.I):
+        return False
+    if re.search(r"\b(?:issn|pp\.?|vol\.?|nos?\.?)\b", text, flags=re.I):
+        return False
+    letters = re.findall(r"[A-Za-z]", text)
+    uppercase_ratio = (
+        sum(1 for letter in letters if letter.isupper()) / len(letters)
+        if letters
+        else 0.0
+    )
+    if uppercase_ratio > 0.9 and len(tokens) <= 6:
+        return False
+    if text.lower().startswith((
+        "article",
+        "abstract",
+        "authors",
+        "copyright",
+        "in: proceedings",
+        "letter",
+        "proceedings",
+        "published by",
+        "research article",
+        "received ",
+        "accepted ",
+        "supplementary information",
+    )):
+        return False
+    if re.search(
+        r"\b(?:department|university|institute|laboratory|labs|room|avenue|ave\.?|received|usa)\b",
+        text,
+        flags=re.I,
+    ):
+        return False
+    if text.count("@") or text.count(";") >= 3:
+        return False
+    return True
 
 
 def title_page_text_for_identifier(page_texts: list[str], title_candidates: list[str]) -> str:
@@ -8714,6 +8962,40 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
                 return {"kind": "doi", "identifier": doi, "source": "title_openalex"}
     except Exception:
         pass
+    try:
+        response = request_with_retries(
+            "GET",
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={
+                "query": query,
+                "limit": 5,
+                "fields": "externalIds,title,year,venue",
+            },
+            timeout=12,
+            max_retries=1,
+        )
+        for item in response.json().get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            candidate_title = clean_text(item.get("title") or "")
+            if not title_match_is_confident(query, candidate_title):
+                continue
+            external_ids = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
+            doi = normalize_publication_doi(clean_text(external_ids.get("DOI") or external_ids.get("doi") or ""))
+            if doi_is_likely_published_version(doi):
+                return {"kind": "doi", "identifier": doi, "source": "title_semantic"}
+            arxiv_id = normalize_arxiv_identifier(
+                clean_text(
+                    external_ids.get("ArXiv")
+                    or external_ids.get("arXiv")
+                    or external_ids.get("ARXIV")
+                    or ""
+                )
+            )
+            if arxiv_id:
+                return {"kind": "arxiv", "identifier": arxiv_id, "source": "title_semantic"}
+    except Exception:
+        pass
     return {"kind": "", "identifier": "", "source": ""}
 
 
@@ -8746,6 +9028,14 @@ def library_workspace_publication_from_query(query: str) -> dict[str, Any] | Non
     identifier = identifier_from_title_lookup(value)
     if identifier.get("kind") == "doi":
         paper = publication_metrics_metadata_from_doi(
+            identifier.get("identifier") or "",
+            timeout=14,
+            max_retries=1,
+        )
+        if paper:
+            return paper
+    if identifier.get("kind") == "arxiv":
+        paper = publication_metrics_metadata_from_arxiv_id(
             identifier.get("identifier") or "",
             timeout=14,
             max_retries=1,
@@ -9697,6 +9987,181 @@ def normalize_metadata_refresh_mode(value: Any) -> str:
     return mode if mode in {"quick", "full"} else "full"
 
 
+def record_recovered_identifier(
+    storage: Storage,
+    *,
+    paper_id: str,
+    found: dict[str, str],
+) -> dict[str, Any] | None:
+    paper = storage.get_paper(paper_id)
+    if not paper:
+        return None
+    identifier = clean_text(found.get("identifier") or "")
+    kind = clean_text(found.get("kind") or "")
+    source = clean_text(found.get("source") or "")
+    matched_title = clean_text(found.get("matched_title") or "")
+    raw = parse_raw_json(paper)
+    raw["identifier_recovery"] = {
+        "kind": kind,
+        "identifier": identifier,
+        "source": source,
+        "matched_title": matched_title,
+        "recovered_at": now_iso(),
+    }
+    updates: dict[str, Any] = {
+        "raw_json": json.dumps(raw, ensure_ascii=False),
+    }
+    if kind == "doi":
+        doi = normalize_publication_doi(identifier)
+        if not looks_like_doi(doi):
+            return None
+        updates["doi"] = doi
+        updates["doi_source"] = source or "title_lookup"
+    elif kind == "arxiv":
+        arxiv_id = normalize_arxiv_identifier(identifier)
+        if not arxiv_id:
+            return None
+        raw["arxiv_id"] = arxiv_id
+        raw["identifier_recovery"]["identifier"] = arxiv_id
+        updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
+        if not clean_text(paper.get("url") or ""):
+            updates["url"] = f"https://arxiv.org/abs/{arxiv_id}"
+        if not clean_text(paper.get("landing_url") or ""):
+            updates["landing_url"] = f"https://arxiv.org/abs/{arxiv_id}"
+    else:
+        return None
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    storage.conn.execute(
+        f"UPDATE papers SET {assignments} WHERE paper_id = ?",
+        [*updates.values(), paper_id],
+    )
+    storage.conn.commit()
+    return storage.get_paper(paper_id)
+
+
+def recover_imported_pdf_identifiers(
+    storage: Storage,
+    result: dict[str, Any],
+    *,
+    job_id: str | None = None,
+) -> set[str]:
+    candidates = [
+        item
+        for item in (result.get("metadata_refresh_candidates") or [])
+        if isinstance(item, dict)
+    ]
+    unresolved: list[tuple[dict[str, Any], dict[str, Any], Path]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        paper_id = clean_text(candidate.get("paper_id") or "")
+        if not paper_id or paper_id in seen:
+            continue
+        seen.add(paper_id)
+        paper = storage.get_paper(paper_id)
+        if not paper:
+            continue
+        doi = normalize_publication_doi(str(paper.get("doi") or candidate.get("doi") or ""))
+        arxiv_id = arxiv_identifier_for_paper(paper) or normalize_arxiv_identifier(
+            str(candidate.get("arxiv_id") or "")
+        )
+        if looks_like_doi(doi) or arxiv_id:
+            continue
+        pdf_path = local_pdf_path_for_identifier_extraction(paper)
+        if pdf_path and pdf_path.exists() and pdf_path.is_file():
+            unresolved.append((candidate, paper, pdf_path))
+    result["identifier_recovery_attempted"] = len(unresolved)
+    if not unresolved:
+        result["identifiers_recovered"] = 0
+        result["identifier_recovery_unresolved"] = 0
+        result["identifier_recovery_sources"] = {}
+        result["identifier_recoveries"] = []
+        return set()
+    if job_id:
+        log_library_import_job(
+            job_id,
+            f"Recovering DOI/arXiv from PDF titles for {len(unresolved)} unresolved papers",
+        )
+    lookup_cache: dict[str, dict[str, str]] = {}
+
+    def cached_title_lookup(title: str) -> dict[str, str]:
+        key = normalized_title_key(title)
+        if key not in lookup_cache:
+            lookup_cache[key] = identifier_from_title_lookup(title)
+        return dict(lookup_cache[key])
+
+    recovered: set[str] = set()
+    source_counts: dict[str, int] = {}
+    recovery_records: list[dict[str, str]] = []
+    total = len(unresolved)
+    for index, (candidate, paper, pdf_path) in enumerate(unresolved, start=1):
+        if job_id and library_import_cancel_requested(job_id):
+            raise ImportCancelled("Import stopped by user")
+        if job_id:
+            update_library_import_job(
+                job_id,
+                stage="identifier",
+                current=index,
+                total=total,
+                percent=max(0, min(99, round((index / total) * 100))),
+            )
+            log_library_import_job(
+                job_id,
+                f"Recovering identifier {index} / {total}: {pdf_path.name}",
+            )
+        found = extract_identifier_from_pdf_or_title(
+            pdf_path,
+            paper,
+            title_lookup=cached_title_lookup,
+        )
+        identifier = clean_text(found.get("identifier") or "")
+        kind = clean_text(found.get("kind") or "")
+        if not identifier or kind not in {"doi", "arxiv"}:
+            continue
+        recorded = record_recovered_identifier(
+            storage,
+            paper_id=str(paper.get("paper_id") or ""),
+            found=found,
+        )
+        if not recorded:
+            continue
+        try:
+            refreshed = refresh_library_paper_metadata_for_identifier(
+                storage,
+                str(paper.get("paper_id") or ""),
+                identifier,
+                timeout=12,
+                max_retries=1,
+            )
+        except Exception:
+            refreshed = recorded
+        paper_id = str(paper.get("paper_id") or "")
+        recovered.add(paper_id)
+        source = clean_text(found.get("source") or "unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if len(recovery_records) < 500:
+            recovery_records.append({
+                "paper_id": paper_id,
+                "kind": kind,
+                "identifier": identifier,
+                "source": source,
+                "matched_title": clean_text(found.get("matched_title") or ""),
+                "pdf_path": str(pdf_path),
+            })
+        candidate["doi"] = normalize_publication_doi(identifier) if kind == "doi" else ""
+        candidate["arxiv_id"] = normalize_arxiv_identifier(identifier) if kind == "arxiv" else ""
+        if job_id:
+            label = clean_text((refreshed or recorded).get("title") or identifier)
+            log_library_import_job(
+                job_id,
+                f"Recovered {kind.upper()} via {source}: {label}",
+            )
+    result["identifiers_recovered"] = len(recovered)
+    result["identifier_recovery_unresolved"] = max(0, total - len(recovered))
+    result["identifier_recovery_sources"] = source_counts
+    result["identifier_recoveries"] = recovery_records
+    return recovered
+
+
 def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, job_id: str | None = None, mode: str = "quick") -> int:
     mode = normalize_import_metadata_mode(mode)
     result["metadata_mode"] = mode
@@ -9705,8 +10170,18 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
             log_library_import_job(job_id, "Metadata refresh skipped by user selection")
         result["doi_metadata_refreshed"] = 0
         result["identifier_metadata_refreshed"] = 0
+        result["identifier_recovery_attempted"] = 0
+        result["identifiers_recovered"] = 0
+        result["identifier_recovery_unresolved"] = 0
+        result["identifier_recovery_sources"] = {}
+        result["identifier_recoveries"] = []
         return 0
     candidates = [item for item in (result.get("metadata_refresh_candidates") or []) if isinstance(item, dict)]
+    recovered_paper_ids = recover_imported_pdf_identifiers(
+        storage,
+        result,
+        job_id=job_id,
+    )
     papers = [
         {"paper_id": item.get("paper_id"), "doi": item.get("doi"), "arxiv_id": item.get("arxiv_id")}
         for item in candidates
@@ -9718,7 +10193,7 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
         paper_id = clean_text(paper.get("paper_id") or "")
         doi = normalize_publication_doi(str(paper.get("doi") or ""))
         arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
-        if paper_id and (looks_like_doi(doi) or arxiv_id):
+        if paper_id and paper_id not in recovered_paper_ids and (looks_like_doi(doi) or arxiv_id):
             eligible.append({"paper_id": paper_id, "doi": doi, "arxiv_id": arxiv_id})
     total = len(eligible)
     if job_id:
@@ -9789,6 +10264,69 @@ def library_metadata_refresh_candidates(storage: Storage) -> list[dict[str, Any]
             candidates.append(paper)
             seen.add(paper_id)
     return candidates
+
+
+def library_missing_identifier_candidates(storage: Storage) -> list[dict[str, Any]]:
+    rows = storage.conn.execute(
+        """
+        SELECT DISTINCT papers.*
+        FROM papers
+        JOIN library_items ON library_items.paper_id = papers.paper_id
+        LEFT JOIN library_folders ON library_folders.id = library_items.folder_id
+        WHERE (library_items.trashed_at IS NULL OR library_items.trashed_at = '')
+          AND (library_folders.trashed_at IS NULL OR library_folders.trashed_at = '')
+        ORDER BY COALESCE(papers.publication_date, '') DESC, papers.title ASC
+        """
+    ).fetchall()
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        paper = dict(row)
+        paper_id = clean_text(paper.get("paper_id") or "")
+        if not paper_id or paper_id in seen:
+            continue
+        seen.add(paper_id)
+        doi = normalize_publication_doi(str(paper.get("doi") or ""))
+        if looks_like_doi(doi) or arxiv_identifier_for_paper(paper):
+            continue
+        candidates.append(paper)
+    return candidates
+
+
+def reliable_paper_title_for_identifier_lookup(paper: dict[str, Any]) -> str:
+    title = clean_text(paper.get("title") or "")
+    if not title or is_placeholder_publication_title(title):
+        return ""
+    if title.lower().endswith((".pdf", ".doc", ".docx", ".ppt", ".pptx")):
+        return ""
+    if len(title) < 12 or len(title_tokens(title)) < 3:
+        return ""
+    return title
+
+
+def identifier_recovery_recently_attempted(
+    storage: Storage,
+    paper_id: str,
+    *,
+    skip_days: int,
+) -> bool:
+    if skip_days <= 0:
+        return False
+    cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
+    row = storage.conn.execute(
+        """
+        SELECT 1
+        FROM paper_metadata_refreshes
+        WHERE paper_id = ?
+          AND mode = 'identifier'
+          AND status IN ('recovered', 'unresolved', 'failed')
+          AND COALESCE(finished_at, started_at) >= ?
+        ORDER BY COALESCE(finished_at, started_at) DESC
+        LIMIT 1
+        """,
+        (paper_id, cutoff),
+    ).fetchone()
+    return row is not None
 
 
 def metadata_refresh_recently_completed(storage: Storage, paper_id: str, mode: str, *, skip_days: int) -> bool:
@@ -9922,6 +10460,222 @@ def run_library_metadata_refresh_job(*, job_id: str, db_path: Path, metadata_mod
         )
     except Exception as exc:
         log_library_import_job(job_id, f"Metadata refresh failed: {exc}", level="error")
+        update_library_import_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    finally:
+        storage.close()
+
+
+def run_library_identifier_recovery_job(
+    *,
+    job_id: str,
+    db_path: Path,
+    skip_days: int = 7,
+) -> None:
+    storage = Storage(db_path)
+    attempted = 0
+    recovered_count = 0
+    unresolved_count = 0
+    skipped_recent = 0
+    failed_count = 0
+    errors: list[str] = []
+    source_counts: dict[str, int] = {}
+    recoveries: list[dict[str, str]] = []
+    lookup_cache: dict[str, dict[str, str]] = {}
+
+    def cached_title_lookup(title: str) -> dict[str, str]:
+        key = normalized_title_key(title)
+        if key not in lookup_cache:
+            lookup_cache[key] = identifier_from_title_lookup(title)
+        return dict(lookup_cache[key])
+
+    try:
+        candidates = library_missing_identifier_candidates(storage)
+        total = len(candidates)
+        log_library_import_job(
+            job_id,
+            f"Finding missing DOI/arXiv identifiers for {total} Library papers",
+        )
+        log_library_import_job(
+            job_id,
+            f"Skipping identifier attempts made in the last {skip_days} day{'s' if skip_days != 1 else ''}",
+        )
+        log_library_import_job(
+            job_id,
+            "Using local PDFs first, then Crossref, OpenAlex, and Semantic Scholar title matching",
+        )
+        update_library_import_job(
+            job_id,
+            status="running",
+            stage="identifier",
+            total=total,
+            current=0,
+            percent=0,
+        )
+        for index, paper in enumerate(candidates, start=1):
+            if library_import_cancel_requested(job_id):
+                raise ImportCancelled("Identifier recovery stopped by user")
+            paper_id = clean_text(paper.get("paper_id") or "")
+            title = reliable_paper_title_for_identifier_lookup(paper)
+            pdf_path = local_pdf_path_for_identifier_extraction(paper)
+            readable_pdf = bool(pdf_path and pdf_path.exists() and pdf_path.is_file())
+            label = title or (pdf_path.name if readable_pdf and pdf_path else paper_id)
+            percent = max(0, min(99, round((index / max(1, total)) * 100)))
+            update_library_import_job(
+                job_id,
+                current=index,
+                total=total,
+                percent=percent,
+                stage="identifier",
+            )
+            if identifier_recovery_recently_attempted(
+                storage,
+                paper_id,
+                skip_days=skip_days,
+            ):
+                skipped_recent += 1
+                continue
+            attempted += 1
+            log_library_import_job(
+                job_id,
+                f"Finding identifier {index} / {total}: {label}",
+            )
+            refresh_id = record_metadata_refresh_start(
+                storage,
+                paper_id=paper_id,
+                mode="identifier",
+                source_summary=label or paper_id,
+            )
+            used_title_lookup = False
+            try:
+                if readable_pdf and pdf_path:
+                    found = extract_identifier_from_pdf_or_title(
+                        pdf_path,
+                        paper,
+                        title_lookup=cached_title_lookup,
+                    )
+                    used_title_lookup = clean_text(found.get("source") or "") != "pdf_title_page"
+                elif title:
+                    found = cached_title_lookup(title)
+                    used_title_lookup = True
+                    if found.get("identifier"):
+                        found["matched_title"] = title
+                else:
+                    found = {"kind": "", "identifier": "", "source": ""}
+                identifier = clean_text(found.get("identifier") or "")
+                kind = clean_text(found.get("kind") or "")
+                if not identifier or kind not in {"doi", "arxiv"}:
+                    unresolved_count += 1
+                    record_metadata_refresh_finish(
+                        storage,
+                        refresh_id,
+                        status="unresolved",
+                        error="" if (readable_pdf or title) else "No readable PDF or reliable title",
+                    )
+                    log_library_import_job(
+                        job_id,
+                        f"No confident identifier found: {label}",
+                        level="warn",
+                    )
+                else:
+                    recorded = record_recovered_identifier(
+                        storage,
+                        paper_id=paper_id,
+                        found=found,
+                    )
+                    if not recorded:
+                        raise ValueError(f"Could not save recovered {kind} identifier")
+                    refreshed = refresh_single_paper_metadata_for_mode(
+                        storage,
+                        recorded,
+                        mode="quick",
+                    ) or recorded
+                    source = clean_text(found.get("source") or "unknown")
+                    source_counts[source] = source_counts.get(source, 0) + 1
+                    recovered_count += 1
+                    record_metadata_refresh_finish(
+                        storage,
+                        refresh_id,
+                        status="recovered",
+                    )
+                    if len(recoveries) < 500:
+                        recoveries.append(
+                            {
+                                "paper_id": paper_id,
+                                "kind": kind,
+                                "identifier": identifier,
+                                "source": source,
+                                "matched_title": clean_text(found.get("matched_title") or ""),
+                                "pdf_path": str(pdf_path) if pdf_path else "",
+                            }
+                        )
+                    log_library_import_job(
+                        job_id,
+                        f"Recovered {kind.upper()} via {source}: {clean_text(refreshed.get('title') or identifier)}",
+                    )
+            except Exception as exc:
+                failed_count += 1
+                record_metadata_refresh_finish(
+                    storage,
+                    refresh_id,
+                    status="failed",
+                    error=str(exc),
+                )
+                if len(errors) < 100:
+                    errors.append(f"{label}: {exc}")
+                log_library_import_job(
+                    job_id,
+                    f"Identifier recovery failed for {label}: {exc}",
+                    level="warn",
+                )
+            if used_title_lookup:
+                time.sleep(0.75)
+        result = {
+            "job_type": "identifier_recovery",
+            "total_candidates": total,
+            "attempted": attempted,
+            "identifiers_recovered": recovered_count,
+            "identifier_recovery_unresolved": unresolved_count,
+            "skipped_recent": skipped_recent,
+            "failed": failed_count,
+            "skip_days": skip_days,
+            "identifier_recovery_sources": source_counts,
+            "identifier_recoveries": recoveries,
+            "errors": errors,
+        }
+        log_library_import_job(
+            job_id,
+            (
+                f"Done: {recovered_count} identifiers recovered, "
+                f"{unresolved_count} unresolved, {skipped_recent} skipped recent, "
+                f"{failed_count} failed"
+            ),
+        )
+        update_library_import_job(
+            job_id,
+            status="completed",
+            stage="complete",
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            percent=100,
+            result=result,
+            library_ready=True,
+        )
+    except ImportCancelled as exc:
+        log_library_import_job(job_id, str(exc), level="warn")
+        update_library_import_job(
+            job_id,
+            status="cancelled",
+            stage="cancelled",
+            error=str(exc),
+            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        )
+    except Exception as exc:
+        log_library_import_job(job_id, f"Identifier recovery failed: {exc}", level="error")
         update_library_import_job(
             job_id,
             status="failed",
@@ -10145,6 +10899,25 @@ def add_library_workspace_tab(storage: Storage, *, name: str) -> dict[str, Any]:
     tabs.append(tab)
     save_library_workspace_tabs(storage, tabs)
     return tab
+
+
+def library_workspace_add_target_folder_id(
+    storage: Storage,
+    *,
+    root_folder_id: int,
+    requested_folder_id: int,
+) -> int:
+    root_folder_id = int(root_folder_id or 0)
+    target_folder_id = int(requested_folder_id or root_folder_id)
+    if not root_folder_id or not storage.get_library_folder(root_folder_id):
+        raise ValueError("Space root folder not found")
+    target_folder = storage.get_library_folder(target_folder_id)
+    if (
+        not target_folder
+        or not library_folder_is_within(storage, target_folder_id, root_folder_id)
+    ):
+        raise ValueError("The selected folder is not inside this Space")
+    return target_folder_id
 
 
 def remove_library_workspace_tab(storage: Storage, payload: dict[str, Any]) -> dict[str, Any]:
@@ -16426,6 +17199,30 @@ def create_library_metadata_refresh_job(*, metadata_mode: str = "full", skip_day
     return job_id
 
 
+def create_library_identifier_recovery_job(*, skip_days: int = 7) -> str:
+    job_id = uuid.uuid4().hex[:12]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    with LIBRARY_IMPORT_JOBS_LOCK:
+        LIBRARY_IMPORT_JOBS[job_id] = {
+            "job_id": job_id,
+            "job_type": "identifier_recovery",
+            "status": "queued",
+            "stage": "queued",
+            "skip_days": int(skip_days),
+            "started_at": now,
+            "finished_at": "",
+            "current": 0,
+            "total": 0,
+            "percent": 0,
+            "logs": [{"time": now, "level": "info", "message": "Queued missing identifier job"}],
+            "result": None,
+            "error": "",
+            "cancel_requested": False,
+            "library_ready": True,
+        }
+    return job_id
+
+
 def get_library_import_job(job_id: str | None) -> dict[str, Any] | None:
     if not job_id:
         return None
@@ -16462,7 +17259,10 @@ def request_stop_library_import_job(job_id: str) -> dict[str, Any] | None:
             job["stage"] = "stopping"
         snapshot = dict(job)
         snapshot["logs"] = list(job.get("logs") or [])[-300:]
-    label = "metadata refresh" if job.get("job_type") == "metadata_refresh" else "loader"
+    label = {
+        "metadata_refresh": "metadata refresh",
+        "identifier_recovery": "identifier recovery",
+    }.get(job.get("job_type"), "loader")
     log_library_import_job(job_id, f"Stop requested. The {label} will stop at the next safe checkpoint.", level="warn")
     return get_library_import_job(job_id)
 
@@ -16716,6 +17516,7 @@ def run_library_import_job(
                 f"{summary.get('library_items_created', 0)} library items created/restored, "
                 f"{summary.get('pdf_doi_extracted_count', 0)} DOI found, "
                 f"{summary.get('pdf_doi_missing_count', 0)} no DOI, "
+                f"{summary.get('identifiers_recovered', 0)} identifiers recovered by title, "
                 f"{summary.get('doi_metadata_refreshed', 0)} DOI/arXiv metadata refreshed, "
                 f"{summary.get('resources_or_attachments_to_import', 0)} resources/attachments, "
                 f"{summary.get('reused_existing_files', 0)} reused, "
@@ -17794,13 +18595,32 @@ def unique_path_in_dir(path: Path) -> Path:
     raise FileExistsError(str(path))
 
 
-def copy_library_folder_real_files_to_desktop(storage: Storage, folder_id: int) -> dict[str, Any]:
+def library_item_export_filename(item: dict[str, Any], source: Path) -> str:
+    display_name = clean_text(item.get("display_name") or "")
+    if not display_name:
+        return finder_safe_name(source.name, "file")
+    filename = finder_safe_name(display_name, source.stem or "file")
+    if source.suffix and not filename.lower().endswith(source.suffix.lower()):
+        filename = f"{filename}{source.suffix}"
+    return filename
+
+
+def copy_library_folder_real_files(
+    storage: Storage,
+    folder_id: int,
+    destination_parent: Path,
+    *,
+    unique_root: bool,
+) -> dict[str, Any]:
     folder = storage.get_library_folder(folder_id)
     if not folder:
         raise ValueError("Library folder not found")
-    desktop = Path.home() / "Desktop"
-    desktop.mkdir(parents=True, exist_ok=True)
-    target_root = unique_path_in_dir(desktop / finder_safe_name(folder.get("name") or "Library Folder", "Library Folder"))
+    destination_parent.mkdir(parents=True, exist_ok=True)
+    requested_root = destination_parent / finder_safe_name(
+        folder.get("name") or "Library Folder",
+        "Library Folder",
+    )
+    target_root = unique_path_in_dir(requested_root) if unique_root else requested_root
     folders = library_folder_tree_rows(storage, folder_id)
     relative_by_id = library_folder_export_relative_paths(folders, folder_id)
     for export_folder_id, relative_path in relative_by_id.items():
@@ -17816,7 +18636,9 @@ def copy_library_folder_real_files_to_desktop(storage: Storage, folder_id: int) 
         if not source:
             missing += 1
             continue
-        target = unique_path_in_dir(export_dir / finder_safe_name(source.name, "file"))
+        target = unique_path_in_dir(
+            export_dir / library_item_export_filename(item, source)
+        )
         shutil.copy2(source, target)
         copied += 1
     return {
@@ -17826,6 +18648,31 @@ def copy_library_folder_real_files_to_desktop(storage: Storage, folder_id: int) 
         "missing_files": missing,
         "folders_created": len(relative_by_id),
     }
+
+
+def copy_library_folder_real_files_to_desktop(storage: Storage, folder_id: int) -> dict[str, Any]:
+    return copy_library_folder_real_files(
+        storage,
+        folder_id,
+        Path.home() / "Desktop",
+        unique_root=True,
+    )
+
+
+def prepare_library_folder_real_files_for_drag(storage: Storage, folder_id: int) -> dict[str, Any]:
+    staging_parent = Path(tempfile.mkdtemp(prefix="daiqo-folder-drag-"))
+    try:
+        result = copy_library_folder_real_files(
+            storage,
+            folder_id,
+            staging_parent,
+            unique_root=False,
+        )
+    except Exception:
+        shutil.rmtree(staging_parent, ignore_errors=True)
+        raise
+    result["cleanup_path"] = str(staging_parent)
+    return result
 
 
 def library_folder_tree_rows(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
@@ -19999,6 +20846,7 @@ USER_GUIDE_HTML = """<!doctype html>
             <tr><td>Refresh in Details</td><td>Refreshes the selected paper's identifier metadata and citation/abstract sources.</td><td>Use for a single paper that looks incomplete.</td></tr>
             <tr><td>Get Identifier from Files</td><td>Looks at the local PDF title page and title/database matches to recover DOI or arXiv ID.</td><td>Use when import failed to find an identifier.</td></tr>
             <tr><td>Refresh All Metadata</td><td>Refreshes many papers but skips entries recently refreshed according to the recency rule.</td><td>Use for maintenance after a large import.</td></tr>
+            <tr><td>Find All Missing Identifiers</td><td>Checks active Library and Space papers without DOI/arXiv, using local PDFs and strict title matches through Crossref, OpenAlex, and Semantic Scholar.</td><td>Use as a resumable, rate-limited repair pass for older imports.</td></tr>
           </tbody>
         </table>
         <p>Refresh history is recorded in <code>paper_metadata_refreshes</code>. This lets Daiqo avoid repeating expensive refreshes and makes failed refreshes easier to diagnose.</p>
@@ -23955,12 +24803,29 @@ INDEX_HTML = """<!doctype html>
     }
     .library-folder-tree-row {
       display: grid;
-      grid-template-columns: 12px minmax(0, 1fr) 14px;
+      grid-template-columns: minmax(0, 1fr) 14px;
       align-items: center;
       gap: 5px;
       min-height: 20px;
       min-width: 0;
       padding-left: calc(var(--library-folder-depth, 0) * 18px);
+    }
+    .library-folder-tree-target {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr);
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .library-folder-tree-target:hover .library-folder-tree-label {
+      color: var(--accent-strong);
+      text-decoration: underline;
     }
     .library-folder-tree-icon {
       width: 11px;
@@ -26526,6 +27391,8 @@ INDEX_HTML = """<!doctype html>
       libraryLoadingPromise: null,
       libraryRefreshPromise: null,
       libraryPaperDetailRequests: {},
+      libraryPaperLocationRequests: {},
+      libraryPaperLocationsLoaded: new Set(),
       libraryTab: "library",
       libraryShortcutTabs: [],
       libraryWorkspaceTabs: [],
@@ -26543,6 +27410,7 @@ INDEX_HTML = """<!doctype html>
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
+      workspaceAddPaperBusy: false,
       libraryTaskMode: "import",
       libraryImportPath: "",
       libraryImportSourcePaths: [],
@@ -26645,6 +27513,9 @@ INDEX_HTML = """<!doctype html>
       authorMonitorSelectedPaperByAuthor: new Map(),
       authorMonitorPapersVersion: 0,
       authorMonitorViewCache: null,
+      authorMonitorEmptyRecoveryTimer: 0,
+      authorMonitorEmptyRecoveryLastKey: "",
+      authorMonitorEmptyRecoveryAt: 0,
       authorMonitorSearchTimer: 0,
       authorMonitorRefreshing: false,
       authorMonitorQuery: "",
@@ -26697,6 +27568,7 @@ INDEX_HTML = """<!doctype html>
       reportCache: {},
       reportCacheOrder: [],
       monitorPaperDomCache: {report: null, theme: null},
+      monitorReturnViewports: {report: null, theme: null},
       monthCacheKey: "",
       monthLoaded: false,
       lateArrivals: [],
@@ -27555,6 +28427,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryItems = data.items || [];
       state.libraryLoadedFolderIds = new Set(state.libraryFolders.map((folder) => Number(folder.id)).filter(Boolean));
       state.libraryFolderLoadPromises = {};
+      state.libraryPaperLocationsLoaded.clear();
+      state.libraryPaperLocationRequests = {};
       rebuildLibraryIndexes();
       state.libraryLoaded = true;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
@@ -27609,6 +28483,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryItems = [];
       state.libraryLoadedFolderIds = new Set();
       state.libraryFolderLoadPromises = {};
+      state.libraryPaperLocationsLoaded.clear();
+      state.libraryPaperLocationRequests = {};
       rebuildLibraryIndexes();
       state.libraryLoaded = true;
       state.libraryShortcutTabs = Array.isArray(data.shortcut_tabs) ? data.shortcut_tabs : state.libraryShortcutTabs;
@@ -27750,7 +28626,14 @@ INDEX_HTML = """<!doctype html>
       if (!item?.id) return;
       const id = Number(item.id);
       const index = state.libraryItems.findIndex((entry) => Number(entry.id) === id);
-      if (index >= 0) state.libraryItems[index] = item;
+      if (index >= 0) {
+        const existing = state.libraryItems[index] || {};
+        state.libraryItems[index] = {
+          ...existing,
+          ...item,
+          paper: {...(existing.paper || {}), ...(item.paper || {})}
+        };
+      }
       else state.libraryItems.push(item);
       rebuildLibraryIndexes();
     }
@@ -28597,6 +29480,7 @@ INDEX_HTML = """<!doctype html>
       if (!res.ok) throw new Error(data.error || "Could not load Library");
       applyLibraryNavigationSnapshot(data);
       (Array.isArray(data.items) ? data.items : []).forEach(upsertLibraryItemLocal);
+      if (paperId) state.libraryPaperLocationsLoaded.add(String(paperId));
       return data;
     }
 
@@ -28706,6 +29590,10 @@ INDEX_HTML = """<!doctype html>
 
     async function showPaperInLibrary(article, paperId) {
       const button = article.querySelector('[data-action="add-library"]');
+      const monitorViewport = captureMonitorViewport(article);
+      if (monitorViewport) {
+        state.monitorReturnViewports[monitorViewport.mode] = monitorViewport;
+      }
       const authorList = article.closest(".author-monitor-paper-list");
       if (authorList) {
         const listRect = authorList.getBoundingClientRect();
@@ -29041,6 +29929,7 @@ INDEX_HTML = """<!doctype html>
     async function addPaperToLibrary(article, paperId, options = {}) {
       const button = article.querySelector('[data-action="add-library"]');
       if (button?.dataset.libraryState === "show") return showPaperInLibrary(article, paperId);
+      const monitorViewport = captureMonitorViewport(article);
       if (button) {
         button.disabled = true;
         button.classList.add("is-busy");
@@ -29070,7 +29959,7 @@ INDEX_HTML = """<!doctype html>
         if (button) {
           setReportLibraryButtonShowState(button);
         }
-        renderCurrentPaperSurface();
+        renderCurrentPaperSurface({monitorViewport});
       } catch (error) {
         if (button) {
           setReportLibraryButtonAddState(button);
@@ -29594,7 +30483,11 @@ INDEX_HTML = """<!doctype html>
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
         const label = data.identifier_kind === "arxiv" ? "arXiv ID" : "DOI";
-        updateLibraryActivityStatus(`${label} found from files.`, {delay: 2600});
+        const source = String(data.identifier_source || "");
+        const origin = source.startsWith("title_")
+          ? "from the PDF title and publication databases"
+          : "on the PDF title page";
+        updateLibraryActivityStatus(`${label} found ${origin}.`, {delay: 3200});
       } catch (error) {
         const message = error.message || "Could not extract identifier";
         updateLibraryActivityStatus(`Identifier lookup failed: ${message}`, {delay: 4200});
@@ -30706,33 +31599,46 @@ INDEX_HTML = """<!doctype html>
       const targetLabel = state.libraryImportTargetPath || "Library";
       const finderTarget = state.libraryImportFinderTarget || "";
       const refreshMode = state.libraryTaskMode === "metadata-refresh";
-      const runLabel = refreshMode ? "Start Refresh" : "Import";
-      const stopLabel = refreshMode ? "Stop Refresh" : "Stop Import";
+      const identifierMode = state.libraryTaskMode === "identifier-recovery";
+      const maintenanceMode = refreshMode || identifierMode;
+      const runLabel = identifierMode ? "Start Search" : (refreshMode ? "Start Refresh" : "Import");
+      const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Stop Refresh" : "Stop Import");
+      const maintenanceSource = identifierMode
+        ? "All Library papers without DOI/arXiv"
+        : "All Library papers with DOI/arXiv";
       root.innerHTML = `
         <div class="loader-panel">
           <div class="loader-form">
-            <div class="loader-field${refreshMode ? " loader-source-disabled" : ""}">
+            <div class="loader-field${maintenanceMode ? " loader-source-disabled" : ""}">
               <label for="libraryImportPath">Source</label>
               <div class="loader-path-control">
-                <input id="libraryImportPath" type="text" value="${escapeAttr(refreshMode ? "All Library papers with DOI/arXiv" : sourceLabel)}" placeholder="/path/to/folder"${refreshMode ? " disabled" : ""}>
-                ${refreshMode ? "" : `<button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>`}
+                <input id="libraryImportPath" type="text" value="${escapeAttr(maintenanceMode ? maintenanceSource : sourceLabel)}" placeholder="/path/to/folder"${maintenanceMode ? " disabled" : ""}>
+                ${maintenanceMode ? "" : `<button class="smallbtn" id="libraryChooseFolder" type="button"${state.libraryImportBusy ? " disabled" : ""}>Choose Folder</button>`}
               </div>
             </div>
             <div class="loader-field loader-metadata-field">
-              <label for="libraryImportMetadataMode">Metadata</label>
-              <select id="libraryImportMetadataMode"${state.libraryImportBusy ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
-                ${refreshMode ? "" : `<option value="skip"${state.libraryImportMetadataMode === "skip" ? " selected" : ""}>Skip metadata</option>`}
-                <option value="quick"${state.libraryImportMetadataMode === "quick" ? " selected" : ""}>Quick refresh</option>
-                <option value="full"${state.libraryImportMetadataMode === "full" ? " selected" : ""}>Full refresh</option>
+              <label for="libraryImportMetadataMode">${identifierMode ? "Lookup" : "Metadata"}</label>
+              <select id="libraryImportMetadataMode"${state.libraryImportBusy || identifierMode ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
+                ${identifierMode
+                  ? `<option value="quick" selected>Identifier + quick metadata</option>`
+                  : `
+                    ${refreshMode ? "" : `<option value="skip"${state.libraryImportMetadataMode === "skip" ? " selected" : ""}>Skip metadata</option>`}
+                    <option value="quick"${state.libraryImportMetadataMode === "quick" ? " selected" : ""}>Quick refresh</option>
+                    <option value="full"${state.libraryImportMetadataMode === "full" ? " selected" : ""}>Full refresh</option>
+                  `}
               </select>
-              <div class="loader-metadata-hint">${escapeHtml(refreshMode ? `Papers refreshed in the last 3 days will be skipped.` : loaderMetadataModeHint(state.libraryImportMetadataMode))}</div>
+              <div class="loader-metadata-hint">${escapeHtml(
+                identifierMode
+                  ? "Recent attempts within 7 days are skipped. No Google Scholar requests."
+                  : (refreshMode ? "Papers refreshed in the last 3 days will be skipped." : loaderMetadataModeHint(state.libraryImportMetadataMode))
+              )}</div>
             </div>
             <div class="loader-action-group">
               <button class="smallbtn" id="libraryRunImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>${runLabel}</button>
               <button class="smallbtn" id="libraryStopImport" type="button"${state.libraryImportBusy ? "" : " disabled"}>${stopLabel}</button>
-              ${refreshMode ? "" : `<button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>`}
+              ${maintenanceMode ? "" : `<button class="smallbtn danger loader-action-danger" id="libraryDeleteImport" type="button"${state.libraryImportBusy ? " disabled" : ""}>Delete Import</button>`}
             </div>
-            <div class="loader-target-summary${refreshMode ? " hidden" : ""}">
+            <div class="loader-target-summary${maintenanceMode ? " hidden" : ""}">
               <div class="loader-target-pill"><strong>Finder Target</strong><span title="${escapeAttr(finderTarget || targetLabel)}">${escapeHtml(finderTarget || targetLabel || "data/Library")}</span></div>
             </div>
           </div>
@@ -30781,7 +31687,7 @@ INDEX_HTML = """<!doctype html>
       mode = normalizeLibraryImportMetadataMode(mode);
       if (mode === "skip") return "Fastest: import files and identifiers only.";
       if (mode === "full") return "Slow: refreshes detailed metadata and citation sources.";
-      return "Recommended: refreshes core title, author, journal, and date metadata.";
+      return "Recommended: recovers missing identifiers by PDF title, then refreshes core metadata.";
     }
 
     function loaderStatusText(job) {
@@ -30847,6 +31753,15 @@ INDEX_HTML = """<!doctype html>
           `mode: ${result.metadata_mode || "full"}`
         ].join(" · ");
       }
+      if (result.job_type === "identifier_recovery") {
+        return [
+          `${result.identifiers_recovered || 0} recovered`,
+          `${result.identifier_recovery_unresolved || 0} unresolved`,
+          `${result.skipped_recent || 0} skipped recent`,
+          `${result.failed || 0} failed`,
+          `${result.total_candidates || 0} candidates`
+        ].join(" · ");
+      }
       return [
         `${result.created_papers || 0} created`,
         `${result.existing_papers || 0} existing`,
@@ -30894,7 +31809,9 @@ INDEX_HTML = """<!doctype html>
       if (level === "error" || /failed|error/i.test(message)) return "error";
       if (level === "warn" || /warning/i.test(message)) return "warn";
       if (message.startsWith("DOI extracted:")) return "doi-ok";
+      if (message.startsWith("Recovered DOI") || message.startsWith("Recovered ARXIV")) return "doi-ok";
       if (message.startsWith("No DOI extracted")) return "doi-missing";
+      if (message.startsWith("No confident identifier")) return "doi-missing";
       if (message.startsWith("Refreshing Details metadata")) return "metadata";
       if (message.startsWith("Stop requested") || message.includes("stopped by user")) return "warn";
       if (message.startsWith("Deleted import batch")) return "warn";
@@ -30954,6 +31871,27 @@ INDEX_HTML = """<!doctype html>
     function loaderSideMarkup(result) {
       const plan = state.libraryImportJob?.local_copy_plan || {};
       const refreshMode = state.libraryTaskMode === "metadata-refresh" || state.libraryImportJob?.job_type === "metadata_refresh" || result?.job_type === "metadata_refresh";
+      const identifierMode = state.libraryTaskMode === "identifier-recovery" || state.libraryImportJob?.job_type === "identifier_recovery" || result?.job_type === "identifier_recovery";
+      if (identifierMode) {
+        const sourceCounts = result?.identifier_recovery_sources || {};
+        const sourceSummary = Object.entries(sourceCounts)
+          .map(([source, count]) => `${source}: ${Number(count || 0)}`)
+          .join(" · ");
+        return `
+          <h3>Missing Identifiers</h3>
+          <p>Scans active Library and Space papers that do not have a DOI or arXiv ID. Local PDFs are checked before title matching through Crossref, OpenAlex, and Semantic Scholar.</p>
+          <div class="loader-metric"><strong>Scope</strong><span>All active Library/Space papers without DOI/arXiv</span></div>
+          <div class="loader-metric"><strong>Safety</strong><span>Sequential requests, cached duplicate titles, 7-day recent-attempt skip, and no Google Scholar requests.</span></div>
+          <div class="loader-metric"><strong>Metadata</strong><span>Recovered papers receive one quick metadata refresh.</span></div>
+          ${result ? `
+            <div class="loader-metric"><strong>${result.identifiers_recovered || 0} recovered</strong><span>Confident DOI/arXiv matches saved to SQLite.</span></div>
+            <div class="loader-metric"><strong>${result.identifier_recovery_unresolved || 0} unresolved</strong><span>No confident match was saved.</span></div>
+            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Attempted within the last ${result.skip_days || 7} days.</span></div>
+            <div class="loader-metric"><strong>${result.failed || 0} failed</strong><span>Errors recorded without changing identifiers.</span></div>
+            ${sourceSummary ? `<div class="loader-metric"><strong>Sources</strong><span>${escapeHtml(sourceSummary)}</span></div>` : ""}
+          ` : ""}
+        `;
+      }
       if (refreshMode) {
         return `
           <h3>Metadata Refresh</h3>
@@ -30977,7 +31915,8 @@ INDEX_HTML = """<!doctype html>
           <div class="loader-metric"><strong>Existing</strong><span>paper records already known by DOI, arXiv, or source path. Missing Library shortcuts are restored.</span></div>
           <div class="loader-metric"><strong>Updated</strong><span>records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
           <div class="loader-metric"><strong>DOI found</strong><span>PDF files where the loader extracted a DOI from the first page or filename.</span></div>
-          <div class="loader-metric"><strong>No DOI</strong><span>PDF files that did not expose a DOI during the loader scan.</span></div>
+          <div class="loader-metric"><strong>Recovered</strong><span>Missing identifiers recovered from a PDF title through Crossref, OpenAlex, or Semantic Scholar.</span></div>
+          <div class="loader-metric"><strong>No DOI in file</strong><span>PDF files that did not expose a DOI during the initial local scan; some may be recovered by title afterward.</span></div>
           <div class="loader-metric"><strong>Resources</strong><span>PDF attachments plus non-PDF resource files.</span></div>
           <div class="loader-metric"><strong>Skipped</strong><span>system metadata and macOS aliases; source files are not deleted.</span></div>
           <div class="loader-metric"><strong>Missing</strong><span>paths recorded in the scan but not readable during import.</span></div>
@@ -30997,7 +31936,9 @@ INDEX_HTML = """<!doctype html>
         <div class="loader-metric"><strong>${result.existing_papers || 0} existing</strong><span>Already-known files matched by DOI, arXiv, or source path; Library shortcuts are still restored when missing.</span></div>
         <div class="loader-metric"><strong>${result.updated_papers || 0} updated</strong><span>Records refreshed by explicit metadata actions, not by repeated folder loading.</span></div>
         <div class="loader-metric"><strong>${result.pdf_doi_extracted_count || 0} DOI found</strong><span>PDF files where the loader found a DOI from the first page or filename.</span></div>
-        <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI</strong><span>PDF files imported by path identity because no DOI was extracted.</span></div>
+        <div class="loader-metric"><strong>${result.identifiers_recovered || 0} recovered</strong><span>DOI/arXiv identifiers recovered from PDF titles through Crossref, OpenAlex, or Semantic Scholar.</span></div>
+        <div class="loader-metric"><strong>${result.identifier_recovery_unresolved || 0} unresolved</strong><span>PDFs still without a confident identifier after title recovery.</span></div>
+        <div class="loader-metric"><strong>${result.pdf_doi_missing_count || 0} no DOI in file</strong><span>PDF files that did not expose a DOI during the initial local scan; recovered title matches are counted above.</span></div>
         <div class="loader-metric"><strong>${result.resources_or_attachments_to_import || 0} resources</strong><span>Imported PDF attachments plus non-PDF resources. This includes ${result.pdf_attachments_to_import || 0} PDF files and ${result.created_resources || 0} non-PDF resources.</span></div>
         <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Journal Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
@@ -31302,7 +32243,7 @@ INDEX_HTML = """<!doctype html>
           </div>
           <div class="workspace-tool-group">
             <input class="search" id="workspaceDoiInput" placeholder="DOI, arXiv ID, or title">
-            <button class="smallbtn" id="workspaceAddDoiButton" type="button">Add Paper</button>
+            <button class="smallbtn" id="workspaceAddDoiButton" type="button"${state.workspaceAddPaperBusy ? " disabled" : ""}>Add Paper</button>
           </div>
           ${status ? `<span class="workspace-status" id="workspaceStatus">${escapeHtml(status)}</span>` : `<span class="workspace-status" id="workspaceStatus"></span>`}
           <button class="smallbtn workspace-move-library-button" id="workspaceMoveToLibraryButton" type="button">Move Space to Library</button>
@@ -31363,6 +32304,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
       $("libraryRunImport")?.addEventListener("click", () => {
         if (state.libraryTaskMode === "metadata-refresh") runLibraryMetadataRefresh();
+        else if (state.libraryTaskMode === "identifier-recovery") runLibraryIdentifierRecovery();
         else runLibraryFolderImport();
       });
       $("libraryStopImport")?.addEventListener("click", stopLibraryFolderImport);
@@ -31546,11 +32488,52 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function runLibraryIdentifierRecovery() {
+      stopLibraryImportPolling();
+      state.libraryImportBusy = true;
+      state.libraryImportBackground = false;
+      state.libraryTaskMode = "identifier-recovery";
+      state.libraryImportMetadataMode = "quick";
+      state.libraryImportStatus = "Starting missing identifier search...";
+      state.libraryImportLastResult = null;
+      state.libraryImportReportPath = "";
+      state.libraryImportReadyRefreshDone = true;
+      state.libraryImportJob = {
+        job_type: "identifier_recovery",
+        status: "starting",
+        stage: "queued",
+        logs: [{time: new Date().toISOString(), level: "info", message: state.libraryImportStatus}],
+        percent: 0
+      };
+      renderLibraryLoader();
+      try {
+        const res = await fetch("/api/library/identifier-recovery/start", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({skip_days: 7})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not start missing identifier search");
+        state.libraryImportJobId = data.job_id || "";
+        state.libraryImportJob = data.job || null;
+        state.libraryImportStatus = "Missing identifier search running...";
+        renderLibraryLoader();
+        startLibraryImportPolling();
+      } catch (error) {
+        state.libraryImportStatus = error.message || "Missing identifier search failed";
+        state.libraryImportLastResult = {job_type: "identifier_recovery", errors: [state.libraryImportStatus]};
+        state.libraryImportBusy = false;
+        renderLibraryLoader();
+      }
+    }
+
     async function stopLibraryFolderImport() {
       if (!state.libraryImportJobId || !state.libraryImportBusy) return;
-      state.libraryImportStatus = state.libraryTaskMode === "metadata-refresh"
-        ? "Stopping metadata refresh at the next safe checkpoint..."
-        : "Stopping import at the next safe checkpoint...";
+      state.libraryImportStatus = state.libraryTaskMode === "identifier-recovery"
+        ? "Stopping identifier search at the next safe checkpoint..."
+        : (state.libraryTaskMode === "metadata-refresh"
+          ? "Stopping metadata refresh at the next safe checkpoint..."
+          : "Stopping import at the next safe checkpoint...");
       renderLibraryLoader();
       try {
         const res = await fetch("/api/library/import-folder/stop", {
@@ -31818,7 +32801,9 @@ INDEX_HTML = """<!doctype html>
 
     function applyLibraryImportDraft(draft = {}) {
       const sourcePaths = Array.isArray(draft.source_paths) ? draft.source_paths.filter((path) => typeof path === "string" && path.trim()) : [];
-      state.libraryTaskMode = draft.job_type === "metadata_refresh" ? "metadata-refresh" : "import";
+      state.libraryTaskMode = draft.job_type === "metadata_refresh"
+        ? "metadata-refresh"
+        : (draft.job_type === "identifier_recovery" ? "identifier-recovery" : "import");
       state.libraryImportSourcePaths = sourcePaths;
       state.libraryImportPath = sourcePaths.length === 1 ? sourcePaths[0] : (sourcePaths.length ? `${sourcePaths.length} dropped items` : (draft.source_root || state.libraryImportPath || ""));
       state.libraryImportTargetFolderId = Number(draft.target_folder_id || state.libraryRootId || 1);
@@ -31861,6 +32846,17 @@ INDEX_HTML = """<!doctype html>
         job_type: "metadata_refresh",
         metadata_mode: "full",
         status: "Ready to refresh Library metadata. Papers refreshed in the last 3 days will be skipped."
+      };
+      saveLibraryImportDraft(draft);
+      applyLibraryImportDraft(draft);
+      openLibraryLoaderWindow();
+    }
+
+    function openIdentifierRecoveryWindow() {
+      const draft = {
+        job_type: "identifier_recovery",
+        metadata_mode: "quick",
+        status: "Ready to find missing identifiers. Attempts made in the last 7 days will be skipped."
       };
       saveLibraryImportDraft(draft);
       applyLibraryImportDraft(draft);
@@ -32817,34 +33813,66 @@ INDEX_HTML = """<!doctype html>
 
     async function addLibraryWorkspaceDoi(index) {
       const identifier = $("workspaceDoiInput")?.value || "";
-      if (!identifier.trim()) return;
+      if (!identifier.trim() || state.workspaceAddPaperBusy) return;
+      const workspaceRootFolderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || 0);
+      const currentFolderId = Number(state.libraryCurrentFolderId || workspaceRootFolderId);
+      const targetFolderId = libraryWorkspaceIndexForFolder(currentFolderId) === index
+        ? currentFolderId
+        : workspaceRootFolderId;
+      const targetName = libraryFolderPath(targetFolderId) || libraryWorkspaceLabel(index) || "current folder";
+      state.workspaceAddPaperBusy = true;
       state.workspaceStatus = "Looking up paper...";
+      updateLibraryActivityStatus(
+        `Finding paper and adding it to ${targetName}...`,
+        {live: true, clear: false}
+      );
       state.libraryTab = `workspace-${index}`;
       renderLibrary();
       try {
         const res = await fetch("/api/library/workspace-tabs/add-doi", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({tab_id: state.libraryWorkspaceTabs[index]?.tab_id || "", index, identifier})
+          body: JSON.stringify({
+            tab_id: state.libraryWorkspaceTabs[index]?.tab_id || "",
+            index,
+            identifier,
+            folder_id: targetFolderId
+          })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not add paper");
         applyLibraryNavigationSnapshot(data);
         upsertLibraryItemLocal(data.item);
         if (data.paper) updatePaperState(data.paper.paper_id || data.paper_id, data.paper);
-        const rootFolderId = Number(state.libraryWorkspaceTabs[index]?.root_folder_id || libraryDisplayRootId());
-        const added = state.libraryItems.find((item) => String(item.paper_id || "") === String(data.paper_id || "") && Number(item.folder_id) === rootFolderId);
+        const addedFolderId = Number(data.folder_id || targetFolderId || workspaceRootFolderId);
+        const added = data.item?.id
+          ? libraryItemById(Number(data.item.id))
+          : state.libraryItems.find((item) => (
+              String(item.paper_id || "") === String(data.paper_id || "")
+              && Number(item.folder_id) === addedFolderId
+            ));
         if (added) {
-          state.libraryActiveFolderId = rootFolderId;
+          state.libraryActiveFolderId = addedFolderId;
           state.librarySelection = {type: "item", id: Number(added.id)};
-          setLibraryColumnSelection(rootFolderId, state.librarySelection);
+          setLibraryColumnSelection(addedFolderId, state.librarySelection);
         }
         state.workspaceStatus = "Literature added.";
         state.libraryTab = `workspace-${index}`;
-        renderLibrary();
+        const paperTitle = String(data.paper?.title || identifier).trim();
+        updateLibraryActivityStatus(
+          `Added ${paperTitle} to ${targetName}.`,
+          {live: false, delay: 4200}
+        );
       } catch (error) {
-        state.workspaceStatus = error.message || "Could not add paper";
+        const message = error.message || "Could not add paper";
+        state.workspaceStatus = message;
         state.libraryTab = `workspace-${index}`;
+        updateLibraryActivityStatus(
+          `Add Paper failed: ${message}`,
+          {live: false, delay: 5200}
+        );
+      } finally {
+        state.workspaceAddPaperBusy = false;
         renderLibrary();
       }
     }
@@ -34106,6 +35134,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryNativeDragHandleAttrs(type, entry, fallbackName) {
+      if (type === "folder") {
+        const folderId = Number(entry?.id || 0);
+        if (!folderId || entry?.protected || folderId === Number(state.libraryRootId || 0)) return "";
+        return `data-native-file-drag-handle data-native-folder-drag-id="${folderId}" draggable="false" title="Drag a real-file copy to Finder"`;
+      }
       if (type !== "item") return "";
       const path = libraryNativeItemPath(entry);
       if (!path) return "";
@@ -34267,28 +35300,7 @@ INDEX_HTML = """<!doctype html>
       const lines = [];
       const localPath = paper?.merged_pdf_path || paper?.native_file_path || paper?.source_path || "";
       const localLabel = paper?.merged_pdf_path ? "PDF" : "File";
-      const selectedItemId = Number(options.selectedLibraryItemId || 0);
-      const canShowInLibrary = Boolean(
-        localPath
-        && paper?.paper_id
-        && (
-          selectedItemId
-          || paper?.in_library
-          || Number(paper?.library_item_count || 0) > 0
-        )
-      );
-      if (localPath && canShowInLibrary) {
-        lines.push(`
-          <button
-            class="library-file-location-link"
-            type="button"
-            data-action="show-file-in-library"
-            data-paper-id="${escapeAttr(paper.paper_id || "")}"
-            data-library-item-id="${selectedItemId}"
-            title="Show in Library"
-          >${escapeHtml(`${localLabel}: ${localPath}`)}</button>
-        `);
-      } else if (localPath) {
+      if (localPath) {
         lines.push(`<span class="library-file-line">${escapeHtml(`${localLabel}: ${localPath}`)}</span>`);
       } else {
         lines.push(`<span class="library-file-line">${libraryPaperIsPdfLike(paper) ? "PDF" : "File"}: No local file</span>`);
@@ -34298,21 +35310,24 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wireLibraryFileLocationLinks(root) {
-      root?.querySelectorAll('[data-action="show-file-in-library"]').forEach((button) => {
+      root?.querySelectorAll('[data-action="show-library-occurrence"]').forEach((button) => {
         button.addEventListener("click", async (event) => {
           event.preventDefault();
           event.stopPropagation();
+          const itemId = Number(button.dataset.libraryItemId || 0);
+          const item = libraryItemById(itemId);
+          if (!item) return;
           button.disabled = true;
           try {
             await navigateToPaperInLibrary(
-              button.dataset.paperId || "",
-              Number(button.dataset.libraryItemId || 0)
+              String(item.paper_id || item.paper?.paper_id || ""),
+              itemId
             );
           } catch (error) {
             button.disabled = false;
             const status = root.querySelector(".library-detail-status");
             if (status) {
-              status.textContent = error.message || "Could not show paper in Library";
+              status.textContent = error.message || "Could not show folder in Library";
               status.className = "library-detail-status err";
             }
           }
@@ -34369,6 +35384,7 @@ INDEX_HTML = """<!doctype html>
               id: key,
               name: folder.name || "Library",
               itemId: 0,
+              targetItemId: 0,
               current: false,
               children: [],
               childMap: new Map()
@@ -34376,6 +35392,7 @@ INDEX_HTML = """<!doctype html>
             siblingMap.set(key, node);
             siblings.push(node);
           }
+          if (!node.targetItemId) node.targetItemId = Number(item.id || 0);
           if (index === chain.length - 1) {
             node.itemId = Number(item.id || 0);
             node.current = node.current || Number(item.id || 0) === Number(selectedItemId || 0);
@@ -34397,9 +35414,7 @@ INDEX_HTML = """<!doctype html>
         guard += 1;
         const currentId = Number(current.id || 0);
         if (currentId === displayRootId) {
-          if (Number(folderId || 0) === displayRootId) {
-            chain.push({id: currentId, name: current.name || "Library"});
-          }
+          chain.push({id: currentId, name: current.name || "Library"});
           break;
         }
         chain.push({id: currentId, name: current.name || "Folder"});
@@ -34417,12 +35432,21 @@ INDEX_HTML = """<!doctype html>
     function libraryFolderOccurrenceNodesMarkup(nodes, depth = 0) {
       return nodes.map((node) => {
         const hasPaper = Number(node.itemId || 0) > 0;
+        const targetItemId = Number(node.targetItemId || node.itemId || 0);
         const childMarkup = node.children.length ? libraryFolderOccurrenceNodesMarkup(node.children, depth + 1) : "";
         return `
           <div class="library-folder-tree-node">
             <div class="library-folder-tree-row${hasPaper ? " has-paper" : ""}${node.current ? " current" : ""}" style="--library-folder-depth:${depth}">
-              <span class="library-folder-tree-icon" aria-hidden="true"></span>
-              <span class="library-folder-tree-label">${escapeHtml(node.name || "Folder")}</span>
+              <button
+                class="library-folder-tree-target"
+                type="button"
+                data-action="show-library-occurrence"
+                data-library-item-id="${targetItemId}"
+                title="Show this location in Library"
+              >
+                <span class="library-folder-tree-icon" aria-hidden="true"></span>
+                <span class="library-folder-tree-label">${escapeHtml(node.name || "Folder")}</span>
+              </button>
               <button class="library-folder-remove" type="button" data-action="remove-library-occurrence" data-library-item-id="${Number(node.itemId || 0)}" title="Remove from this folder" aria-label="Remove from ${escapeAttr(node.name || "Folder")}">-</button>
             </div>
             ${childMarkup}
@@ -34659,6 +35683,31 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function loadLibraryPaperLocations(item) {
+      const paperId = String(item?.paper_id || item?.paper?.paper_id || "");
+      if (!paperId || state.libraryPaperLocationsLoaded.has(paperId)) return null;
+      if (state.libraryPaperLocationRequests[paperId]) {
+        return state.libraryPaperLocationRequests[paperId];
+      }
+      state.libraryPaperLocationRequests[paperId] = refreshLibrarySnapshotForNavigation(paperId)
+        .then(() => {
+          const selected = state.librarySelection;
+          const selectedItem = selected?.type === "item" ? libraryItemById(selected.id) : null;
+          if (
+            state.mode === "library"
+            && state.libraryTab !== "my-publications"
+            && String(selectedItem?.paper_id || selectedItem?.paper?.paper_id || "") === paperId
+          ) {
+            renderLibraryDetail();
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          delete state.libraryPaperLocationRequests[paperId];
+        });
+      return state.libraryPaperLocationRequests[paperId];
+    }
+
     function renderLibraryDetail() {
       const root = $("libraryDetail");
       if (!root) return;
@@ -34683,6 +35732,7 @@ INDEX_HTML = """<!doctype html>
       }
       const item = libraryItemById(selection.id);
       const paper = item?.paper || {};
+      if (paper.paper_id) loadLibraryPaperLocations(item);
       if (paper.paper_id && !libraryPaperIsPdfLike(paper)) {
         root.innerHTML = libraryNonPdfDetailMarkup(paper);
         root.querySelector('[data-action="open-native-paper-file"]')?.addEventListener("click", () => openNativePaperFile(paper, {
@@ -36581,7 +37631,8 @@ INDEX_HTML = """<!doctype html>
         row.querySelectorAll("[data-native-file-drag-handle]").forEach((handle) => {
           handle.addEventListener("mousedown", (event) => {
             event.stopPropagation();
-            prepareNativeFileDrag(handle);
+            if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
+            else prepareNativeFileDrag(handle);
           });
           handle.addEventListener("dragstart", (event) => {
             event.preventDefault();
@@ -36769,6 +37820,49 @@ INDEX_HTML = """<!doctype html>
         path,
         name: handle.dataset.nativeDragName || fileNameFromPath(path) || "paper.pdf"
       });
+    }
+
+    function armNativeFolderDrag(handle) {
+      const row = handle?.closest?.(".library-row");
+      const previousDraggable = row?.getAttribute("draggable");
+      if (row) row.setAttribute("draggable", "false");
+      let restored = false;
+      const restore = () => {
+        if (restored) return;
+        restored = true;
+        if (row && previousDraggable !== null) row.setAttribute("draggable", previousDraggable);
+        else if (row) row.removeAttribute("draggable");
+      };
+      window.addEventListener("mouseup", restore, {once: true});
+      window.setTimeout(restore, 120000);
+      prepareNativeFolderDrag(handle);
+    }
+
+    function prepareNativeFolderDrag(handle) {
+      const folderId = Number(handle?.dataset?.nativeFolderDragId || 0);
+      if (!folderId || !window.webkit?.messageHandlers?.nativeFileDrag) return;
+      try {
+        const request = new XMLHttpRequest();
+        request.open("POST", "/api/library/folders/prepare-drag", false);
+        request.setRequestHeader("Content-Type", "application/json");
+        request.send(JSON.stringify({folder_id: folderId}));
+        const data = JSON.parse(request.responseText || "{}");
+        if (request.status < 200 || request.status >= 300) {
+          throw new Error(data.error || "Could not prepare folder copy");
+        }
+        const result = data.result || {};
+        if (!result.desktop_path) throw new Error("Could not prepare folder copy");
+        window.webkit.messageHandlers.nativeFileDrag.postMessage({
+          path: result.desktop_path,
+          name: result.folder_name || libraryFolderById(folderId)?.name || "Library Folder",
+          cleanup_path: result.cleanup_path || ""
+        });
+      } catch (error) {
+        updateLibraryActivityStatus(
+          error.message || "Could not prepare folder copy",
+          {live: false, clear: false}
+        );
+      }
     }
 
     function fileNameFromPath(path) {
@@ -38488,11 +39582,38 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function authorMonitorExpectedPaperCount(authorId = state.authorMonitorSelectedId) {
+      const normalizedId = Number(authorId || 0);
+      if (normalizedId > 0) {
+        const author = state.authorMonitors.find((item) => Number(item.id) === normalizedId);
+        return Math.max(0, Number(author?.paper_count || 0));
+      }
+      return state.authorMonitors.reduce(
+        (sum, author) => sum + Math.max(0, Number(author.paper_count || 0)),
+        0
+      );
+    }
+
+    function authorMonitorScopeHasExpectedPapers(authorId = state.authorMonitorSelectedId) {
+      const expected = authorMonitorExpectedPaperCount(authorId);
+      if (expected <= 0) return true;
+      const normalizedId = Number(authorId || 0);
+      return state.authorMonitorPapers.some((paper) => {
+        if (!normalizedId) return true;
+        return (paper.author_monitor_ids || []).map(Number).includes(normalizedId);
+      });
+    }
+
     function restoreCachedAuthorMonitorPapers(authorId) {
       const normalizedId = Number(authorId);
       if (!Number.isInteger(normalizedId) || normalizedId < 0) return false;
       if (state.authorMonitorIndexLoaded) {
         state.authorMonitorSelectedId = normalizedId;
+        if (!authorMonitorScopeHasExpectedPapers(normalizedId)) {
+          state.authorMonitorIndexLoaded = false;
+          document.documentElement.dataset.authorMonitorIndex = "stale";
+          return false;
+        }
         state.authorMonitorSelectedPaperId = String(
           state.authorMonitorSelectedPaperByAuthor.get(normalizedId) || ""
         );
@@ -38744,25 +39865,53 @@ INDEX_HTML = """<!doctype html>
         refreshAuthorMonitorSummary();
         return true;
       }
+      const previous = {
+        selectedId: state.authorMonitorSelectedId,
+        papers: state.authorMonitorPapers,
+        selectedPaperId: state.authorMonitorSelectedPaperId,
+        reportSelectedPaperId: state.reportSelectedPaperId,
+        loaded: state.authorMonitorLoaded,
+        loading: state.authorMonitorLoading,
+        loadedAt: state.authorMonitorLoadedAt,
+        indexLoaded: state.authorMonitorIndexLoaded
+      };
+      const canKeepVisiblePapers = (
+        Number(previous.selectedId) === requestedId
+        && authorMonitorScopeHasExpectedPapers(requestedId)
+      );
       state.authorMonitorSelectedId = requestedId;
-      state.authorMonitorPapers = [];
-      state.authorMonitorSelectedPaperId = "";
-      state.reportSelectedPaperId = "";
-      state.authorMonitorLoading = true;
-      state.authorMonitorLoaded = false;
+      if (!canKeepVisiblePapers) {
+        state.authorMonitorSelectedPaperId = "";
+        state.reportSelectedPaperId = "";
+      }
+      state.authorMonitorLoading = !canKeepVisiblePapers;
+      state.authorMonitorLoaded = canKeepVisiblePapers;
       invalidateAuthorMonitorViewCache();
       if (state.mode === "author" && state.authorMonitors.length) {
-        renderAuthorMonitor({preserveScroll: false});
+        renderAuthorMonitor({preserveScroll: canKeepVisiblePapers});
       }
       try {
         const snapshot = await fetchAuthorMonitorSnapshot(requestedId);
         if (token !== state.authorMonitorLoadToken) return false;
         applyAuthorMonitorSnapshot(snapshot);
         if (state.mode === "author") {
-          renderAuthorMonitor({preserveScroll: false});
+          renderAuthorMonitor({preserveScroll: Boolean(options.preserveScroll)});
         }
         prefetchAuthorMonitorIndex().catch(() => {});
         return true;
+      } catch (error) {
+        if (token === state.authorMonitorLoadToken) {
+          state.authorMonitorSelectedId = previous.selectedId;
+          state.authorMonitorPapers = previous.papers;
+          state.authorMonitorSelectedPaperId = previous.selectedPaperId;
+          state.reportSelectedPaperId = previous.reportSelectedPaperId;
+          state.authorMonitorLoaded = previous.loaded;
+          state.authorMonitorLoading = previous.loading;
+          state.authorMonitorLoadedAt = previous.loadedAt;
+          state.authorMonitorIndexLoaded = previous.indexLoaded;
+          invalidateAuthorMonitorViewCache();
+        }
+        throw error;
       } finally {
         if (token === state.authorMonitorLoadToken) {
           state.authorMonitorLoading = false;
@@ -38772,6 +39921,10 @@ INDEX_HTML = """<!doctype html>
 
     function selectAuthorMonitorScope(authorId, options = {}) {
       const nextId = Number(authorId || 0);
+      if (state.authorMonitorEmptyRecoveryTimer) {
+        window.clearTimeout(state.authorMonitorEmptyRecoveryTimer);
+        state.authorMonitorEmptyRecoveryTimer = 0;
+      }
       state.authorMonitorRailScrollTop = Number(
         $("authorMonitorAuthors")?.scrollTop || state.authorMonitorRailScrollTop || 0
       );
@@ -38785,12 +39938,13 @@ INDEX_HTML = """<!doctype html>
       persistAuthorMonitorSelectedId(nextId);
       if (state.authorMonitorIndexLoaded) {
         rememberCurrentAuthorMonitorPapers();
-        restoreCachedAuthorMonitorPapers(nextId);
-        if (state.mode === "author") renderAuthorMonitor({preserveScroll: false});
-        refreshAuthorMonitorSummary();
-        return;
+        if (restoreCachedAuthorMonitorPapers(nextId)) {
+          if (state.mode === "author") renderAuthorMonitor({preserveScroll: false});
+          refreshAuthorMonitorSummary();
+          return;
+        }
       }
-      loadAuthorMonitorScope(nextId).catch((error) => {
+      loadAuthorMonitorScope(nextId, {force: true}).catch((error) => {
         updateAuthorMonitorActivityStatus(
           error.message || "Could not load this author",
           {live: false, clear: false}
@@ -39007,6 +40161,51 @@ INDEX_HTML = """<!doctype html>
       });
       state.authorMonitorViewCache = {key: cacheKey, visible, partition: null};
       return visible;
+    }
+
+    function authorMonitorNeedsEmptyViewRecovery() {
+      if (
+        state.mode !== "author"
+        || state.authorMonitorLoading
+        || state.authorMonitorRefreshing
+        || state.authorMonitorUnreadOnly
+        || String(state.authorPaperQuery || "").trim()
+      ) return false;
+      return (
+        authorMonitorExpectedPaperCount() > 0
+        && !authorMonitorScopeHasExpectedPapers()
+      );
+    }
+
+    function scheduleAuthorMonitorEmptyViewRecovery() {
+      if (!authorMonitorNeedsEmptyViewRecovery() || state.authorMonitorEmptyRecoveryTimer) {
+        return;
+      }
+      const authorId = Number(state.authorMonitorSelectedId || 0);
+      const recoveryKey = `${authorId}:${authorMonitorExpectedPaperCount(authorId)}`;
+      if (
+        state.authorMonitorEmptyRecoveryLastKey === recoveryKey
+        && Date.now() - Number(state.authorMonitorEmptyRecoveryAt || 0) < 30000
+      ) return;
+      state.authorMonitorEmptyRecoveryLastKey = recoveryKey;
+      state.authorMonitorEmptyRecoveryAt = Date.now();
+      state.authorMonitorEmptyRecoveryTimer = window.setTimeout(() => {
+        state.authorMonitorEmptyRecoveryTimer = 0;
+        if (
+          Number(state.authorMonitorSelectedId || 0) !== authorId
+          || !authorMonitorNeedsEmptyViewRecovery()
+        ) return;
+        state.authorMonitorIndexLoaded = false;
+        document.documentElement.dataset.authorMonitorIndex = "stale";
+        loadAuthorMonitorScope(authorId, {force: true, preserveScroll: true})
+          .catch((error) => {
+            updateAuthorMonitorActivityStatus(
+              error.message || "Could not restore this author paper list",
+              {live: false, clear: false}
+            );
+            if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+          });
+      }, 250);
     }
 
     function authorMonitorPartitionedPapers() {
@@ -40110,7 +41309,15 @@ INDEX_HTML = """<!doctype html>
           </div>
         `;
       } else if (!partition.articles.length && !partition.conferences.length) {
-        if (
+        if (authorMonitorNeedsEmptyViewRecovery()) {
+          list.innerHTML = `
+            <div class="author-monitor-empty author-monitor-importing-empty">
+              <strong>Restoring ${escapeHtml(selected?.name || "Author Monitor")} papers…</strong>
+              <span>The local paper count is intact. Reloading this view from SQLite.</span>
+            </div>
+          `;
+          scheduleAuthorMonitorEmptyViewRecovery();
+        } else if (
           selected
           && authorMonitorIsBackgroundScholarJob(selected)
           && Number(selected.paper_count || 0) === 0
@@ -40123,7 +41330,12 @@ INDEX_HTML = """<!doctype html>
             </div>
           `;
         } else {
-          list.innerHTML = `<div class="author-monitor-empty">${state.authorMonitorUnreadOnly ? "No unread papers match this view." : "No monitored papers match this view."}</div>`;
+          const query = String(state.authorPaperQuery || "").trim();
+          list.innerHTML = `<div class="author-monitor-empty">${
+            state.authorMonitorUnreadOnly
+              ? "No unread papers match this view."
+              : (query ? `No monitored papers match “${escapeHtml(query)}”.` : "No monitored papers match this view.")
+          }</div>`;
         }
       } else {
         const conferenceCards = root.querySelector('[data-role="conference-cards"]');
@@ -40220,7 +41432,8 @@ INDEX_HTML = """<!doctype html>
       stopArxivUpdateCountdown();
       setPrimaryView("author");
       const cacheIsFresh = state.authorMonitorLoaded
-        && Date.now() - Number(state.authorMonitorLoadedAt || 0) < AUTHOR_MONITOR_PAPER_CACHE_TTL_MS;
+        && Date.now() - Number(state.authorMonitorLoadedAt || 0) < AUTHOR_MONITOR_PAPER_CACHE_TTL_MS
+        && authorMonitorScopeHasExpectedPapers();
       if (cacheIsFresh) {
         renderAuthorMonitor();
         updateAuthorMonitorActivityStatus("", {live: false});
@@ -43238,6 +44451,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openThemeMonitor() {
+      const returnViewport = state.monitorReturnViewports.theme;
       state.mode = "theme";
       applyCalendarState("theme");
       closeLibraryQuickLook();
@@ -43255,6 +44469,10 @@ INDEX_HTML = """<!doctype html>
       await resumeActiveThemeFetch(state.selectedDate);
       const reportPromise = loadThemeReportForDate(state.selectedDate);
       await Promise.all([monthPromise, reportPromise]);
+      restoreMonitorViewport(returnViewport);
+      if (state.monitorReturnViewports.theme === returnViewport) {
+        state.monitorReturnViewports.theme = null;
+      }
     }
 
     function renderThemeTransitionSurface(options = {}) {
@@ -43671,6 +44889,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openJournalMonitor() {
+      const returnViewport = state.monitorReturnViewports.report;
       state.mode = "report";
       applyCalendarState("report");
       setPrimaryView("report");
@@ -43680,6 +44899,10 @@ INDEX_HTML = """<!doctype html>
       const reportPromise = loadReport({showLoading: true});
       const monthPromise = loadMonth();
       await Promise.all([reportPromise, monthPromise]);
+      restoreMonitorViewport(returnViewport);
+      if (state.monitorReturnViewports.report === returnViewport) {
+        state.monitorReturnViewports.report = null;
+      }
     }
 
     function autoStatusTime(value) {
@@ -44286,6 +45509,7 @@ INDEX_HTML = """<!doctype html>
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;
+    window.openIdentifierRecoveryWindow = openIdentifierRecoveryWindow;
     window.setLibraryContentView = setLibraryContentViewFromMenu;
     window.toggleLibraryContentView = toggleLibraryContentViewFromMenu;
 

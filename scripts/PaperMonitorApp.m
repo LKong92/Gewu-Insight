@@ -5,6 +5,7 @@
 @interface DaiqoWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
+@property(nonatomic, copy) NSString *nativeDragCleanupPath;
 @property(nonatomic) BOOL pdfQuickLookActive;
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @end
@@ -202,9 +203,25 @@
     [super mouseDragged:event];
 }
 
+- (void)scheduleNativeDragCleanup:(NSString *)path afterDelay:(NSTimeInterval)delay {
+    if (path.length == 0) return;
+    NSString *cleanupPath = [path copy];
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0),
+        ^{
+            [[NSFileManager defaultManager] removeItemAtPath:cleanupPath error:nil];
+        }
+    );
+}
+
 - (void)mouseUp:(NSEvent *)event {
+    if (self.nativeDragPath.length > 0 && self.nativeDragCleanupPath.length > 0) {
+        [self scheduleNativeDragCleanup:self.nativeDragCleanupPath afterDelay:0.5];
+    }
     self.nativeDragPath = nil;
     self.nativeDragName = nil;
+    self.nativeDragCleanupPath = nil;
     [super mouseUp:event];
 }
 
@@ -214,6 +231,14 @@
 
 - (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session {
     return YES;
+}
+
+- (void)draggingSession:(NSDraggingSession *)session
+           endedAtPoint:(NSPoint)screenPoint
+              operation:(NSDragOperation)operation {
+    NSString *cleanupPath = self.nativeDragCleanupPath;
+    self.nativeDragCleanupPath = nil;
+    [self scheduleNativeDragCleanup:cleanupPath afterDelay:60.0];
 }
 
 - (NSArray<NSString *> *)finderDropPathsFromDraggingInfo:(id<NSDraggingInfo>)sender {
@@ -510,9 +535,11 @@
         NSDictionary *payload = (NSDictionary *)message.body;
         NSString *path = [payload[@"path"] isKindOfClass:[NSString class]] ? payload[@"path"] : @"";
         NSString *name = [payload[@"name"] isKindOfClass:[NSString class]] ? payload[@"name"] : @"";
+        NSString *cleanupPath = [payload[@"cleanup_path"] isKindOfClass:[NSString class]] ? payload[@"cleanup_path"] : @"";
         DaiqoWebView *webView = (DaiqoWebView *)self.webView;
         webView.nativeDragPath = path;
         webView.nativeDragName = name;
+        webView.nativeDragCleanupPath = cleanupPath;
         return;
     }
     if ([message.name isEqualToString:@"authorPhotoChooser"]) {
@@ -1371,6 +1398,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     openLoaderItem.target = self;
     NSMenuItem *refreshMetadataItem = [loaderMenu addItemWithTitle:@"Refresh All Metadata" action:@selector(openMetadataRefresh:) keyEquivalent:@""];
     refreshMetadataItem.target = self;
+    NSMenuItem *findMissingIdentifiersItem = [loaderMenu addItemWithTitle:@"Find All Missing Identifiers" action:@selector(openIdentifierRecovery:) keyEquivalent:@""];
+    findMissingIdentifiersItem.target = self;
     loaderMenuItem.submenu = loaderMenu;
 
     NSMenuItem *settingMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -1385,9 +1414,9 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     self.citationNamingItem.state = NSControlStateValueOn;
     namingRuleMenuItem.submenu = namingRuleMenu;
     [settingMenu addItem:namingRuleMenuItem];
-    NSMenuItem *pdfRenameSettingsItem = [settingMenu addItemWithTitle:@"PDF Rename Settings..." action:@selector(openPdfRenameSettings:) keyEquivalent:@""];
+    NSMenuItem *pdfRenameSettingsItem = [settingMenu addItemWithTitle:@"PDF Rename Settings" action:@selector(openPdfRenameSettings:) keyEquivalent:@""];
     pdfRenameSettingsItem.target = self;
-    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings..." action:@selector(openCitationSettings:) keyEquivalent:@","];
+    NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
     citationSettingsItem.target = self;
     [settingMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Web Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
@@ -1518,6 +1547,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openMetadataRefresh:(id)sender {
     [self.webView evaluateJavaScript:@"window.openMetadataRefreshWindow && window.openMetadataRefreshWindow()" completionHandler:nil];
+}
+
+- (void)openIdentifierRecovery:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openIdentifierRecoveryWindow && window.openIdentifierRecoveryWindow()" completionHandler:nil];
 }
 
 - (void)setNativeLibraryViewMenuState:(NSString *)viewMode {

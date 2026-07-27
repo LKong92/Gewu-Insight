@@ -34,6 +34,284 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.storage.close()
         self.tmp.cleanup()
 
+    def write_layout_pdf(self, filename: str, title_lines: list[str]) -> Path:
+        path = self.root / filename
+        commands = [
+            "BT /F1 9 Tf 72 760 Td (PHYSICAL REVIEW LETTERS) Tj",
+            "/F1 20 Tf 0 -80 Td",
+        ]
+        for index, line in enumerate(title_lines):
+            escaped = line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            if index:
+                commands.append("0 -25 Td")
+            commands.append(f"({escaped}) Tj")
+        commands.extend([
+            "/F1 11 Tf 0 -35 Td (A. Example and B. Author) Tj",
+            "/F1 10 Tf 0 -45 Td (Abstract) Tj ET",
+        ])
+        content = " ".join(commands).encode("latin-1")
+        objects = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+        ]
+        body = b"%PDF-1.4\n"
+        offsets = [0]
+        for index, obj in enumerate(objects, start=1):
+            offsets.append(len(body))
+            body += f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n"
+        xref_offset = len(body)
+        xref = f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode("ascii")
+        xref += b"".join(
+            f"{offset:010d} 00000 n \n".encode("ascii")
+            for offset in offsets[1:]
+        )
+        trailer = (
+            f"trailer << /Root 1 0 R /Size {len(objects) + 1} >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+        path.write_bytes(body + xref + trailer)
+        return path
+
+    def test_pdf_layout_title_candidates_use_large_front_page_text(self) -> None:
+        pdf = self.write_layout_pdf(
+            "opaque-file.pdf",
+            [
+                "Quantum vortex core and missing pseudogap",
+                "in the multiband crossover superconductor FeSe",
+            ],
+        )
+
+        candidates = ui_server.pdf_layout_title_candidates(pdf)
+
+        self.assertTrue(candidates)
+        self.assertEqual(
+            ui_server.normalized_title_key(candidates[0]),
+            ui_server.normalized_title_key(
+                "Quantum vortex core and missing pseudogap "
+                "in the multiband crossover superconductor FeSe"
+            ),
+        )
+
+    def test_identifier_lookup_uses_title_extracted_from_pdf_layout(self) -> None:
+        title = (
+            "Quantum vortex core and missing pseudogap "
+            "in the multiband crossover superconductor FeSe"
+        )
+        pdf = self.write_layout_pdf(
+            "opaque-file.pdf",
+            [
+                "Quantum vortex core and missing pseudogap",
+                "in the multiband crossover superconductor FeSe",
+            ],
+        )
+        calls: list[str] = []
+
+        def title_lookup(candidate: str) -> dict[str, str]:
+            calls.append(candidate)
+            if ui_server.normalized_title_key(candidate) == ui_server.normalized_title_key(title):
+                return {
+                    "kind": "doi",
+                    "identifier": "10.1103/physrevlett.122.077001",
+                    "source": "title_openalex",
+                }
+            return {"kind": "", "identifier": "", "source": ""}
+
+        found = ui_server.extract_identifier_from_pdf_or_title(
+            pdf,
+            {"paper_id": "layout-paper", "title": "opaque-file.pdf"},
+            title_lookup=title_lookup,
+        )
+
+        self.assertEqual(found["identifier"], "10.1103/physrevlett.122.077001")
+        self.assertEqual(found["source"], "title_openalex")
+        self.assertTrue(
+            any(
+                ui_server.normalized_title_key(candidate)
+                == ui_server.normalized_title_key(title)
+                for candidate in calls
+            )
+        )
+
+    def test_import_identifier_recovery_records_source_and_counts(self) -> None:
+        pdf = self.write_layout_pdf("unresolved.pdf", ["A recoverable imported paper title"])
+        self.storage.upsert_paper(
+            {
+                "paper_id": "unresolved-paper",
+                "doi": "",
+                "title": "unresolved.pdf",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "imported_pdf",
+            }
+        )
+        self.storage.update_download_status(
+            "unresolved-paper",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+            supplement_pdf_paths=[],
+        )
+        result = {
+            "metadata_refresh_candidates": [
+                {
+                    "paper_id": "unresolved-paper",
+                    "doi": "",
+                    "arxiv_id": "",
+                }
+            ]
+        }
+        found = {
+            "kind": "doi",
+            "identifier": "10.1234/recovered",
+            "source": "title_openalex",
+            "matched_title": "A recoverable imported paper title",
+        }
+        with patch.object(
+            ui_server,
+            "extract_identifier_from_pdf_or_title",
+            return_value=found,
+        ), patch.object(
+            ui_server,
+            "refresh_library_paper_metadata_for_identifier",
+            side_effect=lambda storage, paper_id, identifier, **_kwargs: storage.get_paper(paper_id),
+        ):
+            recovered = ui_server.recover_imported_pdf_identifiers(
+                self.storage,
+                result,
+            )
+
+        paper = self.storage.get_paper("unresolved-paper") or {}
+        self.assertEqual(recovered, {"unresolved-paper"})
+        self.assertEqual(paper["doi"], "10.1234/recovered")
+        self.assertEqual(paper["doi_source"], "title_openalex")
+        self.assertEqual(result["identifier_recovery_attempted"], 1)
+        self.assertEqual(result["identifiers_recovered"], 1)
+        self.assertEqual(result["identifier_recovery_unresolved"], 0)
+        self.assertEqual(result["identifier_recovery_sources"], {"title_openalex": 1})
+
+    def test_full_library_identifier_recovery_uses_title_and_records_attempt(self) -> None:
+        self.storage.upsert_paper(
+            {
+                "paper_id": "missing-identifier",
+                "doi": "",
+                "title": "A reliable title for identifier recovery",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "article",
+            }
+        )
+        self.storage.add_library_item(paper_id="missing-identifier", folder_id=1)
+        job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
+        found = {
+            "kind": "doi",
+            "identifier": "10.1234/full-library-recovery",
+            "source": "title_crossref",
+        }
+
+        with patch.object(
+            ui_server,
+            "identifier_from_title_lookup",
+            return_value=found,
+        ), patch.object(
+            ui_server,
+            "refresh_single_paper_metadata_for_mode",
+            side_effect=lambda _storage, paper, **_kwargs: paper,
+        ), patch.object(ui_server.time, "sleep"):
+            ui_server.run_library_identifier_recovery_job(
+                job_id=job_id,
+                db_path=self.db_path,
+                skip_days=7,
+            )
+
+        job = ui_server.get_library_import_job(job_id) or {}
+        result = job.get("result") or {}
+        paper = self.storage.get_paper("missing-identifier") or {}
+        attempt = self.storage.conn.execute(
+            """
+            SELECT mode, status
+            FROM paper_metadata_refreshes
+            WHERE paper_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("missing-identifier",),
+        ).fetchone()
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(result["identifiers_recovered"], 1)
+        self.assertEqual(result["identifier_recovery_unresolved"], 0)
+        self.assertEqual(paper["doi"], "10.1234/full-library-recovery")
+        self.assertEqual(dict(attempt), {"mode": "identifier", "status": "recovered"})
+
+    def test_full_library_identifier_recovery_skips_recent_attempt(self) -> None:
+        self.storage.upsert_paper(
+            {
+                "paper_id": "recent-missing-identifier",
+                "doi": "",
+                "title": "Another reliable paper title for recovery",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "article",
+            }
+        )
+        self.storage.add_library_item(paper_id="recent-missing-identifier", folder_id=1)
+        refresh_id = ui_server.record_metadata_refresh_start(
+            self.storage,
+            paper_id="recent-missing-identifier",
+            mode="identifier",
+            source_summary="test",
+        )
+        ui_server.record_metadata_refresh_finish(
+            self.storage,
+            refresh_id,
+            status="unresolved",
+        )
+        job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
+
+        with patch.object(ui_server, "identifier_from_title_lookup") as lookup:
+            ui_server.run_library_identifier_recovery_job(
+                job_id=job_id,
+                db_path=self.db_path,
+                skip_days=7,
+            )
+
+        result = (ui_server.get_library_import_job(job_id) or {}).get("result") or {}
+        lookup.assert_not_called()
+        self.assertEqual(result["skipped_recent"], 1)
+        self.assertEqual(result["attempted"], 0)
+
+    def test_library_metadata_refresh_job_starts_without_identifier_recovery_state(self) -> None:
+        job_id = ui_server.create_library_metadata_refresh_job(
+            metadata_mode="quick",
+            skip_days=3,
+        )
+
+        ui_server.run_library_metadata_refresh_job(
+            job_id=job_id,
+            db_path=self.db_path,
+            metadata_mode="quick",
+            skip_days=3,
+        )
+
+        job = ui_server.get_library_import_job(job_id) or {}
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual((job.get("result") or {}).get("total_candidates"), 0)
+
+    def test_loader_exposes_full_library_missing_identifier_mode(self) -> None:
+        html = ui_server.INDEX_HTML
+        self.assertIn("/api/library/identifier-recovery/start", html)
+        self.assertIn("function openIdentifierRecoveryWindow()", html)
+        self.assertIn("All Library papers without DOI/arXiv", html)
+        self.assertIn("No Google Scholar requests.", html)
+
     def test_pdf_rename_filename_preserves_pdf_suffix_when_title_is_long(self) -> None:
         long_title = " ".join(["Very Long Electride Nonlinear Optical Response"] * 12)
         filename = ui_server.pdf_rename_filename_from_values(
@@ -229,6 +507,82 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(audit["mismatched_real_files"], 0)
         self.assertEqual(audit["mismatched_shortcuts"], 0)
         self.assertEqual(audit["missing_shortcuts"], 0)
+
+    def test_folder_real_file_export_uses_each_library_item_display_name(self) -> None:
+        space = self.storage.create_library_root_folder(name="Tobit")
+        folder = self.storage.create_library_folder(
+            parent_id=int(space["id"]),
+            name="Quantum Computation",
+        )
+        canonical_dir = ui_server.LIBRARY_LOCAL_COPY_ROOT / "Canonical"
+        canonical_dir.mkdir(parents=True)
+        source_pdf = canonical_dir / "19718.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "export-name-paper",
+                "doi": "10.1038/19718",
+                "title": "Coherent control of macroscopic quantum states",
+                "journal": "Nature",
+                "publication_date": "1999-04-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "export-name-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(
+            paper_id="export-name-paper",
+            folder_id=int(folder["id"]),
+        )
+        self.storage.rename_library_item(
+            item_id=int(item["id"]),
+            name="01.Cooper pair box_19718.pdf",
+        )
+        destination = self.root / "Export"
+
+        result = ui_server.copy_library_folder_real_files(
+            self.storage,
+            int(space["id"]),
+            destination,
+            unique_root=False,
+        )
+
+        exported = (
+            destination
+            / "Tobit"
+            / "Quantum Computation"
+            / "01.Cooper pair box_19718.pdf"
+        )
+        self.assertTrue(exported.is_file())
+        self.assertFalse(exported.is_symlink())
+        self.assertEqual(exported.read_bytes(), source_pdf.read_bytes())
+        self.assertEqual(result["files_copied"], 1)
+
+    def test_folder_export_appends_real_pdf_suffix_after_dotted_display_name(self) -> None:
+        source = self.root / "source.pdf"
+        source.write_bytes(b"%PDF fixture")
+
+        filename = ui_server.library_item_export_filename(
+            {
+                "display_name": (
+                    "04.Transmon02_Generating single microwave photons "
+                    "in a circuit"
+                )
+            },
+            source,
+        )
+
+        self.assertEqual(
+            filename,
+            "04.Transmon02_Generating single microwave photons in a circuit.pdf",
+        )
 
     def test_inline_library_rename_updates_only_that_items_file_name(self) -> None:
         real_folder = self.storage.create_library_folder(parent_id=1, name="Real")

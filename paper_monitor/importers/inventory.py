@@ -1496,7 +1496,7 @@ def ensure_imported_library_item(storage: Storage, *, paper_id: str, folder_id: 
 
 
 def queue_metadata_refresh_candidate(result: dict[str, Any], record: dict[str, Any], paper_id: str) -> None:
-    if not paper_id or not (record.get("doi") or record.get("arxiv_id")):
+    if not paper_id or clean_text(record.get("kind")).lower() != "pdf":
         return
     candidates = result.setdefault("metadata_refresh_candidates", [])
     if any(str(item.get("paper_id") or "") == str(paper_id) for item in candidates if isinstance(item, dict)):
@@ -1505,6 +1505,8 @@ def queue_metadata_refresh_candidate(result: dict[str, Any], record: dict[str, A
         "paper_id": paper_id,
         "doi": record.get("doi") or "",
         "arxiv_id": record.get("arxiv_id") or "",
+        "title": record.get("title") or "",
+        "source_path": record.get("source_path") or "",
     })
 
 

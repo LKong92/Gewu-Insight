@@ -86,6 +86,34 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(ui_server.library_workspace_tabs(self.storage), [])
 
+    def test_space_add_target_accepts_current_nested_folder(self) -> None:
+        tab = ui_server.add_library_workspace_tab(self.storage, name="Quantum Lab")
+        root_id = int(tab["root_folder_id"])
+        level_one = self.storage.create_library_folder(parent_id=root_id, name="Level One")
+        level_two = self.storage.create_library_folder(
+            parent_id=int(level_one["id"]),
+            name="Level Two",
+        )
+
+        target_id = ui_server.library_workspace_add_target_folder_id(
+            self.storage,
+            root_folder_id=root_id,
+            requested_folder_id=int(level_two["id"]),
+        )
+
+        self.assertEqual(target_id, int(level_two["id"]))
+
+    def test_space_add_target_rejects_folder_outside_current_space(self) -> None:
+        tab = ui_server.add_library_workspace_tab(self.storage, name="Quantum Lab")
+        other_tab = ui_server.add_library_workspace_tab(self.storage, name="Other Lab")
+
+        with self.assertRaisesRegex(ValueError, "not inside this Space"):
+            ui_server.library_workspace_add_target_folder_id(
+                self.storage,
+                root_folder_id=int(tab["root_folder_id"]),
+                requested_folder_id=int(other_tab["root_folder_id"]),
+            )
+
     def test_space_title_query_uses_shared_title_identifier_resolution(self) -> None:
         resolved = {
             "paper_id": "resolved-paper",
@@ -160,10 +188,47 @@ class LibraryNavigationTabTests(unittest.TestCase):
             max_retries=1,
         )
 
+    def test_title_identifier_lookup_can_fall_back_to_semantic_scholar(self) -> None:
+        openalex_response = MagicMock()
+        openalex_response.json.return_value = {"results": []}
+        semantic_response = MagicMock()
+        semantic_response.json.return_value = {
+            "data": [
+                {
+                    "title": "A Semantic Scholar Identifier Match",
+                    "externalIds": {"ArXiv": "2607.12345"},
+                    "year": 2026,
+                }
+            ]
+        }
+        with patch.object(
+            ui_server,
+            "search_crossref_publications",
+            return_value=[],
+        ), patch.object(
+            ui_server,
+            "openalex_request",
+            return_value=openalex_response,
+        ), patch.object(
+            ui_server,
+            "request_with_retries",
+            return_value=semantic_response,
+        ):
+            found = ui_server.identifier_from_title_lookup(
+                "A Semantic Scholar Identifier Match"
+            )
+
+        self.assertEqual(found["kind"], "arxiv")
+        self.assertEqual(found["identifier"], "2607.12345")
+        self.assertEqual(found["source"], "title_semantic")
+
     def test_space_add_and_library_location_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
         workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
             "function updateToolbarLibraryImport()", 1
+        )[0]
+        add_paper = html.split("async function addLibraryWorkspaceDoi(index)", 1)[1].split(
+            "function wireWorkspaceTools()", 1
         )[0]
         search_row = html.split("function librarySearchResultRowMarkup", 1)[1].split(
             "function libraryRowMarkup", 1
@@ -174,15 +239,42 @@ class LibraryNavigationTabTests(unittest.TestCase):
         navigation = html.split("async function navigateToPaperInLibrary", 1)[1].split(
             "async function showPaperInLibrary", 1
         )[0]
+        folder_occurrences = html.split("function libraryOccurrenceTreeForPaper", 1)[1].split(
+            "function libraryNonPdfDetailMarkup", 1
+        )[0]
+        native_drag = html.split("function prepareNativeFolderDrag", 1)[1].split(
+            "function fileNameFromPath", 1
+        )[0]
 
         self.assertIn('placeholder="DOI, arXiv ID, or title"', workspace)
+        self.assertIn(
+            "const currentFolderId = Number(state.libraryCurrentFolderId || workspaceRootFolderId)",
+            add_paper,
+        )
+        self.assertIn(
+            "libraryWorkspaceIndexForFolder(currentFolderId) === index",
+            add_paper,
+        )
+        self.assertIn("folder_id: targetFolderId", add_paper)
+        self.assertIn("const addedFolderId = Number(data.folder_id || targetFolderId", add_paper)
+        self.assertIn("state.workspaceAddPaperBusy = true", add_paper)
+        self.assertIn("state.workspaceAddPaperBusy = false", add_paper)
+        self.assertIn("updateLibraryActivityStatus(", add_paper)
+        self.assertIn("Finding paper and adding it to", add_paper)
+        self.assertIn("Add Paper failed:", add_paper)
         self.assertIn('data-action="show-library-search-result"', search_row)
         self.assertIn(">Show in Library</button>", search_row)
         self.assertNotIn("paper.journal", search_row)
-        self.assertIn('data-action="show-file-in-library"', files)
-        self.assertIn('title="Show in Library"', files)
+        self.assertIn('class="library-file-line"', files)
+        self.assertIn("paper?.merged_pdf_path || paper?.native_file_path", files)
+        self.assertNotIn('data-action="show-file-in-library"', files)
+        self.assertNotIn("local_file_path", files)
+        self.assertIn('data-action="show-library-occurrence"', folder_occurrences)
+        self.assertIn("chain.push({id: currentId, name: current.name", folder_occurrences)
         self.assertIn("selectLibraryItemInColumns(item)", navigation)
         self.assertIn('state.query = ""', navigation)
+        self.assertIn("/api/library/folders/prepare-drag", native_drag)
+        self.assertIn("cleanup_path: result.cleanup_path", native_drag)
 
     def test_library_search_covers_library_and_every_space(self) -> None:
         html = ui_server.INDEX_HTML

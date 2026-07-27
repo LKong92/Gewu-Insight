@@ -114,6 +114,21 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("Promise.all([reportPromise, monthPromise])", open_monitor)
         self.assertLess(open_monitor.index("loadReport({showLoading: true})"), open_monitor.index("loadMonth()"))
 
+    def test_journal_library_round_trip_restores_the_monitor_viewport(self) -> None:
+        show_in_library = self.js_function("showPaperInLibrary")
+        add_to_library = self.js_function("addPaperToLibrary")
+        open_monitor = self.js_function("openJournalMonitor")
+
+        self.assertIn("captureMonitorViewport(article)", show_in_library)
+        self.assertIn("state.monitorReturnViewports[monitorViewport.mode] = monitorViewport", show_in_library)
+        self.assertIn("renderCurrentPaperSurface({monitorViewport})", add_to_library)
+        self.assertIn("const returnViewport = state.monitorReturnViewports.report", open_monitor)
+        self.assertGreater(
+            open_monitor.index("restoreMonitorViewport(returnViewport)"),
+            open_monitor.index("await Promise.all([reportPromise, monthPromise])"),
+        )
+        self.assertIn("state.monitorReturnViewports.report = null", open_monitor)
+
     def test_subject_monitor_replaces_old_surface_before_network_wait(self) -> None:
         open_monitor = self.js_function("openThemeMonitor")
         transition = self.js_function("renderThemeTransitionSurface")
