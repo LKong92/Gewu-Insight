@@ -21222,35 +21222,14 @@ INDEX_HTML = """<!doctype html>
     }
     .journal-toggle.theme-toggle.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
     .journal-toggle.theme-toggle.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
-    .theme-context-menu {
-      position: fixed;
+    .library-context-menu.theme-context-menu {
       z-index: 120;
-      min-width: 132px;
-      display: grid;
-      gap: 2px;
-      padding: 5px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: #fff;
-      box-shadow: 0 14px 34px rgba(17, 24, 39, 0.14);
     }
-    .theme-context-menu button {
-      border: 0;
-      border-radius: 6px;
-      background: transparent;
-      min-height: 30px;
-      padding: 0 9px;
-      text-align: left;
-      cursor: pointer;
-      color: var(--ink);
-    }
-    .theme-context-menu button:hover { background: #f3f6fa; }
-    .theme-context-menu button:disabled {
+    .library-context-menu.theme-context-menu button:disabled {
       cursor: default;
       color: #98a2b3;
       background: transparent;
     }
-    .theme-context-menu button.danger { color: var(--accent-2); }
     .filter-title { font-size: 13px; color: var(--muted); }
     .journal-toggle, .preprint-category-toggle {
       display: grid;
@@ -21284,17 +21263,241 @@ INDEX_HTML = """<!doctype html>
     .journal-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
     .preprint-category-toggle span { font-size: 12px; line-height: 1.2; }
     .journal-toggle b, .preprint-category-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .journal-sidebar-filter {
+      gap: 7px;
+    }
+    .journal-sidebar-filter .filter-title {
+      padding-left: 2px;
+      color: #687386;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0.025em;
+      text-transform: uppercase;
+    }
+    #journalFilters,
+    #preprintFilters,
+    #subjectFilters,
+    #journalSettings,
+    .journal-add-panel {
+      overflow: hidden;
+      border: 0;
+      border-radius: 9px;
+      background: #f6f7f9;
+      box-shadow: none;
+    }
+    #journalFilters {
+      display: flex;
+      flex-direction: column;
+    }
+    .journal-sidebar-filter .journal-toggle {
+      position: relative;
+      min-height: 38px;
+      border: 0;
+      border-radius: 0;
+      padding: 7px 11px 7px 13px;
+      background: transparent;
+      box-shadow: none;
+      cursor: pointer;
+      transition: background 110ms ease, color 110ms ease;
+    }
+    #journalFilters .journal-toggle + .journal-toggle {
+      border-top: 1px solid rgba(95, 107, 124, 0.12);
+    }
+    .journal-sidebar-filter .journal-toggle:hover,
+    .journal-sidebar-filter .preprint-category-toggle:hover,
+    #subjectFilters .subject-option:hover {
+      background: rgba(31, 41, 55, 0.045);
+    }
+    .journal-sidebar-filter .journal-toggle.active {
+      background: #eaf4f3;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .journal-sidebar-filter .journal-toggle span {
+      font-size: 13.5px;
+      line-height: 1.25;
+    }
+    .journal-sidebar-filter .journal-toggle b {
+      color: #7a8495;
+      font-size: 11.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .journal-sidebar-filter .preprint-filter-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 30px;
+      gap: 0;
+      align-items: stretch;
+      overflow: hidden;
+      border-radius: 9px;
+      background: #f6f7f9;
+    }
+    .journal-sidebar-filter .preprint-filter-row .journal-toggle {
+      min-width: 0;
+    }
+    .journal-sidebar-filter .preprint-collapse-toggle {
+      min-height: 38px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #687386;
+      font-size: 11px;
+    }
+    .journal-sidebar-filter .preprint-collapse-toggle:hover {
+      border: 0;
+      background: rgba(31, 41, 55, 0.045);
+      color: var(--ink);
+    }
+    .journal-sidebar-filter .preprint-category-list {
+      gap: 0;
+      margin: 1px 0 0 10px;
+      padding: 4px 0 4px 10px;
+      border-left: 1px solid rgba(15, 107, 110, 0.22);
+    }
+    .journal-sidebar-filter .preprint-category-toggle {
+      min-height: 32px;
+      border: 0;
+      border-radius: 0;
+      padding: 6px 9px;
+      background: transparent;
+      box-shadow: none;
+    }
+    .journal-sidebar-filter .preprint-category-toggle + .preprint-category-toggle {
+      border-top: 1px solid rgba(95, 107, 124, 0.10);
+    }
+    .journal-sidebar-filter .preprint-category-toggle.active {
+      background: #eaf4f3;
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+    #subjectFilters {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+    #subjectFilters .subject-option {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      min-height: 38px;
+      border: 0;
+      border-radius: 0;
+      padding: 7px 11px 7px 13px;
+      background: transparent;
+      box-shadow: none;
+      color: var(--ink);
+      font-size: 13.5px;
+      transition: background 110ms ease, color 110ms ease;
+    }
+    #subjectFilters .subject-option + .subject-option {
+      border-top: 1px solid rgba(95, 107, 124, 0.12);
+    }
+    #subjectFilters .subject-option b {
+      color: #7a8495;
+      font-size: 11.5px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    #subjectFilters .subject-option.active {
+      background: #eaf4f3;
+      box-shadow: inset 3px 0 0 var(--accent);
+      color: #0b5f62;
+    }
+    #subjectFilters .subject-option.active b {
+      color: #0b6a6d;
+    }
+    #journalSettings {
+      display: flex;
+      flex-direction: column;
+    }
     .journal-setting-row {
       display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
       align-items: center;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      padding: 8px 10px;
-      background: #fff;
+      min-height: 38px;
+      border: 0;
+      border-radius: 0;
+      padding: 6px 7px 6px 13px;
+      background: transparent;
+      transition: background 110ms ease;
     }
-    .journal-setting-name { font-size: 14px; min-width: 0; }
+    .journal-setting-row + .journal-setting-row {
+      border-top: 1px solid rgba(95, 107, 124, 0.12);
+    }
+    .journal-setting-row:hover {
+      background: rgba(31, 41, 55, 0.035);
+    }
+    .journal-setting-name {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ink);
+      font-size: 13.5px;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .journal-setting-row .action {
+      min-height: 26px;
+      border: 0;
+      border-radius: 5px;
+      padding: 3px 7px;
+      background: transparent;
+      box-shadow: none;
+      color: #778193;
+      font-size: 11.5px;
+      font-weight: 500;
+    }
+    .journal-setting-row .action:hover {
+      border: 0;
+      background: rgba(166, 66, 58, 0.08);
+      color: var(--accent-2);
+    }
+    .journal-add-panel {
+      display: flex;
+      flex-direction: column;
+    }
+    .journal-add-panel .search,
+    .journal-add-panel .smallbtn {
+      width: 100%;
+      min-height: 38px;
+      border: 0;
+      border-radius: 0;
+      padding: 7px 13px;
+      background-color: transparent;
+      box-shadow: none;
+      color: var(--ink);
+      font-size: 13.5px;
+      text-align: left;
+    }
+    .journal-add-panel > * + * {
+      border-top: 1px solid rgba(95, 107, 124, 0.12);
+    }
+    .journal-add-panel .search::placeholder {
+      color: #9aa3b1;
+    }
+    .journal-add-panel .search:focus {
+      outline: 0;
+      background-color: #fff;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .journal-add-panel select.search {
+      -webkit-appearance: none;
+      appearance: none;
+      padding-right: 34px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.25 6 6.25 11 1.25' fill='none' stroke='%23687386' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-position: right 12px center;
+      background-repeat: no-repeat;
+      background-size: 10px 7px;
+    }
+    .journal-add-panel .smallbtn {
+      cursor: pointer;
+      color: #0b6669;
+      font-weight: 650;
+      text-align: center;
+    }
+    .journal-add-panel .smallbtn:hover {
+      border: 0;
+      background: #eaf4f3;
+      color: #075b5e;
+    }
     .main { padding: 50px 30px 24px; min-width: 0; height: 100vh; overflow: hidden; }
     .app.library-mode .main {
       padding: 42px 12px 0 30px;
@@ -26998,10 +27201,12 @@ INDEX_HTML = """<!doctype html>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Settings</div>
         <div id="journalSettings"></div>
-        <input class="search" id="journalName" placeholder="Journal name">
-        <input class="search" id="journalIssns" placeholder="ISSNs, comma separated">
-        <select class="search" id="journalHistory" title="Previously added journals"></select>
-        <button class="smallbtn" id="addJournal">Add Journal</button>
+        <div class="journal-add-panel">
+          <input class="search" id="journalName" placeholder="Journal name">
+          <input class="search" id="journalIssns" placeholder="ISSNs, comma separated">
+          <select class="search" id="journalHistory" title="Previously added journals"></select>
+          <button class="smallbtn" id="addJournal">Add Journal</button>
+        </div>
       </div>
     </aside>
     <main class="main">
@@ -30587,12 +30792,14 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       state.journals.filter((journal) => !PREPRINT_JOURNALS.has(journal)).forEach((journal) => {
         const label = document.createElement("label");
-        label.className = "journal-toggle";
-        label.innerHTML = `<input type="checkbox" ${state.selectedJournals.has(journal) ? "checked" : ""}>
+        const selected = state.selectedJournals.has(journal);
+        label.className = `journal-toggle${selected ? " active" : ""}`;
+        label.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>
           <span>${escapeHtml(journal)}</span><b>${counts[journal] || 0}</b>`;
         label.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedJournals.add(journal);
           else state.selectedJournals.delete(journal);
+          label.classList.toggle("active", event.target.checked);
           state.noMatchDates = new Set();
           renderReport();
         });
@@ -30610,8 +30817,9 @@ INDEX_HTML = """<!doctype html>
       const row = document.createElement("div");
       row.className = "preprint-filter-row";
       const label = document.createElement("label");
-      label.className = "journal-toggle";
-      label.innerHTML = `<input type="checkbox" ${state.selectedJournals.has("arXiv") ? "checked" : ""}>
+      const selected = state.selectedJournals.has("arXiv");
+      label.className = `journal-toggle${selected ? " active" : ""}`;
+      label.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>
         <span>arXiv</span><b>${arxivPapers.length}</b>`;
       label.querySelector("input").addEventListener("change", (event) => {
         if (event.target.checked) state.selectedJournals.add("arXiv");
@@ -30644,8 +30852,9 @@ INDEX_HTML = """<!doctype html>
       categoryRoot.setAttribute("aria-hidden", state.preprintFiltersExpanded ? "false" : "true");
       ARXIV_CATEGORIES.forEach(([code, title]) => {
         const categoryLabel = document.createElement("label");
-        categoryLabel.className = "preprint-category-toggle";
-        categoryLabel.innerHTML = `<input type="checkbox" ${state.selectedPreprintCategories.has(code) ? "checked" : ""}>
+        const selected = state.selectedPreprintCategories.has(code);
+        categoryLabel.className = `preprint-category-toggle${selected ? " active" : ""}`;
+        categoryLabel.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>
           <span>${escapeHtml(code)} · ${escapeHtml(title)}</span><b>${counts[code] || 0}</b>`;
         categoryLabel.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedPreprintCategories.add(code);
@@ -30673,7 +30882,8 @@ INDEX_HTML = """<!doctype html>
         const count = state.papers.filter((paper) => paperMatchesField(paper, value)).length;
         const button = document.createElement("button");
         button.className = `subject-option${fieldIsActive(value) ? " active" : ""}`;
-        button.textContent = `${label} (${count})`;
+        button.setAttribute("aria-pressed", fieldIsActive(value) ? "true" : "false");
+        button.innerHTML = `<span>${escapeHtml(label)}</span><b>${count}</b>`;
         button.addEventListener("click", () => {
           toggleFieldFilter(value);
           state.noMatchDates = new Set();
@@ -43629,7 +43839,7 @@ INDEX_HTML = """<!doctype html>
       const journalName = String(journal || "").trim();
       if (!journalName) return;
       const menu = document.createElement("div");
-      menu.className = "theme-context-menu journal-context-menu";
+      menu.className = "library-context-menu open theme-context-menu journal-context-menu";
       const refreshDisabled = isFutureDateIso(state.selectedDate) || state.fetchingDates.has(state.selectedDate);
       menu.innerHTML = `
         <button type="button" data-action="refresh-journal" ${refreshDisabled ? "disabled" : ""}>Refresh This Journal</button>
@@ -43654,12 +43864,13 @@ INDEX_HTML = """<!doctype html>
       hideThemeContextMenu();
       if (!group?.key) return;
       const menu = document.createElement("div");
-      menu.className = "theme-context-menu";
+      menu.className = "library-context-menu open theme-context-menu";
       const refreshDisabled = isFutureDateIso(state.selectedDate) || state.themeFetchingDates.has(state.selectedDate);
       menu.innerHTML = `
         <button type="button" data-action="refresh" ${refreshDisabled ? "disabled" : ""}>Refresh This Subject</button>
         <button type="button" data-action="edit">Edit</button>
-        <button type="button" class="danger" data-action="delete">Delete</button>
+        <div class="library-menu-separator" role="separator"></div>
+        <button type="button" data-action="delete">Delete</button>
       `;
       document.body.appendChild(menu);
       menu.addEventListener("mousedown", (event) => event.stopPropagation());

@@ -173,6 +173,29 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("--monitor-calendar-width: 280px;", ui_server.INDEX_HTML)
         self.assertIn("width: var(--monitor-calendar-width);", ui_server.INDEX_HTML)
 
+    def test_journal_and_subject_context_menus_share_library_styling(self) -> None:
+        journal_menu = self.js_function("showJournalContextMenu")
+        subject_menu = self.js_function("showThemeContextMenu")
+
+        shared_classes = "library-context-menu open theme-context-menu"
+        self.assertIn(shared_classes, journal_menu)
+        self.assertIn(shared_classes, subject_menu)
+        self.assertIn('class="library-menu-separator" role="separator"', subject_menu)
+        self.assertIn(".library-context-menu.theme-context-menu", ui_server.INDEX_HTML)
+
+    def test_journal_sidebar_filters_use_flat_grouped_rows(self) -> None:
+        journal_filters = self.js_function("renderFilters")
+        subject_filters = self.js_function("renderSubjectFilters")
+
+        self.assertIn(".journal-sidebar-filter .journal-toggle.active", ui_server.INDEX_HTML)
+        self.assertIn("#subjectFilters .subject-option.active", ui_server.INDEX_HTML)
+        self.assertIn('class="journal-add-panel"', ui_server.INDEX_HTML)
+        self.assertIn(".journal-setting-row + .journal-setting-row", ui_server.INDEX_HTML)
+        self.assertIn(".journal-add-panel .search", ui_server.INDEX_HTML)
+        self.assertIn('label.className = `journal-toggle${selected ? " active" : ""}`', journal_filters)
+        self.assertIn('button.innerHTML = `<span>${escapeHtml(label)}</span><b>${count}</b>`', subject_filters)
+        self.assertIn("box-shadow: inset 3px 0 0 var(--accent);", ui_server.INDEX_HTML)
+
     def test_monitor_calendars_always_render_six_week_rows(self) -> None:
         calendar = self.js_function("renderCalendar")
         primary_view = self.js_function("setPrimaryView")
