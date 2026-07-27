@@ -329,6 +329,42 @@ class AuthorMonitorStorageTests(unittest.TestCase):
         self.assertEqual(saved["name"], "Leo Kouwenhoven")
         self.assertEqual(saved["affiliation"], "Delft University of Technology")
 
+    def test_metadata_refresh_does_not_mark_existing_paper_new(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                author = storage.add_author_monitor(
+                    scholar_profile("author-a", "Ada Author")
+                )
+                author_id = int(author["id"])
+                original = paper("existing-paper", "Existing Paper", "2025-01-01")
+                storage.upsert_paper(original)
+                storage.add_author_monitor_paper(
+                    author_monitor_id=author_id,
+                    paper_id="existing-paper",
+                    unread=False,
+                )
+
+                updated = dict(original)
+                updated["journal"] = "Updated Journal"
+                updated["doi"] = "10.1234/updated"
+                storage.upsert_paper(updated)
+                inserted = storage.add_author_monitor_paper(
+                    author_monitor_id=author_id,
+                    paper_id="existing-paper",
+                    scholar_key="updated-scholar-key",
+                    unread=True,
+                )
+
+                saved_author = storage.get_author_monitor(author_id)
+                saved_paper = storage.list_author_monitor_papers(author_id)[0]
+            finally:
+                storage.close()
+
+        self.assertFalse(inserted)
+        self.assertEqual(saved_author["unread_count"], 0)
+        self.assertFalse(saved_paper["author_unread"])
+
     def test_shared_paper_is_deduplicated_and_monitor_delete_keeps_paper(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
@@ -1935,6 +1971,20 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("author-monitor-importing-empty", rendering)
         self.assertIn("Importing ${escapeHtml(selected.name", rendering)
         self.assertIn("This import continues in the background.", rendering)
+
+    def test_author_monitor_new_filter_is_after_conferences(self):
+        html = ui_server.INDEX_HTML
+        rendering = html.split("function renderAuthorMonitor(options = {})", 1)[1].split(
+            "async function openAuthorMonitor()", 1
+        )[0]
+        conference_position = rendering.index("author-monitor-conference-toggle")
+        new_filter_position = rendering.index('data-action="filter-new-papers"')
+        self.assertLess(conference_position, new_filter_position)
+        self.assertIn(">New</button>", rendering)
+        self.assertIn(
+            "state.authorMonitorUnreadOnly = !state.authorMonitorUnreadOnly",
+            rendering,
+        )
 
     def test_author_avatars_link_to_homepage_with_scholar_fallback(self):
         html = ui_server.INDEX_HTML

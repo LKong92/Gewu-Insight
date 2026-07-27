@@ -39360,6 +39360,12 @@ INDEX_HTML = """<!doctype html>
                     Conferences · ${partition.conferences.length} ${state.authorMonitorConferenceExpanded ? "▴" : "▾"}
                   </button>
                 ` : ""}
+                <button
+                  class="author-monitor-sort-button${state.authorMonitorUnreadOnly ? " active" : ""}"
+                  type="button"
+                  data-action="filter-new-papers"
+                  aria-pressed="${state.authorMonitorUnreadOnly ? "true" : "false"}"
+                >New</button>
               </div>
               ${(selected && authorMonitorIsScholar(selected) && scholarPaused) || selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(selected && authorMonitorIsScholar(selected) && scholarPaused ? scholarGlobalCooldownText() : selected.message || "")}">Paused</span>` : ""}
             </div>
@@ -39403,6 +39409,10 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelectorAll("[data-author-sort]").forEach((button) => {
         button.addEventListener("click", () => setAuthorMonitorSort(button.dataset.authorSort || "date"));
+      });
+      root.querySelector('[data-action="filter-new-papers"]')?.addEventListener("click", () => {
+        state.authorMonitorUnreadOnly = !state.authorMonitorUnreadOnly;
+        renderAuthorMonitor({preserveScroll: false});
       });
       root.querySelector(".author-monitor-conference-toggle")?.addEventListener("click", () => {
         const opening = !state.authorMonitorConferenceExpanded;
