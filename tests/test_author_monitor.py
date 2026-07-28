@@ -2248,8 +2248,14 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
     def test_author_monitor_supports_manual_identifier_retries(self):
         html = ui_server.INDEX_HTML
         self.assertIn("Find Missing Identifiers", html)
-        self.assertIn("author-paper-identifier-button", html)
-        self.assertIn('data-action="find-paper-identifier"', html)
+        paper_menu = html.split(
+            "function showAuthorMonitorPaperContextMenu", 1
+        )[1].split("function renderAuthorMonitorPaperCard", 1)[0]
+        self.assertNotIn("author-paper-identifier-button", html)
+        self.assertIn('data-action="find-paper-identifier"', paper_menu)
+        self.assertIn('"Find Missing Identifier"', paper_menu)
+        self.assertIn("findAuthorMonitorPaperIdentifier(paper)", paper_menu)
+        self.assertIn("hasIdentifier || findingIdentifier", paper_menu)
         self.assertIn("identifiers_only: request.identifiersOnly", html)
         self.assertIn("refreshAuthorMonitorMetadataFromIdentifier(paper)", html)
         self.assertIn("paper?.author_details?.author_affiliations", html)
@@ -2270,18 +2276,16 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "async function downloadAuthorMonitorPdf", 1
         )[0]
         self.assertIn("author-paper-action-stack", card)
-        self.assertIn("author-paper-mini-button author-paper-identifier-button", card)
         self.assertIn("author-paper-mini-button author-paper-library-button", card)
+        self.assertNotIn("author-paper-identifier-button", card)
+        self.assertNotIn("author-paper-mini-button-spacer", card)
         self.assertIn('data-action="add-library"', card)
         self.assertIn('>${inLibrary ? "✓" : "+"}</button>', card)
-        self.assertLess(
-            card.index("author-paper-library-button"),
-            card.index("author-paper-identifier-button"),
-        )
         self.assertIn("toggleLibraryAddMenu(event, article, paper.paper_id)", card)
-        self.assertNotIn('addEventListener("contextmenu"', card)
+        self.assertIn('addEventListener("contextmenu"', card)
+        self.assertIn("showAuthorMonitorPaperContextMenu(event, paper)", card)
         self.assertNotIn('data-action="add-library"', detail)
-        self.assertNotIn("showAuthorMonitorPaperContextMenu", html)
+        self.assertIn("showAuthorMonitorPaperContextMenu", html)
         self.assertIn("AUTHOR_MONITOR_INITIAL_CARD_COUNT", html)
         self.assertIn("appendAuthorMonitorPaperCards", html)
         self.assertIn("authorMonitorDetailController.abort()", html)
@@ -2293,7 +2297,18 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn("color: var(--ink)", title_css)
         action_css = html.split(".author-paper-action-stack {", 1)[1].split("}", 1)[0]
         self.assertIn("position: absolute", action_css)
-        self.assertIn("top: 9px", action_css)
+        self.assertIn("top: 50%", action_css)
+        self.assertIn("transform: translateY(-50%)", action_css)
+        compact_scholar_css = html.split(
+            ".app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-scholar-citations {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("grid-row: 1 / span 2", compact_scholar_css)
+        self.assertIn("align-self: center", compact_scholar_css)
+        detail_css = html.split(
+            ".author-monitor-detail-body.library-detail {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("padding: 4px 10px 1px 16px", detail_css)
         detail_title_css = html.split(
             ".author-monitor-detail-body.library-detail h3 {", 1
         )[1].split("}", 1)[0]

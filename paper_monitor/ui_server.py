@@ -25719,6 +25719,11 @@ INDEX_HTML = """<!doctype html>
     .author-monitor-context-menu {
       z-index: 120;
     }
+    .author-monitor-context-menu button:disabled {
+      cursor: default;
+      color: #98a2b3;
+      background: transparent;
+    }
     .library-color-input { position: fixed; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
     .action.copied {
       border-color: rgba(29, 112, 68, 0.35);
@@ -26175,17 +26180,16 @@ INDEX_HTML = """<!doctype html>
     }
     .author-paper-action-stack {
       position: absolute;
-      top: 9px;
+      top: 50%;
       right: 12px;
       z-index: 1;
       width: 26px;
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      gap: 4px;
+      transform: translateY(-50%);
     }
-    .author-paper-mini-button,
-    .author-paper-mini-button-spacer {
+    .author-paper-mini-button {
       width: 26px;
       height: 22px;
       box-sizing: border-box;
@@ -26208,9 +26212,6 @@ INDEX_HTML = """<!doctype html>
     .author-paper-mini-button:disabled {
       cursor: progress;
       opacity: 0.55;
-    }
-    .author-paper-mini-button-spacer {
-      visibility: hidden;
     }
     .author-paper-library-button {
       padding: 0;
@@ -26292,13 +26293,12 @@ INDEX_HTML = """<!doctype html>
       font-size: 10px;
     }
     .author-monitor-conference-cards .author-paper-action-stack {
-      top: 8px;
+      top: 50%;
       right: 9px;
       width: 24px;
-      gap: 3px;
+      transform: translateY(-50%);
     }
-    .author-monitor-conference-cards .author-paper-mini-button,
-    .author-monitor-conference-cards .author-paper-mini-button-spacer {
+    .author-monitor-conference-cards .author-paper-mini-button {
       width: 24px;
       height: 22px;
     }
@@ -26332,7 +26332,7 @@ INDEX_HTML = """<!doctype html>
       padding: 14px;
     }
     .author-monitor-detail-body.library-detail {
-      padding: 4px 4px 1px 8px;
+      padding: 4px 10px 1px 16px;
       background: #f9f9f9;
     }
     .author-monitor-detail-body.library-detail h3 {
@@ -27886,7 +27886,7 @@ INDEX_HTML = """<!doctype html>
     }
     .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-scholar-citations {
       grid-column: 2;
-      grid-row: 2;
+      grid-row: 1 / span 2;
       align-self: center;
       font-size: 10px;
       text-align: right;
@@ -27897,11 +27897,9 @@ INDEX_HTML = """<!doctype html>
       right: 8px;
       width: 24px;
       flex-direction: column;
-      gap: 2px;
       transform: translateY(-50%);
     }
-    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button,
-    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button-spacer {
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button {
       width: 24px;
       height: 24px;
     }
@@ -42218,17 +42216,43 @@ INDEX_HTML = """<!doctype html>
       return Boolean(String(paper?.doi || paper?.preprint_id || "").trim());
     }
 
+    function showAuthorMonitorPaperContextMenu(event, paper) {
+      hideThemeContextMenu();
+      const menu = document.createElement("div");
+      const hasIdentifier = authorMonitorPaperHasIdentifier(paper);
+      const findingIdentifier = state.authorMonitorIdentifierRequests.has(paper.paper_id);
+      menu.className = "library-context-menu open author-monitor-context-menu author-monitor-paper-context-menu";
+      menu.innerHTML = `
+        <button
+          type="button"
+          data-action="find-paper-identifier"
+          ${hasIdentifier || findingIdentifier ? "disabled" : ""}
+          title="${escapeAttr(
+            hasIdentifier
+              ? "This paper already has an identifier"
+              : (findingIdentifier ? "Identifier lookup is running" : "Find a missing DOI or arXiv identifier")
+          )}"
+        >${findingIdentifier ? "Finding Identifier" : "Find Missing Identifier"}</button>
+      `;
+      document.body.appendChild(menu);
+      menu.addEventListener("mousedown", (menuEvent) => menuEvent.stopPropagation());
+      menu.addEventListener("click", (menuEvent) => {
+        const button = menuEvent.target?.closest?.('[data-action="find-paper-identifier"]');
+        if (!button || button.disabled) return;
+        menuEvent.preventDefault();
+        menuEvent.stopPropagation();
+        hideThemeContextMenu();
+        findAuthorMonitorPaperIdentifier(paper);
+      });
+      const width = menu.offsetWidth || 176;
+      const height = menu.offsetHeight || 36;
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - width - 8)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - height - 8)}px`;
+    }
+
     function renderAuthorMonitorPaperCard(paper) {
       const article = document.createElement("article");
       const selected = paper.paper_id === state.authorMonitorSelectedPaperId;
-      const needsIdentifier = !authorMonitorPaperHasIdentifier(paper);
-      const findingIdentifier = state.authorMonitorIdentifierRequests.has(paper.paper_id);
-      const identifierStatus = String(paper.identifier_lookup?.status || "");
-      const identifierMessage = String(paper.identifier_lookup?.message || "");
-      const identifierLabel = findingIdentifier ? "…" : (identifierStatus === "unresolved" || identifierStatus === "error" ? "↻" : "ID");
-      const identifierTitle = findingIdentifier
-        ? "Identifier lookup queued or running"
-        : (identifierMessage ? `${identifierMessage} · Click to retry` : "Find identifier");
       const conferenceAbstract = authorMonitorPaperIsConferenceAbstract(paper);
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       const citationKnown = paper.citation_count !== null
@@ -42257,16 +42281,6 @@ INDEX_HTML = """<!doctype html>
               >${inLibrary ? "✓" : "+"}</button>
               <div class="library-add-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div>
             </span>
-            ${needsIdentifier ? `
-              <button
-                class="author-paper-mini-button author-paper-identifier-button"
-                type="button"
-                data-action="find-paper-identifier"
-                title="${escapeAttr(identifierTitle)}"
-                aria-label="Find identifier for ${escapeAttr(paper.title || "this paper")}"
-                ${findingIdentifier ? "disabled" : ""}
-              >${identifierLabel}</button>
-            ` : `<span class="author-paper-mini-button-spacer" aria-hidden="true"></span>`}
           </div>
         </div>
         <div class="author-paper-citation-row">
@@ -42275,10 +42289,11 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       article.addEventListener("click", () => selectAuthorMonitorPaper(paper.paper_id));
-      article.querySelector('[data-action="find-paper-identifier"]')?.addEventListener("click", (event) => {
+      article.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        findAuthorMonitorPaperIdentifier(paper);
+        selectAuthorMonitorPaper(paper.paper_id);
+        showAuthorMonitorPaperContextMenu(event, paper);
       });
       article.querySelector(".library-add-control")?.addEventListener("click", (event) => event.stopPropagation());
       const libraryButton = article.querySelector('[data-action="add-library"]');
