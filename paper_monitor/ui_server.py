@@ -22370,6 +22370,94 @@ INDEX_HTML = """<!doctype html>
     }
     .auto-update-status.open { display: block; }
     .auto-update-status.warning { color: #9a6b24; }
+    .monitor-sidebar-summary {
+      display: none;
+      width: var(--monitor-calendar-width);
+      flex: 0 0 auto;
+      align-self: flex-start;
+      padding: 11px 2px 2px;
+      border-top: 1px solid rgba(151, 161, 176, 0.22);
+      color: #7a8799;
+    }
+    .app.report-mode .monitor-sidebar-summary,
+    .app.theme-mode .monitor-sidebar-summary {
+      display: grid;
+      gap: 7px;
+    }
+    .monitor-sidebar-summary-title {
+      color: #687386;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+    }
+    .monitor-sidebar-summary-row {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      gap: 8px;
+      align-items: baseline;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .monitor-sidebar-summary-row > span:first-child {
+      color: #98a2b3;
+      white-space: nowrap;
+    }
+    .monitor-sidebar-summary-row > span:last-child {
+      min-width: 0;
+      color: #667085;
+      overflow-wrap: anywhere;
+    }
+    .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.updates > span:last-child,
+    .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.errors > span:last-child {
+      color: #9a6b24;
+    }
+    .monitor-sidebar-summary .sidebar-late-arrivals {
+      display: grid;
+      gap: 6px;
+      margin-top: 3px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(151, 161, 176, 0.18);
+      color: #667085;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .sidebar-late-arrivals-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #475467;
+    }
+    .sidebar-late-arrivals-head .late-dot {
+      width: 7px;
+      height: 7px;
+      box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.14);
+    }
+    .sidebar-late-arrivals-head strong {
+      color: #475467;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .sidebar-late-arrivals-caption {
+      color: #98a2b3;
+    }
+    .sidebar-late-arrival-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 7px;
+      align-items: baseline;
+    }
+    .sidebar-late-arrival-row .late-arrival-link {
+      color: #667085;
+      font-size: 11px;
+      font-weight: 650;
+      text-align: left;
+    }
+    .sidebar-late-arrival-row span {
+      min-width: 0;
+      color: #667085;
+      overflow-wrap: anywhere;
+    }
     .fetch-progress-host {
       display: none;
       margin: -6px 0 12px;
@@ -27565,6 +27653,22 @@ INDEX_HTML = """<!doctype html>
       background: var(--flat-hover);
       color: var(--accent);
     }
+    .app.report-mode .toolbar,
+    .app.theme-mode .toolbar {
+      min-height: 30px;
+      margin-bottom: 10px;
+      flex-wrap: nowrap;
+    }
+    .app.report-mode .summary,
+    .app.theme-mode .summary {
+      display: none;
+    }
+    .app.report-mode .auto-update-status,
+    .app.report-mode .auto-update-status.open,
+    .app.theme-mode .auto-update-status,
+    .app.theme-mode .auto-update-status.open {
+      display: none;
+    }
     .app.report-mode .theme-fetch-subject-row,
     .app.theme-mode .theme-fetch-subject-row {
       border: 0;
@@ -28141,6 +28245,7 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="calendar" id="calendar"></div>
       <button class="smallbtn" id="jumpToday">Today</button>
+      <div class="monitor-sidebar-summary" id="monitorSidebarSummary" aria-live="polite"></div>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
         <div id="journalFilters"></div>
@@ -28187,6 +28292,7 @@ INDEX_HTML = """<!doctype html>
               <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle"> arXiv</label>
               <label class="toolbar-toggle"><input type="checkbox" id="themeZenodoToggle"> Zenodo</label>
             </div>
+            <div class="auto-update-status" id="autoUpdateStatus" aria-live="polite"></div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
                 <input class="search" id="librarySearchBox" placeholder="Search Library" type="search" aria-label="Search Library and all Spaces">
@@ -28195,7 +28301,6 @@ INDEX_HTML = """<!doctype html>
             </div>
           </div>
           <div class="summary" id="summary"></div>
-          <div class="auto-update-status" id="autoUpdateStatus" aria-live="polite"></div>
           <div class="report-tabs" id="reportTabs"></div>
           <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="monitor-status-host" id="monitorStatusHost"></div>
@@ -32227,6 +32332,63 @@ INDEX_HTML = """<!doctype html>
       root.dataset.monitorSignature = monitorPaperSignature(currentMonitorPaperList(mode), mode);
     }
 
+    function monitorSidebarSummaryRow(label, value, className = "") {
+      if (!value) return "";
+      return `
+        <div class="monitor-sidebar-summary-row ${escapeAttr(className)}">
+          <span>${escapeHtml(label)}</span>
+          <span>${escapeHtml(value)}</span>
+        </div>
+      `;
+    }
+
+    function renderMonitorSidebarSummary() {
+      const root = $("monitorSidebarSummary");
+      if (!root) return;
+      if (!["report", "theme"].includes(state.mode)) {
+        root.replaceChildren();
+        root.className = "monitor-sidebar-summary";
+        return;
+      }
+      const rows = [];
+      let warning = false;
+      if (state.mode === "report") {
+        const filtered = reportVisiblePapers();
+        const selectedFieldText = [...state.selectedFields]
+          .map((field) => FIELD_LABELS[field] || field)
+          .join(" · ");
+        const auto = autoMonitorStatusDetails("report");
+        const updates = auto.parts.slice(1).join(" · ") || "not run yet";
+        warning = auto.warning;
+        rows.push(monitorSidebarSummaryRow("Papers", `${state.papers.length} total · ${filtered.length} shown`));
+        rows.push(monitorSidebarSummaryRow("Fields", selectedFieldText || "All fields"));
+        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
+      } else {
+        const summary = state.themeSummary || {};
+        const visiblePapers = themeVisiblePapers();
+        const groups = groupedThemePapers(visiblePapers);
+        const activeGroup = groups.find((group) => group.key === state.activeThemeGroupKey) || groups[0] || null;
+        const activePapers = activeGroup?.papers || [];
+        const saved = Number(summary.saved || 0);
+        const raw = Number(summary.raw_results || 0);
+        const errors = Array.isArray(summary.errors) ? summary.errors : [];
+        const lastFetch = themeLastFetchLabel(summary.last_fetch).replace(/^Last fetched:\s*/i, "");
+        const auto = autoMonitorStatusDetails("theme");
+        const updates = auto.parts.slice(1).join(" · ") || "not run yet";
+        warning = auto.warning || Boolean(errors.length);
+        rows.push(monitorSidebarSummaryRow("Subjects", `${knownThemeGroupKeys().length} monitored`));
+        rows.push(monitorSidebarSummaryRow("Selected", activeGroup?.name || selectedThemeGroupLabel()));
+        rows.push(monitorSidebarSummaryRow("Papers", `${activePapers.length} shown · ${visiblePapers.length} visible`));
+        rows.push(monitorSidebarSummaryRow("Results", `${saved} saved · ${raw} raw hits`));
+        rows.push(monitorSidebarSummaryRow("Last fetch", lastFetch));
+        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
+        if (errors.length) rows.push(monitorSidebarSummaryRow("Errors", `${errors.length} incomplete`, "errors"));
+      }
+      root.className = `monitor-sidebar-summary${warning ? " warning" : ""}`;
+      root.innerHTML = `<div class="monitor-sidebar-summary-title">Monitor Summary</div>${rows.join("")}`;
+      if (state.mode === "report") renderLateArrivalsBanner(root);
+    }
+
     function renderReport() {
       state.mode = "report";
       closeLibraryQuickLook();
@@ -32240,13 +32402,13 @@ INDEX_HTML = """<!doctype html>
         .map((field) => FIELD_LABELS[field] || field)
         .join(", ");
       $("summary").textContent = `${state.papers.length} total · ${filtered.length} shown · Fields: ${selectedFieldText || "All Fields"}`;
+      renderMonitorSidebarSummary();
       const root = $("papers");
       root.classList.remove("library-view");
       root.style.height = "";
       root.style.minHeight = "";
       clearMonitorStatusDisplay();
       const statusRoot = $("monitorStatusHost");
-      renderLateArrivalsBanner(statusRoot);
       $("reportTabs").classList.remove("open");
       $("reportTabs").innerHTML = "";
       const fetchPending = reportFetchIsPending(state.selectedDate);
@@ -32291,15 +32453,27 @@ INDEX_HTML = """<!doctype html>
       const summaries = state.lateArrivals || [];
       if (!summaries.length) return;
       const banner = document.createElement("div");
-      banner.className = "late-arrivals";
+      banner.className = "late-arrivals sidebar-late-arrivals";
       const total = summaries.reduce((sum, item) => sum + Number(item.count || 0), 0);
-      const links = summaries.map((item) => {
+      const rows = summaries.map((item) => {
         const journals = Object.entries(item.journals || {})
           .map(([journal, count]) => `${journal} ${count}`)
           .join(", ");
-        return `<button class="late-arrival-link" type="button" data-late-date="${escapeAttr(item.publication_date)}">${escapeHtml(item.publication_date)}</button>${journals ? ` <span>${escapeHtml(journals)}</span>` : ""}`;
-      }).join(" · ");
-      banner.innerHTML = `<span class="late-dot" aria-hidden="true"></span><strong>${total} late arrival${total === 1 ? "" : "s"}</strong><span>newly fetched for earlier dates:</span>${links}`;
+        return `
+          <div class="sidebar-late-arrival-row">
+            <button class="late-arrival-link" type="button" data-late-date="${escapeAttr(item.publication_date)}">${escapeHtml(item.publication_date)}</button>
+            <span>${escapeHtml(journals || `${Number(item.count || 0)} paper${Number(item.count || 0) === 1 ? "" : "s"}`)}</span>
+          </div>
+        `;
+      }).join("");
+      banner.innerHTML = `
+        <div class="sidebar-late-arrivals-head">
+          <span class="late-dot" aria-hidden="true"></span>
+          <strong>${total} late arrival${total === 1 ? "" : "s"}</strong>
+        </div>
+        <div class="sidebar-late-arrivals-caption">Newly fetched for earlier dates</div>
+        ${rows}
+      `;
       banner.querySelectorAll("[data-late-date]").forEach((button) => {
         button.addEventListener("click", async () => {
           state.selectedDate = button.dataset.lateDate || state.selectedDate;
@@ -46620,6 +46794,7 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = state.themeSearched
         ? `${dateLabel} · ${groupLabel} · ${activePapers.length} shown in ${activeGroup?.name || "Subject"} · ${visiblePapers.length} visible · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
         : "Choose a date on the calendar to fetch subject-matched papers from multiple metadata sources.";
+      renderMonitorSidebarSummary();
       if (currentThemeBusy) {
         updateThemeFetchProgressDisplay(state.selectedDate);
         if (!state.themePapers.length) {
@@ -46777,18 +46952,11 @@ INDEX_HTML = """<!doctype html>
       }).format(parsed);
     }
 
-    function renderAutoMonitorStatus() {
-      const root = $("autoUpdateStatus");
-      if (!root) return;
-      if (!['report', 'theme'].includes(state.mode)) {
-        root.textContent = "";
-        root.className = "auto-update-status";
-        return;
-      }
+    function autoMonitorStatusDetails(mode = state.mode) {
       const data = state.autoMonitorStatus || {};
       const parts = ["Automatic updates"];
       let warning = false;
-      if (state.mode === "report") {
+      if (mode === "report") {
         const journal = data.journal || {};
         const targets = Array.isArray(journal.targets) ? journal.targets : [];
         const pending = targets.filter((item) => item?.pending).length;
@@ -46799,9 +46967,9 @@ INDEX_HTML = """<!doctype html>
         if (incomplete) parts.push(`${incomplete} date${incomplete === 1 ? "" : "s"} incomplete`);
         const arxiv = data.arxiv || {};
         const arxivFinished = autoStatusTime(arxiv.finished_at);
-        if (arxivFinished) parts.push(`arXiv ${String(arxiv.status || "checked")} ${arxivFinished}`);
+        if (arxivFinished) parts.push(`arXiv fetched ${arxivFinished}`);
         warning = Boolean(pending || incomplete);
-      } else if (state.mode === "theme") {
+      } else if (mode === "theme") {
         const subject = data.subject || {};
         const retryItems = Array.isArray(data.subject_retry?.items) ? data.subject_retry.items : [];
         const pending = retryItems.filter((item) => !item?.exhausted).length;
@@ -46821,8 +46989,21 @@ INDEX_HTML = """<!doctype html>
         warning = Boolean(pending || exhausted);
       }
       if (parts.length === 1) parts.push("not run yet");
-      root.textContent = parts.join(" · ");
-      root.className = `auto-update-status open${warning ? " warning" : ""}`;
+      return {parts, warning};
+    }
+
+    function renderAutoMonitorStatus() {
+      const root = $("autoUpdateStatus");
+      if (!root) return;
+      if (!['report', 'theme'].includes(state.mode)) {
+        root.textContent = "";
+        root.className = "auto-update-status";
+        renderMonitorSidebarSummary();
+        return;
+      }
+      root.textContent = "";
+      root.className = "auto-update-status";
+      renderMonitorSidebarSummary();
     }
 
     async function refreshAutoMonitorStatus() {
@@ -46877,6 +47058,7 @@ INDEX_HTML = """<!doctype html>
       $("reportToolbarActions")?.classList.toggle("hidden", view !== "report");
       $("themeToolbarActions")?.classList.toggle("hidden", view !== "theme");
       $("authorToolbarActions")?.classList.toggle("hidden", view !== "author");
+      if (!["report", "theme"].includes(view)) renderMonitorSidebarSummary();
       syncPrimaryKeyboardLayer({focus: false});
       if (view === "author") {
         const figureToggle = $("authorFigureToggle");

@@ -196,9 +196,33 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertNotIn('$("papers")?.querySelector("[data-theme-fetch-progress]")', theme_progress)
         self.assertIn('updateThemeFetchProgressDisplay(state.selectedDate)', theme_render)
         self.assertNotIn('root.insertAdjacentHTML("beforeend", themeFetchProgressMarkup', theme_render)
-        self.assertIn('renderLateArrivalsBanner(statusRoot)', journal_render)
+        self.assertNotIn('renderLateArrivalsBanner(statusRoot)', journal_render)
         self.assertIn('renderArxivUpdateCountdown(statusRoot', journal_render)
         self.assertIn('renderMonitorPaperList(root, activePapers, "report")', journal_render)
+
+    def test_monitor_header_stats_updates_and_late_arrivals_move_to_the_sidebar(self):
+        sidebar = INDEX_HTML.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
+        toolbar = INDEX_HTML.split('<div class="toolbar">', 1)[1].split(
+            '<div class="summary" id="summary">', 1
+        )[0]
+        sidebar_render = INDEX_HTML.split('function renderMonitorSidebarSummary()', 1)[1].split(
+            'function renderReport()', 1
+        )[0]
+        auto_status = INDEX_HTML.split('function renderAutoMonitorStatus()', 1)[1].split(
+            'async function refreshAutoMonitorStatus', 1
+        )[0]
+
+        self.assertIn('id="monitorSidebarSummary"', sidebar)
+        self.assertIn('id="autoUpdateStatus"', toolbar)
+        self.assertIn('.app.report-mode .summary,', INDEX_HTML)
+        self.assertIn('.app.theme-mode .summary {', INDEX_HTML)
+        self.assertIn('"Papers", `${state.papers.length} total · ${filtered.length} shown`', sidebar_render)
+        self.assertIn('"Results", `${saved} saved · ${raw} raw hits`', sidebar_render)
+        self.assertIn('"Last fetch", lastFetch', sidebar_render)
+        self.assertIn('"Updates", updates', sidebar_render)
+        self.assertIn('if (state.mode === "report") renderLateArrivalsBanner(root)', sidebar_render)
+        self.assertIn('.app.report-mode .auto-update-status.open,', INDEX_HTML)
+        self.assertIn('renderMonitorSidebarSummary();', auto_status)
 
     def test_automatic_update_status_is_polled_and_failed_subject_fetches_are_incomplete(self):
         completeness = INDEX_HTML.split('function themeFetchRecordIsComplete', 1)[1].split(
