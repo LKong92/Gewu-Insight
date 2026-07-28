@@ -17,6 +17,7 @@ from ..text import clean_markup_text, clean_text, journal_name_for_doi, make_pap
 
 OPENALEX_API_KEY_SETTING = "openalex_api_key"
 OPENALEX_RATE_STATUS_TTL_SECONDS = 300
+OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES = frozenset({"harvard dataverse"})
 _OPENALEX_STATE_LOCK = threading.RLock()
 _OPENALEX_RUNTIME_API_KEY = ""
 _OPENALEX_RATE_STATUS: dict[str, Any] = {}
@@ -385,6 +386,8 @@ def search_openalex_author_publications(
         for item in response.json().get("results", []):
             if not isinstance(item, dict):
                 continue
+            if openalex_author_work_is_excluded(item):
+                continue
             if affiliation_terms and not (
                 openalex_work_author_affiliation_matches(item, author_id, affiliation_terms)
                 or author_affiliation_matches_by_id.get(author_id, False)
@@ -530,6 +533,8 @@ def fetch_openalex_author_publications(
         for item in results:
             if not isinstance(item, dict):
                 continue
+            if openalex_author_work_is_excluded(item):
+                continue
             papers.append(normalize_openalex_item(item, "Unknown Journal"))
         remaining -= len(results)
         next_cursor = (data.get("meta") or {}).get("next_cursor") if isinstance(data, dict) else None
@@ -537,6 +542,28 @@ def fetch_openalex_author_publications(
             break
         cursor = next_cursor
     return papers
+
+
+def openalex_author_work_is_excluded(item: dict[str, Any]) -> bool:
+    """Return True for repository records that are not Author Monitor papers."""
+    if not isinstance(item, dict):
+        return False
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else item
+    source_names = [
+        clean_text(item.get("journal")),
+        clean_text(((raw.get("primary_location") or {}).get("source") or {}).get("display_name")),
+        clean_text(((raw.get("best_oa_location") or {}).get("source") or {}).get("display_name")),
+    ]
+    for location in raw.get("locations") or []:
+        if isinstance(location, dict):
+            source_names.append(
+                clean_text(((location.get("source") or {}).get("display_name")))
+            )
+    return any(
+        source_name.lower() in OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
+        for source_name in source_names
+        if source_name
+    )
 
 
 def openalex_author_affiliation_matches(author: dict[str, Any], affiliations: list[str]) -> bool:

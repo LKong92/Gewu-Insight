@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paper_monitor import ui_server
+from paper_monitor.sources.openalex import openalex_author_work_is_excluded
 from paper_monitor.storage import Storage
 
 
@@ -52,6 +53,76 @@ def paper(paper_id: str, title: str, date: str) -> dict:
 
 
 class AuthorMonitorStorageTests(unittest.TestCase):
+    def test_harvard_dataverse_is_excluded_from_openalex_author_works(self):
+        self.assertTrue(
+            openalex_author_work_is_excluded(
+                {
+                    "primary_location": {
+                        "source": {"display_name": "Harvard Dataverse"}
+                    }
+                }
+            )
+        )
+        self.assertTrue(
+            openalex_author_work_is_excluded(
+                {"journal": "Harvard Dataverse", "raw": {}}
+            )
+        )
+        self.assertFalse(
+            openalex_author_work_is_excluded(
+                {
+                    "primary_location": {
+                        "source": {"display_name": "Physical Review Letters"}
+                    }
+                }
+            )
+        )
+
+    def test_author_snapshot_prunes_dataverse_links_but_keeps_library_paper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                author = storage.add_author_monitor(
+                    researchgate_profile(
+                        "https://www.researchgate.net/profile/Test-Author",
+                        "Test Author",
+                    )
+                )
+                candidate = paper(
+                    "dataverse-file",
+                    "Fig_3a_IV.tab",
+                    "2020-01-01",
+                )
+                candidate["journal"] = "Harvard Dataverse"
+                candidate["source"] = "openalex"
+                storage.upsert_paper(candidate)
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(author["id"]),
+                    paper_id="dataverse-file",
+                    unread=True,
+                )
+                library_item = storage.add_library_item(
+                    paper_id="dataverse-file",
+                    folder_id=1,
+                )
+
+                snapshot = ui_server.author_monitor_snapshot(
+                    storage,
+                    author_monitor_id=int(author["id"]),
+                )
+                saved_author = storage.get_author_monitor(int(author["id"]))
+                saved_paper = storage.get_paper("dataverse-file")
+                saved_library_item = storage.get_library_item(
+                    int(library_item["id"])
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(snapshot["papers"], [])
+        self.assertEqual(saved_author["paper_count"], 0)
+        self.assertIsNotNone(saved_paper)
+        self.assertIsNotNone(saved_library_item)
+
     def test_existing_author_monitor_schema_migrates_before_source_index_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "monitor.sqlite"
@@ -1040,7 +1111,24 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
                 "id": "https://openalex.org/W2",
                 "cited_by_count": 29,
             }
-            publication_payloads = [[first_paper], [first_paper, second_paper]]
+            dataverse_file = paper(
+                "oa-dataverse-file",
+                "Fig_3a_IV.tab",
+                "2020-01-01",
+            )
+            dataverse_file["journal"] = "Harvard Dataverse"
+            dataverse_file["source"] = "openalex"
+            dataverse_file["raw"] = {
+                "id": "https://openalex.org/W-DATA",
+                "primary_location": {
+                    "source": {"display_name": "Harvard Dataverse"}
+                },
+                "cited_by_count": 0,
+            }
+            publication_payloads = [
+                [first_paper, dataverse_file],
+                [first_paper, second_paper, dataverse_file],
+            ]
 
             with patch.object(
                 ui_server,
@@ -1105,6 +1193,7 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
         self.assertEqual(saved["citation_source"], "OpenAlex")
         self.assertFalse(rows["oa-old"]["author_unread"])
         self.assertTrue(rows["oa-new"]["author_unread"])
+        self.assertNotIn("oa-dataverse-file", rows)
         self.assertEqual(paper_api["oa-new"]["citation_count"], 29)
         self.assertEqual(paper_api["oa-new"]["citation_count_source"], "OpenAlex")
 
@@ -1866,6 +1955,16 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
     def test_global_search_is_explicitly_clickable_after_commit(self):
         html = ui_server.INDEX_HTML
         self.assertIn("-webkit-app-region: no-drag;", html)
+        search_tools_css = html.split(".library-search-tools {", 1)[1].split("}", 1)[0]
+        search_update = html.split("function updateLibrarySearchTools()", 1)[1].split(
+            "function currentSurfaceSearchScope()", 1
+        )[0]
+        self.assertIn("right: 30px;", search_tools_css)
+        self.assertIn("width: 292px;", search_tools_css)
+        self.assertIn("justify-content: flex-end;", search_tools_css)
+        self.assertNotIn('id="librarySearchCount"', html)
+        self.assertNotIn("function surfaceSearchResultCount", html)
+        self.assertNotIn("surfaceSearchResultCount", search_update)
         self.assertIn('closest(".library-search-wrap")?.addEventListener("pointerdown"', html)
         search_pointer = html.split(
             '$("librarySearchBox").closest(".library-search-wrap")?.addEventListener("pointerdown"',

@@ -67,6 +67,7 @@ from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import (
+    OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES,
     OPENALEX_API_KEY_SETTING,
     OpenAlexDailyLimitError,
     configure_openalex_api_key,
@@ -76,6 +77,7 @@ from .sources.openalex import (
     normalize_openalex_item,
     normalize_openalex_journal_name,
     openalex_api_key_param,
+    openalex_author_work_is_excluded,
     openalex_rate_limit_snapshot,
     openalex_request,
     refresh_openalex_rate_limit_status,
@@ -12355,6 +12357,9 @@ def start_google_scholar_global_cooldown_for_db(db_path: Path, *, message: str =
 
 
 def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> dict[str, Any]:
+    storage.remove_author_monitor_papers_by_journal_names(
+        OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
+    )
     authors = [author_monitor_to_api(row) for row in storage.list_author_monitors()]
     if author_monitor_id < 0:
         author_monitor_id = int(authors[0]["id"]) if authors else 0
@@ -12394,6 +12399,9 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
 
 def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
     """Return the complete compact card index when its SQLite cache is current."""
+    storage.remove_author_monitor_papers_by_journal_names(
+        OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
+    )
     authors = [author_monitor_to_api(row) for row in storage.list_author_monitors()]
     status = storage.author_monitor_card_cache_status()
     payload: dict[str, Any] = {
@@ -12576,6 +12584,9 @@ def refresh_author_monitor_for_db(
         monitor = storage.get_author_monitor(author_monitor_id)
         if not monitor:
             return {"author_id": author_monitor_id, "status": "missing", "added": 0}
+        storage.remove_author_monitor_papers_by_journal_names(
+            OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES
+        )
         source_type = clean_text(
             monitor.get("source_type") or "google_scholar"
         ).lower()
@@ -12790,6 +12801,8 @@ def refresh_author_monitor_for_db(
                 }
             added = 0
             for candidate in candidates:
+                if openalex_author_work_is_excluded(candidate):
+                    continue
                 try:
                     normalized = paper_from_publication_candidate(candidate)
                 except Exception:
@@ -22470,12 +22483,11 @@ INDEX_HTML = """<!doctype html>
     .library-search-tools {
       display: none;
       align-items: center;
-      gap: 6px;
       position: fixed;
       top: 3px;
       right: 30px;
       z-index: 76;
-      width: 386px;
+      width: 292px;
       justify-content: flex-end;
       pointer-events: none;
       -webkit-app-region: no-drag;
@@ -22577,15 +22589,6 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-clear.open { display: grid; place-items: center; }
     .library-search-clear:hover { background: #eef2f7; color: var(--ink); }
-    .library-search-count {
-      color: var(--muted);
-      font-size: 12px;
-      white-space: nowrap;
-      display: none;
-      flex: 0 0 82px;
-      min-width: 82px;
-    }
-    .library-search-tools.has-query .library-search-count { display: inline-block; }
     .library-tab {
       --library-tab-bg: #f3f5f8;
       --library-tab-border: #d8dee8;
@@ -28181,7 +28184,6 @@ INDEX_HTML = """<!doctype html>
                 <input class="search" id="librarySearchBox" placeholder="Search Library" type="search" aria-label="Search Library and all Spaces">
                 <button class="library-search-clear" id="clearLibrarySearch" type="button" title="Clear search">×</button>
               </div>
-              <span class="library-search-count" id="librarySearchCount"></span>
             </div>
           </div>
           <div class="summary" id="summary"></div>
@@ -34699,8 +34701,7 @@ INDEX_HTML = """<!doctype html>
       const tools = $("librarySearchTools");
       const input = $("librarySearchBox");
       const clear = $("clearLibrarySearch");
-      const count = $("librarySearchCount");
-      if (!tools || !input || !clear || !count) return;
+      if (!tools || !input || !clear) return;
       const scope = currentSurfaceSearchScope();
       const open = Boolean(scope);
       const query = surfaceSearchQuery(scope);
@@ -34710,10 +34711,6 @@ INDEX_HTML = """<!doctype html>
       input.placeholder = surfaceSearchPlaceholder(scope);
       if (document.activeElement !== input) input.value = query;
       clear.classList.toggle("open", Boolean(query));
-      const results = open && query.trim() ? surfaceSearchResultCount(scope) : 0;
-      count.textContent = query.trim()
-        ? `${results} match${results === 1 ? "" : "es"}`
-        : "";
       updateLibraryViewToggle();
     }
 
@@ -34751,21 +34748,6 @@ INDEX_HTML = """<!doctype html>
         "theme": "Search Subject Monitor",
         "author": "Search Author Monitor"
       }[scope] || "Search";
-    }
-
-    function surfaceSearchResultCount(scope = currentSurfaceSearchScope()) {
-      if (scope === "library") {
-        const normalized = librarySearchNormalize(state.query);
-        if (normalized && state.libraryRemoteSearchQuery === normalized) {
-          return Number(state.libraryRemoteSearchTotal || state.libraryRemoteSearchResults.length);
-        }
-        return librarySearchResults().length;
-      }
-      if (scope === "my-publications") return visibleMyPublicationRows().length;
-      if (scope === "report") return reportVisiblePapers().length;
-      if (scope === "theme") return themeVisiblePapers().length;
-      if (scope === "author") return authorMonitorVisiblePapers().length;
-      return 0;
     }
 
     function updateLibraryViewToggle() {

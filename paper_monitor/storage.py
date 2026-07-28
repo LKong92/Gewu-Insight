@@ -2148,6 +2148,66 @@ class Storage:
         ).fetchone()
         return int(row["count"] or 0)
 
+    def remove_author_monitor_papers_by_journal_names(
+        self,
+        journal_names: list[str] | tuple[str, ...] | set[str],
+    ) -> int:
+        normalized_names = sorted(
+            {
+                str(name or "").strip().lower()
+                for name in journal_names
+                if str(name or "").strip()
+            }
+        )
+        if not normalized_names:
+            return 0
+        placeholders = ", ".join("?" for _ in normalized_names)
+        existing = self.conn.execute(
+            f"""
+            SELECT 1
+            FROM author_monitor_papers
+            JOIN papers ON papers.paper_id = author_monitor_papers.paper_id
+            WHERE lower(trim(papers.journal)) IN ({placeholders})
+            LIMIT 1
+            """,
+            tuple(normalized_names),
+        ).fetchone()
+        if not existing:
+            return 0
+        cursor = self.conn.execute(
+            f"""
+            DELETE FROM author_monitor_papers
+            WHERE paper_id IN (
+              SELECT paper_id
+              FROM papers
+              WHERE lower(trim(journal)) IN ({placeholders})
+            )
+            """,
+            tuple(normalized_names),
+        )
+        self.conn.execute(
+            """
+            DELETE FROM author_monitor_card_cache
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM author_monitor_papers
+              WHERE author_monitor_papers.paper_id = author_monitor_card_cache.paper_id
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            DELETE FROM author_monitor_card_cache_dirty
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM author_monitor_papers
+              WHERE author_monitor_papers.paper_id = author_monitor_card_cache_dirty.paper_id
+            )
+            """
+        )
+        self.conn.commit()
+        return max(0, int(cursor.rowcount or 0))
+
     def list_author_monitor_papers(self, author_monitor_id: int = 0) -> list[dict[str, Any]]:
         params: tuple[Any, ...] = ()
         where = ""
