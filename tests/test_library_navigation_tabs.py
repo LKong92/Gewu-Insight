@@ -286,11 +286,43 @@ class LibraryNavigationTabTests(unittest.TestCase):
             "new Set(state.libraryFolders.map((folder) => Number(folder.id)))",
             search,
         )
-        self.assertIn("libraryGlobalFolderPath(folder.id)", search)
         self.assertIn("libraryGlobalFolderPath(item.folder_id)", search)
+        self.assertIn('type: "item"', search)
+        self.assertNotIn('type: "folder"', search)
         self.assertNotIn("libraryDisplayRootId()", search)
         self.assertNotIn("libraryDescendantFolderIds(", search)
         self.assertIn('aria-label="Search Library and all Spaces"', html)
+        self.assertIn("/api/library/search?q=", html)
+        self.assertIn("requestRemoteLibrarySearch(nextQuery)", html)
+
+    def test_library_search_snapshot_returns_files_but_never_folders(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Quantum Search Folder")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "searchable-paper",
+                "doi": "10.1234/searchable",
+                "title": "A directly searchable quantum paper",
+                "journal": "Test Journal",
+                "publication_date": "2026-07-28",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        item = self.storage.add_library_item(
+            paper_id="searchable-paper",
+            folder_id=int(folder["id"]),
+        )
+
+        by_title = ui_server.library_file_search_snapshot(
+            self.storage,
+            "directly searchable",
+        )
+
+        self.assertEqual(by_title["total"], 1)
+        self.assertEqual(by_title["results"][0]["type"], "item")
+        self.assertEqual(by_title["results"][0]["id"], int(item["id"]))
+        self.assertIn("Quantum Search Folder", by_title["results"][0]["path"])
 
     def test_space_remove_rejects_database_or_finder_contents(self) -> None:
         tab = ui_server.add_library_workspace_tab(self.storage, name="Occupied")

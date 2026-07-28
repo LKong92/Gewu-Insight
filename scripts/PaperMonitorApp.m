@@ -259,26 +259,6 @@
 
 @end
 
-@interface DaiqoTitlebarGestureView : NSView
-@property(nonatomic, copy) void (^doubleClickHandler)(void);
-@end
-
-@implementation DaiqoTitlebarGestureView
-
-- (BOOL)acceptsFirstMouse:(NSEvent *)event {
-    return YES;
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    if (event.clickCount == 2) {
-        if (self.doubleClickHandler) self.doubleClickHandler();
-        return;
-    }
-    [self.window performWindowDragWithEvent:event];
-}
-
-@end
-
 @interface DaiqoWindow : NSWindow
 @property(nonatomic, copy) void (^titlebarDoubleClickHandler)(void);
 @end
@@ -332,7 +312,6 @@
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
-@property(nonatomic, strong) DaiqoTitlebarGestureView *titlebarGestureView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
@@ -480,16 +459,6 @@
         strongSelf.windowDragging = NO;
         [strongSelf toggleMainWindowFill];
     };
-    self.titlebarGestureView = [[DaiqoTitlebarGestureView alloc] initWithFrame:NSZeroRect];
-    self.titlebarGestureView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.titlebarGestureView.doubleClickHandler = ((DaiqoWindow *)self.window).titlebarDoubleClickHandler;
-    [self.webView addSubview:self.titlebarGestureView positioned:NSWindowAbove relativeTo:nil];
-    [NSLayoutConstraint activateConstraints:@[
-        [self.titlebarGestureView.leadingAnchor constraintEqualToAnchor:self.webView.leadingAnchor constant:720.0],
-        [self.titlebarGestureView.trailingAnchor constraintEqualToAnchor:self.webView.trailingAnchor constant:-160.0],
-        [self.titlebarGestureView.topAnchor constraintEqualToAnchor:self.webView.topAnchor],
-        [self.titlebarGestureView.heightAnchor constraintEqualToConstant:40.0]
-    ]];
     if (self.window.isMiniaturized) [self.window deminiaturize:nil];
     [self.window makeKeyAndOrderFront:nil];
     [self positionTrafficLightButtons];

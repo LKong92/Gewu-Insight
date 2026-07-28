@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import uuid
 import webbrowser
 import zipfile
@@ -409,6 +410,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/bootstrap":
                 self.handle_library_bootstrap(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/library/search":
+                self.handle_library_search(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/library/add-targets":
                 self.handle_library_add_targets()
@@ -1160,6 +1164,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             snapshot = library_bootstrap_snapshot(storage)
+        finally:
+            storage.close()
+        self.send_json(snapshot)
+
+    def handle_library_search(self, query: dict[str, list[str]]) -> None:
+        search_query = clean_text(first(query, "q") or "")[:300]
+        limit = max(1, min(500, int(first(query, "limit") or 400)))
+        storage = Storage(self.configured_db_path)
+        try:
+            snapshot = library_file_search_snapshot(storage, search_query, limit=limit)
         finally:
             storage.close()
         self.send_json(snapshot)
@@ -8466,6 +8480,159 @@ def library_bootstrap_snapshot(storage: Storage) -> dict[str, Any]:
         "children": root_children,
         "shortcut_tabs": library_shortcut_tabs(storage),
         "workspace_tabs": workspace_tabs,
+    }
+
+
+def library_search_normalize(value: Any) -> str:
+    normalized = unicodedata.normalize("NFD", clean_text(str(value or "")).casefold())
+    without_marks = "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    )
+    return re.sub(r"[\W_]+", " ", without_marks, flags=re.UNICODE).strip()
+
+
+def library_file_search_snapshot(
+    storage: Storage,
+    query: str,
+    *,
+    limit: int = 400,
+) -> dict[str, Any]:
+    cleaned_query = clean_text(query)[:300]
+    if not cleaned_query:
+        return {"query": "", "results": [], "total": 0}
+    tokens = [token for token in library_search_normalize(cleaned_query).split() if token][:8]
+    if not tokens:
+        return {"query": cleaned_query, "results": [], "total": 0}
+    search_blob = """
+        LOWER(
+          COALESCE(library_items.display_name, '') || ' ' ||
+          COALESCE(papers.title, '') || ' ' ||
+          COALESCE(papers.original_filename, '') || ' ' ||
+          COALESCE(papers.doi, '') || ' ' ||
+          COALESCE(papers.journal, '') || ' ' ||
+          COALESCE(papers.abstract, '') || ' ' ||
+          COALESCE(papers.url, '') || ' ' ||
+          COALESCE(papers.landing_url, '')
+        )
+    """
+    token_clauses = " AND ".join(f"{search_blob} LIKE ?" for _ in tokens)
+    bounded_limit = max(1, min(500, int(limit or 400)))
+    rows = storage.conn.execute(
+        f"""
+        WITH RECURSIVE folder_paths(id, path, trashed_at) AS (
+          SELECT id, name, COALESCE(trashed_at, '')
+          FROM library_folders
+          WHERE parent_id IS NULL
+          UNION ALL
+          SELECT
+            child.id,
+            folder_paths.path || ' / ' || child.name,
+            CASE
+              WHEN folder_paths.trashed_at <> '' THEN folder_paths.trashed_at
+              ELSE COALESCE(child.trashed_at, '')
+            END
+          FROM library_folders AS child
+          JOIN folder_paths ON child.parent_id = folder_paths.id
+        )
+        SELECT
+          library_items.id,
+          library_items.folder_id,
+          library_items.paper_id,
+          library_items.display_name,
+          library_items.original_folder_id,
+          library_items.trashed_at,
+          library_items.created_at,
+          library_items.sort_order,
+          papers.title,
+          papers.journal,
+          papers.publication_date,
+          papers.doi,
+          papers.url,
+          papers.landing_url,
+          papers.source,
+          papers.raw_json,
+          papers.semantic_scholar_json,
+          papers.download_status,
+          papers.main_pdf_path,
+          papers.merged_pdf_path,
+          papers.source_path,
+          papers.original_filename,
+          papers.import_batch_id,
+          papers.import_kind,
+          papers.import_as,
+          papers.size_bytes,
+          papers.analysis_status,
+          inventory_import_batches.copy_mode AS import_copy_mode,
+          folder_paths.path AS folder_path,
+          COUNT(*) OVER() AS search_total
+        FROM library_items
+        JOIN papers ON papers.paper_id = library_items.paper_id
+        JOIN folder_paths ON folder_paths.id = library_items.folder_id
+        LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
+        WHERE COALESCE(library_items.trashed_at, '') = ''
+          AND folder_paths.trashed_at = ''
+          AND {token_clauses}
+        ORDER BY
+          LOWER(COALESCE(NULLIF(library_items.display_name, ''), papers.title)),
+          library_items.id
+        LIMIT ?
+        """,
+        (*[f"%{token}%" for token in tokens], bounded_limit),
+    ).fetchall()
+    total = int(rows[0]["search_total"] or 0) if rows else 0
+
+    def search_item_to_api(row: sqlite3.Row) -> dict[str, Any]:
+        merged_path = clean_text(row["merged_pdf_path"] or "")
+        main_path = clean_text(row["main_pdf_path"] or "")
+        source_path = clean_text(row["source_path"] or "")
+        original_filename = clean_text(row["original_filename"] or "")
+        local_path = merged_path or main_path or source_path
+        paper = {
+            "paper_id": clean_text(row["paper_id"] or ""),
+            "title": clean_text(row["title"] or ""),
+            "journal": clean_text(row["journal"] or ""),
+            "publication_date": clean_text(row["publication_date"] or ""),
+            "doi": clean_text(row["doi"] or ""),
+            "source": clean_text(row["source"] or ""),
+            "original_filename": original_filename,
+            "file_extension": Path(original_filename or local_path).suffix.lower(),
+            "full_detail": False,
+            "storage_mode": "copy" if local_path else "link",
+        }
+        if merged_path:
+            paper["merged_pdf_path"] = merged_path
+        if main_path and main_path != merged_path:
+            paper["main_pdf_path"] = main_path
+        if source_path and not merged_path and not main_path:
+            paper["source_path"] = source_path
+        item_api = {
+            "id": int(row["id"] or 0),
+            "folder_id": int(row["folder_id"] or 0),
+            "paper_id": clean_text(row["paper_id"] or ""),
+            "created_at": clean_text(row["created_at"] or ""),
+            "paper": paper,
+        }
+        display_name = clean_text(row["display_name"] or "")
+        if display_name and display_name != paper["title"]:
+            item_api["display_name"] = display_name
+        return item_api
+
+    return {
+        "query": cleaned_query,
+        "total": total,
+        "results": [
+            {
+                "type": "item",
+                "id": int(row["id"] or 0),
+                "parentFolderId": int(item_api.get("folder_id") or 0),
+                "path": clean_text(row["folder_path"] or ""),
+                "item": item_api,
+            }
+            for row in rows
+            for item_api in [search_item_to_api(row)]
+        ],
     }
 
 
@@ -28223,6 +28390,11 @@ INDEX_HTML = """<!doctype html>
       libraryRangeSelectionKeys: new Set(),
       librarySearchCache: {key: "", results: []},
       librarySearchVersion: 0,
+      libraryRemoteSearchQuery: "",
+      libraryRemoteSearchResults: [],
+      libraryRemoteSearchTotal: 0,
+      libraryRemoteSearchLoadingQuery: "",
+      libraryRemoteSearchSequence: 0,
       libraryColumnsScrollLeft: 0,
       libraryColumnScrollTops: {},
       libraryRestoringColumnScroll: false,
@@ -29940,24 +30112,14 @@ INDEX_HTML = """<!doctype html>
     function librarySearchResults() {
       const query = state.query.trim();
       if (!query) return [];
+      const normalizedQuery = librarySearchNormalize(query);
+      if (state.libraryRemoteSearchQuery === normalizedQuery) {
+        return state.libraryRemoteSearchResults;
+      }
       const cacheKey = librarySearchCacheKey(query);
       if (state.librarySearchCache.key === cacheKey) return state.librarySearchCache.results;
       const folderIds = new Set(state.libraryFolders.map((folder) => Number(folder.id)));
       const results = [];
-      state.libraryFolders
-        .filter((folder) => folderIds.has(Number(folder.id)) && folder.parent_id !== null)
-        .forEach((folder) => {
-          const path = libraryGlobalFolderPath(folder.id);
-          const haystack = `${folder.name || ""} ${path}`;
-          if (librarySearchMatches(haystack, query)) {
-            results.push({
-              type: "folder",
-              id: Number(folder.id),
-              parentFolderId: Number(folder.parent_id),
-              path
-            });
-          }
-        });
       state.libraryItems
         .filter((item) => folderIds.has(Number(item.folder_id)))
         .forEach((item) => {
@@ -29973,18 +30135,84 @@ INDEX_HTML = """<!doctype html>
           }
         });
       results.sort((a, b) => {
-        const typeDelta = (a.type === "folder" ? 0 : 1) - (b.type === "folder" ? 0 : 1);
-        if (typeDelta) return typeDelta;
-        const left = a.type === "folder"
-          ? (libraryFolderById(a.id)?.name || "")
-          : (libraryItemById(a.id)?.display_name || libraryItemById(a.id)?.paper?.title || "");
-        const right = b.type === "folder"
-          ? (libraryFolderById(b.id)?.name || "")
-          : (libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "");
+        const left = libraryItemById(a.id)?.display_name || libraryItemById(a.id)?.paper?.title || "";
+        const right = libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "";
         return String(left).localeCompare(String(right)) || Number(a.id) - Number(b.id);
       });
       state.librarySearchCache = {key: cacheKey, results};
       return results;
+    }
+
+    function resetRemoteLibrarySearch() {
+      state.libraryRemoteSearchQuery = "";
+      state.libraryRemoteSearchResults = [];
+      state.libraryRemoteSearchTotal = 0;
+      state.libraryRemoteSearchLoadingQuery = "";
+    }
+
+    function requestRemoteLibrarySearch(query) {
+      const cleaned = String(query || "").trim();
+      const normalized = librarySearchNormalize(cleaned);
+      if (!normalized) {
+        resetRemoteLibrarySearch();
+        return Promise.resolve();
+      }
+      if (state.libraryRemoteSearchQuery === normalized || state.libraryRemoteSearchLoadingQuery === normalized) {
+        return Promise.resolve();
+      }
+      const sequence = Number(state.libraryRemoteSearchSequence || 0) + 1;
+      state.libraryRemoteSearchSequence = sequence;
+      state.libraryRemoteSearchLoadingQuery = normalized;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+      return fetch(`/api/library/search?q=${encodeURIComponent(cleaned)}&limit=400`, {
+        cache: "no-store",
+        signal: controller.signal
+      })
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not search Library");
+          if (sequence !== state.libraryRemoteSearchSequence) return;
+          const itemMap = new Map(state.libraryItems.map((item) => [Number(item.id), item]));
+          const results = Array.isArray(data.results) ? data.results : [];
+          results.forEach((result) => {
+            const item = result?.item;
+            if (!item?.id) return;
+            const id = Number(item.id);
+            const existing = itemMap.get(id) || {};
+            itemMap.set(id, {...existing, ...item, paper: {...(existing.paper || {}), ...(item.paper || {})}});
+          });
+          state.libraryItems = [...itemMap.values()];
+          rebuildLibraryIndexes();
+          state.libraryRemoteSearchQuery = normalized;
+          state.libraryRemoteSearchResults = results.map((result) => ({
+            type: "item",
+            id: Number(result.id || result.item?.id || 0),
+            parentFolderId: Number(result.parentFolderId || result.item?.folder_id || 0),
+            path: String(result.path || "")
+          })).filter((result) => result.id && result.parentFolderId);
+          state.libraryRemoteSearchTotal = Math.max(
+            state.libraryRemoteSearchResults.length,
+            Number(data.total || 0)
+          );
+        })
+        .catch((error) => {
+          if (sequence !== state.libraryRemoteSearchSequence) return;
+          const message = error?.name === "AbortError"
+            ? "Library search timed out. Please try a more specific title."
+            : (error.message || "Could not search Library.");
+          updateLibraryActivityStatus(message, {delay: 3600});
+        })
+        .finally(() => {
+          window.clearTimeout(timeoutId);
+          if (sequence !== state.libraryRemoteSearchSequence) return;
+          state.libraryRemoteSearchLoadingQuery = "";
+          if (state.mode === "library" && currentSurfaceSearchScope() === "library"
+              && librarySearchNormalize(state.query) === normalized) {
+            renderLibrary();
+            updateLibrarySearchTools();
+          }
+        });
     }
 
     function libraryVisibleEntries() {
@@ -34066,7 +34294,13 @@ INDEX_HTML = """<!doctype html>
     }
 
     function surfaceSearchResultCount(scope = currentSurfaceSearchScope()) {
-      if (scope === "library") return librarySearchResults().length;
+      if (scope === "library") {
+        const normalized = librarySearchNormalize(state.query);
+        if (normalized && state.libraryRemoteSearchQuery === normalized) {
+          return Number(state.libraryRemoteSearchTotal || state.libraryRemoteSearchResults.length);
+        }
+        return librarySearchResults().length;
+      }
       if (scope === "my-publications") return visibleMyPublicationRows().length;
       if (scope === "report") return reportVisiblePapers().length;
       if (scope === "theme") return themeVisiblePapers().length;
@@ -34090,11 +34324,16 @@ INDEX_HTML = """<!doctype html>
       if (!scope) return;
       const nextQuery = String(value || "");
       if (surfaceSearchQuery(scope) === nextQuery) {
+        if (scope === "library") requestRemoteLibrarySearch(nextQuery);
         updateLibrarySearchTools();
         return;
       }
       setSurfaceSearchQuery(scope, nextQuery);
-      if (scope === "library") clearLibraryRangeSelection();
+      if (scope === "library") {
+        clearLibraryRangeSelection();
+        if (nextQuery.trim()) requestRemoteLibrarySearch(nextQuery);
+        else resetRemoteLibrarySearch();
+      }
       if (scope === "report") state.noMatchDates = new Set();
       if (scope === currentSurfaceSearchScope()) renderCurrentPaperSurface();
       updateLibrarySearchTools();
@@ -35878,13 +36117,18 @@ INDEX_HTML = """<!doctype html>
         const entry = result.type === "folder" ? libraryFolderById(result.id) : libraryItemById(result.id);
         return entry ? librarySearchResultRowMarkup(result.type, entry, result.parentFolderId, result.path) : "";
       }).join("");
-      const header = results.length > visibleResults.length
-        ? `Search Results · Showing ${visibleResults.length} of ${results.length}`
-        : `Search Results${results.length ? ` · ${results.length}` : ""}`;
+      const normalizedQuery = librarySearchNormalize(state.query);
+      const searching = state.libraryRemoteSearchLoadingQuery === normalizedQuery;
+      const totalResults = state.libraryRemoteSearchQuery === normalizedQuery
+        ? Math.max(results.length, Number(state.libraryRemoteSearchTotal || 0))
+        : results.length;
+      const header = totalResults > visibleResults.length
+        ? `Search Results · Showing ${visibleResults.length} of ${totalResults}`
+        : `Search Results${totalResults ? ` · ${totalResults}` : ""}`;
       root.innerHTML = `
         <div class="library-pane-header">${escapeHtml(header)}</div>
         <div class="library-search-results-body">
-          ${rows || `<div class="empty">No Library matches for "${escapeHtml(state.query.trim())}".</div>`}
+          ${rows || `<div class="empty">${searching ? "Searching Library..." : `No Library matches for "${escapeHtml(state.query.trim())}".`}</div>`}
         </div>
       `;
     }
@@ -46217,7 +46461,10 @@ INDEX_HTML = """<!doctype html>
       const scope = currentSurfaceSearchScope();
       setSurfaceSearchQuery(scope, "");
       $("librarySearchBox").value = "";
-      if (scope === "library") clearLibraryRangeSelection();
+      if (scope === "library") {
+        clearLibraryRangeSelection();
+        resetRemoteLibrarySearch();
+      }
       renderCurrentPaperSurface();
       updateLibrarySearchTools();
       $("librarySearchBox")?.focus({preventScroll: true});
