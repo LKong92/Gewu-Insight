@@ -195,6 +195,10 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(result["identifier_recovery_sources"], {"title_openalex": 1})
 
     def test_full_library_identifier_recovery_uses_title_and_records_attempt(self) -> None:
+        pdf = self.write_layout_pdf(
+            "missing-identifier.pdf",
+            ["A reliable title for identifier recovery"],
+        )
         self.storage.upsert_paper(
             {
                 "paper_id": "missing-identifier",
@@ -206,6 +210,13 @@ class LibraryFileOperationTests(unittest.TestCase):
                 "source": "inventory",
                 "type": "article",
             }
+        )
+        self.storage.update_download_status(
+            "missing-identifier",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+            supplement_pdf_paths=[],
         )
         self.storage.add_library_item(paper_id="missing-identifier", folder_id=1)
         job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
@@ -250,6 +261,10 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(dict(attempt), {"mode": "identifier", "status": "recovered"})
 
     def test_full_library_identifier_recovery_skips_recent_attempt(self) -> None:
+        pdf = self.write_layout_pdf(
+            "recent-missing-identifier.pdf",
+            ["Another reliable paper title for recovery"],
+        )
         self.storage.upsert_paper(
             {
                 "paper_id": "recent-missing-identifier",
@@ -261,6 +276,13 @@ class LibraryFileOperationTests(unittest.TestCase):
                 "source": "inventory",
                 "type": "article",
             }
+        )
+        self.storage.update_download_status(
+            "recent-missing-identifier",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+            supplement_pdf_paths=[],
         )
         self.storage.add_library_item(paper_id="recent-missing-identifier", folder_id=1)
         refresh_id = ui_server.record_metadata_refresh_start(
@@ -288,6 +310,52 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(result["skipped_recent"], 1)
         self.assertEqual(result["attempted"], 0)
 
+    def test_full_library_identifier_recovery_excludes_non_pdf_files(self) -> None:
+        text_path = self.root / "Device_C_177_raw.txt"
+        text_path.write_text("measurement data", encoding="utf-8")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "non-pdf-library-file",
+                "doi": "",
+                "title": "Device_C_177_raw.txt",
+                "journal": "",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "file",
+            }
+        )
+        self.storage.update_download_status(
+            "non-pdf-library-file",
+            status="success",
+            main_pdf_path=str(text_path),
+            merged_pdf_path=str(text_path),
+            supplement_pdf_paths=[],
+        )
+        self.storage.add_library_item(paper_id="non-pdf-library-file", folder_id=1)
+        job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
+
+        with patch.object(ui_server, "identifier_from_title_lookup") as lookup:
+            ui_server.run_library_identifier_recovery_job(
+                job_id=job_id,
+                db_path=self.db_path,
+                skip_days=7,
+            )
+
+        result = (ui_server.get_library_import_job(job_id) or {}).get("result") or {}
+        lookup.assert_not_called()
+        self.assertEqual(result["total_candidates"], 0)
+        self.assertEqual(result["attempted"], 0)
+        refresh_count = self.storage.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM paper_metadata_refreshes
+            WHERE paper_id = ?
+            """,
+            ("non-pdf-library-file",),
+        ).fetchone()[0]
+        self.assertEqual(refresh_count, 0)
+
     def test_library_metadata_refresh_job_starts_without_identifier_recovery_state(self) -> None:
         job_id = ui_server.create_library_metadata_refresh_job(
             metadata_mode="quick",
@@ -309,7 +377,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         html = ui_server.INDEX_HTML
         self.assertIn("/api/library/identifier-recovery/start", html)
         self.assertIn("function openIdentifierRecoveryWindow()", html)
-        self.assertIn("All Library papers without DOI/arXiv", html)
+        self.assertIn("All Library PDF files without DOI/arXiv", html)
+        self.assertIn("Scans active Library and Space PDF files", html)
         self.assertIn("No Google Scholar requests.", html)
 
     def test_pdf_rename_filename_preserves_pdf_suffix_when_title_is_long(self) -> None:

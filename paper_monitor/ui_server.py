@@ -8604,6 +8604,16 @@ def local_pdf_path_for_identifier_extraction(paper: dict[str, Any]) -> Path | No
     return None
 
 
+def readable_local_pdf_path_for_identifier_recovery(paper: dict[str, Any]) -> Path | None:
+    pdf_path = local_pdf_path_for_identifier_extraction(paper)
+    if pdf_path is None or pdf_path.suffix.lower() != ".pdf":
+        return None
+    try:
+        return pdf_path if pdf_path.exists() and pdf_path.is_file() else None
+    except OSError:
+        return None
+
+
 def extract_identifier_from_pdf_or_title(
     pdf_path: Path,
     paper: dict[str, Any],
@@ -10289,6 +10299,10 @@ def library_missing_identifier_candidates(storage: Storage) -> list[dict[str, An
         doi = normalize_publication_doi(str(paper.get("doi") or ""))
         if looks_like_doi(doi) or arxiv_identifier_for_paper(paper):
             continue
+        pdf_path = readable_local_pdf_path_for_identifier_recovery(paper)
+        if pdf_path is None:
+            continue
+        paper["_identifier_recovery_pdf_path"] = str(pdf_path)
         candidates.append(paper)
     return candidates
 
@@ -10499,7 +10513,7 @@ def run_library_identifier_recovery_job(
         total = len(candidates)
         log_library_import_job(
             job_id,
-            f"Finding missing DOI/arXiv identifiers for {total} Library papers",
+            f"Finding missing DOI/arXiv identifiers for {total} Library PDF files",
         )
         log_library_import_job(
             job_id,
@@ -10507,7 +10521,7 @@ def run_library_identifier_recovery_job(
         )
         log_library_import_job(
             job_id,
-            "Using local PDFs first, then Crossref, OpenAlex, and Semantic Scholar title matching",
+            "Using local PDF content first, then Crossref, OpenAlex, and Semantic Scholar title matching",
         )
         update_library_import_job(
             job_id,
@@ -10522,9 +10536,10 @@ def run_library_identifier_recovery_job(
                 raise ImportCancelled("Identifier recovery stopped by user")
             paper_id = clean_text(paper.get("paper_id") or "")
             title = reliable_paper_title_for_identifier_lookup(paper)
-            pdf_path = local_pdf_path_for_identifier_extraction(paper)
-            readable_pdf = bool(pdf_path and pdf_path.exists() and pdf_path.is_file())
-            label = title or (pdf_path.name if readable_pdf and pdf_path else paper_id)
+            pdf_path = readable_local_pdf_path_for_identifier_recovery(paper)
+            if pdf_path is None:
+                continue
+            label = title or pdf_path.name or paper_id
             percent = max(0, min(99, round((index / max(1, total)) * 100)))
             update_library_import_job(
                 job_id,
@@ -10553,20 +10568,12 @@ def run_library_identifier_recovery_job(
             )
             used_title_lookup = False
             try:
-                if readable_pdf and pdf_path:
-                    found = extract_identifier_from_pdf_or_title(
-                        pdf_path,
-                        paper,
-                        title_lookup=cached_title_lookup,
-                    )
-                    used_title_lookup = clean_text(found.get("source") or "") != "pdf_title_page"
-                elif title:
-                    found = cached_title_lookup(title)
-                    used_title_lookup = True
-                    if found.get("identifier"):
-                        found["matched_title"] = title
-                else:
-                    found = {"kind": "", "identifier": "", "source": ""}
+                found = extract_identifier_from_pdf_or_title(
+                    pdf_path,
+                    paper,
+                    title_lookup=cached_title_lookup,
+                )
+                used_title_lookup = clean_text(found.get("source") or "") != "pdf_title_page"
                 identifier = clean_text(found.get("identifier") or "")
                 kind = clean_text(found.get("kind") or "")
                 if not identifier or kind not in {"doi", "arxiv"}:
@@ -10575,7 +10582,7 @@ def run_library_identifier_recovery_job(
                         storage,
                         refresh_id,
                         status="unresolved",
-                        error="" if (readable_pdf or title) else "No readable PDF or reliable title",
+                        error="",
                     )
                     log_library_import_job(
                         job_id,
@@ -32543,7 +32550,7 @@ INDEX_HTML = """<!doctype html>
       const runLabel = identifierMode ? "Start Search" : (refreshMode ? "Start Refresh" : "Import");
       const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Stop Refresh" : "Stop Import");
       const maintenanceSource = identifierMode
-        ? "All Library papers without DOI/arXiv"
+        ? "All Library PDF files without DOI/arXiv"
         : "All Library papers with DOI/arXiv";
       root.innerHTML = `
         <div class="loader-panel">
@@ -32818,8 +32825,8 @@ INDEX_HTML = """<!doctype html>
           .join(" · ");
         return `
           <h3>Missing Identifiers</h3>
-          <p>Scans active Library and Space papers that do not have a DOI or arXiv ID. Local PDFs are checked before title matching through Crossref, OpenAlex, and Semantic Scholar.</p>
-          <div class="loader-metric"><strong>Scope</strong><span>All active Library/Space papers without DOI/arXiv</span></div>
+          <p>Scans active Library and Space PDF files that do not have a DOI or arXiv ID. PDF content and titles are checked through Crossref, OpenAlex, and Semantic Scholar.</p>
+          <div class="loader-metric"><strong>Scope</strong><span>All active Library/Space PDF files without DOI/arXiv</span></div>
           <div class="loader-metric"><strong>Safety</strong><span>Sequential requests, cached duplicate titles, 7-day recent-attempt skip, and no Google Scholar requests.</span></div>
           <div class="loader-metric"><strong>Metadata</strong><span>Recovered papers receive one quick metadata refresh.</span></div>
           ${result ? `
