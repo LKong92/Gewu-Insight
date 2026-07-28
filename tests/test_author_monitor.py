@@ -1841,11 +1841,11 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         conference_title_css = html.split(
             ".author-monitor-conference-cards .author-paper-title {", 1
         )[1].split("}", 1)[0]
-        self.assertIn("height: 54px", conference_card_css)
+        self.assertIn("height: 76px", conference_card_css)
         self.assertIn("align-content: start", conference_card_css)
         self.assertIn("overflow: hidden", conference_card_css)
-        self.assertIn("font-size: 9.5px", conference_title_css)
-        self.assertIn("font-weight: 540", conference_title_css)
+        self.assertIn("font-size: 13px", conference_title_css)
+        self.assertIn("font-weight: 600", conference_title_css)
         self.assertIn("color: #596575", conference_title_css)
         self.assertIn("-webkit-line-clamp: 2", conference_title_css)
         self.assertIn('"meeting"', conference_logic)
@@ -2119,7 +2119,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         )
         self.assertIn('channel: "secondary"', updating)
         self.assertIn("transform: translateY(1px)", html)
-        self.assertIn("height: 54px", html)
+        self.assertIn("height: 76px", html)
         self.assertIn("height: 55px", html)
         self.assertIn("Update All Scholar Citations</button>", context_menu)
         self.assertIn("updateAllAuthorScholarCitations(author, {confirm: true})", context_menu)

@@ -26042,9 +26042,9 @@ INDEX_HTML = """<!doctype html>
     }
     .author-paper-citation {
       min-width: 0;
-      color: #315c6a;
+      color: #1f2937;
       font-style: italic;
-      font-weight: 650;
+      font-weight: 400;
       overflow-wrap: anywhere;
     }
     .author-paper-card.author-unread::before {
@@ -26060,11 +26060,11 @@ INDEX_HTML = """<!doctype html>
       z-index: 2;
     }
     .author-monitor-conference-cards .author-paper-card {
-      height: 54px;
-      min-height: 54px;
+      height: 76px;
+      min-height: 76px;
       align-content: start;
-      gap: 2px;
-      padding: 5px 36px 5px 8px;
+      gap: 3px;
+      padding: 7px 42px 7px 10px;
       overflow: hidden;
       border-radius: 7px;
     }
@@ -26072,16 +26072,16 @@ INDEX_HTML = """<!doctype html>
       display: -webkit-box;
       overflow: hidden;
       color: #596575;
-      font-size: 9.5px;
-      font-weight: 540;
-      line-height: 1.12;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.18;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
     }
     .author-monitor-conference-cards .author-paper-citation-row {
-      column-gap: 5px;
-      font-size: 8px;
-      line-height: 1.12;
+      column-gap: 7px;
+      font-size: 11px;
+      line-height: 1.2;
     }
     .author-monitor-conference-cards .author-paper-citation {
       display: -webkit-box;
@@ -26090,24 +26090,24 @@ INDEX_HTML = """<!doctype html>
       -webkit-line-clamp: 2;
     }
     .author-monitor-conference-cards .author-paper-scholar-citations {
-      font-size: 7.5px;
+      font-size: 10px;
     }
     .author-monitor-conference-cards .author-paper-action-stack {
-      top: 6px;
-      right: 7px;
-      width: 22px;
+      top: 8px;
+      right: 9px;
+      width: 24px;
       gap: 3px;
     }
     .author-monitor-conference-cards .author-paper-mini-button,
     .author-monitor-conference-cards .author-paper-mini-button-spacer {
-      width: 22px;
-      height: 19px;
+      width: 24px;
+      height: 22px;
     }
     .author-monitor-conference-cards .author-paper-mini-button {
       padding: 0 4px;
       border-radius: 5px;
-      font-size: 8.5px;
-      line-height: 17px;
+      font-size: 10px;
+      line-height: 20px;
     }
     .author-monitor-conference-cards .author-paper-library-button {
       font-size: 13px;
@@ -26120,12 +26120,12 @@ INDEX_HTML = """<!doctype html>
       grid-template-rows: auto minmax(0, 1fr);
       border: 0;
       border-radius: 0;
-      background: #f2f2f2;
+      background: #f9f9f9;
     }
     .author-monitor-detail .author-monitor-detail-head {
       padding-left: 8px;
       padding-right: 4px;
-      background: #f2f2f2;
+      background: #f9f9f9;
     }
     .author-monitor-detail-body {
       min-height: 0;
@@ -26134,7 +26134,7 @@ INDEX_HTML = """<!doctype html>
     }
     .author-monitor-detail-body.library-detail {
       padding: 4px 4px 1px 8px;
-      background: #f2f2f2;
+      background: #f9f9f9;
     }
     .author-monitor-detail-body.library-detail h3 {
       margin-bottom: 12px;
@@ -26150,7 +26150,7 @@ INDEX_HTML = """<!doctype html>
     .author-monitor-detail-body.library-detail .library-detail-figure img,
     .author-monitor-detail-body.library-detail .semantic-detail-row,
     .author-monitor-detail-body.library-detail .semantic-influential-card {
-      background: #f2f2f2;
+      background: #f9f9f9;
     }
     .author-monitor-detail-body.library-detail .action,
     .author-monitor-detail-body.library-detail .citation-source-cell {
@@ -27473,6 +27473,21 @@ INDEX_HTML = """<!doctype html>
       color: #9b4b45;
     }
 
+    /* Author Monitor uses a calm blue accent, independent of other views. */
+    .app.author-mode {
+      --accent: #1f4f7a;
+      --accent-strong: #163e62;
+      background: #f2f2f2;
+    }
+    .app.author-mode .main,
+    .app.author-mode .report-column,
+    .app.author-mode .papers,
+    .app.author-mode .author-monitor-shell,
+    .app.author-mode .author-monitor-list-panel,
+    .app.author-mode .author-monitor-paper-list,
+    .app.author-mode .author-monitor-status-bar {
+      background: #f2f2f2;
+    }
     /* Author Monitor keeps structural dividers, but removes nested cards. */
     .app.author-mode .author-monitor-rail,
     .app.author-mode .author-monitor-list-panel,
@@ -27481,13 +27496,20 @@ INDEX_HTML = """<!doctype html>
       border-radius: 0;
       box-shadow: none;
     }
+    .app.author-mode .author-monitor-rail {
+      background: #f2f2f2;
+    }
+    .app.author-mode .author-monitor-all-avatar {
+      background: #e3e5e7;
+      color: var(--accent);
+    }
     .app.author-mode .author-monitor-rail,
     .app.author-mode .author-monitor-list-panel {
       border-right: 1px solid var(--flat-divider);
     }
     .app.author-mode .author-monitor-shell[data-keyboard-pane="authors"] .author-monitor-rail,
     .app.author-mode .author-monitor-shell[data-keyboard-pane="papers"] .author-monitor-list-panel {
-      box-shadow: inset 0 2px 0 rgba(15, 107, 110, 0.58);
+      box-shadow: inset 0 2px 0 rgba(31, 79, 122, 0.58);
     }
     .app.author-mode .author-monitor-add {
       border: 0;
@@ -27514,9 +27536,37 @@ INDEX_HTML = """<!doctype html>
     }
     .app.author-mode .author-monitor-author.active {
       border: 0;
-      border-bottom: 1px solid rgba(95, 107, 124, 0.09);
-      background: var(--flat-selected);
-      box-shadow: inset 3px 0 0 var(--accent);
+      border-bottom: 0;
+      border-radius: 6px;
+      background: #dce8f5;
+      color: var(--ink);
+      box-shadow: none;
+    }
+    .app.author-mode .author-monitor-author.active .author-monitor-author-affiliation {
+      color: var(--muted);
+    }
+    .app.author-mode .author-monitor-author.active .author-monitor-avatar {
+      background: #e8f1f0;
+      color: var(--accent);
+    }
+    .app.author-mode .author-monitor-author.active .author-monitor-source-badge {
+      background: #eef2f6;
+      color: #667085;
+    }
+    .app.author-mode .author-monitor-author.active .author-monitor-source-badge.researchgate {
+      background: #e8eef6;
+      color: #1f4f7a;
+    }
+    .app.author-mode .author-monitor-source-badge.researchgate {
+      background: #e8eef6;
+      color: #1f4f7a;
+    }
+    .app.author-mode .author-monitor-scholar-update-button:hover {
+      color: #1f4f7a;
+    }
+    .app.author-mode .author-monitor-author.active .author-monitor-unread {
+      background: var(--accent);
+      color: #fff;
     }
     .app.author-mode .author-monitor-sort-button,
     .app.author-mode .author-monitor-conference-toggle {
@@ -27531,15 +27581,15 @@ INDEX_HTML = """<!doctype html>
     }
     .app.author-mode .author-monitor-sort-button.active,
     .app.author-mode .author-monitor-conference-toggle.open {
-      background: rgba(234, 244, 243, 0.5);
+      background: rgba(220, 232, 245, 0.68);
       box-shadow: inset 0 -2px 0 var(--accent);
-      color: #075b5e;
+      color: #1f4f7a;
     }
     .app.author-mode .author-monitor-paper-list {
       gap: 0;
       padding: 0 8px;
       border-top: 1px solid var(--flat-divider);
-      background: #fff;
+      background: #f2f2f2;
     }
     .app.author-mode .author-paper-card {
       min-height: 68px;
@@ -27555,9 +27605,125 @@ INDEX_HTML = """<!doctype html>
     }
     .app.author-mode .author-paper-card.report-selected {
       border: 0;
-      border-bottom: 1px solid var(--flat-divider);
-      background: #f4faf9;
-      box-shadow: inset 3px 0 0 var(--accent);
+      background: #dce8f5;
+      box-shadow: none;
+    }
+    /* Keep Author Monitor's current selection treatment, but make its main
+       paper list scan like the compact My Publications table. */
+    .app.author-mode .author-monitor-list-panel {
+      grid-template-rows: auto auto minmax(0, 1fr);
+      background: #f9f9f9;
+    }
+    .app.author-mode .author-monitor-paper-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 72px;
+      column-gap: 6px;
+      align-items: center;
+      min-height: 27px;
+      margin: 0 10px 3px;
+      padding: 0 40px 0 16px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .app.author-mode .author-monitor-paper-columns span:nth-child(2) {
+      text-align: right;
+    }
+    .app.author-mode .author-monitor-paper-list {
+      gap: 4px;
+      padding: 3px 10px 8px;
+      border-top: 0;
+      background: #f9f9f9;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card {
+      grid-template-columns: minmax(0, 1fr) 72px;
+      grid-template-rows: auto auto;
+      align-items: center;
+      min-height: 54px;
+      padding: 6px 40px 6px 16px;
+      gap: 2px 6px;
+      border: 0;
+      border-radius: 7px;
+      overflow: hidden;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card:not(.report-selected) {
+      background: #f9f9f9;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-title-row,
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-citation-row {
+      display: contents;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-title {
+      grid-column: 1;
+      grid-row: 1;
+      overflow: hidden;
+      font-size: 13px;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-citation {
+      grid-column: 1;
+      grid-row: 2;
+      overflow: hidden;
+      font-size: 12px;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-scholar-citations {
+      grid-column: 2;
+      grid-row: 2;
+      align-self: center;
+      font-size: 10px;
+      text-align: right;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-action-stack {
+      position: absolute;
+      top: 50%;
+      right: 8px;
+      width: 24px;
+      flex-direction: column;
+      gap: 2px;
+      transform: translateY(-50%);
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button,
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button-spacer {
+      width: 24px;
+      height: 24px;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card .author-paper-mini-button {
+      line-height: 24px;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.author-unread::before {
+      top: 50%;
+      left: 5px;
+      transform: translateY(-50%);
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-title,
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-citation,
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-scholar-citations {
+      color: var(--ink);
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-citation {
+      color: #1f2937;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-scholar-citations {
+      color: #7a8492;
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-mini-button,
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-library-button[data-library-state="show"] {
+      color: var(--accent);
+      background: rgba(31, 79, 122, 0.10);
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected .author-paper-mini-button:hover {
+      background: rgba(31, 79, 122, 0.18);
+    }
+    .app.author-mode .author-monitor-paper-list > .author-paper-card.report-selected.author-unread::before {
+      background: var(--accent);
+      box-shadow: 0 0 0 3px rgba(31, 79, 122, 0.16);
     }
     .app.author-mode .author-paper-mini-button {
       border: 0;
@@ -27568,7 +27734,7 @@ INDEX_HTML = """<!doctype html>
     .app.author-mode .author-paper-mini-button:hover,
     .app.author-mode .author-paper-library-button[data-library-state="show"] {
       border: 0;
-      background: rgba(15, 107, 110, 0.10);
+      background: rgba(31, 79, 122, 0.10);
     }
     .app.author-mode .author-monitor-conference-cards .author-paper-card {
       border-radius: 0;
@@ -27661,7 +27827,7 @@ INDEX_HTML = """<!doctype html>
     .author-monitor-detail-body.library-detail .citation-source-cell.active {
       border: 0;
       border-bottom: 2px solid var(--accent);
-      background: rgba(234, 244, 243, 0.45);
+      background: #e3e5e7;
       box-shadow: none;
       outline: 0;
     }
@@ -41281,7 +41447,7 @@ INDEX_HTML = """<!doctype html>
       const totalUnread = state.authorMonitors.reduce((sum, author) => sum + Number(author.unread_count || 0), 0);
       root.innerHTML = `
         <div class="author-monitor-author${state.authorMonitorSelectedId ? "" : " active"}" role="button" tabindex="0" data-author-id="0">
-          <span class="author-monitor-avatar">ALL</span>
+          <span class="author-monitor-avatar author-monitor-all-avatar">ALL</span>
           <span class="author-monitor-author-copy">
             <span class="author-monitor-author-name">All Authors</span>
             <span class="author-monitor-author-affiliation">${state.authorMonitors.length} monitored</span>
@@ -42187,6 +42353,10 @@ INDEX_HTML = """<!doctype html>
                 >New</button>
               </div>
               ${(selected && authorMonitorIsScholar(selected) && scholarPaused) || selected?.status === "cooldown" ? `<span class="status err" title="${escapeAttr(selected && authorMonitorIsScholar(selected) && scholarPaused ? scholarGlobalCooldownText() : selected.message || "")}">Paused</span>` : ""}
+            </div>
+            <div class="author-monitor-paper-columns" aria-hidden="true">
+              <span>Title</span>
+              <span>Cites</span>
             </div>
             <div class="author-monitor-paper-list" id="authorMonitorPaperList"></div>
             ${state.authorMonitorConferenceExpanded && partition.conferences.length ? `
