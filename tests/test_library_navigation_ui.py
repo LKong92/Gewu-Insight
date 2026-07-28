@@ -34,6 +34,20 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("if (shouldCommit)", INDEX_HTML)
         self.assertNotIn('if (!window.confirm(message)) return;', INDEX_HTML)
 
+    def test_shortcut_and_space_context_menu_uses_library_style_without_rename(self) -> None:
+        menu_markup = INDEX_HTML.split(
+            '<div class="library-context-menu library-tab-context-menu" id="libraryTabContextMenu">',
+            1,
+        )[1].split("</div>", 1)[0]
+        menu_logic = INDEX_HTML.split("function showLibraryTabContextMenu", 1)[1].split(
+            "function hideLibraryTabContextMenu", 1
+        )[0]
+        self.assertIn('data-action="remove-tab"', menu_markup)
+        self.assertNotIn('data-action="rename-tab"', menu_markup)
+        self.assertIn('"Remove Empty Space"', menu_logic)
+        self.assertIn('"Remove Shortcut"', menu_logic)
+        self.assertNotIn("renameButton", menu_logic)
+
     def test_only_navigation_tabs_fade_while_section_tools_stay_emphasized(self) -> None:
         self.assertIn(".library-tab-rail .library-tab:not(.active)", INDEX_HTML)
         self.assertIn("filter: saturate(0.28) brightness(1.12);", INDEX_HTML)
@@ -44,6 +58,14 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("filter: none;", tools_css)
         self.assertNotIn("opacity: 0.34;", tools_css)
         self.assertIn(".library-tab-section-tools button:disabled { color: #667085;", INDEX_HTML)
+
+    def test_navigation_rail_never_scrolls_horizontally(self) -> None:
+        rail_css = INDEX_HTML.split(".library-tab-rail {", 1)[1].split("}", 1)[0]
+        scroll_css = INDEX_HTML.split(".library-tab-scroll {", 1)[1].split("}", 1)[0]
+        self.assertIn("overflow-x: hidden;", rail_css)
+        self.assertIn("overflow-x: hidden;", scroll_css)
+        self.assertNotIn("overflow-x: visible;", rail_css)
+        self.assertNotIn("overflow-x: visible;", scroll_css)
 
     def test_dynamic_tab_measurement_does_not_emit_javascript_nul_bytes(self) -> None:
         self.assertNotIn("\x00", INDEX_HTML)

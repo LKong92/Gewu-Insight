@@ -114,6 +114,26 @@ class LibraryNavigationTabTests(unittest.TestCase):
                 requested_folder_id=int(other_tab["root_folder_id"]),
             )
 
+    def test_shortcut_add_target_accepts_current_nested_folder(self) -> None:
+        shortcut_root = self.storage.create_library_folder(parent_id=1, name="Shortcut Root")
+        level_one = self.storage.create_library_folder(
+            parent_id=int(shortcut_root["id"]),
+            name="Level One",
+        )
+        level_two = self.storage.create_library_folder(
+            parent_id=int(level_one["id"]),
+            name="Level Two",
+        )
+
+        target_id = ui_server.library_navigation_add_target_folder_id(
+            self.storage,
+            root_folder_id=int(shortcut_root["id"]),
+            requested_folder_id=int(level_two["id"]),
+            root_label="Shortcut",
+        )
+
+        self.assertEqual(target_id, int(level_two["id"]))
+
     def test_space_title_query_uses_shared_title_identifier_resolution(self) -> None:
         resolved = {
             "paper_id": "resolved-paper",
@@ -227,8 +247,14 @@ class LibraryNavigationTabTests(unittest.TestCase):
         workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
             "function updateToolbarLibraryImport()", 1
         )[0]
-        add_paper = html.split("async function addLibraryWorkspaceDoi(index)", 1)[1].split(
+        context = html.split("function activeLibraryNavigationToolContext()", 1)[1].split(
+            "function workspaceToolsMarkup()", 1
+        )[0]
+        add_paper = html.split("async function addLibraryNavigationPaper(tabType, index)", 1)[1].split(
             "function wireWorkspaceTools()", 1
+        )[0]
+        wire_tools = html.split("function wireWorkspaceTools()", 1)[1].split(
+            "function renderMyPublications", 1
         )[0]
         search_row = html.split("function librarySearchResultRowMarkup", 1)[1].split(
             "function libraryRowMarkup", 1
@@ -247,14 +273,20 @@ class LibraryNavigationTabTests(unittest.TestCase):
         )[0]
 
         self.assertIn('placeholder="DOI, arXiv ID, or title"', workspace)
+        self.assertIn('type: "shortcut"', context)
+        self.assertIn('type: "workspace"', context)
+        self.assertIn('context.type === "workspace"', workspace)
+        self.assertIn("Move Space to Library", workspace)
         self.assertIn(
-            "const currentFolderId = Number(state.libraryCurrentFolderId || workspaceRootFolderId)",
+            "const currentFolderId = Number(state.libraryCurrentFolderId || rootFolderId)",
             add_paper,
         )
         self.assertIn(
-            "libraryWorkspaceIndexForFolder(currentFolderId) === index",
+            "libraryFolderIsWithin(currentFolderId, rootFolderId)",
             add_paper,
         )
+        self.assertIn('fetch("/api/library/navigation-tabs/add-paper"', add_paper)
+        self.assertIn("tab_type: tabType", add_paper)
         self.assertIn("folder_id: targetFolderId", add_paper)
         self.assertIn("const addedFolderId = Number(data.folder_id || targetFolderId", add_paper)
         self.assertIn("state.workspaceAddPaperBusy = true", add_paper)
@@ -262,6 +294,9 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertIn("updateLibraryActivityStatus(", add_paper)
         self.assertIn("Finding paper and adding it to", add_paper)
         self.assertIn("Add Paper failed:", add_paper)
+        self.assertIn("renameLibraryShortcutTab(context.index, label)", wire_tools)
+        self.assertIn("renameLibraryWorkspace(context.index, label)", wire_tools)
+        self.assertIn("addLibraryNavigationPaper(context.type, context.index)", wire_tools)
         self.assertIn('data-action="show-library-search-result"', search_row)
         self.assertIn(">Show in Library</button>", search_row)
         self.assertNotIn("paper.journal", search_row)

@@ -231,6 +231,8 @@ class UiPerformanceContractTests(unittest.TestCase):
 
     def test_arrow_navigation_can_move_between_content_and_primary_tabs(self) -> None:
         primary = self.js_function("handlePrimaryKeyboardNavigation")
+        switcher = self.js_function("switchPrimaryKeyboardView")
+        focus_content = self.js_function("focusPrimarySurfaceContent")
         report = self.js_function("handleReportKeydown")
         author = self.js_function("handleAuthorMonitorKeydown")
         library = self.js_function("handleLibraryKeydown")
@@ -247,6 +249,15 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("border-bottom-color: transparent;", ui_server.INDEX_HTML)
         self.assertNotIn("box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.68);", ui_server.INDEX_HTML)
         self.assertIn('if (key === "ArrowUp") return true;', primary)
+        self.assertIn("Math.min(PRIMARY_KEYBOARD_VIEWS.length - 1, currentIndex + delta)", switcher)
+        self.assertIn("if (nextIndex === currentIndex)", switcher)
+        self.assertNotIn("% PRIMARY_KEYBOARD_VIEWS.length", switcher)
+        self.assertIn(
+            'state.authorMonitorKeyboardPane === "authors" ? "authors" : "papers"',
+            focus_content,
+        )
+        self.assertIn(".author-monitor-paper-list .author-paper-card", focus_content)
+        self.assertIn(".author-monitor-author", focus_content)
 
     def test_monitor_source_navigation_stops_at_each_end(self) -> None:
         journal = self.js_function("switchReportJournalTab")
