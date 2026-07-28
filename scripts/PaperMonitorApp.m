@@ -407,6 +407,16 @@
     if (!activeWindow || !activeWindow.isVisible) {
         return;
     }
+    if (
+        activeWindow == self.window
+        && [self.webView isKindOfClass:[DaiqoWebView class]]
+        && ((DaiqoWebView *)self.webView).pdfQuickLookActive
+    ) {
+        [self.webView evaluateJavaScript:
+            @"window.closeDaiqoPreviewFromNative && window.closeDaiqoPreviewFromNative()"
+            completionHandler:nil];
+        return;
+    }
     [activeWindow performClose:sender];
 }
 

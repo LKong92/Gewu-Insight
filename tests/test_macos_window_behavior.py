@@ -69,6 +69,22 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('<iframe class="library-pdf-frame"', INDEX_HTML)
         self.assertNotIn("pdfjsLib", INDEX_HTML)
 
+    def test_command_w_closes_quicklook_before_the_main_window(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+
+        self.assertIn("((DaiqoWebView *)self.webView).pdfQuickLookActive", source)
+        self.assertIn("window.closeDaiqoPreviewFromNative", source)
+        self.assertLess(
+            source.index("window.closeDaiqoPreviewFromNative"),
+            source.index("[activeWindow performClose:sender];"),
+        )
+        self.assertIn("function handlePreviewCloseShortcut(event)", INDEX_HTML)
+        self.assertIn("String(event.key || \"\").toLowerCase() !== \"w\"", INDEX_HTML)
+        self.assertIn("closeLibraryQuickLook({restoreFocus: true})", INDEX_HTML)
+        self.assertIn("captureLibraryQuickLookReturnFocus();", INDEX_HTML)
+        self.assertIn("restoreLibraryQuickLookReturnFocus(returnFocus)", INDEX_HTML)
+        self.assertIn("state.libraryQuickLookReturnFocus", INDEX_HTML)
+
     def test_native_publisher_download_accepts_science_supplements(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 

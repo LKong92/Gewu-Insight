@@ -766,24 +766,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         prefix = f"{year:04d}-{month:02d}-"
         storage = Storage(self.configured_db_path)
         try:
-            rows = storage.conn.execute(
-                """
-                SELECT publication_date, journal, COUNT(*) AS count
-                FROM papers
-                WHERE publication_date LIKE ?
-                  AND (section_allowed IS NULL OR section_allowed != 0)
-                GROUP BY publication_date, journal
-                ORDER BY publication_date ASC, journal ASC
-                """,
-                (prefix + "%",),
-            ).fetchall()
+            counts = journal_counts_for_month(
+                storage,
+                prefix=prefix,
+                journals=self.configured_journals,
+            )
         finally:
             storage.close()
-
-        counts: dict[str, dict[str, int]] = {}
-        for row in rows:
-            day = row["publication_date"]
-            counts.setdefault(day, {})[row["journal"]] = int(row["count"] or 0)
 
         self.send_json(
             {
@@ -7018,6 +7007,37 @@ def configured_source_names(config: AppConfig) -> list[str]:
         if preprint not in names:
             names.append(preprint)
     return names
+
+
+def journal_counts_for_month(
+    storage: Storage,
+    *,
+    prefix: str,
+    journals: Iterable[str],
+) -> dict[str, dict[str, int]]:
+    journal_names = list(dict.fromkeys(clean_text(name) for name in journals if clean_text(name)))
+    if not journal_names:
+        return {}
+    placeholders = ", ".join(["?"] * len(journal_names))
+    rows = storage.conn.execute(
+        f"""
+        SELECT publication_date, journal, COUNT(*) AS count
+        FROM papers
+        WHERE publication_date LIKE ?
+          AND journal IN ({placeholders})
+          AND (section_allowed IS NULL OR section_allowed != 0)
+        GROUP BY publication_date, journal
+        ORDER BY publication_date ASC, journal ASC
+        """,
+        (prefix + "%", *journal_names),
+    ).fetchall()
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        day = str(row["publication_date"] or "")
+        journal = str(row["journal"] or "")
+        if day and journal:
+            counts.setdefault(day, {})[journal] = int(row["count"] or 0)
+    return counts
 
 
 def cache_file_entries(root: Path) -> tuple[int, list[tuple[float, int, Path]]]:
@@ -22136,8 +22156,11 @@ INDEX_HTML = """<!doctype html>
     }
     .sidebar-view-switcher.open { display: flex; }
     .view-switch {
+      box-sizing: border-box;
+      height: 32px;
       min-height: 32px;
-      border: 0;
+      border: 2px solid transparent;
+      border-bottom: 0;
       border-radius: 14px 14px 0 0;
       background: transparent;
       color: #475467;
@@ -22150,6 +22173,10 @@ INDEX_HTML = """<!doctype html>
       position: relative;
       text-align: center;
       white-space: nowrap;
+    }
+    .view-switch:focus,
+    .view-switch:focus-visible {
+      outline: none;
     }
     .view-switch:hover {
       background: rgba(255, 255, 255, .38);
@@ -22164,7 +22191,9 @@ INDEX_HTML = """<!doctype html>
     }
     .view-switcher.keyboard-active .view-switch.active {
       color: #075b5e;
-      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.68);
+      border-color: rgba(15, 107, 110, 0.68);
+      border-bottom-color: transparent;
+      box-shadow: none;
     }
     .view-switch.active::before,
     .view-switch.active::after {
@@ -27370,7 +27399,19 @@ INDEX_HTML = """<!doctype html>
       padding: 7px 8px 6px;
       background: #fff;
       box-shadow: none;
-      transition: background 110ms ease, box-shadow 110ms ease, color 110ms ease;
+      transition: none;
+    }
+    .app.report-mode .day:focus,
+    .app.report-mode .day:focus-visible,
+    .app.theme-mode .day:focus,
+    .app.theme-mode .day:focus-visible {
+      outline: none;
+    }
+    .app.report-mode .day.keyboard-current:not(.active),
+    .app.theme-mode .day.keyboard-current:not(.active) {
+      background: #eef6f5;
+      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.58);
+      color: #075b5e;
     }
     .app.report-mode .day:nth-child(7n),
     .app.theme-mode .day:nth-child(7n) {
@@ -28234,6 +28275,7 @@ INDEX_HTML = """<!doctype html>
 	    const LIBRARY_CONTENT_VIEW_STORAGE_KEY = "daiqo-library-content-view";
 	    const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
 	    const THEME_SELECTED_GROUPS_STORAGE_KEY = "daiqo-theme-selected-groups";
+    const ARXIV_SELECTED_CATEGORIES_STORAGE_KEY = "daiqo-arxiv-selected-categories";
     const AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
     const ARXIV_CATEGORIES = [
@@ -28247,7 +28289,11 @@ INDEX_HTML = """<!doctype html>
       ["cond-mat.str-el", "Strongly Correlated Electrons"],
       ["cond-mat.supr-con", "Superconductivity"]
     ];
-    const DEFAULT_ARXIV_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"];
+    const DEFAULT_ARXIV_CATEGORIES = [
+      "cond-mat.mes-hall",
+      "cond-mat.str-el",
+      "cond-mat.supr-con"
+    ];
     const AUTHOR_MONITOR_INITIAL_CARD_COUNT = 40;
     const AUTHOR_MONITOR_CARD_BATCH_SIZE = 40;
     const AUTHOR_MONITOR_PAPER_CACHE_LIMIT = 3;
@@ -28287,7 +28333,7 @@ INDEX_HTML = """<!doctype html>
       journalsConfig: [],
       journalHistory: [],
       selectedJournals: new Set(),
-      selectedPreprintCategories: new Set(DEFAULT_ARXIV_CATEGORIES),
+      selectedPreprintCategories: new Set(loadStoredPreprintCategories() ?? DEFAULT_ARXIV_CATEGORIES),
       preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
@@ -28422,6 +28468,7 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookManualFrame: false,
       libraryQuickLookFrameRect: null,
       libraryQuickLookPdfHasFocus: false,
+      libraryQuickLookReturnFocus: null,
       myPublications: [],
       myPublicationSelectionId: 0,
       myPublicationSelectedIds: new Set(),
@@ -28508,6 +28555,9 @@ INDEX_HTML = """<!doctype html>
       mode: "library",
       activeReportJournal: "",
       reportSelectedPaperId: "",
+      monitorKeyboardPanes: {report: "papers", theme: "papers"},
+      monitorCalendarCursorDates: {report: initialToday, theme: initialToday},
+      monitorSelectedPaperIds: {report: "", theme: ""},
       reportQuickLookPaperId: "",
       noteWidth: 460,
       query: "",
@@ -31520,69 +31570,101 @@ INDEX_HTML = """<!doctype html>
       return names;
     }
 
+    function updateCalendarDayButton(button, iso, day) {
+      const isThemeCalendar = state.mode === "theme";
+      const calendarCounts = isThemeCalendar ? state.themeCounts : state.reportCounts;
+      const dayCounts = calendarCounts[iso] || {};
+      const hasCount = Object.keys(dayCounts).length > 0;
+      const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
+      const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
+      const isFuture = isFutureDateIso(iso);
+      const isToday = iso === todayIsoDate();
+      const calendarMode = activeCalendarMode();
+      const isKeyboardCurrent = state.monitorKeyboardPanes[calendarMode] === "calendar"
+        && state.monitorCalendarCursorDates[calendarMode] === iso;
+      const className = `day${iso === state.selectedDate ? " active" : ""}${isKeyboardCurrent ? " keyboard-current" : ""}${isFetching ? " fetching" : ""}${isToday ? " today" : ""}${isFuture ? " future" : ""}`;
+      const markup = `<span class="daynum">${day}</span>${
+        isFetching
+          ? `<span class="fetching-dot" title="Fetching"></span>`
+          : `<span class="count">${hasCount ? total : ""}</span>`
+      }`;
+      if (button.className !== className) button.className = className;
+      if (button.disabled !== isFuture) button.disabled = isFuture;
+      if (button.innerHTML !== markup) button.innerHTML = markup;
+    }
+
     function renderCalendar() {
       if ($("todayLabel")) $("todayLabel").textContent = localIsoDate(new Date());
       $("monthLabel").textContent = fmtMonth(state.viewYear, state.viewMonth);
       const root = $("calendar");
-      root.innerHTML = "";
-      ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach((day) => {
-        const el = document.createElement("div");
-        el.className = "weekday";
-        el.textContent = day;
-        root.appendChild(el);
-      });
-
+      const structureKey = fmtMonth(state.viewYear, state.viewMonth);
       const firstDay = new Date(state.viewYear, state.viewMonth - 1, 1);
       const startOffset = (firstDay.getDay() + 6) % 7;
       const days = new Date(state.viewYear, state.viewMonth, 0).getDate();
-      for (let i = 0; i < startOffset; i++) {
-        const blank = document.createElement("button");
-        blank.className = "day out";
-        blank.disabled = true;
-        root.appendChild(blank);
-      }
-      for (let day = 1; day <= days; day++) {
-        const iso = `${fmtMonth(state.viewYear, state.viewMonth)}-${String(day).padStart(2, "0")}`;
-        const isThemeCalendar = state.mode === "theme";
-        const calendarCounts = isThemeCalendar ? state.themeCounts : state.reportCounts;
-        const dayCounts = calendarCounts[iso] || {};
-	        const hasCount = Object.keys(dayCounts).length > 0;
-	        const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
-	        const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
-	        const isFuture = isFutureDateIso(iso);
-	        const isToday = iso === todayIsoDate();
-	        const button = document.createElement("button");
-	        button.className = `day${iso === state.selectedDate ? " active" : ""}${isFetching ? " fetching" : ""}${isToday ? " today" : ""}${isFuture ? " future" : ""}`;
-        button.disabled = isFuture;
-        button.innerHTML = `<span class="daynum">${day}</span>${
-          isFetching
-            ? `<span class="fetching-dot" title="Fetching"></span>`
-            : `<span class="count">${hasCount ? total : ""}</span>`
-        }`;
-        if (isFuture) {
-          root.appendChild(button);
-          continue;
-        }
-        button.addEventListener("click", async () => {
-          setCalendarDateForActiveMode(iso);
-          state.activeReportJournal = "";
-          updateReportRefreshButton();
-          renderCalendar();
-          if (state.mode === "theme") await loadThemeReportForDate(iso).catch((error) => handleThemeLoadFailure(error, iso));
-          else await loadReport().catch((error) => handleReportLoadFailure(error));
+      if (root.dataset.structureKey !== structureKey) {
+        root.innerHTML = "";
+        root.dataset.structureKey = structureKey;
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach((weekday) => {
+          const element = document.createElement("div");
+          element.className = "weekday";
+          element.textContent = weekday;
+          root.appendChild(element);
         });
-        root.appendChild(button);
+        for (let index = 0; index < startOffset; index += 1) {
+          const blank = document.createElement("button");
+          blank.type = "button";
+          blank.className = "day out";
+          blank.disabled = true;
+          blank.setAttribute("aria-hidden", "true");
+          root.appendChild(blank);
+        }
+        for (let day = 1; day <= days; day += 1) {
+          const iso = `${structureKey}-${String(day).padStart(2, "0")}`;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "day";
+          button.dataset.date = iso;
+          button.addEventListener("click", async () => {
+            const selectedIso = button.dataset.date || "";
+            if (!selectedIso || isFutureDateIso(selectedIso)) return;
+            const calendarMode = activeCalendarMode();
+            state.primaryKeyboardLayer = "content";
+            syncPrimaryKeyboardLayer({focus: false});
+            state.monitorKeyboardPanes[calendarMode] = "calendar";
+            state.monitorCalendarCursorDates[calendarMode] = selectedIso;
+            setCalendarDateForActiveMode(selectedIso);
+            state.reportSelectedPaperId = "";
+            state.monitorSelectedPaperIds[calendarMode] = "";
+            if (calendarMode === "theme") state.activeThemeGroupKey = "";
+            else state.activeReportJournal = "";
+            updateReportRefreshButton();
+            renderCalendar();
+            if (state.mode === "theme") {
+              await loadThemeReportForDate(selectedIso).catch((error) => handleThemeLoadFailure(error, selectedIso));
+            } else {
+              await loadReport().catch((error) => handleReportLoadFailure(error));
+            }
+            restoreMonitorKeyboardFocus(calendarMode);
+          });
+          root.appendChild(button);
+        }
+        const occupiedCells = startOffset + days;
+        const calendarCells = Math.ceil(occupiedCells / 7) * 7;
+        const trailingBlanks = calendarCells - occupiedCells;
+        for (let index = 0; index < trailingBlanks; index += 1) {
+          const blank = document.createElement("button");
+          blank.type = "button";
+          blank.className = "day out";
+          blank.disabled = true;
+          blank.setAttribute("aria-hidden", "true");
+          root.appendChild(blank);
+        }
       }
-      const occupiedCells = startOffset + days;
-      const calendarCells = Math.ceil(occupiedCells / 7) * 7;
-      const trailingBlanks = calendarCells - occupiedCells;
-      for (let index = 0; index < trailingBlanks; index += 1) {
-        const blank = document.createElement("button");
-        blank.className = "day out";
-        blank.disabled = true;
-        blank.setAttribute("aria-hidden", "true");
-        root.appendChild(blank);
-      }
+      root.querySelectorAll(".day[data-date]").forEach((button) => {
+        const iso = button.dataset.date || "";
+        const day = Number(iso.slice(-2));
+        updateCalendarDayButton(button, iso, day);
+      });
     }
 
     function renderFilters() {
@@ -31608,6 +31690,32 @@ INDEX_HTML = """<!doctype html>
         root.appendChild(label);
       });
       renderPreprintFilters();
+    }
+
+    function loadStoredPreprintCategories() {
+      try {
+        const raw = window.localStorage?.getItem(ARXIV_SELECTED_CATEGORIES_STORAGE_KEY);
+        if (raw === null || raw === undefined || raw === "") return null;
+        const values = JSON.parse(raw);
+        if (!Array.isArray(values)) return null;
+        const known = new Set(ARXIV_CATEGORIES.map(([code]) => code));
+        return values
+          .map((value) => String(value || ""))
+          .filter((value) => known.has(value));
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function saveSelectedPreprintCategories() {
+      try {
+        window.localStorage?.setItem(
+          ARXIV_SELECTED_CATEGORIES_STORAGE_KEY,
+          JSON.stringify([...state.selectedPreprintCategories])
+        );
+      } catch (_error) {
+        // Keep the current in-memory selection if WebKit storage is unavailable.
+      }
     }
 
     function renderPreprintFilters() {
@@ -31661,6 +31769,7 @@ INDEX_HTML = """<!doctype html>
         categoryLabel.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedPreprintCategories.add(code);
           else state.selectedPreprintCategories.delete(code);
+          saveSelectedPreprintCategories();
           state.noMatchDates = new Set();
           renderFilters();
           renderReport();
@@ -32057,8 +32166,14 @@ INDEX_HTML = """<!doctype html>
           hydrateJournalLogo(group.journal, button.querySelector(".journal-tab-label"), "");
         }
         button.addEventListener("click", () => {
+          state.primaryKeyboardLayer = "content";
+          syncPrimaryKeyboardLayer({focus: false});
+          state.monitorKeyboardPanes.report = "papers";
           state.activeReportJournal = group.journal;
+          state.reportSelectedPaperId = group.papers[0]?.paper_id || "";
+          state.monitorSelectedPaperIds.report = state.reportSelectedPaperId;
           renderReport();
+          focusMonitorPaperSelection("report");
         });
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
@@ -32114,13 +32229,142 @@ INDEX_HTML = """<!doctype html>
       return group?.papers || [];
     }
 
+    function activeMonitorKeyboardMode() {
+      return state.mode === "theme" ? "theme" : "report";
+    }
+
+    function setMonitorKeyboardPane(pane, mode = activeMonitorKeyboardMode()) {
+      if (!["report", "theme"].includes(mode)) return;
+      state.monitorKeyboardPanes[mode] = pane === "calendar" ? "calendar" : "papers";
+      if (mode === state.mode) renderCalendar();
+    }
+
+    function focusMonitorCalendarCursor(mode = activeMonitorKeyboardMode()) {
+      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+      const iso = state.monitorCalendarCursorDates[mode] || state.selectedDate;
+      window.requestAnimationFrame(() => {
+        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+        const button = document.querySelector(`#calendar .day[data-date="${CSS.escape(iso)}"]`);
+        button?.focus({preventScroll: true});
+      });
+    }
+
+    function focusMonitorPaperSelection(mode = activeMonitorKeyboardMode(), options = {}) {
+      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+      const papers = activeReportPapers();
+      ensureReportPaperSelection(papers);
+      const selectedId = String(state.reportSelectedPaperId || "");
+      window.requestAnimationFrame(() => {
+        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+        const root = $("papers");
+        const article = selectedId
+          ? root?.querySelector(`.paper[data-paper-id="${CSS.escape(selectedId)}"]`)
+          : null;
+        if (options.scroll) article?.scrollIntoView({block: "nearest"});
+        (article || root)?.focus({preventScroll: true});
+      });
+    }
+
+    function restoreMonitorKeyboardFocus(mode = activeMonitorKeyboardMode()) {
+      if (mode !== state.mode || state.primaryKeyboardLayer === "root") return;
+      if (state.monitorKeyboardPanes[mode] === "calendar") {
+        focusMonitorCalendarCursor(mode);
+      } else {
+        focusMonitorPaperSelection(mode);
+      }
+    }
+
+    function isoDateShiftedByDays(iso, delta) {
+      const value = new Date(`${iso}T12:00:00`);
+      if (Number.isNaN(value.getTime())) return iso;
+      value.setDate(value.getDate() + delta);
+      return localIsoDate(value);
+    }
+
+    async function moveMonitorCalendarCursor(delta) {
+      const mode = activeMonitorKeyboardMode();
+      const currentIso = state.monitorCalendarCursorDates[mode] || state.selectedDate || todayIsoDate();
+      const nextIso = isoDateShiftedByDays(currentIso, delta);
+      if (!nextIso || isFutureDateIso(nextIso)) return true;
+      state.monitorKeyboardPanes[mode] = "calendar";
+      state.monitorCalendarCursorDates[mode] = nextIso;
+      const nextYear = Number(nextIso.slice(0, 4));
+      const nextMonth = Number(nextIso.slice(5, 7));
+      const crossedMonth = nextYear !== state.viewYear || nextMonth !== state.viewMonth;
+      if (crossedMonth) {
+        state.viewYear = nextYear;
+        state.viewMonth = nextMonth;
+      }
+      setCalendarDateForActiveMode(nextIso);
+      state.reportSelectedPaperId = "";
+      state.monitorSelectedPaperIds[mode] = "";
+      if (mode === "theme") state.activeThemeGroupKey = "";
+      else state.activeReportJournal = "";
+      updateReportRefreshButton();
+      renderCalendar();
+      focusMonitorCalendarCursor(mode);
+      const monthPromise = crossedMonth
+        ? loadMonth().catch((error) => handleMonthLoadFailure(error))
+        : Promise.resolve();
+      const reportPromise = mode === "theme"
+        ? loadThemeReportForDate(nextIso).catch((error) => handleThemeLoadFailure(error, nextIso))
+        : loadReport().catch((error) => handleReportLoadFailure(error));
+      await Promise.all([monthPromise, reportPromise]);
+      if (
+        mode === state.mode
+        && state.monitorCalendarCursorDates[mode] === nextIso
+      ) {
+        renderCalendar();
+        restoreMonitorKeyboardFocus(mode);
+      }
+      return true;
+    }
+
+    async function enterMonitorCalendarDate() {
+      const mode = activeMonitorKeyboardMode();
+      const iso = state.monitorCalendarCursorDates[mode] || state.selectedDate;
+      if (!iso || isFutureDateIso(iso)) return true;
+      state.monitorKeyboardPanes[mode] = "papers";
+      renderCalendar();
+      focusMonitorPaperSelection(mode, {scroll: true});
+      return true;
+    }
+
+    async function returnMonitorFocusToCalendar() {
+      const mode = activeMonitorKeyboardMode();
+      const iso = state.selectedDate || todayIsoDate();
+      const year = Number(iso.slice(0, 4));
+      const month = Number(iso.slice(5, 7));
+      const changedMonth = year !== state.viewYear || month !== state.viewMonth;
+      state.primaryKeyboardLayer = "content";
+      syncPrimaryKeyboardLayer({focus: false});
+      state.monitorKeyboardPanes[mode] = "calendar";
+      state.monitorCalendarCursorDates[mode] = iso;
+      if (changedMonth) {
+        state.viewYear = year;
+        state.viewMonth = month;
+        rememberCalendarState(mode);
+      }
+      renderCalendar();
+      focusMonitorCalendarCursor(mode);
+      if (changedMonth) await loadMonth().catch((error) => handleMonthLoadFailure(error));
+      restoreMonitorKeyboardFocus(mode);
+      return true;
+    }
+
     function ensureReportPaperSelection(papers) {
       if (!papers.length) {
         state.reportSelectedPaperId = "";
+        if (["report", "theme"].includes(state.mode)) {
+          state.monitorSelectedPaperIds[activeMonitorKeyboardMode()] = "";
+        }
         return;
       }
       if (!state.reportSelectedPaperId || !papers.some((paper) => paper.paper_id === state.reportSelectedPaperId)) {
         state.reportSelectedPaperId = papers[0].paper_id || "";
+      }
+      if (["report", "theme"].includes(state.mode)) {
+        state.monitorSelectedPaperIds[activeMonitorKeyboardMode()] = state.reportSelectedPaperId;
       }
     }
 
@@ -32147,6 +32391,11 @@ INDEX_HTML = """<!doctype html>
       if (!paperId) return;
       const followSelection = state.libraryQuickLookOpen && ["report", "theme"].includes(state.mode);
       state.reportSelectedPaperId = paperId;
+      if (["report", "theme"].includes(state.mode)) {
+        const mode = activeMonitorKeyboardMode();
+        state.monitorKeyboardPanes[mode] = "papers";
+        state.monitorSelectedPaperIds[mode] = paperId;
+      }
       updateReportPaperSelectionDom(options);
       if (followSelection) refreshSelectedReportPaperQuickLook({open: true});
     }
@@ -32157,10 +32406,13 @@ INDEX_HTML = """<!doctype html>
       if (!groups.length) return true;
       const currentIndex = groups.findIndex((group) => group.journal === state.activeReportJournal);
       const baseIndex = currentIndex >= 0 ? currentIndex : 0;
-      const nextIndex = (baseIndex + delta + groups.length) % groups.length;
+      const nextIndex = Math.max(0, Math.min(groups.length - 1, baseIndex + delta));
+      if (nextIndex === baseIndex) return true;
       const followSelection = state.libraryQuickLookOpen;
       state.activeReportJournal = groups[nextIndex].journal;
       state.reportSelectedPaperId = groups[nextIndex].papers[0]?.paper_id || "";
+      state.monitorKeyboardPanes.report = "papers";
+      state.monitorSelectedPaperIds.report = state.reportSelectedPaperId;
       renderReport();
       revealActiveReportTab({smooth: true});
       updateReportPaperSelectionDom({scroll: true});
@@ -32192,7 +32444,7 @@ INDEX_HTML = """<!doctype html>
       const paper = selectedReportPaper();
       if (!paper) return;
       if (state.libraryQuickLookOpen && state.reportQuickLookPaperId === paper.paper_id) {
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       refreshSelectedReportPaperQuickLook({open: true});
@@ -32263,6 +32515,8 @@ INDEX_HTML = """<!doctype html>
       state.primaryKeyboardLayer = "content";
       syncPrimaryKeyboardLayer({focus: false});
       if (state.mode === "report" || state.mode === "theme") {
+        state.monitorKeyboardPanes[activeMonitorKeyboardMode()] = "papers";
+        renderCalendar();
         const papers = activeReportPapers();
         if (papers.length) selectReportPaper(papers[0].paper_id, {scroll: true});
         window.requestAnimationFrame(() => {
@@ -32326,7 +32580,7 @@ INDEX_HTML = """<!doctype html>
       if (key === "ArrowDown" || key === "Enter" || key === " ") {
         return focusPrimarySurfaceContent();
       }
-      syncPrimaryKeyboardLayer();
+      if (key === "ArrowUp") return true;
       return true;
     }
 
@@ -32348,7 +32602,47 @@ INDEX_HTML = """<!doctype html>
       if (key === " " && state.libraryQuickLookOpen) {
         event.preventDefault();
         event.stopPropagation();
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
+        return true;
+      }
+      const keyboardMode = activeMonitorKeyboardMode();
+      const calendarTarget = event.target?.closest?.("#calendar .day[data-date]");
+      if (state.monitorKeyboardPanes[keyboardMode] === "calendar" && calendarTarget) {
+        if (event.metaKey || event.ctrlKey || event.altKey) return false;
+        const calendarDeltas = {
+          "ArrowLeft": -1,
+          "ArrowRight": 1,
+          "ArrowUp": -7,
+          "ArrowDown": 7
+        };
+        if (Object.prototype.hasOwnProperty.call(calendarDeltas, key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          moveMonitorCalendarCursor(calendarDeltas[key]).catch((error) => {
+            if (keyboardMode === "theme") handleThemeLoadFailure(error, state.selectedDate);
+            else handleReportLoadFailure(error);
+          });
+          return true;
+        }
+        if (key === "Enter") {
+          event.preventDefault();
+          event.stopPropagation();
+          enterMonitorCalendarDate().catch((error) => {
+            if (keyboardMode === "theme") handleThemeLoadFailure(error, state.selectedDate);
+            else handleReportLoadFailure(error);
+          });
+          return true;
+        }
+        return false;
+      }
+      if (
+        key === "Escape"
+        && state.monitorKeyboardPanes[keyboardMode] === "papers"
+        && !state.libraryQuickLookOpen
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        returnMonitorFocusToCalendar().catch((error) => handleMonthLoadFailure(error));
         return true;
       }
       if (reportKeyboardTargetIsEditable(event.target)) return false;
@@ -32398,7 +32692,7 @@ INDEX_HTML = """<!doctype html>
       if (key === " " && state.libraryQuickLookOpen) {
         event.preventDefault();
         event.stopPropagation();
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return true;
       }
       const authorNavigationButton = event.target?.closest?.(".author-monitor-author");
@@ -39303,7 +39597,9 @@ INDEX_HTML = """<!doctype html>
       const button = $("openLibraryQuickLookInPreview");
       if (button) button.hidden = !active;
       try {
-        window.webkit?.messageHandlers?.pdfPreviewState?.postMessage({active: Boolean(active)});
+        window.webkit?.messageHandlers?.pdfPreviewState?.postMessage({
+          active: Boolean(state.libraryQuickLookOpen)
+        });
       } catch (error) {
         // The regular browser build has no native WebKit message bridge.
       }
@@ -39409,7 +39705,7 @@ INDEX_HTML = """<!doctype html>
       const status = $("libraryDetailStatus");
       if (!path) {
         if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "placeholder") {
-          closeLibraryQuickLook();
+          closeLibraryQuickLook({restoreFocus: true});
           return;
         }
         if (status && !options.silent) {
@@ -39420,7 +39716,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "file" && path === state.libraryQuickLookPath) {
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       if (status && !options.silent) {
@@ -39433,6 +39729,7 @@ INDEX_HTML = """<!doctype html>
       if (!overlay || !pages) return;
       const token = ++state.libraryQuickLookRenderToken;
       const isNewFile = path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "file";
+      captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "file";
       state.libraryQuickLookPath = path;
@@ -39781,9 +40078,79 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function closeLibraryQuickLook() {
-      setNativePdfQuickLookActive(false);
+    function captureLibraryQuickLookReturnFocus() {
+      if (state.libraryQuickLookOpen || state.libraryQuickLookReturnFocus) return;
+      const active = document.activeElement;
+      state.libraryQuickLookReturnFocus = {
+        element: active && active !== document.body ? active : null,
+        mode: state.mode,
+        libraryTab: state.libraryTab,
+        monitorPane: ["report", "theme"].includes(state.mode)
+          ? state.monitorKeyboardPanes[activeMonitorKeyboardMode()]
+          : "",
+        selectedDate: state.selectedDate,
+        reportPaperId: state.reportSelectedPaperId,
+        authorId: state.authorMonitorSelectedId,
+        authorPaperId: state.authorMonitorSelectedPaperId,
+        authorPane: state.authorMonitorKeyboardPane,
+        publicationId: state.myPublicationSelectionId
+      };
+    }
+
+    function restoreLibraryQuickLookReturnFocus(snapshot) {
+      if (!snapshot || snapshot.mode !== state.mode) return;
+      const focusTarget = () => {
+        const direct = snapshot.element;
+        if (
+          direct?.isConnected
+          && !direct.closest?.("#libraryQuickLook")
+          && typeof direct.focus === "function"
+        ) {
+          direct.focus({preventScroll: true});
+          return true;
+        }
+        if (["report", "theme"].includes(snapshot.mode)) {
+          const mode = snapshot.mode;
+          if (snapshot.monitorPane === "calendar") {
+            state.monitorKeyboardPanes[mode] = "calendar";
+            state.monitorCalendarCursorDates[mode] = snapshot.selectedDate || state.selectedDate;
+            renderCalendar();
+            focusMonitorCalendarCursor(mode);
+          } else {
+            state.monitorKeyboardPanes[mode] = "papers";
+            focusMonitorPaperSelection(mode);
+          }
+          return true;
+        }
+        if (snapshot.mode === "author") {
+          const selector = snapshot.authorPane === "authors"
+            ? `.author-monitor-author[data-author-id="${Number(snapshot.authorId || 0)}"]`
+            : `.author-paper-card[data-paper-id="${CSS.escape(String(snapshot.authorPaperId || ""))}"]`;
+          const target = document.querySelector(selector)
+            || document.querySelector(snapshot.authorPane === "authors" ? ".author-monitor-author" : ".author-paper-card");
+          target?.focus({preventScroll: true});
+          return Boolean(target);
+        }
+        if (snapshot.libraryTab === "my-publications" && snapshot.publicationId) {
+          const row = document.querySelector(`.my-publications-row[data-publication-id="${Number(snapshot.publicationId)}"]`);
+          if (row) {
+            row.focus({preventScroll: true});
+            return true;
+          }
+        }
+        $("libraryShell")?.focus({preventScroll: true});
+        return true;
+      };
+      window.requestAnimationFrame(() => {
+        if (!focusTarget()) window.requestAnimationFrame(focusTarget);
+      });
+    }
+
+    function closeLibraryQuickLook(options = {}) {
+      const returnFocus = state.libraryQuickLookReturnFocus;
       state.libraryQuickLookOpen = false;
+      state.libraryQuickLookReturnFocus = null;
+      setNativePdfQuickLookActive(false);
       state.libraryQuickLookKind = "";
       state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = "";
@@ -39800,6 +40167,30 @@ INDEX_HTML = """<!doctype html>
       }
       if (pages) pages.innerHTML = "";
       renderLibraryQuickLookThumbs(0);
+      if (options.restoreFocus) restoreLibraryQuickLookReturnFocus(returnFocus);
+    }
+
+    window.closeDaiqoPreviewFromNative = () => {
+      if (!state.libraryQuickLookOpen) return false;
+      closeLibraryQuickLook({restoreFocus: true});
+      return true;
+    };
+
+    function handlePreviewCloseShortcut(event) {
+      if (
+        !state.libraryQuickLookOpen
+        || !event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || String(event.key || "").toLowerCase() !== "w"
+      ) {
+        return false;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      closeLibraryQuickLook({restoreFocus: true});
+      return true;
     }
 
     function defaultLibraryQuickLookFrame() {
@@ -39880,6 +40271,7 @@ INDEX_HTML = """<!doctype html>
       const pages = $("libraryQuickLookPages");
       if (!overlay || !pages) return;
       const placeholder = selectedLibraryQuickLookPlaceholder();
+      captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "placeholder";
       state.libraryQuickLookRenderToken += 1;
@@ -40000,11 +40392,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function handleLibraryQuickLookPdfKeydown(event) {
+      if (handlePreviewCloseShortcut(event)) return;
       const key = event.key === "Spacebar" ? " " : event.key;
       if (key === " " && ["report", "theme"].includes(state.mode)) {
         event.preventDefault();
         event.stopPropagation();
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       if (key !== "Escape") return;
@@ -40056,7 +40449,7 @@ INDEX_HTML = """<!doctype html>
     function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
       if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "pdf" && paper.merged_pdf_path === state.libraryQuickLookPath) {
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       const status = $("libraryDetailStatus");
@@ -40070,6 +40463,7 @@ INDEX_HTML = """<!doctype html>
       if (!overlay || !pages) return;
       const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
       const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "pdf";
+      captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "pdf";
       state.libraryQuickLookRenderToken += 1;
@@ -43468,7 +43862,14 @@ INDEX_HTML = """<!doctype html>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
       if (openPageButton) openPageButton.addEventListener("click", () => openUrlExternally(paper.url));
-      article.addEventListener("click", () => selectReportPaper(paper.paper_id));
+      article.addEventListener("click", () => {
+        if (["report", "theme"].includes(state.mode)) {
+          state.primaryKeyboardLayer = "content";
+          syncPrimaryKeyboardLayer({focus: false});
+          setMonitorKeyboardPane("papers");
+        }
+        selectReportPaper(paper.paper_id);
+      });
       article.querySelector(".library-add-control")?.addEventListener("click", (event) => event.stopPropagation());
       const libraryButton = article.querySelector('[data-action="add-library"]');
       libraryButton.addEventListener("click", (event) => {
@@ -45662,6 +46063,7 @@ INDEX_HTML = """<!doctype html>
     async function openThemeMonitor() {
       const returnViewport = state.monitorReturnViewports.theme;
       state.mode = "theme";
+      state.reportSelectedPaperId = state.monitorSelectedPaperIds.theme || "";
       applyCalendarState("theme");
       closeLibraryQuickLook();
       closeAnalysis();
@@ -45682,6 +46084,7 @@ INDEX_HTML = """<!doctype html>
       if (state.monitorReturnViewports.theme === returnViewport) {
         state.monitorReturnViewports.theme = null;
       }
+      restoreMonitorKeyboardFocus("theme");
     }
 
     function renderThemeTransitionSurface(options = {}) {
@@ -45852,9 +46255,14 @@ INDEX_HTML = """<!doctype html>
         `;
         button.addEventListener("click", () => {
           if (state.themeSuppressNextClick) return;
+          state.primaryKeyboardLayer = "content";
+          syncPrimaryKeyboardLayer({focus: false});
+          state.monitorKeyboardPanes.theme = "papers";
           state.activeThemeGroupKey = entry.key;
           state.reportSelectedPaperId = entry.papers[0]?.paper_id || "";
+          state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
           renderThemeMonitor();
+          focusMonitorPaperSelection("theme");
         });
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
@@ -45912,10 +46320,14 @@ INDEX_HTML = """<!doctype html>
       if (!groups.length) return true;
       const currentIndex = groups.findIndex((group) => group.key === state.activeThemeGroupKey);
       const baseIndex = currentIndex >= 0 ? currentIndex : 0;
-      const next = groups[(baseIndex + delta + groups.length) % groups.length];
+      const nextIndex = Math.max(0, Math.min(groups.length - 1, baseIndex + delta));
+      if (nextIndex === baseIndex) return true;
+      const next = groups[nextIndex];
       const followSelection = state.libraryQuickLookOpen;
       state.activeThemeGroupKey = next.key;
       state.reportSelectedPaperId = next.papers[0]?.paper_id || "";
+      state.monitorKeyboardPanes.theme = "papers";
+      state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
       renderThemeMonitor();
       revealActiveReportTab({smooth: true});
       updateReportPaperSelectionDom({scroll: true});
@@ -45956,7 +46368,7 @@ INDEX_HTML = """<!doctype html>
       const groups = groupedThemePapers(visiblePapers);
       const currentGroup = groups.find((group) => group.key === state.activeThemeGroupKey);
       const firstNonEmptyGroup = groups.find((group) => group.papers.length);
-      if (!currentGroup) {
+      if (!currentGroup || (!currentGroup.papers.length && firstNonEmptyGroup)) {
         state.activeThemeGroupKey = firstNonEmptyGroup?.key || groups[0]?.key || "";
       }
       renderThemeTabs(groups);
@@ -46100,6 +46512,7 @@ INDEX_HTML = """<!doctype html>
     async function openJournalMonitor() {
       const returnViewport = state.monitorReturnViewports.report;
       state.mode = "report";
+      state.reportSelectedPaperId = state.monitorSelectedPaperIds.report || "";
       applyCalendarState("report");
       setPrimaryView("report");
       // loadReport renders cached data or a stable loading surface synchronously,
@@ -46112,6 +46525,7 @@ INDEX_HTML = """<!doctype html>
       if (state.monitorReturnViewports.report === returnViewport) {
         state.monitorReturnViewports.report = null;
       }
+      restoreMonitorKeyboardFocus("report");
     }
 
     function autoStatusTime(value) {
@@ -46510,13 +46924,13 @@ INDEX_HTML = """<!doctype html>
     $("closeInternalBrowser").addEventListener("click", closeInternalBrowser);
     $("openExternalBrowser").addEventListener("click", openExternalBrowser);
     $("closeLibraryQuickLook").addEventListener("click", () => {
-      closeLibraryQuickLook();
-      $("libraryShell")?.focus({preventScroll: true});
+      closeLibraryQuickLook({restoreFocus: true});
     });
     $("openLibraryQuickLookInPreview").addEventListener("click", openLibraryQuickLookInPreview);
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     window.addEventListener("keydown", (event) => {
+      if (handlePreviewCloseShortcut(event)) return;
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
@@ -46566,7 +46980,7 @@ INDEX_HTML = """<!doctype html>
           reclaimLibraryQuickLookFocus();
           return;
         }
-        closeLibraryQuickLook();
+        closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       if ($("internalBrowser").classList.contains("open")) {

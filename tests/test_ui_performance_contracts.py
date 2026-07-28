@@ -174,6 +174,17 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("width: var(--monitor-calendar-width);", ui_server.INDEX_HTML)
         self.assertNotIn("--monitor-calendar-width: 100%;", ui_server.INDEX_HTML)
 
+    def test_monitor_calendar_updates_existing_day_buttons_without_rebuilding(self) -> None:
+        render_calendar = self.js_function("renderCalendar")
+        update_day = self.js_function("updateCalendarDayButton")
+
+        self.assertIn("if (root.dataset.structureKey !== structureKey)", render_calendar)
+        self.assertIn('root.querySelectorAll(".day[data-date]")', render_calendar)
+        self.assertIn("updateCalendarDayButton(button, iso, day)", render_calendar)
+        self.assertIn("if (button.className !== className)", update_day)
+        self.assertIn("if (button.innerHTML !== markup)", update_day)
+        self.assertIn("transition: none;", ui_server.INDEX_HTML)
+
     def test_journal_and_subject_context_menus_share_library_styling(self) -> None:
         journal_menu = self.js_function("showJournalContextMenu")
         subject_menu = self.js_function("showThemeContextMenu")
@@ -232,6 +243,52 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("activatePrimaryKeyboardRoot()", library)
         self.assertIn("handlePrimaryKeyboardNavigation(event)", ui_server.INDEX_HTML)
         self.assertIn(".view-switcher.keyboard-active .view-switch.active", ui_server.INDEX_HTML)
+        self.assertIn(".view-switch:focus-visible", ui_server.INDEX_HTML)
+        self.assertIn("border-bottom-color: transparent;", ui_server.INDEX_HTML)
+        self.assertNotIn("box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.68);", ui_server.INDEX_HTML)
+        self.assertIn('if (key === "ArrowUp") return true;', primary)
+
+    def test_monitor_source_navigation_stops_at_each_end(self) -> None:
+        journal = self.js_function("switchReportJournalTab")
+        subject = self.js_function("switchThemeSubjectTab")
+
+        for switcher in (journal, subject):
+            self.assertIn("Math.max(0, Math.min(groups.length - 1, baseIndex + delta))", switcher)
+            self.assertIn("if (nextIndex === baseIndex) return true;", switcher)
+            self.assertNotIn("% groups.length", switcher)
+
+    def test_monitor_calendar_keyboard_navigation_updates_content_but_keeps_focus(self) -> None:
+        keyboard = self.js_function("handleReportKeydown")
+        move_cursor = self.js_function("moveMonitorCalendarCursor")
+        enter_date = self.js_function("enterMonitorCalendarDate")
+        return_to_calendar = self.js_function("returnMonitorFocusToCalendar")
+        journal_open = self.js_function("openJournalMonitor")
+        subject_open = self.js_function("openThemeMonitor")
+
+        self.assertIn('"ArrowLeft": -1', keyboard)
+        self.assertIn('"ArrowRight": 1', keyboard)
+        self.assertIn('"ArrowUp": -7', keyboard)
+        self.assertIn('"ArrowDown": 7', keyboard)
+        self.assertIn("moveMonitorCalendarCursor(calendarDeltas[key])", keyboard)
+        self.assertIn("enterMonitorCalendarDate()", keyboard)
+        self.assertIn("setCalendarDateForActiveMode(nextIso)", move_cursor)
+        self.assertIn("loadThemeReportForDate(nextIso)", move_cursor)
+        self.assertIn("loadReport()", move_cursor)
+        self.assertIn("focusMonitorCalendarCursor(mode)", move_cursor)
+        self.assertIn('state.monitorKeyboardPanes[mode] = "papers"', enter_date)
+        self.assertIn("focusMonitorPaperSelection(mode, {scroll: true})", enter_date)
+        self.assertNotIn("loadReport()", enter_date)
+        self.assertIn('key === "Escape"', keyboard)
+        self.assertIn("returnMonitorFocusToCalendar()", keyboard)
+        self.assertIn("state.monitorCalendarCursorDates[mode] = iso", return_to_calendar)
+        self.assertIn("focusMonitorCalendarCursor(mode)", return_to_calendar)
+        self.assertIn('restoreMonitorKeyboardFocus("report")', journal_open)
+        self.assertIn('restoreMonitorKeyboardFocus("theme")', subject_open)
+        self.assertIn(".day.keyboard-current:not(.active)", ui_server.INDEX_HTML)
+        self.assertIn(
+            "if (!currentGroup || (!currentGroup.papers.length && firstNonEmptyGroup))",
+            self.js_function("renderThemeMonitor"),
+        )
 
 
 if __name__ == "__main__":
