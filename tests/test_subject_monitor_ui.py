@@ -67,6 +67,16 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('color: var(--ink)', title_css)
         self.assertNotIn('style="color:${paper.section_color}"', render_paper)
 
+    def test_journal_and_subject_cards_have_airier_metadata_and_plain_last_author(self):
+        monitor_css = INDEX_HTML.split('.app.report-mode .paper .meta,', 1)[1].split(
+            '.app.report-mode .paper.with-figure:has(.paper-figure.missing)', 1
+        )[0]
+        last_author_css = INDEX_HTML.split('.report-author.last-author {', 1)[1].split('}', 1)[0]
+
+        self.assertIn('margin-top: 8px;', monitor_css)
+        self.assertIn('margin-top: 12px;', monitor_css)
+        self.assertNotIn('text-decoration', last_author_css)
+
     def test_subject_keyboard_navigation_reuses_report_interactions(self):
         keyboard = INDEX_HTML.split('function handleReportKeydown', 1)[1].split(
             'function renderArxivUpdateCountdown', 1

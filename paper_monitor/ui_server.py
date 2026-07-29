@@ -26758,10 +26758,6 @@ INDEX_HTML = """<!doctype html>
     .report-author.last-author {
       color: #263746;
       font-weight: 700;
-      text-decoration-line: underline;
-      text-decoration-color: rgba(15, 107, 110, 0.42);
-      text-decoration-thickness: 1.5px;
-      text-underline-offset: 3px;
     }
     .abstract { color: #344054; line-height: 1.55; margin: 12px 0 0; font-size: 14px; }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
@@ -27514,13 +27510,16 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .journal-sidebar-filter .journal-toggle,
     .app.report-mode .journal-sidebar-filter .preprint-category-toggle,
     .app.report-mode #subjectFilters .subject-option {
-      min-height: 30px;
-      padding-top: 3px;
-      padding-bottom: 3px;
+      min-height: 26px;
+      padding-top: 1px;
+      padding-bottom: 1px;
+    }
+    .app.report-mode .journal-sidebar-filter .preprint-collapse-toggle {
+      min-height: 26px;
     }
     .app.report-mode .journal-setting-row {
-      min-height: 30px;
-      padding: 3px 0 3px 39px;
+      min-height: 26px;
+      padding: 1px 0 1px 39px;
     }
     .app.report-mode .journal-add-panel {
       gap: 2px;
@@ -27938,12 +27937,12 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .paper .meta,
     .app.theme-mode .paper .meta {
       gap: 8px;
-      margin-top: 3px;
+      margin-top: 8px;
       font-size: 12px;
     }
     .app.report-mode .paper .authors,
     .app.theme-mode .paper .authors {
-      margin-top: 3px;
+      margin-top: 8px;
       color: #1f2328;
       font-size: 12.5px;
       line-height: 1.32;
@@ -27954,13 +27953,9 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .paper .report-author.last-author {
       color: #1f2328;
     }
-    .app.report-mode .paper .report-author.last-author,
-    .app.theme-mode .paper .report-author.last-author {
-      text-decoration-color: #1f2328;
-    }
     .app.report-mode .paper .abstract,
     .app.theme-mode .paper .abstract {
-      margin-top: 5px;
+      margin-top: 12px;
       color: #1f2328;
       font-size: 12.5px;
       line-height: 1.38;
@@ -28901,6 +28896,7 @@ INDEX_HTML = """<!doctype html>
       libraryPaperLocationRequests: {},
       libraryPaperLocationsLoaded: new Set(),
       libraryTab: "library",
+      libraryLastLocation: null,
       libraryShortcutTabs: [],
       libraryWorkspaceTabs: [],
       libraryShortcutRailScrollTop: 0,
@@ -29763,12 +29759,70 @@ INDEX_HTML = """<!doctype html>
       ensureLibraryColumnSelection(state.libraryRootId);
     }
 
+    function rememberLibraryLocation() {
+      const tab = String(state.libraryTab || "library");
+      if (tab !== "library" && !tab.startsWith("shortcut-") && !tab.startsWith("workspace-")) return;
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const currentFolderId = Number(state.libraryCurrentFolderId || displayRootId);
+      const activeFolderId = Number(state.libraryActiveFolderId || currentFolderId);
+      const tabId = tab.startsWith("shortcut-")
+        ? String(state.libraryShortcutTabs[Number(tab.slice("shortcut-".length) || 0)]?.tab_id || "")
+        : (tab.startsWith("workspace-")
+          ? String(state.libraryWorkspaceTabs[Number(tab.slice("workspace-".length) || 0)]?.tab_id || "")
+          : "");
+      state.libraryLastLocation = {
+        tab,
+        tabId,
+        currentFolderId,
+        activeFolderId,
+        selection: state.librarySelection ? {...state.librarySelection} : null
+      };
+    }
+
+    function restoreLibraryLastLocation() {
+      const location = state.libraryLastLocation;
+      if (!location) return false;
+      let tab = String(location.tab || "library");
+      if (tab.startsWith("shortcut-")) {
+        const index = state.libraryShortcutTabs.findIndex((entry) => String(entry.tab_id || "") === String(location.tabId || ""));
+        tab = index >= 0 ? `shortcut-${index}` : "library";
+      } else if (tab.startsWith("workspace-")) {
+        const index = state.libraryWorkspaceTabs.findIndex((entry) => String(entry.tab_id || "") === String(location.tabId || ""));
+        tab = index >= 0 ? `workspace-${index}` : "library";
+      } else {
+        tab = "library";
+      }
+      state.libraryTab = tab;
+      const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
+      const currentFolderId = Number(location.currentFolderId || 0);
+      const activeFolderId = Number(location.activeFolderId || 0);
+      state.libraryCurrentFolderId = libraryFolderIsWithin(currentFolderId, displayRootId)
+        ? currentFolderId
+        : displayRootId;
+      state.libraryActiveFolderId = libraryFolderIsWithin(activeFolderId, displayRootId)
+        ? activeFolderId
+        : state.libraryCurrentFolderId;
+      const selection = location.selection;
+      const selectionFolderId = selection?.type === "item"
+        ? Number(libraryItemById(selection.id)?.folder_id || 0)
+        : Number(selection?.id || 0);
+      state.librarySelection = librarySelectionExists(selection) && libraryFolderIsWithin(selectionFolderId, displayRootId)
+        ? {...selection}
+        : {type: "folder", id: state.libraryCurrentFolderId};
+      clearLibraryRangeSelection();
+      ensureLibraryColumnSelection(displayRootId);
+      return true;
+    }
+
     async function loadLibrary(options = {}) {
       state.mode = "library";
-      state.libraryTab = "library";
       setPrimaryView("library");
-      if (!options.force && state.libraryLoaded) {
+      if (options.root) {
+        state.libraryTab = "library";
         resetLibraryRootSelection();
+      }
+      if (!options.force && state.libraryLoaded) {
+        if (!options.root) restoreLibraryLastLocation();
         renderLibrary();
         return;
       }
@@ -29784,12 +29838,13 @@ INDEX_HTML = """<!doctype html>
           });
       }
       await state.libraryLoadingPromise;
-      resetLibraryRootSelection();
+      if (!options.root && !restoreLibraryLastLocation()) resetLibraryRootSelection();
       renderLibrary();
       requestAnimationFrame(() => requestAnimationFrame(hideAppStartupCover));
     }
 
     async function loadMyPublications() {
+      rememberLibraryLocation();
       state.mode = "library";
       state.libraryTab = "my-publications";
       setPrimaryView("my-publications");
@@ -34193,6 +34248,7 @@ INDEX_HTML = """<!doctype html>
         if (librarySearchIsActive()) revealLibrarySearchSelection();
         else revealLibrarySelectionInColumn(state.libraryActiveFolderId);
       });
+      rememberLibraryLocation();
     }
 
     function libraryViewTitle() {
@@ -35361,7 +35417,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       root.querySelector("[data-root-tab]")?.addEventListener("click", () => {
-        loadLibrary().catch((error) => {
+        loadLibrary({root: true}).catch((error) => {
           $("papers").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         });
       });

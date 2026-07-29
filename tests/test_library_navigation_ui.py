@@ -75,6 +75,14 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("Promise.resolve().then(loadLibrary).catch((error) => {", INDEX_HTML)
         self.assertIn("showBootError(error);", INDEX_HTML)
 
+    def test_returning_to_library_restores_the_last_navigation_location(self) -> None:
+        self.assertIn("libraryLastLocation: null", INDEX_HTML)
+        self.assertIn("function rememberLibraryLocation()", INDEX_HTML)
+        self.assertIn("function restoreLibraryLastLocation()", INDEX_HTML)
+        self.assertIn("if (!options.root) restoreLibraryLastLocation();", INDEX_HTML)
+        self.assertIn("if (!options.root && !restoreLibraryLastLocation()) resetLibraryRootSelection();", INDEX_HTML)
+        self.assertIn("loadLibrary({root: true})", INDEX_HTML)
+
     def test_space_dialog_explains_real_directory_semantics(self) -> None:
         self.assertIn('id="libraryNavBackdrop"', INDEX_HTML)
         self.assertIn("A matching folder will be created immediately under data/Spaces.", INDEX_HTML)

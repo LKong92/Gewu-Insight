@@ -209,6 +209,15 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('option.querySelector("input").addEventListener("change", () => {', subject_filters)
         self.assertIn("grid-template-columns: 18px minmax(0, 1fr) auto;", ui_server.INDEX_HTML)
 
+    def test_report_sidebar_filter_and_settings_rows_are_compact(self) -> None:
+        report_sidebar_css = ui_server.INDEX_HTML.split(
+            ".app.report-mode .journal-sidebar-filter .journal-toggle,", 1
+        )[1].split("/* Earlier shared controls retain", 1)[0]
+
+        self.assertIn("min-height: 26px;", report_sidebar_css)
+        self.assertIn("padding-top: 1px;", report_sidebar_css)
+        self.assertIn("padding: 1px 0 1px 39px;", report_sidebar_css)
+
     def test_primary_reading_surfaces_share_flat_visual_language(self) -> None:
         html = ui_server.INDEX_HTML
 
