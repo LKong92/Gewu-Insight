@@ -205,8 +205,9 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn(".journal-setting-row + .journal-setting-row", ui_server.INDEX_HTML)
         self.assertIn(".journal-add-panel .search", ui_server.INDEX_HTML)
         self.assertIn('label.className = `journal-toggle${selected ? " active" : ""}`', journal_filters)
-        self.assertIn('button.innerHTML = `<span>${escapeHtml(label)}</span><b>${count}</b>`', subject_filters)
-        self.assertIn("box-shadow: inset 3px 0 0 var(--accent);", ui_server.INDEX_HTML)
+        self.assertIn('option.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>', subject_filters)
+        self.assertIn('option.querySelector("input").addEventListener("change", () => {', subject_filters)
+        self.assertIn("grid-template-columns: 18px minmax(0, 1fr) auto;", ui_server.INDEX_HTML)
 
     def test_primary_reading_surfaces_share_flat_visual_language(self) -> None:
         html = ui_server.INDEX_HTML
@@ -218,7 +219,8 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn(".app.author-mode .author-paper-card.report-selected", html)
         self.assertIn(".library-detail .citation-source-cell.active", html)
         self.assertIn(".library-detail .library-detail-abstract", html)
-        self.assertIn("border: 1px solid rgba(15, 107, 110, 0.42);", html)
+        self.assertIn("background: #e3e5e7;", html)
+        self.assertNotIn('id="jumpToday"', html)
 
     def test_monitor_calendars_render_only_the_weeks_the_month_uses(self) -> None:
         calendar = self.js_function("renderCalendar")

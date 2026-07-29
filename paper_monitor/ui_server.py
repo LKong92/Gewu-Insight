@@ -21138,12 +21138,33 @@ INDEX_HTML = """<!doctype html>
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    .app.report-mode input[type="checkbox"],
-    .app.theme-mode input[type="checkbox"] {
-      accent-color: var(--accent);
+    input[type="checkbox"] {
+      appearance: none;
+      display: inline-grid;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      place-content: center;
+      border: 1px solid #c6cdd5;
+      border-radius: 3px;
+      background: #fff;
+      cursor: pointer;
+    }
+    input[type="checkbox"]::after {
+      content: "";
+      width: 7px;
+      height: 3px;
+      border-bottom: 1.5px solid #1f2328;
+      border-left: 1.5px solid #1f2328;
+      opacity: 0.72;
+      transform: rotate(-45deg) scale(0);
+      transform-origin: center;
+    }
+    input[type="checkbox"]:checked::after {
+      transform: rotate(-45deg) scale(1);
     }
     .app {
-      --sidebar-width: 340px;
+      --sidebar-width: 296px;
       display: grid;
       grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
       height: 100vh;
@@ -21227,21 +21248,20 @@ INDEX_HTML = """<!doctype html>
       display: none;
     }
     .sidebar {
-      --monitor-calendar-width: 280px;
+      --monitor-calendar-width: 254px;
       border-right: 1px solid var(--line);
       background: #fff;
-      padding: 22px;
+      padding: 14px 12px 18px;
       display: flex;
       flex-direction: column;
-      gap: 18px;
+      gap: 12px;
       height: 100vh;
       overflow-y: auto;
       overflow-x: hidden;
       scrollbar-gutter: stable;
     }
     .sidebar > .monthbar,
-    .sidebar > .calendar,
-    .sidebar > #jumpToday {
+    .sidebar > .calendar {
       width: var(--monitor-calendar-width);
       flex: 0 0 auto;
       align-self: flex-start;
@@ -21497,7 +21517,7 @@ INDEX_HTML = """<!doctype html>
     .preprint-category-list { display: flex; flex-direction: column; gap: 6px; padding-left: 14px; }
     .preprint-category-list[hidden] { display: none; }
     .preprint-category-toggle { padding: 7px 8px; }
-    .journal-toggle input, .preprint-category-toggle input { width: 16px; height: 16px; }
+    .journal-toggle input, .preprint-category-toggle input { width: 14px; height: 14px; }
     .journal-toggle span, .preprint-category-toggle span { font-size: 14px; min-width: 0; }
     .preprint-category-toggle span { font-size: 12px; line-height: 1.2; }
     .journal-toggle b, .preprint-category-toggle b { color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -21538,17 +21558,14 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
       transition: background 110ms ease, color 110ms ease;
     }
-    #journalFilters .journal-toggle + .journal-toggle {
-      border-top: 1px solid rgba(95, 107, 124, 0.12);
-    }
     .journal-sidebar-filter .journal-toggle:hover,
     .journal-sidebar-filter .preprint-category-toggle:hover,
     #subjectFilters .subject-option:hover {
       background: rgba(31, 41, 55, 0.045);
     }
     .journal-sidebar-filter .journal-toggle.active {
-      background: #eaf4f3;
-      box-shadow: inset 3px 0 0 var(--accent);
+      background: transparent;
+      box-shadow: none;
     }
     .journal-sidebar-filter .journal-toggle span {
       font-size: 13.5px;
@@ -21598,12 +21615,9 @@ INDEX_HTML = """<!doctype html>
       background: transparent;
       box-shadow: none;
     }
-    .journal-sidebar-filter .preprint-category-toggle + .preprint-category-toggle {
-      border-top: 1px solid rgba(95, 107, 124, 0.10);
-    }
     .journal-sidebar-filter .preprint-category-toggle.active {
-      background: #eaf4f3;
-      box-shadow: inset 2px 0 0 var(--accent);
+      background: transparent;
+      box-shadow: none;
     }
     #subjectFilters {
       display: grid;
@@ -21612,7 +21626,8 @@ INDEX_HTML = """<!doctype html>
     }
     #subjectFilters .subject-option {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      column-gap: 8px;
       align-items: center;
       min-height: 38px;
       border: 0;
@@ -21621,11 +21636,14 @@ INDEX_HTML = """<!doctype html>
       background: transparent;
       box-shadow: none;
       color: var(--ink);
+      cursor: pointer;
       font-size: 13.5px;
       transition: background 110ms ease, color 110ms ease;
     }
-    #subjectFilters .subject-option + .subject-option {
-      border-top: 1px solid rgba(95, 107, 124, 0.12);
+    #subjectFilters .subject-option input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
     }
     #subjectFilters .subject-option b {
       color: #7a8495;
@@ -21634,12 +21652,12 @@ INDEX_HTML = """<!doctype html>
       font-variant-numeric: tabular-nums;
     }
     #subjectFilters .subject-option.active {
-      background: #eaf4f3;
-      box-shadow: inset 3px 0 0 var(--accent);
-      color: #0b5f62;
+      background: transparent;
+      box-shadow: none;
+      color: var(--ink);
     }
     #subjectFilters .subject-option.active b {
-      color: #0b6a6d;
+      color: #7a8495;
     }
     #journalSettings {
       display: flex;
@@ -21656,9 +21674,6 @@ INDEX_HTML = """<!doctype html>
       padding: 6px 7px 6px 13px;
       background: transparent;
       transition: background 110ms ease;
-    }
-    .journal-setting-row + .journal-setting-row {
-      border-top: 1px solid rgba(95, 107, 124, 0.12);
     }
     .journal-setting-row:hover {
       background: rgba(31, 41, 55, 0.035);
@@ -21704,9 +21719,6 @@ INDEX_HTML = """<!doctype html>
       color: var(--ink);
       font-size: 13.5px;
       text-align: left;
-    }
-    .journal-add-panel > * + * {
-      border-top: 1px solid rgba(95, 107, 124, 0.12);
     }
     .journal-add-panel .search::placeholder {
       color: #9aa3b1;
@@ -26643,7 +26655,7 @@ INDEX_HTML = """<!doctype html>
       box-shadow: 0 0 0 3px rgba(15, 107, 110, 0.18);
     }
     .paper-layout { display: grid; gap: 14px; }
-    .paper.with-figure .paper-layout { grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); align-items: start; }
+    .paper.with-figure .paper-layout { grid-template-columns: minmax(120px, 176px) minmax(0, 1fr); align-items: start; }
     .paper-figure {
       margin: 0;
       overflow: hidden;
@@ -27001,6 +27013,7 @@ INDEX_HTML = """<!doctype html>
       padding-left: 8px;
       min-height: 18px;
     }
+    .status:empty { display: none; }
     .status.ok { border-color: var(--ok); color: var(--ok); }
     .status.warn { border-color: var(--warn); color: var(--warn); }
     .status.err { border-color: var(--accent-2); color: var(--accent-2); }
@@ -27437,22 +27450,155 @@ INDEX_HTML = """<!doctype html>
       --flat-tonal: #f1f3f5;
     }
 
+    /* Journal and Subject Monitor use the same blue accent as Author Monitor. */
+    .app.report-mode,
+    .app.theme-mode {
+      --accent: #1f4f7a;
+      --accent-strong: #163e62;
+      --ok: #1f4f7a;
+      --flat-selected: #dce8f5;
+    }
+
+    .app.report-mode .sidebar,
+    .app.theme-mode .sidebar,
+    .app.report-mode #journalFilters,
+    .app.report-mode #preprintFilters,
+    .app.report-mode #subjectFilters,
+    .app.report-mode .journal-sidebar-filter .preprint-filter-row {
+      background: #f2f2f2;
+    }
+    .app.report-mode .sidebar,
+    .app.theme-mode .sidebar {
+      padding-top: 46px;
+    }
+    .app.report-mode .main,
+    .app.theme-mode .main,
+    .app.report-mode .workspace,
+    .app.theme-mode .workspace,
+    .app.report-mode .report-column,
+    .app.theme-mode .report-column {
+      background: #fff;
+    }
+    .app.report-mode .brand,
+    .app.theme-mode .brand {
+      display: none;
+    }
+    .app.report-mode .sidebar > .filters.journal-sidebar-filter {
+      width: var(--monitor-calendar-width);
+      flex: 0 0 auto;
+      align-self: flex-start;
+      gap: 10px;
+      margin: 2px 0 0;
+      padding-top: 14px;
+      border-top: 1px solid rgba(95, 107, 124, 0.18);
+    }
+    .app.report-mode #journalFilters,
+    .app.report-mode #preprintFilters,
+    .app.report-mode #subjectFilters,
+    .app.report-mode #journalSettings,
+    .app.report-mode .journal-add-panel,
+    .app.report-mode .journal-sidebar-filter .preprint-filter-row {
+      overflow: visible;
+      border-radius: 0;
+      background: transparent;
+    }
+    .app.report-mode .journal-sidebar-filter .journal-toggle,
+    .app.report-mode .journal-sidebar-filter .preprint-category-toggle,
+    .app.report-mode #subjectFilters .subject-option {
+      min-height: 30px;
+      padding-top: 3px;
+      padding-bottom: 3px;
+    }
+    .app.report-mode .journal-setting-row {
+      min-height: 30px;
+      padding: 3px 0 3px 39px;
+    }
+    .app.report-mode .journal-add-panel {
+      gap: 2px;
+    }
+    .app.report-mode .journal-add-panel .search,
+    .app.report-mode .journal-add-panel .smallbtn {
+      min-height: 30px;
+      padding: 3px 0;
+    }
+
+    /* Earlier shared controls retain their monitor-specific blue states here. */
+    .app.report-mode .fetch-progress-track,
+    .app.theme-mode .fetch-progress-track {
+      background: rgba(31, 79, 122, 0.12);
+    }
+    .app.report-mode .citation-settings-status.ok,
+    .app.theme-mode .citation-settings-status.ok {
+      color: #1f4f7a;
+    }
+    .app.report-mode .arxiv-countdown,
+    .app.theme-mode .arxiv-countdown {
+      border-color: rgba(31, 79, 122, 0.24);
+      background: #eef4fb;
+    }
+    .app.theme-mode .journal-toggle.theme-toggle.dragging,
+    .app.theme-mode .journal-tab.subject-tab.dragging {
+      background: #eef4fb;
+    }
+    .app.report-mode .preprint-collapse-toggle:hover {
+      border-color: rgba(31, 79, 122, 0.34);
+    }
+    .app.report-mode .journal-sidebar-filter .journal-toggle.active,
+    .app.report-mode .journal-sidebar-filter .preprint-category-toggle.active,
+    .app.report-mode #subjectFilters .subject-option.active {
+      background: transparent;
+      box-shadow: none;
+    }
+    .app.report-mode .journal-sidebar-filter .preprint-category-list {
+      border-left-color: rgba(95, 107, 124, 0.18);
+    }
+    .app.report-mode .journal-add-panel .smallbtn,
+    .app.theme-mode .journal-add-panel .smallbtn {
+      color: #1f4f7a;
+    }
+    .app.report-mode .journal-add-panel .smallbtn:hover,
+    .app.theme-mode .journal-add-panel .smallbtn:hover {
+      background: #dce8f5;
+      color: #1f4f7a;
+    }
+    .app.report-mode .view-switcher.keyboard-active .view-switch.active,
+    .app.theme-mode .view-switcher.keyboard-active .view-switch.active,
+    .app.report-mode .sidebar-view-switcher.keyboard-active .view-switch.active,
+    .app.theme-mode .sidebar-view-switcher.keyboard-active .view-switch.active {
+      color: #1f4f7a;
+      border-color: rgba(31, 79, 122, 0.68);
+      border-bottom-color: transparent;
+    }
+    .app.report-mode .sidebar-late-arrivals-head .late-dot,
+    .app.theme-mode .sidebar-late-arrivals-head .late-dot {
+      box-shadow: 0 0 0 2px rgba(31, 79, 122, 0.14);
+    }
+    .app.theme-mode .theme-chip.score {
+      color: #1f4f7a;
+      background: #e8eef6;
+      border-color: #b8cce2;
+    }
+
     /* Journal and Subject Monitor calendar. */
     .app.report-mode .monthbar,
     .app.theme-mode .monthbar {
-      gap: 6px;
+      display: grid !important;
+      min-height: 28px;
+      gap: 0;
+      margin: 0 0 2px;
+      background: #f2f2f2;
+      visibility: visible;
+      opacity: 1;
     }
     .app.report-mode .monthbar strong,
     .app.theme-mode .monthbar strong {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: 720;
       letter-spacing: 0.01em;
     }
     .app.report-mode .monthbar .iconbtn,
-    .app.theme-mode .monthbar .iconbtn,
-    .app.report-mode #jumpToday,
-    .app.theme-mode #jumpToday {
-      min-height: 34px;
+    .app.theme-mode .monthbar .iconbtn {
+      min-height: 28px;
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
@@ -27461,29 +27607,28 @@ INDEX_HTML = """<!doctype html>
       font-size: 14px;
     }
     .app.report-mode .monthbar .iconbtn:hover,
-    .app.theme-mode .monthbar .iconbtn:hover,
-    .app.report-mode #jumpToday:hover,
-    .app.theme-mode #jumpToday:hover {
+    .app.theme-mode .monthbar .iconbtn:hover {
       background: var(--flat-hover);
       color: var(--accent);
     }
     .app.report-mode .calendar,
     .app.theme-mode .calendar {
-      gap: 0;
+      gap: 2px;
       padding: 0;
-      overflow: hidden;
-      border: 1px solid #dfe5ea;
-      border-radius: 10px;
-      background: #fff;
+      margin-top: -6px;
+      overflow: visible;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
     }
     .app.report-mode .weekday,
     .app.theme-mode .weekday {
-      min-height: 31px;
-      padding: 8px 0 6px;
-      border-right: 1px solid #e5e9ed;
-      background: #f4f6f8;
+      min-height: 24px;
+      padding: 3px 0;
+      border-right: 0;
+      background: transparent;
       color: #667085;
-      font-size: 11.5px;
+      font-size: 11px;
       font-weight: 700;
     }
     .app.report-mode .weekday:nth-child(7),
@@ -27492,13 +27637,11 @@ INDEX_HTML = """<!doctype html>
     }
     .app.report-mode .day,
     .app.theme-mode .day {
-      min-height: 52px;
+      min-height: 44px;
       border: 0;
-      border-top: 1px solid #e5e9ed;
-      border-right: 1px solid #e5e9ed;
-      border-radius: 0;
-      padding: 7px 8px 6px;
-      background: #fff;
+      border-radius: 6px;
+      padding: 5px 7px 4px;
+      background: transparent;
       box-shadow: none;
       transition: none;
     }
@@ -27510,9 +27653,9 @@ INDEX_HTML = """<!doctype html>
     }
     .app.report-mode .day.keyboard-current:not(.active),
     .app.theme-mode .day.keyboard-current:not(.active) {
-      background: #eef6f5;
-      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.58);
-      color: #075b5e;
+      background: #e3e5e7;
+      box-shadow: none;
+      color: #394555;
     }
     .app.report-mode .day:nth-child(7n),
     .app.theme-mode .day:nth-child(7n) {
@@ -27520,26 +27663,26 @@ INDEX_HTML = """<!doctype html>
     }
     .app.report-mode .day:not(.out):not(:disabled):hover,
     .app.theme-mode .day:not(.out):not(:disabled):hover {
-      background: #eef6f5;
+      background: #e3e5e7;
     }
     .app.report-mode .day.out,
     .app.theme-mode .day.out,
     .app.report-mode .day.future,
     .app.theme-mode .day.future {
-      background: #fafbfc;
+      background: transparent;
       color: #b4bbc5;
     }
     .app.report-mode .day.active,
     .app.theme-mode .day.active {
       border: 0;
-      background: #dfeeed;
-      box-shadow: inset 0 0 0 2px rgba(15, 107, 110, 0.72);
-      color: #075b5e;
+      background: #d9dddf;
+      box-shadow: none;
+      color: #263241;
     }
     .app.report-mode .day.fetching,
     .app.theme-mode .day.fetching {
       border: 0;
-      background: #edf7f2;
+      background: #e8eaec;
     }
     .app.report-mode .day.today::after,
     .app.theme-mode .day.today::after {
@@ -27569,39 +27712,42 @@ INDEX_HTML = """<!doctype html>
     /* Journal and Subject tabs stay visually distinct without returning to heavy boxes. */
     .app.report-mode .report-tabs,
     .app.theme-mode .report-tabs {
-      gap: 8px;
+      gap: 0;
       align-items: stretch;
-      padding: 1px 2px 10px;
-      margin: -8px -2px 12px;
-      border-bottom: 0;
+      padding: 0 0 8px;
+      margin: -8px 0 12px;
+      border-bottom: 1px solid rgba(95, 107, 124, 0.16);
     }
     .app.report-mode .journal-tab,
     .app.theme-mode .journal-tab {
-      min-width: 104px;
-      min-height: 48px;
-      border: 1px solid #d7dde4;
-      border-radius: 8px;
-      padding: 8px 11px;
-      background: #e9edf1;
-      box-shadow: inset 0 -2px 0 rgba(95, 107, 124, 0.08);
-      transition: border-color 110ms ease, background 110ms ease, box-shadow 110ms ease, color 110ms ease;
+      min-width: 0;
+      min-height: 34px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 4px 12px 6px;
+      background: transparent;
+      box-shadow: none;
+      transition: none;
     }
     .app.report-mode .journal-tab:hover,
     .app.theme-mode .journal-tab:hover {
-      border-color: rgba(15, 107, 110, 0.18);
-      background: #edf3f2;
+      border-color: transparent;
+      background: transparent;
     }
     .app.report-mode .journal-tab.active,
     .app.theme-mode .journal-tab.active {
-      border: 1px solid rgba(15, 107, 110, 0.42);
-      background: #f7fcfb;
-      box-shadow: inset 0 -3px 0 var(--accent), 0 1px 3px rgba(31, 41, 55, 0.08);
-      color: #075b5e;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      box-shadow: inset 0 0 0 2px #1f5b94;
+      color: #1f2328;
+      font-weight: 720;
     }
     .app.report-mode .journal-tab img,
     .app.theme-mode .journal-tab img {
-      max-width: 142px;
-      max-height: 20px;
+      max-width: 132px;
+      max-height: 18px;
     }
     .app.report-mode .journal-tab-label,
     .app.theme-mode .journal-tab-label {
@@ -27626,8 +27772,8 @@ INDEX_HTML = """<!doctype html>
       color: #687386;
     }
     .app.theme-mode .journal-tab.subject-add-tab:hover {
-      border-color: rgba(15, 107, 110, 0.24);
-      background: #edf3f2;
+      border-color: rgba(31, 79, 122, 0.24);
+      background: #eef2f6;
       color: var(--accent);
     }
 
@@ -27690,60 +27836,128 @@ INDEX_HTML = """<!doctype html>
     /* Monitor papers use light cards: distinct enough to scan, still visually flat. */
     .app.report-mode .papers,
     .app.theme-mode .papers {
-      gap: 10px;
-      padding: 2px 7px 12px 2px;
+      gap: 0;
+      padding: 0 2px 12px 0;
       border-top: 0;
       background: transparent;
     }
     .app.report-mode .paper,
     .app.theme-mode .paper {
-      border: 1px solid #dfe5ea;
-      border-radius: 9px;
-      padding: 15px 13px;
-      background: #fff;
-      box-shadow: 0 1px 2px rgba(31, 41, 55, 0.035);
-      transition: border-color 110ms ease, background 110ms ease, box-shadow 110ms ease;
+      border: 0;
+      border-bottom: 1px solid rgba(95, 107, 124, 0.20);
+      border-radius: 0;
+      padding: 9px 14px;
+      background: transparent;
+      box-shadow: none;
+      transition: none;
     }
     .app.report-mode .paper:hover,
     .app.theme-mode .paper:hover {
-      border-color: rgba(15, 107, 110, 0.3);
-      background: #fff;
-      box-shadow: 0 3px 12px rgba(31, 41, 55, 0.075);
+      border-color: transparent;
+      border-bottom-color: rgba(95, 107, 124, 0.20);
+      background: transparent;
+      box-shadow: none;
     }
     .app.report-mode .paper.in-library,
     .app.theme-mode .paper.in-library {
-      background: #fbfcff;
-      box-shadow: inset 3px 0 0 rgba(91, 107, 138, 0.48), 0 1px 2px rgba(31, 41, 55, 0.035);
+      background: transparent;
+      box-shadow: none;
     }
     .app.report-mode .paper.in-library:hover,
     .app.theme-mode .paper.in-library:hover {
-      border-color: rgba(91, 107, 138, 0.28);
-      background: #f8faff;
-      box-shadow: inset 3px 0 0 rgba(91, 107, 138, 0.62), 0 3px 12px rgba(31, 41, 55, 0.07);
+      border-color: transparent;
+      border-bottom-color: rgba(95, 107, 124, 0.20);
+      background: transparent;
+      box-shadow: none;
     }
     .app.report-mode .paper.report-selected,
     .app.theme-mode .paper.report-selected {
-      border: 1px solid rgba(15, 107, 110, 0.52);
-      padding: 15px 13px;
-      background: #f5fbfa;
-      box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(15, 107, 110, 0.09);
+      border: 0;
+      border-bottom: 1px solid rgba(95, 107, 124, 0.20);
+      padding: 9px 14px;
+      background: transparent;
+      box-shadow: inset 0 0 0 2px #1f5b94;
     }
     .app.report-mode .paper.in-library.report-selected,
     .app.theme-mode .paper.in-library.report-selected {
-      box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(15, 107, 110, 0.09);
+      box-shadow: inset 0 0 0 2px #1f5b94;
+    }
+    .app.report-mode .paper.report-selected:hover,
+    .app.theme-mode .paper.report-selected:hover,
+    .app.report-mode .paper.in-library.report-selected:hover,
+    .app.theme-mode .paper.in-library.report-selected:hover {
+      background: transparent;
+      box-shadow: inset 0 0 0 2px #1f5b94;
     }
     .app.report-mode .paper .journal-name,
     .app.theme-mode .paper .journal-name {
-      border-radius: 4px;
-      padding: 2px 6px;
-      background: #e8f3f2;
-      color: #075b5e;
+      padding: 0;
+      background: transparent;
+      color: #667085;
+      font-weight: 400;
       font-size: 12px;
       line-height: 1.35;
     }
+    .app.report-mode .paper-layout,
+    .app.theme-mode .paper-layout {
+      gap: 8px;
+    }
+    .app.report-mode .paper.with-figure .paper-layout,
+    .app.theme-mode .paper.with-figure .paper-layout {
+      grid-template-columns: minmax(0, 1fr) minmax(120px, 176px);
+    }
+    .app.report-mode .paper.with-figure .paper-main,
+    .app.theme-mode .paper.with-figure .paper-main {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .app.report-mode .paper.with-figure .paper-figure,
+    .app.theme-mode .paper.with-figure .paper-figure {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .app.report-mode .paper-title-row,
+    .app.theme-mode .paper-title-row {
+      gap: 6px;
+    }
+    .app.report-mode .paper h3,
+    .app.theme-mode .paper h3 {
+      font-size: 17px;
+      line-height: 1.22;
+    }
+    .app.report-mode .paper .meta,
+    .app.theme-mode .paper .meta {
+      gap: 8px;
+      margin-top: 3px;
+      font-size: 12px;
+    }
+    .app.report-mode .paper .authors,
+    .app.theme-mode .paper .authors {
+      margin-top: 3px;
+      color: #1f2328;
+      font-size: 12.5px;
+      line-height: 1.32;
+    }
+    .app.report-mode .paper .author-label,
+    .app.theme-mode .paper .author-label,
+    .app.report-mode .paper .report-author.last-author,
+    .app.theme-mode .paper .report-author.last-author {
+      color: #1f2328;
+    }
+    .app.report-mode .paper .report-author.last-author,
+    .app.theme-mode .paper .report-author.last-author {
+      text-decoration-color: #1f2328;
+    }
+    .app.report-mode .paper .abstract,
+    .app.theme-mode .paper .abstract {
+      margin-top: 5px;
+      color: #1f2328;
+      font-size: 12.5px;
+      line-height: 1.38;
+    }
     .app.report-mode .paper.with-figure:has(.paper-figure.missing) .paper-layout,
     .app.theme-mode .paper.with-figure:has(.paper-figure.missing) .paper-layout {
-      grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) minmax(120px, 176px);
     }
     .app.report-mode .paper-figure.missing,
     .app.theme-mode .paper-figure.missing {
@@ -27768,7 +27982,7 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .paper .actions,
     .app.theme-mode .paper .actions {
       gap: 4px;
-      margin-top: 11px;
+      margin-top: 6px;
     }
     .app.report-mode .paper .action,
     .app.theme-mode .paper .action {
@@ -27788,8 +28002,22 @@ INDEX_HTML = """<!doctype html>
     }
     .app.report-mode .paper .action.primary,
     .app.theme-mode .paper .action.primary {
-      background: #e2f1ef;
-      color: #075b5e;
+      border: 1px solid #1f5b94;
+      background: transparent;
+      color: #1f5b94;
+    }
+    .app.report-mode .paper-badges .badge,
+    .app.report-mode .paper-badges .field-badge,
+    .app.theme-mode .paper-badges .badge,
+    .app.theme-mode .paper-badges .field-badge {
+      min-height: 21px;
+      border-color: #e1e5ea;
+      border-width: 0;
+      border-radius: 4px;
+      padding: 2px 6px;
+      background: #f1f3f5 !important;
+      color: #344054 !important;
+      font-size: 10.5px;
     }
     .app.report-mode .paper .action.danger,
     .app.theme-mode .paper .action.danger {
@@ -28244,7 +28472,6 @@ INDEX_HTML = """<!doctype html>
         <button class="iconbtn" id="nextMonth" title="Next month">›</button>
       </div>
       <div class="calendar" id="calendar"></div>
-      <button class="smallbtn" id="jumpToday">Today</button>
       <div class="monitor-sidebar-summary" id="monitorSidebarSummary" aria-live="polite"></div>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
@@ -32072,18 +32299,19 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       options.forEach(([value, label]) => {
         const count = state.papers.filter((paper) => paperMatchesField(paper, value)).length;
-        const button = document.createElement("button");
-        button.className = `subject-option${fieldIsActive(value) ? " active" : ""}`;
-        button.setAttribute("aria-pressed", fieldIsActive(value) ? "true" : "false");
-        button.innerHTML = `<span>${escapeHtml(label)}</span><b>${count}</b>`;
-        button.addEventListener("click", () => {
+        const option = document.createElement("label");
+        const selected = fieldIsActive(value);
+        option.className = `subject-option${selected ? " active" : ""}`;
+        option.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>
+          <span>${escapeHtml(label)}</span><b>${count}</b>`;
+        option.querySelector("input").addEventListener("change", () => {
           toggleFieldFilter(value);
           state.noMatchDates = new Set();
           renderSubjectFilters();
           renderFilters();
           renderReport();
         });
-        root.appendChild(button);
+        root.appendChild(option);
       });
     }
 
@@ -44228,9 +44456,6 @@ INDEX_HTML = """<!doctype html>
         .map((field) => `<span class="field-badge">${escapeHtml(FIELD_LABELS[field] || field)}</span>`)
         .join("");
       const themeMeta = state.mode === "theme" ? themePaperMetaMarkup(paper) : "";
-      const analysisStatusText = paper.analysis_status && paper.analysis_status !== "not_started"
-        ? ` · Analysis: ${escapeHtml(paper.analysis_status)}`
-        : "";
       article.innerHTML = `
         <div class="paper-layout">
           ${reserveFigure ? reportFigureMarkup(paper) : ""}
@@ -44264,9 +44489,7 @@ INDEX_HTML = """<!doctype html>
               ${paper.merged_pdf_path ? `<button class="action danger" data-action="delete-pdf" title="Delete local PDF and reset download status">Delete PDF</button>` : ""}
               ${paper.analysis_path ? `<button class="action" data-action="view-analysis" title="Show analysis">Note</button>` : ""}
               ${paper.analysis_path ? `<button class="action danger" data-action="delete-analysis" title="Delete analysis note and reset analysis status">Delete Note</button>` : ""}
-              <span class="status ${statusClass(paper.download_status)}" data-role="status">
-                Download: ${escapeHtml(paper.download_status)}${analysisStatusText}
-              </span>
+              <span class="status" data-role="status"></span>
             </div>
           </div>
         </div>
@@ -44723,7 +44946,7 @@ INDEX_HTML = """<!doctype html>
     function authorLineMarkup(paper) {
       const authors = Array.isArray(paper.authors) ? paper.authors : [];
       if (!authors.length) {
-        return `<span class="author-label">Authors</span><span class="author-names">Unavailable</span>`;
+        return `<span class="author-names">Unavailable</span>`;
       }
       let lastAuthorIndex = authors.length - 1;
       while (lastAuthorIndex >= 0 && String(authors[lastAuthorIndex] || "").trim() === "…") lastAuthorIndex -= 1;
@@ -44731,7 +44954,7 @@ INDEX_HTML = """<!doctype html>
         const classes = `report-author${index === lastAuthorIndex ? " last-author" : ""}`;
         return `<span class="${classes}">${escapeHtml(author)}</span>`;
       }).join(`<span class="author-separator">, </span>`);
-      return `<span class="author-label">Authors</span><span class="author-names">${names}</span>`;
+      return `<span class="author-names">${names}</span>`;
     }
 
     function wireManualPdfDrop(article, dropZone, paperId) {
@@ -45488,18 +45711,6 @@ INDEX_HTML = """<!doctype html>
       shiftCalendarMonthForActiveMode(1);
       renderCalendar();
       await loadMonth().catch((error) => handleMonthLoadFailure(error));
-    });
-    $("jumpToday").addEventListener("click", async () => {
-      const now = new Date();
-      setCalendarDateForActiveMode(localIsoDate(now));
-      state.activeReportJournal = "";
-      state.viewYear = Number(state.selectedDate.slice(0, 4));
-      state.viewMonth = Number(state.selectedDate.slice(5, 7));
-      rememberCalendarState();
-      renderCalendar();
-      await loadMonth().catch((error) => handleMonthLoadFailure(error));
-      if (state.mode === "theme") await loadThemeReportForDate(state.selectedDate).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
-      else await loadReport().catch((error) => handleReportLoadFailure(error));
     });
     function openThemeGroupDialog(group = null) {
       const backdrop = $("themeGroupBackdrop");
