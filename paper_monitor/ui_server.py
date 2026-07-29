@@ -27479,6 +27479,15 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .report-column {
       background: #fff;
     }
+    .app.report-mode .main,
+    .app.theme-mode .main {
+      padding-left: 25px;
+      padding-right: 25px;
+    }
+    .app.report-mode .report-column,
+    .app.theme-mode .report-column {
+      padding-right: 0;
+    }
     .app.report-mode .brand,
     .app.theme-mode .brand {
       display: none;
@@ -27837,7 +27846,7 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .papers,
     .app.theme-mode .papers {
       gap: 0;
-      padding: 0 2px 12px 0;
+      padding: 0 0 12px;
       border-top: 0;
       background: transparent;
     }
