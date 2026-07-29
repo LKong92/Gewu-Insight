@@ -27874,6 +27874,7 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .paper.report-selected {
       border: 0;
       border-bottom: 1px solid rgba(95, 107, 124, 0.20);
+      border-radius: 5px;
       padding: 9px 14px;
       background: transparent;
       box-shadow: inset 0 0 0 2px #1f5b94;
