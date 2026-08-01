@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 4
+STORAGE_SCHEMA_VERSION = 5
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -187,6 +187,30 @@ CREATE TABLE IF NOT EXISTS theme_candidates (
 
 CREATE INDEX IF NOT EXISTS idx_theme_candidates_window
 ON theme_candidates(window_start, window_end, source);
+
+CREATE TABLE IF NOT EXISTS aps_rss_feeds (
+  journal_slug TEXT PRIMARY KEY,
+  journal_name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'never',
+  entry_count INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at TEXT,
+  success_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS aps_rss_entries (
+  journal_slug TEXT NOT NULL REFERENCES aps_rss_feeds(journal_slug) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  publication_date TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (journal_slug, paper_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_aps_rss_entries_date
+ON aps_rss_entries(publication_date, journal_slug);
 
 CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -694,7 +718,13 @@ class Storage:
     def close(self) -> None:
         self.conn.close()
 
-    def upsert_paper(self, paper: dict[str, Any], *, replace_bibliographic_metadata: bool = False) -> None:
+    def upsert_paper(
+        self,
+        paper: dict[str, Any],
+        *,
+        replace_bibliographic_metadata: bool = False,
+        commit: bool = True,
+    ) -> None:
         existing = self.get_paper(paper["paper_id"])
         timestamp = now_iso()
         payload = dict(paper)
@@ -739,7 +769,7 @@ class Storage:
                     merged[key] = value
             merged["source_count"] = int(existing["source_count"] or 1) + 1
             merged["last_seen_at"] = timestamp
-            self._update_paper(merged)
+            self._update_paper(merged, commit=commit)
             return
 
         columns = [
@@ -769,9 +799,82 @@ class Storage:
             f"INSERT INTO papers ({', '.join(columns)}) VALUES ({placeholders})",
             values,
         )
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
-    def _update_paper(self, paper: dict[str, Any]) -> None:
+    def merge_paper_missing_metadata(
+        self,
+        paper: dict[str, Any],
+        *,
+        source_name: str,
+        commit: bool = True,
+    ) -> bool:
+        """Insert a paper or fill blanks without treating every cache refresh as a new source sighting."""
+        existing = self.get_paper(str(paper.get("paper_id") or ""))
+        if not existing:
+            self.upsert_paper(paper, commit=commit)
+            return True
+
+        merged = dict(existing)
+        for key in [
+            "doi",
+            "title",
+            "journal",
+            "publication_date",
+            "abstract",
+            "abstract_source",
+            "url",
+            "landing_url",
+            "pdf_url",
+            "type",
+            "type_crossref",
+            "publisher_section",
+            "section_allowed",
+            "image_url",
+        ]:
+            value = paper.get(key)
+            if value not in (None, "") and _is_blank_existing(key, merged.get(key)):
+                merged[key] = _bool_to_int(value) if key == "section_allowed" else value
+
+        try:
+            existing_raw = json.loads(str(existing.get("raw_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            existing_raw = {}
+        if not isinstance(existing_raw, dict):
+            existing_raw = {}
+        incoming_raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+        if not existing_raw:
+            existing_raw = dict(incoming_raw)
+        else:
+            for key in ["author", "volume", "issue", "page", "article-number", "aps_rss"]:
+                if key not in existing_raw and incoming_raw.get(key) not in (None, "", [], {}):
+                    existing_raw[key] = incoming_raw[key]
+
+        source_tokens = [
+            token
+            for token in str(existing.get("source") or "").split("+")
+            if token
+        ]
+        raw_sources = existing_raw.get("_paper_monitor_sources")
+        if isinstance(raw_sources, list):
+            source_tokens.extend(str(token) for token in raw_sources if str(token))
+        source_name = str(source_name or "")
+        is_new_source = bool(source_name and source_name not in source_tokens)
+        if source_name:
+            source_tokens.append(source_name)
+        source_tokens = list(dict.fromkeys(source_tokens))
+        if source_tokens:
+            existing_raw["_paper_monitor_sources"] = source_tokens
+        if not str(merged.get("source") or "") and source_name:
+            merged["source"] = source_name
+        if is_new_source:
+            merged["source_count"] = int(existing.get("source_count") or 1) + 1
+        merged["raw_json"] = json.dumps(existing_raw, ensure_ascii=False)
+        merged["last_seen_at"] = now_iso()
+        self._update_paper(merged, commit=commit)
+        return False
+
+    def _update_paper(self, paper: dict[str, Any], *, commit: bool = True) -> None:
         columns = [
             "doi",
             "title",
@@ -796,7 +899,8 @@ class Storage:
         values = [paper.get(column) for column in columns]
         values.append(paper["paper_id"])
         self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.get_paper(paper_id)
@@ -1125,6 +1229,142 @@ class Storage:
             rows,
         )
         self.conn.commit()
+
+    def get_aps_rss_feed(self, journal_slug: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM aps_rss_feeds WHERE journal_slug = ?",
+            (str(journal_slug),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def record_aps_rss_feed(
+        self,
+        *,
+        journal_slug: str,
+        journal_name: str,
+        status: str,
+        entry_count: int,
+        message: str = "",
+        etag: str = "",
+        last_modified: str = "",
+        success: bool = False,
+    ) -> None:
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO aps_rss_feeds (
+              journal_slug, journal_name, status, entry_count, message,
+              etag, last_modified, checked_at, success_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(journal_slug) DO UPDATE SET
+              journal_name = excluded.journal_name,
+              status = excluded.status,
+              entry_count = excluded.entry_count,
+              message = excluded.message,
+              etag = CASE WHEN excluded.etag != '' THEN excluded.etag ELSE aps_rss_feeds.etag END,
+              last_modified = CASE
+                WHEN excluded.last_modified != '' THEN excluded.last_modified
+                ELSE aps_rss_feeds.last_modified
+              END,
+              checked_at = excluded.checked_at,
+              success_at = CASE
+                WHEN excluded.success_at IS NOT NULL THEN excluded.success_at
+                ELSE aps_rss_feeds.success_at
+              END
+            """,
+            (
+                str(journal_slug),
+                str(journal_name),
+                str(status),
+                max(0, int(entry_count or 0)),
+                str(message or ""),
+                str(etag or ""),
+                str(last_modified or ""),
+                timestamp,
+                timestamp if success else None,
+            ),
+        )
+        self.conn.commit()
+
+    def record_aps_rss_entries(self, journal_slug: str, papers: Iterable[dict[str, Any]]) -> None:
+        timestamp = now_iso()
+        rows = [
+            (
+                str(journal_slug),
+                str(paper.get("paper_id") or ""),
+                str(paper.get("publication_date") or "")[:10],
+                timestamp,
+                timestamp,
+            )
+            for paper in papers
+            if paper.get("paper_id") and paper.get("publication_date")
+        ]
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO aps_rss_entries (
+              journal_slug, paper_id, publication_date, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(journal_slug, paper_id) DO UPDATE SET
+              publication_date = excluded.publication_date,
+              last_seen_at = excluded.last_seen_at
+            """,
+            rows,
+        )
+        self.conn.commit()
+
+    def list_aps_rss_papers(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        journal_slugs: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = [
+            "aps_rss_entries.publication_date >= ?",
+            "aps_rss_entries.publication_date <= ?",
+            "(papers.section_allowed IS NULL OR papers.section_allowed != 0)",
+        ]
+        params: list[Any] = [str(start_date), str(end_date)]
+        slugs = [str(slug) for slug in (journal_slugs or []) if str(slug)]
+        if journal_slugs is not None and not slugs:
+            return []
+        if slugs:
+            placeholders = ", ".join(["?"] * len(slugs))
+            clauses.append(f"aps_rss_entries.journal_slug IN ({placeholders})")
+            params.extend(slugs)
+        rows = self.conn.execute(
+            f"""
+            SELECT papers.*, aps_rss_entries.journal_slug AS aps_rss_journal_slug
+            FROM aps_rss_entries
+            JOIN papers ON papers.paper_id = aps_rss_entries.paper_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def aps_rss_abstracts(self, journal_slug: str) -> dict[str, str]:
+        rows = self.conn.execute(
+            """
+            SELECT papers.doi, papers.abstract
+            FROM aps_rss_entries
+            JOIN papers ON papers.paper_id = aps_rss_entries.paper_id
+            WHERE aps_rss_entries.journal_slug = ?
+              AND papers.doi IS NOT NULL
+              AND papers.doi != ''
+              AND papers.abstract IS NOT NULL
+              AND papers.abstract != ''
+            """,
+            (str(journal_slug),),
+        ).fetchall()
+        return {
+            str(row["doi"] or "").lower(): str(row["abstract"] or "")
+            for row in rows
+            if row["doi"] and row["abstract"]
+        }
 
     def list_theme_candidates(
         self,

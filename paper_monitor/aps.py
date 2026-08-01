@@ -3,15 +3,81 @@ from __future__ import annotations
 from typing import Any
 
 
+APS_JOURNAL_SLUGS = {
+    "aps open science": "apsos",
+    "apsos": "apsos",
+    "physical review a": "pra",
+    "pra": "pra",
+    "physical review b": "prb",
+    "prb": "prb",
+    "physical review c": "prc",
+    "prc": "prc",
+    "physical review d": "prd",
+    "prd": "prd",
+    "physical review e": "pre",
+    "pre": "pre",
+    "physical review accelerators and beams": "prstab",
+    "physical review special topics - accelerators and beams": "prstab",
+    "physical review special topics—accelerators and beams": "prstab",
+    "prab": "prstab",
+    "physical review applied": "prapplied",
+    "pr applied": "prapplied",
+    "physical review fluids": "prfluids",
+    "pr fluids": "prfluids",
+    "physical review letters": "prl",
+    "prl": "prl",
+    "physical review materials": "prmaterials",
+    "pr materials": "prmaterials",
+    "physical review physics education research": "prstper",
+    "prper": "prstper",
+    "physical review research": "prresearch",
+    "pr research": "prresearch",
+    "physical review x": "prx",
+    "prx": "prx",
+    "prx energy": "prxenergy",
+    "prx intelligence": "prxintelligence",
+    "prx life": "prxlife",
+    "prx quantum": "prxquantum",
+    "reviews of modern physics": "rmp",
+    "review of modern physics": "rmp",
+    "rmp": "rmp",
+}
+
+APS_CANONICAL_NAMES_BY_SLUG = {
+    "apsos": "APS Open Science",
+    "pra": "Physical Review A",
+    "prb": "Physical Review B",
+    "prc": "Physical Review C",
+    "prd": "Physical Review D",
+    "pre": "Physical Review E",
+    "prstab": "Physical Review Accelerators and Beams",
+    "prapplied": "Physical Review Applied",
+    "prfluids": "Physical Review Fluids",
+    "prl": "Physical Review Letters",
+    "prmaterials": "Physical Review Materials",
+    "prstper": "Physical Review Physics Education Research",
+    "prresearch": "Physical Review Research",
+    "prx": "Physical Review X",
+    "prxenergy": "PRX Energy",
+    "prxintelligence": "PRX Intelligence",
+    "prxlife": "PRX Life",
+    "prxquantum": "PRX Quantum",
+    "rmp": "Reviews of Modern Physics",
+}
+
+# Retain the historical public mapping used by SQLite migrations.
 APS_MONITORED_JOURNALS = {
-    "physical review letters": "Physical Review Letters",
-    "physical review x": "Physical Review X",
-    "reviews of modern physics": "Reviews of Modern Physics",
+    name: APS_CANONICAL_NAMES_BY_SLUG[slug]
+    for name, slug in APS_JOURNAL_SLUGS.items()
 }
 
 
 def is_aps_lifecycle_journal(journal_name: Any) -> bool:
     return str(journal_name or "").strip().casefold() in APS_MONITORED_JOURNALS
+
+
+def aps_journal_slug(journal_name: Any) -> str:
+    return APS_JOURNAL_SLUGS.get(str(journal_name or "").strip().casefold(), "")
 
 
 def is_aps_version_of_record(raw: dict[str, Any] | None) -> bool:

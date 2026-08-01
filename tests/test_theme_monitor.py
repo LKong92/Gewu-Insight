@@ -405,6 +405,85 @@ class ThemeMonitorTest(unittest.TestCase):
         finally:
             ui_server.theme_source_fetchers = original_fetchers
 
+    def test_local_aps_rss_augments_existing_online_subject_sources(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 8, 1)
+        groups = {"quantum": {"name": "Quantum Materials", "queries": ["quantum materials"]}}
+        calls = []
+
+        def online_source(query, start_date, end_date):
+            calls.append(query)
+            return [
+                {
+                    "paper_id": "doi_online_subject",
+                    "doi": "10.1000/online-subject",
+                    "title": "An online quantum materials result",
+                    "journal": "Online Journal",
+                    "publication_date": selected.isoformat(),
+                    "abstract": "Quantum materials from the existing online source.",
+                    "url": "https://doi.org/10.1000/online-subject",
+                    "source": "online_source",
+                    "type": "journal-article",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                    "raw": {"type": "journal-article"},
+                }
+            ]
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("online_source", online_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    local = {
+                        "paper_id": "doi_aps_subject",
+                        "doi": "10.1103/aps-subject",
+                        "title": "A local APS RSS quantum materials result",
+                        "journal": "Physical Review Materials",
+                        "publication_date": selected.isoformat(),
+                        "abstract": "Quantum materials from the shared APS RSS cache.",
+                        "url": "https://doi.org/10.1103/aps-subject",
+                        "source": "aps_rss",
+                        "type": "journal-article",
+                        "type_crossref": "journal-article",
+                        "publisher_section": "published",
+                        "section_allowed": True,
+                        "raw": {"type": "journal-article", "_paper_monitor_sources": ["aps_rss"]},
+                    }
+                    storage.record_aps_rss_feed(
+                        journal_slug="prmaterials",
+                        journal_name="Physical Review Materials",
+                        status="success",
+                        entry_count=1,
+                        success=True,
+                    )
+                    storage.upsert_paper(local)
+                    storage.record_aps_rss_entries("prmaterials", [local])
+
+                    result = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["quantum"],
+                        theme_groups=groups,
+                    )
+
+                    self.assertEqual(calls, ["quantum materials"])
+                    self.assertEqual(result["source_counts"]["local_aps_rss"], 1)
+                    self.assertEqual(result["source_counts"]["online_source"], 1)
+                    papers = storage.list_theme_papers(
+                        window_start=selected.isoformat(),
+                        window_end=selected.isoformat(),
+                        group_keys=["quantum"],
+                    )
+                    self.assertEqual({paper["paper_id"] for paper in papers}, {"doi_aps_subject", "doi_online_subject"})
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
     def test_network_query_plan_is_bounded_and_does_not_expand_surface_variants(self):
         import paper_monitor.ui_server as ui_server
 

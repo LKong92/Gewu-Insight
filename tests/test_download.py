@@ -194,6 +194,23 @@ class DownloadCandidateTests(unittest.TestCase):
             ],
         )
 
+    def test_physical_review_materials_uses_its_aps_pdf_routes(self):
+        candidates = download.journal_pdf_candidates(
+            {
+                "doi": "10.1103/example-token",
+                "journal": "Physical Review Materials",
+            }
+        )
+
+        self.assertEqual(
+            candidates,
+            [
+                "https://harvest.aps.org/v2/journals/articles/10.1103/example-token/fulltext",
+                "https://journals.aps.org/prmaterials/pdf/10.1103/example-token",
+                "https://link.aps.org/pdf/10.1103/example-token",
+            ],
+        )
+
     def test_europe_pmc_returns_only_exact_open_pdf_match(self):
         response = SimpleNamespace(
             json=lambda: {

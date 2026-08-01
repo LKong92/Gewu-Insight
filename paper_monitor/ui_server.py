@@ -86,7 +86,12 @@ from .sources.openalex import (
     search_openalex_works,
     test_openalex_api_key,
 )
-from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
+from .sources.publisher import (
+    APS_RSS_SUBJECT_CACHE_SECONDS,
+    enrich_from_landing_page,
+    enrich_image_from_landing_page,
+    sync_aps_rss_feeds,
+)
 from .storage import Storage
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
 from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
@@ -4128,6 +4133,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                         group_keys=missing_group_keys,
                         theme_groups=theme_groups,
                         trigger="manual" if force_fetch else "on_demand",
+                        refresh_aps_rss=True,
                     )
                     fetched = True
                 finally:
@@ -4176,6 +4182,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 group_keys=group_keys,
                 theme_groups=theme_groups,
                 trigger="manual_search",
+                refresh_aps_rss=True,
             )
             papers = storage.list_theme_papers(
                 window_start=start_date.isoformat(),
@@ -4276,11 +4283,8 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not name:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
             return
-        if not issns:
-            preset = JOURNAL_PRESETS.get(name.lower())
-            if preset:
-                issns = list(preset["issns"])
         preset = JOURNAL_PRESETS.get(name.lower(), {})
+        issns = journal_issns_for_add(name, issns)
         openalex_source_id = preset.get("openalex_source_id")
         if not issns and not openalex_source_id:
             resolved = resolve_journal_metadata(name)
@@ -4302,7 +4306,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if any(item.get("name", "").lower() == name.lower() for item in journals):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
             return
-        resolved_name = clean_journal_name(str(resolved.get("name") or name))
+        resolved_name = canonical_journal_name_for_add(name, str(resolved.get("name") or ""))
         if resolved_name.lower() != name.lower() and any(item.get("name", "").lower() == resolved_name.lower() for item in journals):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
             return
@@ -5608,6 +5612,7 @@ def run_theme_monitor(
     theme_groups: dict[str, dict[str, Any]] | None = None,
     retry_tasks_by_group: dict[str, list[dict[str, str]]] | None = None,
     trigger: str = "manual",
+    refresh_aps_rss: bool = False,
 ) -> dict[str, Any]:
     """Build a shared candidate pool, then match every selected Subject locally."""
     window_start = start_date.isoformat()
@@ -5658,7 +5663,7 @@ def run_theme_monitor(
                             if any(clean_text(item.get("query") or "") == query for item in tasks or [])
                         },
                     )
-    source_totals = {group_key: 1 + len(source_fetchers) for group_key in group_keys}
+    source_totals = {group_key: 2 + len(source_fetchers) for group_key in group_keys}
     if progress_date:
         start_theme_fetch_progress(progress_date, group_keys, groups, source_totals)
         for group_key in group_keys:
@@ -5698,7 +5703,36 @@ def run_theme_monitor(
                 query="local arXiv",
             )
 
-        for source_index, (source_name, fetcher) in enumerate(source_fetchers, start=1):
+        if progress_date:
+            for group_key in group_keys:
+                update_theme_fetch_progress(
+                    progress_date,
+                    group_key,
+                    status="running",
+                    current_source="local_aps_rss",
+                    source_completed=1,
+                    source_total=source_totals[group_key],
+                )
+        local_aps_rss, local_aps_rss_status, local_aps_rss_message = local_aps_rss_theme_candidates(
+            storage,
+            start_date=start_date,
+            end_date=end_date,
+            refresh=refresh_aps_rss,
+        )
+        summary["source_counts"]["local_aps_rss"] = len(local_aps_rss)
+        summary["source_statuses"]["local_aps_rss"] = local_aps_rss_status
+        summary["raw_results"] += len(local_aps_rss)
+        for paper in local_aps_rss:
+            add_theme_candidate(
+                candidates,
+                candidate_sources,
+                candidate_queries,
+                paper,
+                source_name="local_aps_rss",
+                query="local APS RSS",
+            )
+
+        for source_index, (source_name, fetcher) in enumerate(source_fetchers, start=2):
             relevant_queries = [
                 query
                 for query in query_plan
@@ -5776,7 +5810,7 @@ def run_theme_monitor(
         candidate_rows: list[dict[str, str]] = []
         for merge_key, paper in candidates.items():
             sources = candidate_sources.get(merge_key, set())
-            if "local_arxiv" not in sources:
+            if not sources.intersection({"local_arxiv", "local_aps_rss"}):
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
                 storage.upsert_paper(paper)
@@ -5788,7 +5822,7 @@ def run_theme_monitor(
                         "window_start": window_start,
                         "window_end": window_end,
                         "query_plan_hash": plan_hash
-                        if source_name == "local_arxiv"
+                        if source_name in {"local_arxiv", "local_aps_rss"}
                         else source_plan_hashes.get(source_name, theme_source_plan_hash(source_name, start_date, end_date, query_plan)),
                     }
                 )
@@ -5807,9 +5841,14 @@ def run_theme_monitor(
             )
             group_errors: list[str] = []
             failed_tasks: list[dict[str, str]] = []
-            source_statuses = {"local_arxiv": local_arxiv_status}
+            source_statuses = {
+                "local_arxiv": local_arxiv_status,
+                "local_aps_rss": local_aps_rss_status,
+            }
             if local_arxiv_message:
                 group_errors.append(local_arxiv_message)
+            if local_aps_rss_message:
+                group_errors.append(local_aps_rss_message)
             group_queries = [query for query in query_plan if group_key in query_groups.get(query, set())]
             for source_name, _fetcher in source_fetchers:
                 if retry_tasks_by_group is not None and source_name not in retry_sources_by_group.get(group_key, set()):
@@ -6223,6 +6262,37 @@ def local_arxiv_theme_candidates(
     if status in {"success", "empty"}:
         return [], "empty", ""
     return [], "error", clean_text(row["message"] or "Local arXiv update failed.")
+
+
+def local_aps_rss_theme_candidates(
+    storage: Storage,
+    *,
+    start_date: date,
+    end_date: date,
+    refresh: bool = False,
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Refresh the shared APS feed cache once, then query the requested window locally."""
+    sync = (
+        sync_aps_rss_feeds(storage, cache_seconds=APS_RSS_SUBJECT_CACHE_SECONDS)
+        if refresh
+        else {"status": "empty", "errors": []}
+    )
+    papers = storage.list_aps_rss_papers(
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+    )
+    sync_status = clean_text(sync.get("status") or "")
+    errors = [clean_text(message) for message in (sync.get("errors") or []) if clean_text(message)]
+    # APS RSS is an additive local cache. A temporary feed failure must not
+    # downgrade an otherwise successful Subject Monitor search.
+    if papers:
+        status = "success"
+    elif sync_status == "success":
+        status = "empty"
+    else:
+        status = "not_available"
+    message = "; ".join(errors[:3])
+    return papers, status, message
 
 
 def match_local_arxiv_for_all_subjects(storage: Storage, selected_date: date) -> dict[str, int]:
@@ -7722,6 +7792,7 @@ def run_auto_subject_monitor_once(db_path: Path, run_date: date) -> None:
                 group_keys=missing_group_keys,
                 theme_groups=theme_groups,
                 trigger="automatic",
+                refresh_aps_rss=True,
             )
             for group_key in missing_group_keys:
                 processed_retry_keys.add((selected, group_key))
@@ -18425,20 +18496,47 @@ def clean_openalex_source_id(value: str) -> str:
     return value.rsplit("/", 1)[-1]
 
 
+RMP_JOURNAL_PRESET = {
+    "canonical_name": "Reviews of Modern Physics",
+    "issns": ["0034-6861", "1539-0756"],
+    "openalex_source_id": "S73260565",
+    "section_policy": "science",
+    "skip_landing_enrichment": True,
+    "authoritative_issns": True,
+}
+
+
 JOURNAL_PRESETS = {
     "physical review letters": {
+        "canonical_name": "Physical Review Letters",
         "issns": ["1079-7114", "0031-9007"],
         "openalex_source_id": None,
         "section_policy": "science",
         "skip_landing_enrichment": True,
     },
     "prl": {
+        "canonical_name": "Physical Review Letters",
         "issns": ["1079-7114", "0031-9007"],
         "openalex_source_id": None,
         "section_policy": "science",
         "skip_landing_enrichment": True,
     },
+    "reviews of modern physics": RMP_JOURNAL_PRESET,
+    "review of modern physics": RMP_JOURNAL_PRESET,
+    "rmp": RMP_JOURNAL_PRESET,
 }
+
+
+def journal_issns_for_add(name: str, supplied_issns: list[str]) -> list[str]:
+    preset = JOURNAL_PRESETS.get(clean_journal_name(name).lower(), {})
+    if preset and (not supplied_issns or preset.get("authoritative_issns")):
+        return list(preset["issns"])
+    return list(supplied_issns)
+
+
+def canonical_journal_name_for_add(name: str, resolved_name: str = "") -> str:
+    preset = JOURNAL_PRESETS.get(clean_journal_name(name).lower(), {})
+    return clean_journal_name(str(preset.get("canonical_name") or resolved_name or name))
 
 
 def existing_path_or_empty(path: str) -> str:
@@ -20862,6 +20960,7 @@ FIELD_KEYWORDS = {
 JOURNAL_FIELD_HINTS = {
     "nature physics": ["physics"],
     "physical review letters": ["physics"],
+    "reviews of modern physics": ["physics"],
     "nature photonics": ["physics"],
     "nature materials": ["materials"],
     "nature chemistry": ["chemistry"],
@@ -33774,6 +33873,8 @@ INDEX_HTML = """<!doctype html>
 	        crossref: "Crossref",
 	        semantic_scholar: "Semantic Scholar",
 	        arxiv: "arXiv",
+	        local_arxiv: "Local arXiv",
+	        local_aps_rss: "Local APS RSS",
 	        pubmed: "PubMed"
 	      };
 	      return labels[String(source || "")] || String(source || "");

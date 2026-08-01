@@ -10,10 +10,12 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
+from .aps import aps_journal_slug as canonical_aps_journal_slug
 from .config import DEFAULT_PDF_DIR
 from .http import request_with_retries
 from .pdf_utils import merge_pdfs
 from .sources.openalex import openalex_request
+from .sources.publisher import request_aps_page
 from .storage import Storage
 from .text import safe_slug
 
@@ -231,7 +233,12 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     landing_url = paper.get("landing_url") or paper.get("url")
     if landing_url:
         try:
-            response = request_with_retries("GET", landing_url)
+            if doi.startswith("10.1103/"):
+                response = request_aps_page(landing_url)
+                if response is None:
+                    raise RuntimeError("APS page request paused by rate-limit protection")
+            else:
+                response = request_with_retries("GET", landing_url)
             page_url = response.url or landing_url
             soup = BeautifulSoup(response.text, "html.parser")
             for tag in soup.find_all("meta", attrs={"name": "citation_pdf_url"}):
@@ -444,23 +451,7 @@ def publisher_browser_candidate(paper: dict[str, Any]) -> dict[str, str] | None:
 
 
 def aps_journal_slug(journal: str) -> str:
-    if "physical review letters" in journal:
-        return "prl"
-    if "physical review x" in journal:
-        return "prx"
-    if "physical review a" in journal:
-        return "pra"
-    if "physical review b" in journal:
-        return "prb"
-    if "physical review c" in journal:
-        return "prc"
-    if "physical review d" in journal:
-        return "prd"
-    if "physical review e" in journal:
-        return "pre"
-    if "reviews of modern physics" in journal:
-        return "rmp"
-    return ""
+    return canonical_aps_journal_slug(journal)
 
 
 def crossref_pdf_candidates(doi: str) -> list[str]:

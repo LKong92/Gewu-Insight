@@ -7,13 +7,30 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from paper_monitor.aps import is_aps_lifecycle_journal
+from requests import HTTPError
+
+from paper_monitor.aps import aps_journal_slug, is_aps_lifecycle_journal
 from paper_monitor.config import JournalConfig
 from paper_monitor.monitor import apply_fast_section_hints, dedup_by_id
 from paper_monitor.reporting import section_badge_background, section_color
 from paper_monitor.sources.crossref import fetch_crossref_journal, normalize_crossref_item
-from paper_monitor.sources.openalex import normalize_openalex_item
+from paper_monitor.sources.openalex import fetch_openalex_work_by_doi, normalize_openalex_item
+from paper_monitor.sources.publisher import (
+    enrich_aps_abstract_from_rss,
+    enrich_rmp_abstract_from_aps,
+    enrich_rmp_abstract_from_rss,
+    parse_aps_rss_entries,
+    parse_rmp_rss_abstracts,
+    reset_aps_abstract_fetch_state,
+    sync_aps_rss_feeds,
+)
 from paper_monitor.storage import Storage
+from paper_monitor.ui_server import (
+    JOURNAL_PRESETS,
+    canonical_journal_name_for_add,
+    classify_fields,
+    journal_issns_for_add,
+)
 
 
 def crossref_item(
@@ -65,6 +82,12 @@ def openalex_item(
 
 
 class PrlRecentTests(unittest.TestCase):
+    def setUp(self) -> None:
+        reset_aps_abstract_fetch_state()
+
+    def tearDown(self) -> None:
+        reset_aps_abstract_fetch_state()
+
     def test_published_and_preprint_titles_use_normal_article_green(self) -> None:
         for section in ("article", "research article", "published", "preprint"):
             self.assertEqual(section_color(section), "#17643b")
@@ -119,6 +142,389 @@ class PrlRecentTests(unittest.TestCase):
 
         self.assertEqual([paper["doi"] for paper in papers], ["10.1103/first-page", "10.1103/second-page"])
         self.assertEqual(request.call_count, 3)
+
+    def test_crossref_preserves_good_issn_results_when_an_alternate_issn_fails(self) -> None:
+        class Response:
+            def json(self) -> dict:
+                return {
+                    "message": {
+                        "items": [
+                            crossref_item(
+                                formal=True,
+                                published=(2026, 7, 13),
+                                doi="10.1103/wd4f-q7kv",
+                                journal="Reviews of Modern Physics",
+                            )
+                        ]
+                    }
+                }
+
+        with patch(
+            "paper_monitor.sources.crossref.request_with_retries",
+            side_effect=[Response(), HTTPError("unsupported alternate ISSN")],
+        ):
+            papers = fetch_crossref_journal(
+                journal_name="Reviews of Modern Physics",
+                issns=["0034-6861", "unsupported"],
+                start_date=date(2026, 7, 13),
+                end_date=date(2026, 7, 13),
+            )
+
+        self.assertEqual([paper["doi"] for paper in papers], ["10.1103/wd4f-q7kv"])
+        self.assertTrue(papers[0]["section_allowed"])
+
+    def test_crossref_raises_when_every_issn_request_fails(self) -> None:
+        with patch(
+            "paper_monitor.sources.crossref.request_with_retries",
+            side_effect=[HTTPError("first failed"), HTTPError("second failed")],
+        ):
+            with self.assertRaisesRegex(HTTPError, "first failed"):
+                fetch_crossref_journal(
+                    journal_name="Reviews of Modern Physics",
+                    issns=["first", "second"],
+                    start_date=date(2026, 7, 13),
+                    end_date=date(2026, 7, 13),
+                )
+
+    def test_rmp_preset_uses_only_crossref_supported_issns(self) -> None:
+        for name in ("reviews of modern physics", "review of modern physics", "rmp"):
+            preset = JOURNAL_PRESETS[name]
+            self.assertEqual(preset["canonical_name"], "Reviews of Modern Physics")
+            self.assertEqual(preset["issns"], ["0034-6861", "1539-0756"])
+            self.assertTrue(preset["authoritative_issns"])
+            self.assertEqual(canonical_journal_name_for_add(name), "Reviews of Modern Physics")
+            self.assertEqual(
+                journal_issns_for_add(name, ["0034-6861", "1538-4527", "1539-0756"]),
+                ["0034-6861", "1539-0756"],
+            )
+
+    def test_all_current_aps_journals_have_rss_slugs_and_lifecycle_handling(self) -> None:
+        expected = {
+            "APS Open Science": "apsos",
+            "Physical Review A": "pra",
+            "Physical Review B": "prb",
+            "Physical Review C": "prc",
+            "Physical Review D": "prd",
+            "Physical Review E": "pre",
+            "Physical Review Accelerators and Beams": "prstab",
+            "Physical Review Applied": "prapplied",
+            "Physical Review Fluids": "prfluids",
+            "Physical Review Letters": "prl",
+            "Physical Review Materials": "prmaterials",
+            "Physical Review Physics Education Research": "prstper",
+            "Physical Review Research": "prresearch",
+            "Physical Review X": "prx",
+            "PRX Energy": "prxenergy",
+            "PRX Intelligence": "prxintelligence",
+            "PRX Life": "prxlife",
+            "PRX Quantum": "prxquantum",
+            "Reviews of Modern Physics": "rmp",
+        }
+        for journal, slug in expected.items():
+            self.assertEqual(aps_journal_slug(journal), slug)
+            self.assertTrue(is_aps_lifecycle_journal(journal))
+
+    def test_rmp_articles_are_visible_under_the_default_physics_filter(self) -> None:
+        self.assertEqual(
+            classify_fields(
+                {
+                    "journal": "Reviews of Modern Physics",
+                    "title": "Colloquium: what do we mean by ‘active matter’?",
+                    "abstract": "",
+                }
+            ),
+            ["physics"],
+        )
+
+    def test_openalex_exact_doi_lookup_can_supply_rmp_abstract_without_search(self) -> None:
+        item = openalex_item(
+            formal=True,
+            published="2026-07-13",
+            doi="10.1103/wd4f-q7kv",
+        )
+        item["abstract_inverted_index"] = {
+            "This": [0],
+            "abstract": [1],
+            "came": [2],
+            "from": [3],
+            "OpenAlex.": [4],
+        }
+
+        class Response:
+            @staticmethod
+            def json() -> dict:
+                return item
+
+        with patch(
+            "paper_monitor.sources.openalex.openalex_request",
+            return_value=Response(),
+        ) as request:
+            paper = fetch_openalex_work_by_doi(
+                "https://doi.org/10.1103/wd4f-q7kv",
+                journal_name="Reviews of Modern Physics",
+            )
+
+        self.assertEqual(paper["abstract"], "This abstract came from OpenAlex.")
+        self.assertIn("works/https%3A%2F%2Fdoi.org%2F10.1103%2Fwd4f-q7kv", request.call_args.args[1])
+        self.assertEqual(request.call_args.kwargs["max_retries"], 1)
+
+    def test_rmp_formal_abstract_is_fetched_once_and_then_cached(self) -> None:
+        class Response:
+            status_code = 200
+            text = """
+                <html><body><section class="abstract"><h2>Abstract</h2>
+                <p>This is a sufficiently long APS abstract that describes the formal published
+                article and is deliberately longer than the parser minimum.</p></section></body></html>
+            """
+
+        paper = {
+            "journal": "Reviews of Modern Physics",
+            "doi": "10.1103/wd4f-q7kv",
+            "abstract": "",
+            "publisher_section": "published",
+            "section_allowed": True,
+        }
+        with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+            first = enrich_rmp_abstract_from_aps(dict(paper))
+            second = enrich_rmp_abstract_from_aps(dict(paper))
+
+        self.assertIn("sufficiently long APS abstract", first["abstract"])
+        self.assertEqual(first["abstract_source"], "aps")
+        self.assertEqual(second["abstract"], first["abstract"])
+        self.assertEqual(request.call_count, 1)
+
+    def test_rmp_official_rss_summary_is_parsed_and_cached_by_doi(self) -> None:
+        payload = b"""<?xml version='1.0'?>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+          xmlns='http://purl.org/rss/1.0/'
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'
+          xmlns:content='http://purl.org/rss/1.0/modules/content/'>
+          <item rdf:about='https://link.aps.org/doi/10.1103/wd4f-q7kv'>
+            <description>Author(s): Example&lt;p&gt;An official publisher summary long enough to be used as the safe abstract fallback for this formal RMP article.&lt;/p&gt;</description>
+            <content:encoded><![CDATA[<p>Author(s): Example</p><p>An official publisher summary long enough to be used as the safe abstract fallback for this formal RMP article.</p>]]></content:encoded>
+            <prism:doi>10.1103/wd4f-q7kv</prism:doi>
+          </item>
+        </rdf:RDF>"""
+        parsed = parse_rmp_rss_abstracts(payload)
+        self.assertIn("official publisher summary", parsed["10.1103/wd4f-q7kv"])
+
+        class Response:
+            content = payload
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        paper = {
+            "journal": "Reviews of Modern Physics",
+            "doi": "10.1103/wd4f-q7kv",
+            "abstract": "",
+            "publisher_section": "published",
+            "section_allowed": True,
+        }
+        with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+            first = enrich_rmp_abstract_from_rss(dict(paper))
+            second = enrich_rmp_abstract_from_rss(dict(paper))
+
+        self.assertEqual(first["abstract_source"], "aps_rss")
+        self.assertEqual(second["abstract"], first["abstract"])
+        self.assertEqual(request.call_count, 1)
+
+    def test_prl_uses_its_own_official_rss_feed_for_missing_abstract(self) -> None:
+        payload = b"""<?xml version='1.0'?>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+          xmlns='http://purl.org/rss/1.0/'
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'
+          xmlns:content='http://purl.org/rss/1.0/modules/content/'>
+          <item rdf:about='https://link.aps.org/doi/10.1103/example-prl'>
+            <content:encoded><![CDATA[<p>Author(s): Example</p><p>This official PRL publisher summary is intentionally long enough to provide a safe RSS abstract fallback without loading an article page.</p>]]></content:encoded>
+            <prism:doi>10.1103/example-prl</prism:doi>
+          </item>
+        </rdf:RDF>"""
+
+        class Response:
+            content = payload
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        paper = {
+            "journal": "Physical Review Letters",
+            "doi": "10.1103/example-prl",
+            "abstract": "",
+            "publisher_section": "published",
+            "section_allowed": True,
+        }
+        with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+            result = enrich_aps_abstract_from_rss(paper)
+
+        self.assertEqual(result["abstract_source"], "aps_rss")
+        self.assertIn("official PRL publisher summary", result["abstract"])
+        self.assertTrue(request.call_args.args[0].endswith("/recent/prl.xml"))
+
+    def test_persistent_aps_rss_cache_is_shared_by_subject_and_journal_paths(self) -> None:
+        payload = b"""<?xml version='1.0'?>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+          xmlns='http://purl.org/rss/1.0/'
+          xmlns:dc='http://purl.org/dc/elements/1.1/'
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'
+          xmlns:content='http://purl.org/rss/1.0/modules/content/'>
+          <item rdf:about='https://link.aps.org/doi/10.1103/example-materials'>
+            <title>A persistent APS RSS paper about quantum materials</title>
+            <link>https://link.aps.org/doi/10.1103/example-materials</link>
+            <content:encoded><![CDATA[<p>Author(s): Ada Example and Ben Example</p><p>This official APS RSS abstract is intentionally long enough to support local Subject Monitor keyword matching without opening an article page.</p>]]></content:encoded>
+            <dc:title>A persistent APS RSS paper about quantum materials</dc:title>
+            <dc:creator>Ada Example and Ben Example</dc:creator>
+            <dc:date>2026-08-01T10:00:00+00:00</dc:date>
+            <prism:doi>10.1103/example-materials</prism:doi>
+            <prism:publicationName>Physical Review Materials</prism:publicationName>
+            <prism:volume>10</prism:volume>
+            <prism:number>8</prism:number>
+            <prism:publicationDate>2026-08-01T10:00:00+00:00</prism:publicationDate>
+            <prism:url>https://link.aps.org/doi/10.1103/example-materials</prism:url>
+            <prism:startingPage>081001</prism:startingPage>
+          </item>
+        </rdf:RDF>"""
+
+        class Response:
+            status_code = 200
+            content = payload
+            headers: dict[str, str] = {}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        parsed = parse_aps_rss_entries(
+            payload,
+            journal_slug="prmaterials",
+            journal_name="Physical Review Materials",
+        )
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["publication_date"], "2026-08-01")
+        self.assertEqual(parsed[0]["publisher_section"], "published")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+                    first = sync_aps_rss_feeds(storage, journal_slugs=["prmaterials"])
+                    second = sync_aps_rss_feeds(storage, journal_slugs=["prmaterials"])
+                    journal_paper = enrich_aps_abstract_from_rss(
+                        {
+                            "journal": "Physical Review Materials",
+                            "doi": "10.1103/example-materials",
+                            "abstract": "",
+                            "publisher_section": "published",
+                            "section_allowed": True,
+                        },
+                        storage=storage,
+                    )
+
+                self.assertEqual(request.call_count, 1)
+                self.assertEqual(first["created"], 1)
+                self.assertEqual(second["feeds"]["prmaterials"]["status"], "cached")
+                self.assertIn("official APS RSS abstract", journal_paper["abstract"])
+                subject_papers = storage.list_aps_rss_papers(
+                    start_date="2026-08-01",
+                    end_date="2026-08-01",
+                )
+                self.assertEqual([paper["doi"] for paper in subject_papers], ["10.1103/example-materials"])
+            finally:
+                storage.close()
+
+    def test_aps_rss_fills_blanks_without_overwriting_or_recounting_existing_doi(self) -> None:
+        payload = b"""<?xml version='1.0'?>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+          xmlns='http://purl.org/rss/1.0/'
+          xmlns:dc='http://purl.org/dc/elements/1.1/'
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'
+          xmlns:content='http://purl.org/rss/1.0/modules/content/'>
+          <item rdf:about='https://link.aps.org/doi/10.1103/existing-doi'>
+            <title>RSS title must not replace trusted metadata</title>
+            <link>https://link.aps.org/doi/10.1103/existing-doi</link>
+            <content:encoded><![CDATA[<p>An APS RSS abstract that is deliberately long enough to fill an empty abstract while preserving all trusted bibliographic metadata already stored for the DOI.</p>]]></content:encoded>
+            <dc:date>2026-08-01T10:00:00+00:00</dc:date>
+            <prism:doi>10.1103/existing-doi</prism:doi>
+            <prism:publicationName>Physical Review Materials</prism:publicationName>
+            <prism:publicationDate>2026-08-01T10:00:00+00:00</prism:publicationDate>
+          </item>
+        </rdf:RDF>"""
+
+        class Response:
+            status_code = 200
+            content = payload
+            headers: dict[str, str] = {}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        rss_paper = parse_aps_rss_entries(
+            payload,
+            journal_slug="prmaterials",
+            journal_name="Physical Review Materials",
+        )[0]
+        existing = {
+            **rss_paper,
+            "title": "Trusted Crossref title",
+            "abstract": "",
+            "abstract_source": "",
+            "source": "crossref",
+            "raw": {"source": "crossref"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.upsert_paper(existing)
+                with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+                    first = sync_aps_rss_feeds(storage, journal_slugs=["prmaterials"], force=True)
+                    second = sync_aps_rss_feeds(storage, journal_slugs=["prmaterials"], force=True)
+
+                saved = storage.get_paper(rss_paper["paper_id"])
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(first["created"], 0)
+                self.assertEqual(second["created"], 0)
+                self.assertEqual(saved["title"], "Trusted crossref title")
+                self.assertIn("APS RSS abstract", saved["abstract"])
+                self.assertEqual(saved["source_count"], 2)
+            finally:
+                storage.close()
+
+    def test_rmp_accepted_records_never_request_an_aps_page(self) -> None:
+        paper = {
+            "journal": "Reviews of Modern Physics",
+            "doi": "10.1103/j9ly-b6q3",
+            "abstract": "",
+            "publisher_section": "accepted",
+            "section_allowed": False,
+        }
+        with patch("paper_monitor.sources.publisher.requests.get") as request:
+            result = enrich_rmp_abstract_from_aps(dict(paper))
+
+        self.assertFalse(result["abstract"])
+        request.assert_not_called()
+
+    def test_rmp_aps_block_response_starts_global_cooldown_without_retry(self) -> None:
+        class Response:
+            status_code = 429
+            text = ""
+
+        first = {
+            "journal": "Reviews of Modern Physics",
+            "doi": "10.1103/first",
+            "abstract": "",
+            "publisher_section": "published",
+            "section_allowed": True,
+        }
+        second = {**first, "doi": "10.1103/second"}
+        with patch("paper_monitor.sources.publisher.requests.get", return_value=Response()) as request:
+            enrich_rmp_abstract_from_aps(first)
+            enrich_rmp_abstract_from_aps(second)
+
+        self.assertEqual(request.call_count, 1)
 
     def test_crossref_normalization_hides_accepted_and_allows_formal_prl(self) -> None:
         accepted = normalize_crossref_item(

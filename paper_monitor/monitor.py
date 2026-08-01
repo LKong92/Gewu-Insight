@@ -4,12 +4,17 @@ import re
 from datetime import date, timedelta
 from typing import Any, Callable
 
-from .aps import is_aps_lifecycle_journal
+from .aps import aps_journal_slug, is_aps_lifecycle_journal
 from .config import AppConfig, JournalConfig
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_condensed_matter
 from .sources.crossref import fetch_crossref_journal
-from .sources.openalex import fetch_openalex_journal
-from .sources.publisher import enrich_from_landing_page, enrich_image_from_landing_page
+from .sources.openalex import fetch_openalex_journal, fetch_openalex_work_by_doi
+from .sources.publisher import (
+    enrich_aps_abstract_from_page,
+    enrich_aps_abstract_from_rss,
+    enrich_from_landing_page,
+    enrich_image_from_landing_page,
+)
 from .storage import Storage
 from .text import clean_text
 from .time_utils import now_iso
@@ -120,6 +125,35 @@ def fetch_one_journal(
         blocked = 0
         for paper in dedup_by_id(collected):
             apply_fast_section_hints(paper, journal)
+            if (
+                enrich
+                and not paper.get("abstract")
+                and paper.get("publisher_section") == "published"
+                and is_aps_lifecycle_journal(journal.name)
+            ):
+                existing = storage.get_paper(paper["paper_id"])
+                if existing and existing.get("abstract"):
+                    paper["abstract"] = existing["abstract"]
+                    paper["abstract_source"] = existing.get("abstract_source") or "sqlite"
+                else:
+                    paper = enrich_aps_abstract_from_rss(paper, storage=storage)
+                    if not paper.get("abstract"):
+                        try:
+                            openalex_paper = fetch_openalex_work_by_doi(
+                                paper.get("doi") or "",
+                                journal_name=journal.name,
+                            )
+                        except Exception:
+                            openalex_paper = None
+                        if openalex_paper and openalex_paper.get("abstract"):
+                            paper["abstract"] = openalex_paper["abstract"]
+                            paper["abstract_source"] = "openalex"
+                    # RSS is the normal publisher fallback for every APS journal.
+                    # Keep direct article-page scraping as the narrow RMP fallback
+                    # that predates the all-journal RSS path; otherwise a historical
+                    # PRL/PRB refresh could turn into many publisher page requests.
+                    if not paper.get("abstract") and aps_journal_slug(journal.name) == "rmp":
+                        paper = enrich_aps_abstract_from_page(paper)
             if enrich and not journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
                 paper = enrich_from_landing_page(
                     paper,
@@ -128,7 +162,12 @@ def fetch_one_journal(
                 )
             elif paper.get("section_allowed") is None:
                 paper["section_allowed"] = config.keep_unknown_sections
-            if enrich and journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
+            if (
+                enrich
+                and journal.skip_landing_enrichment
+                and paper.get("section_allowed") is not False
+                and not is_aps_lifecycle_journal(journal.name)
+            ):
                 paper = enrich_image_from_landing_page(paper)
 
             if paper.get("section_allowed") is False:

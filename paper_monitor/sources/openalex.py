@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import date
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -281,6 +281,35 @@ def fetch_openalex_journal(
         cursor = next_cursor
 
     return papers
+
+
+def fetch_openalex_work_by_doi(
+    doi: str,
+    *,
+    journal_name: str = "Unknown Journal",
+    timeout: int = 10,
+) -> dict[str, Any] | None:
+    """Fetch one work through OpenAlex's zero-cost entity endpoint.
+
+    This is intentionally an exact DOI lookup rather than a title search or a
+    paginated list request.  It is used as a conservative metadata fallback
+    before visiting a publisher page.
+    """
+    normalized_doi = normalize_doi(doi)
+    if not normalized_doi:
+        return None
+    openalex_id = quote(f"https://doi.org/{normalized_doi}", safe="")
+    response = openalex_request(
+        "GET",
+        f"https://api.openalex.org/works/{openalex_id}",
+        timeout=timeout,
+        # request_with_retries counts total attempts, so 1 means no retry.
+        max_retries=1,
+    )
+    item = response.json()
+    if not isinstance(item, dict) or not item.get("id"):
+        return None
+    return normalize_openalex_item(item, journal_name)
 
 
 def search_openalex_works(

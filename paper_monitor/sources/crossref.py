@@ -4,6 +4,8 @@ import os
 from datetime import date
 from typing import Any
 
+from requests import RequestException
+
 from ..http import request_with_retries
 from ..aps import apply_aps_publication_status
 from ..text import clean_markup_text, first_text, journal_name_for_doi, make_paper_id, normalize_doi, normalize_publication_title
@@ -20,62 +22,71 @@ def fetch_crossref_journal(
 ) -> list[dict[str, Any]]:
     papers: list[dict[str, Any]] = []
     seen: set[str] = set()
+    successful_requests = 0
+    issn_errors: list[RequestException] = []
 
     for issn in issns:
-        cursor = "*"
-        for _ in range(max_pages):
-            params = {
-                "filter": ",".join(
-                    [
-                        f"from-pub-date:{start_date.isoformat()}",
-                        f"until-pub-date:{end_date.isoformat()}",
-                        "type:journal-article",
-                    ]
-                ),
-                "rows": rows,
-                "cursor": cursor,
-                "sort": "published",
-                "order": "desc",
-                "select": ",".join(
-                    [
-                        "DOI",
-                        "URL",
-                        "title",
-                        "container-title",
-                        "author",
-                        "published-print",
-                        "published-online",
-                        "published",
-                        "issued",
-                        "volume",
-                        "issue",
-                        "page",
-                        "article-number",
-                        "type",
-                        "abstract",
-                    ]
-                ),
-            }
-            mailto = os.getenv("CROSSREF_MAILTO")
-            if mailto:
-                params["mailto"] = mailto
-            response = request_with_retries(
-                "GET",
-                f"https://api.crossref.org/journals/{issn}/works",
-                params=params,
-            )
-            message = response.json().get("message", {})
-            for item in message.get("items", []):
-                paper = normalize_crossref_item(item, journal_name)
-                key = paper["doi"] or paper["url"] or paper["paper_id"]
-                if key in seen:
-                    continue
-                seen.add(key)
-                papers.append(paper)
-            next_cursor = message.get("next-cursor")
-            if not next_cursor or len(message.get("items", [])) < rows:
-                break
-            cursor = next_cursor
+        try:
+            cursor = "*"
+            for _ in range(max_pages):
+                params = {
+                    "filter": ",".join(
+                        [
+                            f"from-pub-date:{start_date.isoformat()}",
+                            f"until-pub-date:{end_date.isoformat()}",
+                            "type:journal-article",
+                        ]
+                    ),
+                    "rows": rows,
+                    "cursor": cursor,
+                    "sort": "published",
+                    "order": "desc",
+                    "select": ",".join(
+                        [
+                            "DOI",
+                            "URL",
+                            "title",
+                            "container-title",
+                            "author",
+                            "published-print",
+                            "published-online",
+                            "published",
+                            "issued",
+                            "volume",
+                            "issue",
+                            "page",
+                            "article-number",
+                            "type",
+                            "abstract",
+                        ]
+                    ),
+                }
+                mailto = os.getenv("CROSSREF_MAILTO")
+                if mailto:
+                    params["mailto"] = mailto
+                response = request_with_retries(
+                    "GET",
+                    f"https://api.crossref.org/journals/{issn}/works",
+                    params=params,
+                )
+                message = response.json().get("message", {})
+                successful_requests += 1
+                for item in message.get("items", []):
+                    paper = normalize_crossref_item(item, journal_name)
+                    key = paper["doi"] or paper["url"] or paper["paper_id"]
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    papers.append(paper)
+                next_cursor = message.get("next-cursor")
+                if not next_cursor or len(message.get("items", [])) < rows:
+                    break
+                cursor = next_cursor
+        except RequestException as exc:
+            issn_errors.append(exc)
+
+    if not successful_requests and issn_errors:
+        raise issn_errors[0]
 
     return papers
 
