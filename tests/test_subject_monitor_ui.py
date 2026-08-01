@@ -75,6 +75,8 @@ class SubjectMonitorUiTests(unittest.TestCase):
 
         self.assertIn('margin-top: 8px;', monitor_css)
         self.assertIn('margin-top: 12px;', monitor_css)
+        self.assertIn('font-size: 13px;', monitor_css)
+        self.assertEqual(monitor_css.count('font-size: 13.5px;'), 2)
         self.assertNotIn('text-decoration', last_author_css)
 
     def test_subject_keyboard_navigation_reuses_report_interactions(self):

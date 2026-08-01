@@ -27997,13 +27997,13 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .paper .meta {
       gap: 8px;
       margin-top: 8px;
-      font-size: 12px;
+      font-size: 13px;
     }
     .app.report-mode .paper .authors,
     .app.theme-mode .paper .authors {
       margin-top: 8px;
       color: #1f2328;
-      font-size: 12.5px;
+      font-size: 13.5px;
       line-height: 1.32;
     }
     .app.report-mode .paper .author-label,
@@ -28016,7 +28016,7 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .paper .abstract {
       margin-top: 12px;
       color: #1f2328;
-      font-size: 12.5px;
+      font-size: 13.5px;
       line-height: 1.38;
     }
     .app.report-mode .paper.with-figure:has(.paper-figure.missing) .paper-layout,
