@@ -294,7 +294,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         ui_server.record_metadata_refresh_finish(
             self.storage,
             refresh_id,
-            status="unresolved",
+            status="unresolved_checked",
         )
         job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
 
@@ -309,6 +309,131 @@ class LibraryFileOperationTests(unittest.TestCase):
         lookup.assert_not_called()
         self.assertEqual(result["skipped_recent"], 1)
         self.assertEqual(result["attempted"], 0)
+
+    def test_full_library_identifier_recovery_retries_legacy_unresolved_attempt(self) -> None:
+        pdf = self.write_layout_pdf(
+            "legacy-unresolved.pdf",
+            ["A legacy unresolved paper title for recovery"],
+        )
+        self.storage.upsert_paper(
+            {
+                "paper_id": "legacy-unresolved",
+                "doi": "",
+                "title": "A legacy unresolved paper title for recovery",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "legacy-unresolved",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+            supplement_pdf_paths=[],
+        )
+        self.storage.add_library_item(paper_id="legacy-unresolved", folder_id=1)
+        refresh_id = ui_server.record_metadata_refresh_start(
+            self.storage,
+            paper_id="legacy-unresolved",
+            mode="identifier",
+            source_summary="legacy test",
+        )
+        ui_server.record_metadata_refresh_finish(
+            self.storage,
+            refresh_id,
+            status="unresolved",
+        )
+        job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
+
+        with patch.object(
+            ui_server,
+            "identifier_from_title_lookup",
+            return_value={"kind": "", "identifier": "", "source": "", "lookup_status": "completed"},
+        ) as lookup, patch.object(ui_server.time, "sleep"):
+            ui_server.run_library_identifier_recovery_job(
+                job_id=job_id,
+                db_path=self.db_path,
+                skip_days=7,
+            )
+
+        result = (ui_server.get_library_import_job(job_id) or {}).get("result") or {}
+        self.assertTrue(lookup.called)
+        self.assertEqual(result["skipped_recent"], 0)
+        self.assertEqual(result["attempted"], 1)
+        attempt = self.storage.conn.execute(
+            """
+            SELECT status
+            FROM paper_metadata_refreshes
+            WHERE paper_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("legacy-unresolved",),
+        ).fetchone()
+        self.assertEqual(attempt["status"], "unresolved_checked")
+
+    def test_full_library_identifier_recovery_marks_all_service_failures_retryable(self) -> None:
+        pdf = self.write_layout_pdf(
+            "network-unavailable.pdf",
+            ["A paper title whose identifier services are unavailable"],
+        )
+        self.storage.upsert_paper(
+            {
+                "paper_id": "network-unavailable",
+                "doi": "",
+                "title": "A paper title whose identifier services are unavailable",
+                "journal": "Imported Library",
+                "publication_date": "",
+                "abstract": "",
+                "source": "inventory",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "network-unavailable",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+            supplement_pdf_paths=[],
+        )
+        self.storage.add_library_item(paper_id="network-unavailable", folder_id=1)
+        job_id = ui_server.create_library_identifier_recovery_job(skip_days=7)
+
+        unavailable = {
+            "kind": "",
+            "identifier": "",
+            "source": "",
+            "lookup_status": "unavailable",
+            "lookup_error": "All identifier services unavailable",
+        }
+        with patch.object(
+            ui_server,
+            "identifier_from_title_lookup",
+            return_value=unavailable,
+        ), patch.object(ui_server.time, "sleep"):
+            ui_server.run_library_identifier_recovery_job(
+                job_id=job_id,
+                db_path=self.db_path,
+                skip_days=7,
+            )
+
+        result = (ui_server.get_library_import_job(job_id) or {}).get("result") or {}
+        attempt = self.storage.conn.execute(
+            """
+            SELECT status, error
+            FROM paper_metadata_refreshes
+            WHERE paper_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("network-unavailable",),
+        ).fetchone()
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(attempt["status"], "retryable")
+        self.assertIn("services unavailable", attempt["error"])
 
     def test_full_library_identifier_recovery_excludes_non_pdf_files(self) -> None:
         text_path = self.root / "Device_C_177_raw.txt"

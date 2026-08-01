@@ -3735,6 +3735,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             identifier = clean_text(found.get("identifier") or "")
             kind = clean_text(found.get("kind") or "")
             if not identifier or kind not in {"doi", "arxiv"}:
+                if clean_text(found.get("lookup_status") or "") == "unavailable":
+                    self.send_error_json(
+                        HTTPStatus.SERVICE_UNAVAILABLE,
+                        clean_text(found.get("lookup_error") or "Identifier lookup services were unavailable"),
+                    )
+                    return
                 self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI or arXiv ID was found in this local PDF or by title lookup")
                 return
             try:
@@ -8846,6 +8852,8 @@ def extract_identifier_from_pdf_or_title(
         *title_candidates,
         Path(pdf_path).stem,
     ]
+    lookup_completed = False
+    lookup_errors: list[str] = []
     for title in dedup_clean_texts(fallback_titles):
         found = lookup(title)
         if found.get("identifier"):
@@ -8853,7 +8861,22 @@ def extract_identifier_from_pdf_or_title(
                 **found,
                 "matched_title": title,
             }
-    return {"kind": "", "identifier": "", "source": ""}
+        lookup_status = clean_text(found.get("lookup_status") or "completed")
+        if lookup_status == "completed":
+            lookup_completed = True
+        elif found.get("lookup_error"):
+            lookup_errors.append(clean_text(found.get("lookup_error") or ""))
+    if lookup_completed:
+        return {"kind": "", "identifier": "", "source": "", "lookup_status": "completed"}
+    if lookup_errors:
+        return {
+            "kind": "",
+            "identifier": "",
+            "source": "",
+            "lookup_status": "unavailable",
+            "lookup_error": "; ".join(dedup_clean_texts(lookup_errors)),
+        }
+    return {"kind": "", "identifier": "", "source": "", "lookup_status": "not_attempted"}
 
 
 def pdf_identifier_page_texts(pdf_path: Path, *, page_limit: int = 5) -> tuple[str, list[str]]:
@@ -9147,17 +9170,21 @@ def explicit_arxiv_id_from_text(value: str) -> str:
 def identifier_from_title_lookup(title: str) -> dict[str, str]:
     query = clean_text(title)
     if len(query) < 8:
-        return {"kind": "", "identifier": "", "source": ""}
+        return {"kind": "", "identifier": "", "source": "", "lookup_status": "not_attempted"}
+    completed_sources: list[str] = []
+    lookup_errors: list[str] = []
     try:
-        for candidate in search_crossref_publications(query, kind="title", rows=6, timeout=10, max_retries=1):
+        candidates = search_crossref_publications(query, kind="title", rows=6, timeout=10, max_retries=1)
+        completed_sources.append("Crossref")
+        for candidate in candidates:
             candidate_title = clean_text(candidate.get("title") or "")
             if not title_match_is_confident(query, candidate_title):
                 continue
             doi = normalize_publication_doi(str(candidate.get("doi") or ""))
             if doi_is_likely_published_version(doi):
-                return {"kind": "doi", "identifier": doi, "source": "title_crossref"}
-    except Exception:
-        pass
+                return {"kind": "doi", "identifier": doi, "source": "title_crossref", "lookup_status": "completed"}
+    except Exception as exc:
+        lookup_errors.append(f"Crossref: {exc}")
     try:
         response = openalex_request(
             "GET",
@@ -9166,6 +9193,7 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
             timeout=10,
             max_retries=1,
         )
+        completed_sources.append("OpenAlex")
         for item in response.json().get("results") or []:
             if not isinstance(item, dict) or openalex_item_is_likely_data_repository(item):
                 continue
@@ -9174,9 +9202,9 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
                 continue
             doi = normalize_publication_doi(clean_text(item.get("doi") or ""))
             if doi_is_likely_published_version(doi):
-                return {"kind": "doi", "identifier": doi, "source": "title_openalex"}
-    except Exception:
-        pass
+                return {"kind": "doi", "identifier": doi, "source": "title_openalex", "lookup_status": "completed"}
+    except Exception as exc:
+        lookup_errors.append(f"OpenAlex: {exc}")
     try:
         response = request_with_retries(
             "GET",
@@ -9189,6 +9217,7 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
             timeout=12,
             max_retries=1,
         )
+        completed_sources.append("Semantic Scholar")
         for item in response.json().get("data") or []:
             if not isinstance(item, dict):
                 continue
@@ -9198,7 +9227,7 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
             external_ids = item.get("externalIds") if isinstance(item.get("externalIds"), dict) else {}
             doi = normalize_publication_doi(clean_text(external_ids.get("DOI") or external_ids.get("doi") or ""))
             if doi_is_likely_published_version(doi):
-                return {"kind": "doi", "identifier": doi, "source": "title_semantic"}
+                return {"kind": "doi", "identifier": doi, "source": "title_semantic", "lookup_status": "completed"}
             arxiv_id = normalize_arxiv_identifier(
                 clean_text(
                     external_ids.get("ArXiv")
@@ -9208,10 +9237,24 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
                 )
             )
             if arxiv_id:
-                return {"kind": "arxiv", "identifier": arxiv_id, "source": "title_semantic"}
-    except Exception:
-        pass
-    return {"kind": "", "identifier": "", "source": ""}
+                return {"kind": "arxiv", "identifier": arxiv_id, "source": "title_semantic", "lookup_status": "completed"}
+    except Exception as exc:
+        lookup_errors.append(f"Semantic Scholar: {exc}")
+    if completed_sources:
+        return {
+            "kind": "",
+            "identifier": "",
+            "source": "",
+            "lookup_status": "completed",
+            "lookup_sources": ", ".join(completed_sources),
+        }
+    return {
+        "kind": "",
+        "identifier": "",
+        "source": "",
+        "lookup_status": "unavailable",
+        "lookup_error": "; ".join(lookup_errors) or "Identifier lookup services were unavailable",
+    }
 
 
 def library_workspace_publication_from_query(query: str) -> dict[str, Any] | None:
@@ -10532,18 +10575,27 @@ def identifier_recovery_recently_attempted(
     if skip_days <= 0:
         return False
     cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
+    retry_cutoff = (datetime.now().astimezone() - timedelta(hours=1)).isoformat(timespec="seconds")
     row = storage.conn.execute(
         """
         SELECT 1
         FROM paper_metadata_refreshes
         WHERE paper_id = ?
           AND mode = 'identifier'
-          AND status IN ('recovered', 'unresolved', 'failed')
-          AND COALESCE(finished_at, started_at) >= ?
+          AND (
+            (
+              status IN ('recovered', 'unresolved_checked')
+              AND COALESCE(finished_at, started_at) >= ?
+            )
+            OR (
+              status IN ('retryable', 'failed')
+              AND COALESCE(finished_at, started_at) >= ?
+            )
+          )
         ORDER BY COALESCE(finished_at, started_at) DESC
         LIMIT 1
         """,
-        (paper_id, cutoff),
+        (paper_id, cutoff, retry_cutoff),
     ).fetchone()
     return row is not None
 
@@ -10722,7 +10774,10 @@ def run_library_identifier_recovery_job(
         )
         log_library_import_job(
             job_id,
-            f"Skipping identifier attempts made in the last {skip_days} day{'s' if skip_days != 1 else ''}",
+            (
+                f"Skipping verified identifier checks made in the last {skip_days} "
+                f"day{'s' if skip_days != 1 else ''}; transient failures cool down for 1 hour"
+            ),
         )
         log_library_import_job(
             job_id,
@@ -10782,11 +10837,15 @@ def run_library_identifier_recovery_job(
                 identifier = clean_text(found.get("identifier") or "")
                 kind = clean_text(found.get("kind") or "")
                 if not identifier or kind not in {"doi", "arxiv"}:
+                    if clean_text(found.get("lookup_status") or "") == "unavailable":
+                        raise RuntimeError(
+                            clean_text(found.get("lookup_error") or "Identifier lookup services were unavailable")
+                        )
                     unresolved_count += 1
                     record_metadata_refresh_finish(
                         storage,
                         refresh_id,
-                        status="unresolved",
+                        status="unresolved_checked",
                         error="",
                     )
                     log_library_import_job(
@@ -10835,7 +10894,7 @@ def run_library_identifier_recovery_job(
                 record_metadata_refresh_finish(
                     storage,
                     refresh_id,
-                    status="failed",
+                    status="retryable",
                     error=str(exc),
                 )
                 if len(errors) < 100:
@@ -28761,6 +28820,8 @@ INDEX_HTML = """<!doctype html>
     </main>
   </div>
   <script>
+    let appBootCompleted = false;
+
     function showBootError(error) {
       const message = error && (error.stack || error.message) ? (error.stack || error.message) : String(error || "Unknown startup error");
       const startupTitle = document.getElementById("appStartupTitle");
@@ -28773,13 +28834,21 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `<div class="empty"><strong>Startup error</strong><pre style="white-space:pre-wrap;text-align:left;max-width:100%;overflow:auto;">${String(message).replace(/[&<>]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]))}</pre></div>`;
     }
     function hideAppStartupCover() {
+      appBootCompleted = true;
       const cover = document.getElementById("appStartupCover");
       if (!cover) return;
       cover.classList.add("hidden");
       window.setTimeout(() => cover.remove(), 160);
     }
-    window.addEventListener("error", (event) => showBootError(event.error || event.message));
-    window.addEventListener("unhandledrejection", (event) => showBootError(event.reason));
+    function handleGlobalUiError(error, source) {
+      if (!appBootCompleted) {
+        showBootError(error);
+        return;
+      }
+      console.error(`Daiqo ${source || "runtime"} error`, error);
+    }
+    window.addEventListener("error", (event) => handleGlobalUiError(event.error || event.message, "runtime"));
+    window.addEventListener("unhandledrejection", (event) => handleGlobalUiError(event.reason, "promise"));
     const initialToday = localIsoDate(new Date());
     const initialBrowserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const IS_STANDALONE_LOADER_WINDOW = new URLSearchParams(window.location.search).get("standalone") === "loader";
@@ -33764,7 +33833,7 @@ INDEX_HTML = """<!doctype html>
               </select>
               <div class="loader-metadata-hint">${escapeHtml(
                 identifierMode
-                  ? "Recent attempts within 7 days are skipped. No Google Scholar requests."
+                  ? "Verified checks within 7 days are skipped; transient failures cool down for 1 hour. No Google Scholar requests."
                   : (refreshMode ? "Papers refreshed in the last 3 days will be skipped." : loaderMetadataModeHint(state.libraryImportMetadataMode))
               )}</div>
             </div>
@@ -33941,8 +34010,11 @@ INDEX_HTML = """<!doctype html>
     function loaderLogKind(entry) {
       const level = String(entry.level || "info");
       const message = String(entry.message || "");
-      if (level === "error" || /failed|error/i.test(message)) return "error";
-      if (level === "warn" || /warning/i.test(message)) return "warn";
+      if (level === "error") return "error";
+      if (level === "warn") return "warn";
+      if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
+      if (/failed|error/i.test(message)) return "error";
+      if (/warning/i.test(message)) return "warn";
       if (message.startsWith("DOI extracted:")) return "doi-ok";
       if (message.startsWith("Recovered DOI") || message.startsWith("Recovered ARXIV")) return "doi-ok";
       if (message.startsWith("No DOI extracted")) return "doi-missing";
@@ -33954,7 +34026,6 @@ INDEX_HTML = """<!doctype html>
       if (message.startsWith("Entering ")) return "enter";
       if (message.startsWith("Reading first PDF page") || message.startsWith("Scanning folder") || message.startsWith("Scanned ")) return "scan";
       if (message.startsWith("Inventory written") || message.startsWith("Report written") || message.startsWith("Source folder") || message.startsWith("Source paths") || message.startsWith("Target Library path") || message.startsWith("Metadata mode") || message.startsWith("Mode:")) return "file";
-      if (message.startsWith("Done:") || message.startsWith("Import complete") || message.startsWith("Refreshed DOI metadata for") || message.startsWith("Refreshed DOI/arXiv metadata for")) return "done";
       return "info";
     }
 
@@ -34016,12 +34087,12 @@ INDEX_HTML = """<!doctype html>
           <h3>Missing Identifiers</h3>
           <p>Scans active Library and Space PDF files that do not have a DOI or arXiv ID. PDF content and titles are checked through Crossref, OpenAlex, and Semantic Scholar.</p>
           <div class="loader-metric"><strong>Scope</strong><span>All active Library/Space PDF files without DOI/arXiv</span></div>
-          <div class="loader-metric"><strong>Safety</strong><span>Sequential requests, cached duplicate titles, 7-day recent-attempt skip, and no Google Scholar requests.</span></div>
+          <div class="loader-metric"><strong>Safety</strong><span>Sequential requests, cached duplicate titles, 7-day verified-check skip, 1-hour transient-error cooldown, and no Google Scholar requests.</span></div>
           <div class="loader-metric"><strong>Metadata</strong><span>Recovered papers receive one quick metadata refresh.</span></div>
           ${result ? `
             <div class="loader-metric"><strong>${result.identifiers_recovered || 0} recovered</strong><span>Confident DOI/arXiv matches saved to SQLite.</span></div>
             <div class="loader-metric"><strong>${result.identifier_recovery_unresolved || 0} unresolved</strong><span>No confident match was saved.</span></div>
-            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Attempted within the last ${result.skip_days || 7} days.</span></div>
+            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Verified within ${result.skip_days || 7} days or temporarily cooling down after an error.</span></div>
             <div class="loader-metric"><strong>${result.failed || 0} failed</strong><span>Errors recorded without changing identifiers.</span></div>
             ${sourceSummary ? `<div class="loader-metric"><strong>Sources</strong><span>${escapeHtml(sourceSummary)}</span></div>` : ""}
           ` : ""}
@@ -35020,7 +35091,7 @@ INDEX_HTML = """<!doctype html>
       const draft = {
         job_type: "identifier_recovery",
         metadata_mode: "quick",
-        status: "Ready to find missing identifiers. Attempts made in the last 7 days will be skipped."
+        status: "Ready to find missing identifiers. Verified checks within 7 days are skipped; transient failures cool down for 1 hour."
       };
       saveLibraryImportDraft(draft);
       applyLibraryImportDraft(draft);
@@ -36243,7 +36314,7 @@ INDEX_HTML = """<!doctype html>
       const avatarUrl = profile.avatar_url || "";
       const initials = scholarProfileInitials(profile.name || "") || "GS";
       const avatarMarkup = avatarUrl
-        ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}" onerror="this.remove(); this.parentElement.textContent='${escapeAttr(initials)}';">`
+        ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}" data-fallback="${escapeAttr(initials)}" onerror="this.onerror=null; if (this.parentElement) this.parentElement.textContent=this.dataset.fallback || 'GS';">`
         : `${escapeHtml(initials)}`;
       return `
         <div class="my-publications-profile-strip" id="myPublicationProfileStrip">
@@ -42523,7 +42594,7 @@ INDEX_HTML = """<!doctype html>
     function authorMonitorAvatarMarkup(author) {
       const initials = authorMonitorInitials(author?.name || "");
       return author?.avatar_url
-        ? `<span class="author-monitor-avatar"><img src="${escapeAttr(author.avatar_url)}" alt="${escapeAttr(author.name || "Author")}" onerror="this.parentElement.textContent='${escapeAttr(initials)}'"></span>`
+        ? `<span class="author-monitor-avatar"><img src="${escapeAttr(author.avatar_url)}" alt="${escapeAttr(author.name || "Author")}" data-fallback="${escapeAttr(initials)}" onerror="this.onerror=null; if (this.parentElement) this.parentElement.textContent=this.dataset.fallback || 'AU';"></span>`
         : `<span class="author-monitor-avatar">${escapeHtml(initials)}</span>`;
     }
 

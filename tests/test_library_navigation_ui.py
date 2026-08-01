@@ -75,6 +75,30 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("Promise.resolve().then(loadLibrary).catch((error) => {", INDEX_HTML)
         self.assertIn("showBootError(error);", INDEX_HTML)
 
+    def test_runtime_errors_do_not_replace_an_already_loaded_app(self) -> None:
+        self.assertIn("let appBootCompleted = false;", INDEX_HTML)
+        self.assertIn("appBootCompleted = true;", INDEX_HTML)
+        self.assertIn("function handleGlobalUiError(error, source)", INDEX_HTML)
+        self.assertIn("if (!appBootCompleted) {", INDEX_HTML)
+        self.assertNotIn(
+            'window.addEventListener("error", (event) => showBootError',
+            INDEX_HTML,
+        )
+
+    def test_remote_avatar_fallbacks_do_not_access_a_removed_parent(self) -> None:
+        self.assertNotIn("this.remove(); this.parentElement", INDEX_HTML)
+        self.assertIn('data-fallback="${escapeAttr(initials)}"', INDEX_HTML)
+        self.assertIn("if (this.parentElement) this.parentElement.textContent=this.dataset.fallback", INDEX_HTML)
+
+    def test_completed_loader_summary_is_not_promoted_to_error_by_zero_failed_count(self) -> None:
+        classifier = INDEX_HTML.split("function loaderLogKind(entry)", 1)[1].split(
+            "function loaderLogLabel", 1
+        )[0]
+        done_index = classifier.index('message.startsWith("Done:")')
+        error_text_index = classifier.index('/failed|error/i.test(message)')
+        self.assertLess(done_index, error_text_index)
+        self.assertLess(classifier.index('if (level === "warn")'), error_text_index)
+
     def test_returning_to_library_restores_the_last_navigation_location(self) -> None:
         self.assertIn("libraryLastLocation: null", INDEX_HTML)
         self.assertIn("function rememberLibraryLocation()", INDEX_HTML)

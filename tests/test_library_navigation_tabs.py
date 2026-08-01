@@ -242,6 +242,29 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertEqual(found["identifier"], "2607.12345")
         self.assertEqual(found["source"], "title_semantic")
 
+    def test_title_identifier_lookup_distinguishes_all_service_failures(self) -> None:
+        with patch.object(
+            ui_server,
+            "search_crossref_publications",
+            side_effect=RuntimeError("Crossref offline"),
+        ), patch.object(
+            ui_server,
+            "openalex_request",
+            side_effect=RuntimeError("OpenAlex offline"),
+        ), patch.object(
+            ui_server,
+            "request_with_retries",
+            side_effect=RuntimeError("Semantic Scholar offline"),
+        ):
+            found = ui_server.identifier_from_title_lookup(
+                "A title lookup with unavailable identifier services"
+            )
+
+        self.assertEqual(found["lookup_status"], "unavailable")
+        self.assertIn("Crossref offline", found["lookup_error"])
+        self.assertIn("OpenAlex offline", found["lookup_error"])
+        self.assertIn("Semantic Scholar offline", found["lookup_error"])
+
     def test_space_add_and_library_location_ui_contract(self) -> None:
         html = ui_server.INDEX_HTML
         workspace = html.split("function workspaceToolsMarkup()", 1)[1].split(
