@@ -130,7 +130,7 @@ class OpenAlexSettingsUiContractTests(unittest.TestCase):
         self.assertIn('id="testOpenalexKey"', html)
         self.assertIn('id="clearOpenalexKey"', html)
         self.assertIn("daily free allowance", html)
-        self.assertIn("Paid credits are not used by Daiqo.", html)
+        self.assertIn("Paid credits are not used by Gewu Insight.", html)
         self.assertIn('provider: "openalex"', html)
         self.assertNotIn("OpenAlex...</button>", html)
 

@@ -19,14 +19,14 @@ cd "$PROJECT_DIR"
 ACCESS_PROBE="$PROJECT_DIR/data/.paper_monitor_access_probe"
 if ! touch "$ACCESS_PROBE" || ! rm -f "$ACCESS_PROBE"; then
   echo "This app cannot write to the project data folder. macOS may be blocking access to this location." >&2
-  echo "Grant Files and Folders permission for Daiqo/Python in System Settings, or move PaperMonitor to a regular folder such as $HOME/Applications or $HOME/PaperMonitor." >&2
+  echo "Grant Files and Folders permission for Gewu Insight/Python in System Settings, or move the project to a regular folder such as $HOME/Applications or $HOME/PaperMonitor." >&2
   exit 1
 fi
 
 if [ ! -x "$PYTHON_BIN" ]; then
   SYSTEM_PYTHON="$(/usr/bin/env which python3 || true)"
   if [ -z "$SYSTEM_PYTHON" ]; then
-    echo "python3 was not found. Install Python 3 from https://www.python.org/downloads/macos/ or Homebrew, then open Journal Monitor again." >&2
+    echo "python3 was not found. Install Python 3 from https://www.python.org/downloads/macos/ or Homebrew, then open Gewu Insight again." >&2
     exit 1
   fi
   "$SYSTEM_PYTHON" -m venv "$VENV_DIR"
@@ -36,13 +36,13 @@ if [ ! -f "$REQ_STAMP" ] || [ "$REQ_FILE" -nt "$REQ_STAMP" ]; then
   if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     "$PYTHON_BIN" -m ensurepip --upgrade
   fi
-  echo "Installing Journal Monitor dependencies..."
+  echo "Installing Gewu Insight dependencies..."
   "$PYTHON_BIN" -m pip install -r "$REQ_FILE"
   touch "$REQ_STAMP"
 fi
 
 if ! /usr/bin/curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
-  echo "Starting Journal Monitor UI at $URL"
+  echo "Starting Gewu Insight UI at $URL"
   exec "$PYTHON_BIN" -m paper_monitor ui --host "$HOST" --port "$PORT" --open
 fi
 

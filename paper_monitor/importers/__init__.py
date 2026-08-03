@@ -1,4 +1,4 @@
-"""Import helpers for bringing external paper libraries into Paper Monitor."""
+"""Import helpers for bringing external paper libraries into Gewu Insight."""
 
 from .inventory import import_library_inventory
 

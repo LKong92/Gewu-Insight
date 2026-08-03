@@ -55,14 +55,14 @@
 	</dict>
 	<key>files2</key>
 	<dict>
-		<key>MacOS/Paper Monitor Server</key>
+		<key>MacOS/Gewu Insight Server</key>
 		<dict>
 			<key>cdhash</key>
 			<data>
-			L3E8OV+gzXVzSax5ObeCNnLU46A=
+			jwsvNuCvlOgKkpGjiDvshT/C2Mw=
 			</data>
 			<key>requirement</key>
-			<string>cdhash H"ea51c5a0624497ccf3e37e97e8ce840aa8184927" or cdhash H"2f713c395fa0cd757349ac7939b7823672d4e3a0"</string>
+			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
 		</dict>
 		<key>Resources/PaperMonitor.icns</key>
 		<dict>

@@ -219,7 +219,7 @@ def import_library_inventory(
     library_root_folder_id: int = 1,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Inspect or import an external inventory into Paper Monitor storage."""
+    """Inspect or import an external inventory into Gewu Insight storage."""
 
     inventory_file = Path(inventory_path)
     dedupe_keys = normalize_dedupe_keys(dedupe_by)

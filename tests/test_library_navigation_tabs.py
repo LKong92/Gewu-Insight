@@ -134,6 +134,30 @@ class LibraryNavigationTabTests(unittest.TestCase):
 
         self.assertEqual(target_id, int(level_two["id"]))
 
+    def test_main_library_add_target_accepts_nested_folder_and_rejects_space(self) -> None:
+        level_one = self.storage.create_library_folder(parent_id=1, name="Level One")
+        level_two = self.storage.create_library_folder(
+            parent_id=int(level_one["id"]),
+            name="Level Two",
+        )
+        space = ui_server.add_library_workspace_tab(self.storage, name="Separate Space")
+
+        target_id = ui_server.library_navigation_add_target_folder_id(
+            self.storage,
+            root_folder_id=1,
+            requested_folder_id=int(level_two["id"]),
+            root_label="Library",
+        )
+
+        self.assertEqual(target_id, int(level_two["id"]))
+        with self.assertRaisesRegex(ValueError, "not inside this Library"):
+            ui_server.library_navigation_add_target_folder_id(
+                self.storage,
+                root_folder_id=1,
+                requested_folder_id=int(space["root_folder_id"]),
+                root_label="Library",
+            )
+
     def test_space_title_query_uses_shared_title_identifier_resolution(self) -> None:
         resolved = {
             "paper_id": "resolved-paper",
@@ -333,6 +357,30 @@ class LibraryNavigationTabTests(unittest.TestCase):
         self.assertIn('state.query = ""', navigation)
         self.assertIn("/api/library/folders/prepare-drag", native_drag)
         self.assertIn("cleanup_path: result.cleanup_path", native_drag)
+
+    def test_main_library_inline_add_paper_ui_contract(self) -> None:
+        html = ui_server.INDEX_HTML
+        inline = html.split("function beginLibraryInlineAddPaper(folderId)", 1)[1].split(
+            "function wireWorkspaceTools()", 1
+        )[0]
+        markup = html.split("function libraryInlineAddPaperMarkup(folderId", 1)[1].split(
+            "function libraryColumnMarkup", 1
+        )[0]
+        context_menu = html.split("function showLibraryContextMenu(event", 1)[1].split(
+            "function hideLibraryContextMenu", 1
+        )[0]
+
+        self.assertIn('data-action="add-paper">Add Paper</button>', html)
+        self.assertIn('fetch("/api/library/add-paper"', inline)
+        self.assertIn("folder_id: targetFolderId", inline)
+        self.assertIn("state.libraryInlineAddBusy = true", inline)
+        self.assertIn("state.libraryInlineAddError = error.message", inline)
+        self.assertIn("resetLibraryInlineAddPaper()", inline)
+        self.assertIn('placeholder="DOI, arXiv ID, or title"', markup)
+        self.assertIn("data-library-inline-add-paper-submit", markup)
+        self.assertIn('state.libraryTab === "library"', context_menu)
+        self.assertIn("!hasEntry", context_menu)
+        self.assertIn("beginLibraryInlineAddPaper(targetFolderId)", context_menu)
 
     def test_library_search_covers_library_and_every_space(self) -> None:
         html = ui_server.INDEX_HTML

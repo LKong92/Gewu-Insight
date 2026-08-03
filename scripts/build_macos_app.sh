@@ -3,11 +3,11 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
-APP="$PROJECT_DIR/Daiqo.app"
-OUTPUT="$APP/Contents/MacOS/Paper Monitor"
+APP="$PROJECT_DIR/Gewu Insight.app"
+OUTPUT="$APP/Contents/MacOS/Gewu Insight"
 SIGN_WORKDIR="${TMPDIR:-/private/tmp}/paper-monitor-sign-$$"
-SIGN_APP="$SIGN_WORKDIR/Daiqo.app"
-BACKUP_APP="$SIGN_WORKDIR/Daiqo.previous.app"
+SIGN_APP="$SIGN_WORKDIR/Gewu Insight.app"
+BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
 trap 'rm -rf "$SIGN_WORKDIR"' EXIT
 
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/private/tmp/paper-monitor-clang-cache}" \

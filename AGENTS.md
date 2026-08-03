@@ -31,7 +31,7 @@
 - Analyze paper: `python3 -m paper_monitor analyze PAPER_ID`
 - Complete queued analysis job: `python3 -m paper_monitor complete-analysis-job reports/analysis_jobs/queued/JOB.md`
 - Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
-- Clickable launcher: `Daiqo.app`
+- Clickable launcher: `Gewu Insight.app`
 
 ## Key Paths
 

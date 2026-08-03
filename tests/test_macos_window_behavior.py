@@ -30,7 +30,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
     def test_native_window_consumes_system_titlebar_double_click_action(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 
-        self.assertIn("@interface DaiqoWindow : NSWindow", source)
+        self.assertIn("@interface GewuInsightWindow : NSWindow", source)
         self.assertIn('setObject:@"None" forKey:@"AppleActionOnDoubleClick"', source)
         self.assertIn("- (void)sendEvent:(NSEvent *)event", source)
         self.assertIn("event.clickCount == 2", source)
@@ -39,7 +39,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("- (void)performZoom:(id)sender", source)
         self.assertIn("[self handleTitlebarDoubleClickAction]", source)
         self.assertIn("[strongSelf toggleMainWindowFill]", source)
-        self.assertNotIn("DaiqoTitlebarGestureView", source)
+        self.assertNotIn("GewuInsightTitlebarGestureView", source)
         self.assertNotIn("[self.webView addSubview:self.titlebarGestureView", source)
         self.assertIn("[self.window deminiaturize:nil]", source)
         self.assertIn("- (void)windowWillMiniaturize:(NSNotification *)notification", source)
@@ -72,10 +72,10 @@ class MacosWindowBehaviorTests(unittest.TestCase):
     def test_command_w_closes_quicklook_before_the_main_window(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 
-        self.assertIn("((DaiqoWebView *)self.webView).pdfQuickLookActive", source)
-        self.assertIn("window.closeDaiqoPreviewFromNative", source)
+        self.assertIn("((GewuInsightWebView *)self.webView).pdfQuickLookActive", source)
+        self.assertIn("window.closeGewuInsightPreviewFromNative", source)
         self.assertLess(
-            source.index("window.closeDaiqoPreviewFromNative"),
+            source.index("window.closeGewuInsightPreviewFromNative"),
             source.index("[activeWindow performClose:sender];"),
         )
         self.assertIn("function handlePreviewCloseShortcut(event)", INDEX_HTML)

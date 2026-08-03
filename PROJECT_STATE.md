@@ -1,7 +1,7 @@
 # PROJECT_STATE.md
 ## Current handoff
 - Repo: `/Users/lingyuan/PaperMonitor-20260516`
-- App launcher: `Daiqo.app`
+- Product/launcher: `Gewu Insight`（格物洞见）, `Gewu Insight.app`
 - Main UI/API file: `paper_monitor/ui_server.py`
 - SQLite is the source of truth: `data/paper_monitor.sqlite`
 - Current worktree includes the new Author Monitor; unrelated local journal configuration and generated reports may also be present.
@@ -89,7 +89,7 @@
 - Python compile and embedded JavaScript syntax checks pass.
 - Full suite passes: 186 tests.
 - Author Monitor was visually checked with an isolated SQLite database, including empty state, populated three-column layout, unread badges, and click-to-read behavior.
-- `Daiqo.app` rebuilt, signed, restarted, and `/api/health` plus `/api/author-monitor?summary=1` verified.
+- `Gewu Insight.app` rebuilt, signed, restarted, and `/api/health` plus `/api/author-monitor?summary=1` verified.
 
 ## Current caveats
 

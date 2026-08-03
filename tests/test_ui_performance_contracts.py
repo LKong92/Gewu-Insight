@@ -32,7 +32,7 @@ class UiPerformanceContractTests(unittest.TestCase):
     def test_launcher_uses_small_health_endpoint(self) -> None:
         route_source = inspect.getsource(ui_server.PaperMonitorUiHandler.do_GET)
         launcher_source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
-        helper_source = (ROOT / "Daiqo.app" / "Contents" / "MacOS" / "Paper Monitor Server").read_text()
+        helper_source = (ROOT / "Gewu Insight.app" / "Contents" / "MacOS" / "Gewu Insight Server").read_text()
 
         self.assertIn('parsed.path == "/api/health"', route_source)
         self.assertIn('@"api/health"', launcher_source)

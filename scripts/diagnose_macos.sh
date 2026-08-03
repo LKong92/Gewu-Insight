@@ -7,7 +7,7 @@ PORT="${PAPER_MONITOR_PORT:-8765}"
 HOST="${PAPER_MONITOR_HOST:-127.0.0.1}"
 URL="http://$HOST:$PORT"
 
-echo "Journal Monitor diagnostics"
+echo "Gewu Insight diagnostics"
 echo "Project: $PROJECT_DIR"
 echo "URL: $URL"
 echo ""
@@ -25,7 +25,7 @@ check() {
   fi
 }
 
-check "Daiqo app exists" test -d "$PROJECT_DIR/Daiqo.app"
+check "Gewu Insight app exists" test -d "$PROJECT_DIR/Gewu Insight.app"
 check "bootstrap script exists" test -f "$PROJECT_DIR/scripts/bootstrap_macos.sh"
 check "requirements.txt exists" test -f "$PROJECT_DIR/requirements.txt"
 check "python3 is available" /usr/bin/env python3 --version

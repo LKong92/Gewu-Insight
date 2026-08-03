@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only benchmark for Daiqo / Paper Monitor.
+"""Local-only benchmark for Gewu Insight.
 
 The script deliberately talks only to 127.0.0.1 and the local SQLite database.
 It writes a reproducible JSON result plus a Markdown summary under benchmarks/.
@@ -326,7 +326,7 @@ def markdown_report(result: dict[str, Any]) -> str:
     bootstrap = by_name.get("Library bootstrap", {})
     health_note = "`/api/health` is not registered; service health was confirmed via `/` and `/api/library/bootstrap`."
     score = scorecard(by_name)
-    return f"""# Paper Monitor Local Benchmark Report
+    return f"""# Gewu Insight Local Benchmark Report
 
 ## Environment
 
@@ -417,14 +417,14 @@ The measured local-only proxy for the core UI flow is:
 This is a product-positioning comparison, not a same-machine benchmark of the other apps.
 No commercial software was installed or tested by this script.
 
-| Product | Public positioning | Where Daiqo is stronger | Where Daiqo is weaker / unproven |
+| Product | Public positioning | Where Gewu Insight is stronger | Where Gewu Insight is weaker / unproven |
 |---|---|---|---|
-| Zotero | Open-source reference manager with browser capture, citation plugins, sync, groups, notes, and PDF annotation. See https://www.zotero.org/ | Daiqo is more local-workflow-first for monitored papers, filesystem-like Spaces, loader/import workflows, and Chinese analysis artifacts. | Zotero is much more mature for citation workflows, cross-device sync, group libraries, connectors, and broad community ecosystem. |
-| EndNote | Commercial reference manager centered on library/reference editing, PDF attachment/viewing/annotation, full-text discovery, and Word workflows. See https://docs.endnote.com/ | Daiqo feels more specialized for a personal research-reading pipeline, local journal monitoring, and direct Library filesystem organization. | EndNote is stronger for institutional citation management, manuscript workflows, and established support/documentation. |
-| Mendeley Reference Manager | Reference manager with PDF reader, annotations, Notebook, and Word citation workflow. See https://www.mendeley.com/reference-management/reference-manager | Daiqo keeps the tested workload local and is built around local paper monitoring plus project-specific Library/Spaces behavior. | Mendeley is stronger for standard citation/reference workflows and account-based sync; Daiqo has not been benchmarked for collaboration/sync. |
-| ReadCube Papers | Literature manager with SmartLists, annotations, subscription integration, group management, and AI-oriented library features. See https://www.readcube.com/ | Daiqo is more transparent/local for the user's own database and file tree, and can be tailored tightly to the user's reading workflow. | ReadCube Papers is stronger as a polished commercial cross-device product; Daiqo's UI polish and PDF preview smoothness still need iteration. |
+| Zotero | Open-source reference manager with browser capture, citation plugins, sync, groups, notes, and PDF annotation. See https://www.zotero.org/ | Gewu Insight is more local-workflow-first for monitored papers, filesystem-like Spaces, loader/import workflows, and Chinese analysis artifacts. | Zotero is much more mature for citation workflows, cross-device sync, group libraries, connectors, and broad community ecosystem. |
+| EndNote | Commercial reference manager centered on library/reference editing, PDF attachment/viewing/annotation, full-text discovery, and Word workflows. See https://docs.endnote.com/ | Gewu Insight feels more specialized for a personal research-reading pipeline, local journal monitoring, and direct Library filesystem organization. | EndNote is stronger for institutional citation management, manuscript workflows, and established support/documentation. |
+| Mendeley Reference Manager | Reference manager with PDF reader, annotations, Notebook, and Word citation workflow. See https://www.mendeley.com/reference-management/reference-manager | Gewu Insight keeps the tested workload local and is built around local paper monitoring plus project-specific Library/Spaces behavior. | Mendeley is stronger for standard citation/reference workflows and account-based sync; Gewu Insight has not been benchmarked for collaboration/sync. |
+| ReadCube Papers | Literature manager with SmartLists, annotations, subscription integration, group management, and AI-oriented library features. See https://www.readcube.com/ | Gewu Insight is more transparent/local for the user's own database and file tree, and can be tailored tightly to the user's reading workflow. | ReadCube Papers is stronger as a polished commercial cross-device product; Gewu Insight's UI polish and PDF preview smoothness still need iteration. |
 
-Bottom line: Daiqo currently scores as a good local specialized research cockpit, not as a drop-in replacement for mature citation-suite software. Its biggest measured bottleneck is the full Library snapshot payload; its biggest product differentiator is local monitored-reading workflow plus filesystem-like Library/Spaces.
+Bottom line: Gewu Insight currently scores as a good local specialized research cockpit, not as a drop-in replacement for mature citation-suite software. Its biggest measured bottleneck is the full Library snapshot payload; its biggest product differentiator is local monitored-reading workflow plus filesystem-like Library/Spaces.
 
 ## Reproduction
 
@@ -532,7 +532,7 @@ def scorecard(by_name: dict[str, dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Local-only Daiqo / Paper Monitor benchmark")
+    parser = argparse.ArgumentParser(description="Local-only Gewu Insight benchmark")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--runs", type=int, default=20)

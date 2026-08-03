@@ -270,7 +270,7 @@ AUTHOR_MONITOR_INITIAL_IMPORT_LIMIT = 5000
 AUTHOR_MONITOR_RECENT_CHECK_LIMIT = 50
 AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
 AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
-NCBI_EUTILS_TOOL = "PaperMonitor"
+NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
@@ -341,7 +341,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     configured_db_path: Path = DEFAULT_DB_PATH
     configured_journals: list[str] = []
 
-    server_version = "PaperMonitorUI/0.1"
+    server_version = "GewuInsightUI/0.1"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -732,6 +732,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/library/navigation-tabs/add-paper":
                 self.handle_add_library_navigation_paper(payload)
                 return
+            if parsed.path == "/api/library/add-paper":
+                self.handle_add_library_navigation_paper({**payload, "tab_type": "library"})
+                return
             if parsed.path == "/api/library/import-folder/choose":
                 self.handle_choose_library_import_folder()
                 return
@@ -1113,7 +1116,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     storage.update_download_status(
                         paper_id,
                         status="success",
-                        message="publisher PDF downloaded through Daiqo browser session",
+                        message="publisher PDF downloaded through Gewu Insight browser session",
                         main_pdf_path=str(target_path),
                         supplement_pdf_paths=[],
                         merged_pdf_path=str(target_path),
@@ -2485,24 +2488,23 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             tab_type = clean_text(str(payload.get("tab_type") or "workspace")).lower()
-            if tab_type == "shortcut":
+            if tab_type == "library":
+                root_folder_id = 1
+                root_label = "Library"
+            elif tab_type == "shortcut":
                 tabs = library_shortcut_tabs(storage)
                 root_key = "folder_id"
                 root_label = "Shortcut"
+                index = library_navigation_tab_index(tabs, payload)
+                root_folder_id = int(tabs[index].get(root_key) or 0)
             elif tab_type == "workspace":
                 tabs = library_workspace_tabs(storage)
                 root_key = "root_folder_id"
                 root_label = "Space"
+                index = library_navigation_tab_index(tabs, payload)
+                root_folder_id = int(tabs[index].get(root_key) or 0)
             else:
-                raise ValueError("tab_type must be shortcut or workspace")
-            index = library_navigation_tab_index(tabs, payload)
-            storage.upsert_paper(paper)
-            paper_id = str(paper.get("paper_id") or "")
-            stored_paper = storage.get_paper(paper_id)
-            stored_paper = refresh_pubmed_if_possible(storage, stored_paper, doi=doi, timeout=8, max_retries=1) or stored_paper
-            refreshed = refresh_semantic_scholar_if_possible(storage, stored_paper, timeout=8, max_retries=1)
-            refresh_ads_if_possible(storage, refreshed or stored_paper or storage.get_paper(paper_id), timeout=8, max_retries=1)
-            root_folder_id = int(tabs[index].get(root_key) or 0)
+                raise ValueError("tab_type must be library, shortcut, or workspace")
             if not root_folder_id:
                 raise ValueError(f"{root_label} folder not found")
             target_folder_id = library_navigation_add_target_folder_id(
@@ -2511,6 +2513,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 requested_folder_id=int(payload.get("folder_id") or root_folder_id),
                 root_label=root_label,
             )
+            storage.upsert_paper(paper)
+            paper_id = str(paper.get("paper_id") or "")
+            stored_paper = storage.get_paper(paper_id)
+            stored_paper = refresh_pubmed_if_possible(storage, stored_paper, doi=doi, timeout=8, max_retries=1) or stored_paper
+            refreshed = refresh_semantic_scholar_if_possible(storage, stored_paper, timeout=8, max_retries=1)
+            refresh_ads_if_possible(storage, refreshed or stored_paper or storage.get_paper(paper_id), timeout=8, max_retries=1)
             item = None
             if paper_id:
                 item = storage.add_library_item(paper_id=paper_id, folder_id=target_folder_id)
@@ -3981,7 +3989,7 @@ pre{{white-space:pre-wrap;background:#f2f4f7;border-radius:8px;padding:12px;colo
 button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 13px;font-weight:700;cursor:pointer;}}
 </style></head><body><div class="card">
 <h1>Publication List Export Failed</h1>
-<p>The export did not finish. You can go back to Daiqo and try another format.</p>
+<p>The export did not finish. You can go back to Gewu Insight and try another format.</p>
 <pre>{xml_escape(message)}</pre>
 <button type="button" onclick="history.back()">Back</button>
 </div></body></html>"""
@@ -16329,7 +16337,7 @@ def write_publication_tex(path: Path, entries: list[dict[str, Any]], *, engine: 
 
 def write_publication_overleaf_zip(path: Path, entries: list[dict[str, Any]]) -> None:
     readme = (
-        "Paper Monitor publication list export\n\n"
+        "Gewu Insight publication list export\n\n"
         "Upload this zip to Overleaf as a new project. The main file is main.tex.\n"
         "The project includes latexmkrc to select XeLaTeX automatically.\n"
     )
@@ -18768,7 +18776,7 @@ def retire_replaced_managed_pdf_paths(
         requested = old_path.expanduser().resolve()
         if requested == replacement or not requested.exists() or not requested.is_file():
             continue
-        # A dragged external source is never Daiqo's file to remove. Shared managed
+        # A dragged external source is never Gewu Insight's file to remove. Shared managed
         # files also remain until every paper has stopped referencing them.
         if not is_allowed_file(requested, managed_roots):
             continue
@@ -21015,7 +21023,7 @@ USER_GUIDE_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Daiqo User Guide</title>
+  <title>Gewu Insight User Guide</title>
   <style>
     :root {
       color: #172033;
@@ -21080,7 +21088,7 @@ USER_GUIDE_HTML = """<!doctype html>
 <body>
   <div class="manual">
     <nav class="toc" aria-label="User Guide Sections">
-      <h1>Daiqo User Guide</h1>
+      <h1>Gewu Insight User Guide</h1>
       <p>File system, Library, imports, metadata, and deletion rules.</p>
       <a href="#overview">1. System Overview</a>
       <a href="#objects">2. Objects You See</a>
@@ -21097,15 +21105,15 @@ USER_GUIDE_HTML = """<!doctype html>
     <main class="content">
       <header class="hero">
         <p class="eyebrow">Chapter 1</p>
-        <h2 id="overview">Daiqo Library File System</h2>
-        <p>Daiqo is a literature library with a Finder-like UI, a SQLite database, and managed local copies in Finder. These three parts are intentionally separate. A row in the Library UI is usually a shortcut, not the paper file itself; the PDF or other file is a local copy managed by Daiqo; the title, DOI, authors, citations, source paths, and refresh history live in SQLite.</p>
+        <h2 id="overview">Gewu Insight Library File System</h2>
+        <p>Gewu Insight（格物洞见）is a literature library with a Finder-like UI, a SQLite database, and managed local copies in Finder. These three parts are intentionally separate. A row in the Library UI is usually a shortcut, not the paper file itself; the PDF or other file is a local copy managed by Gewu Insight; the title, DOI, authors, citations, source paths, and refresh history live in SQLite.</p>
         <div class="flow">
-          <div><b>UI layer</b><span>Folders, paper shortcuts, Recycle, Spaces, and My Publications rows shown in Daiqo.</span></div>
+          <div><b>UI layer</b><span>Folders, paper shortcuts, Recycle, Spaces, and My Publications rows shown in Gewu Insight.</span></div>
           <div><b>SQLite layer</b><span>The authoritative records for papers, shortcuts, folders, resources, imports, and metadata refreshes.</span></div>
-          <div><b>Local-copy layer</b><span>Files and aliases under Daiqo's own <code>data/</code> folder.</span></div>
-          <div><b>External source layer</b><span>Original folders or files selected during import. Daiqo records them but does not manage or delete them.</span></div>
+          <div><b>Local-copy layer</b><span>Files and aliases under Gewu Insight's own <code>data/</code> folder.</span></div>
+          <div><b>External source layer</b><span>Original folders or files selected during import. Gewu Insight records them but does not manage or delete them.</span></div>
         </div>
-        <div class="note">The most important rule: Daiqo manages its own local copies. It should never delete, move, or overwrite the original files that existed outside Daiqo before import.</div>
+        <div class="note">The most important rule: Gewu Insight manages its own local copies. It should never delete, move, or overwrite the original files that existed outside Gewu Insight before import.</div>
       </header>
 
       <section id="objects">
@@ -21116,9 +21124,9 @@ USER_GUIDE_HTML = """<!doctype html>
             <tr><td>Folder</td><td>A Library container stored in <code>library_folders</code>. It can contain child folders and paper shortcuts.</td><td>It is not the paper metadata itself. It may have a matching Finder folder, but SQLite decides the UI tree.</td></tr>
             <tr><td>Paper shortcut</td><td>A visible Library row stored in <code>library_items</code>. It points to one shared <code>papers</code> record.</td><td>It is not a duplicate PDF. Copying it creates another shortcut, not another paper record.</td></tr>
             <tr><td>Paper record</td><td>The shared literature record in <code>papers</code>: title, DOI/arXiv, journal, authors, abstract, citation caches, PDF paths, source path, and import fields.</td><td>It is not tied to only one folder. Many shortcuts can point to it.</td></tr>
-            <tr><td>Resource</td><td>An imported attachment or non-primary file stored in <code>resources</code>, with <code>source_path</code>, <code>stored_path</code>, kind, MIME type, size, and import batch.</td><td>It is not the original external file; it tracks a Daiqo-managed local copy or attachment relationship.</td></tr>
-            <tr><td>Source path</td><td>The original external path Daiqo saw during import, stored on paper/resource/import records for dedupe and diagnosis.</td><td>It is not a path Daiqo is allowed to delete.</td></tr>
-            <tr><td>Local copy</td><td>The managed file under Daiqo's data folder, such as a PDF in <code>data/Library/...</code>.</td><td>It is not necessarily the only shortcut location. Finder aliases may point to it from other folders.</td></tr>
+            <tr><td>Resource</td><td>An imported attachment or non-primary file stored in <code>resources</code>, with <code>source_path</code>, <code>stored_path</code>, kind, MIME type, size, and import batch.</td><td>It is not the original external file; it tracks a Gewu Insight-managed local copy or attachment relationship.</td></tr>
+            <tr><td>Source path</td><td>The original external path Gewu Insight saw during import, stored on paper/resource/import records for dedupe and diagnosis.</td><td>It is not a path Gewu Insight is allowed to delete.</td></tr>
+            <tr><td>Local copy</td><td>The managed file under Gewu Insight's data folder, such as a PDF in <code>data/Library/...</code>.</td><td>It is not necessarily the only shortcut location. Finder aliases may point to it from other folders.</td></tr>
           </tbody>
         </table>
         <h3>Example: one PDF imported into Library</h3>
@@ -21126,7 +21134,7 @@ USER_GUIDE_HTML = """<!doctype html>
           <thead><tr><th>Piece</th><th>Where it lives</th><th>Example meaning</th></tr></thead>
           <tbody>
             <tr><td>Original source path</td><td><code>papers.source_path</code> and/or <code>resources.source_path</code></td><td>The external file path selected during import. It is kept for dedupe and diagnostics only.</td></tr>
-            <tr><td>Local copy</td><td><code>data/Library/.../paper.pdf</code>, referenced by paper/resource path fields</td><td>The Daiqo-managed copy that can be opened, previewed, moved, or sent to macOS Trash by Daiqo.</td></tr>
+            <tr><td>Local copy</td><td><code>data/Library/.../paper.pdf</code>, referenced by paper/resource path fields</td><td>The Gewu Insight-managed copy that can be opened, previewed, moved, or sent to macOS Trash by Gewu Insight.</td></tr>
             <tr><td>Paper metadata</td><td><code>papers</code></td><td>The shared record containing title, DOI/arXiv, authors, journal, abstract, PDF path, source path, and raw metadata.</td></tr>
             <tr><td>Resource/attachment record</td><td><code>resources</code></td><td>The file-level record containing stored path, original filename, MIME type, size, batch, and parse status.</td></tr>
             <tr><td>Visible shortcut</td><td><code>library_items</code></td><td>The row you click in the Library UI. Multiple shortcuts can point to the same paper metadata and local copy.</td></tr>
@@ -21151,8 +21159,8 @@ USER_GUIDE_HTML = """<!doctype html>
           </tbody>
         </table>
         <h3>Canonical file and aliases</h3>
-        <p>When a paper appears in only one Library folder, its local PDF normally lives in that folder's matching Finder directory. When the same paper appears in multiple UI folders, Daiqo keeps one canonical local file and can create macOS aliases in the other Finder folders. This avoids duplicating large PDFs while still making Finder folders useful.</p>
-        <p>If a shortcut has no PDF yet, there may be no Finder file for it. After the PDF is downloaded from Details, Daiqo assigns a local copy path and tries to synchronize aliases for other existing shortcuts.</p>
+        <p>When a paper appears in only one Library folder, its local PDF normally lives in that folder's matching Finder directory. When the same paper appears in multiple UI folders, Gewu Insight keeps one canonical local file and can create macOS aliases in the other Finder folders. This avoids duplicating large PDFs while still making Finder folders useful.</p>
+        <p>If a shortcut has no PDF yet, there may be no Finder file for it. After the PDF is downloaded from Details, Gewu Insight assigns a local copy path and tries to synchronize aliases for other existing shortcuts.</p>
       </section>
 
       <section id="database">
@@ -21178,12 +21186,12 @@ USER_GUIDE_HTML = """<!doctype html>
         <ol>
           <li>The user chooses a source file or folder. That path is external source data.</li>
           <li>The Loader scans readable files, preserves relative paths, extracts DOI/arXiv where possible, and records missing/skipped items in the report.</li>
-          <li>Daiqo copies readable files into the selected target under <code>data/Library/</code> or the active Space root. Link mode is not used.</li>
+          <li>Gewu Insight copies readable files into the selected target under <code>data/Library/</code> or the active Space root. Link mode is not used.</li>
           <li>It creates or reuses <code>papers</code> records, creates <code>resources</code> rows for attachments/local files, creates <code>library_folders</code> for folders, and creates <code>library_items</code> shortcuts for visible UI rows.</li>
           <li>Depending on the selected mode, it may skip metadata refresh, run a quick refresh, or run a full refresh.</li>
         </ol>
         <h3>Repeated import from the same source</h3>
-        <p>If the same source root is imported again, Daiqo tries to reuse the previous target and merge by relative path. Existing local copies are not overwritten. Newly readable files that were missing before can be added. Existing user organization should not be reset just because the source is loaded again.</p>
+        <p>If the same source root is imported again, Gewu Insight tries to reuse the previous target and merge by relative path. Existing local copies are not overwritten. Newly readable files that were missing before can be added. Existing user organization should not be reset just because the source is loaded again.</p>
         <h3>Drag import from Finder</h3>
         <p>Dragging a file or folder from Finder into the Library uses the same Loader pipeline. The difference is target selection: dropping on a folder imports inside that folder; dropping on blank space in a column imports into the current column's folder.</p>
         <div class="note">The Loader report is part of the audit trail. It is useful for missing files, skipped macOS aliases, PDFs without DOI, duplicate DOI/arXiv merges, and metadata refresh failures.</div>
@@ -21192,13 +21200,13 @@ USER_GUIDE_HTML = """<!doctype html>
       <section id="organize">
         <h2>6. Move, Copy, Paste, and Drag</h2>
         <h3>Moving a shortcut</h3>
-        <p>Moving a paper shortcut changes its <code>library_items.folder_id</code>. If that shortcut represents the canonical Finder location for the paper, Daiqo also tries to move the local copy to the matching Finder folder and update aliases. The paper metadata in <code>papers</code> stays the same.</p>
+        <p>Moving a paper shortcut changes its <code>library_items.folder_id</code>. If that shortcut represents the canonical Finder location for the paper, Gewu Insight also tries to move the local copy to the matching Finder folder and update aliases. The paper metadata in <code>papers</code> stays the same.</p>
         <h3>Copying a shortcut</h3>
         <p>Copy/Paste creates another <code>library_items</code> shortcut pointing to the same <code>papers.paper_id</code>. It does not duplicate metadata and does not duplicate the PDF. Finder may receive an alias in the pasted folder so the Finder view still makes sense.</p>
         <h3>Moving folders</h3>
-        <p>Moving a folder changes the <code>library_folders</code> tree and should keep its child folders and shortcuts together. Daiqo then attempts to keep the matching Finder folder structure, canonical local files, and aliases consistent with the new location.</p>
+        <p>Moving a folder changes the <code>library_folders</code> tree and should keep its child folders and shortcuts together. Gewu Insight then attempts to keep the matching Finder folder structure, canonical local files, and aliases consistent with the new location.</p>
         <h3>Dragging out to Finder</h3>
-        <p>Dragging the file icon from a Library row to Desktop or Finder copies the real local file to the external destination. This is an export action. It does not move the Daiqo-managed local copy, and it does not change SQLite records.</p>
+        <p>Dragging the file icon from a Library row to Desktop or Finder copies the real local file to the external destination. This is an export action. It does not move the Gewu Insight-managed local copy, and it does not change SQLite records.</p>
         <h3>Make Copy Desktop</h3>
         <p>The folder context menu action <code>Make Copy Desktop</code> exports a complete real-file copy of that Library folder to Desktop. It follows Library folder hierarchy but writes actual files, not Library shortcuts and not Finder aliases.</p>
       </section>
@@ -21210,8 +21218,8 @@ USER_GUIDE_HTML = """<!doctype html>
         <h3>Inside Recycle</h3>
         <p>Delete inside Recycle is final, but it is reference-aware.</p>
         <ul>
-          <li>If the same paper still has a shortcut outside Recycle, Daiqo removes only the Recycle shortcut. The paper metadata, resources, and local file remain.</li>
-          <li>If no shortcut outside Recycle still points to the paper, Daiqo can remove the remaining Library shortcuts, the shared paper metadata, related resources, and managed local copies.</li>
+          <li>If the same paper still has a shortcut outside Recycle, Gewu Insight removes only the Recycle shortcut. The paper metadata, resources, and local file remain.</li>
+          <li>If no shortcut outside Recycle still points to the paper, Gewu Insight can remove the remaining Library shortcuts, the shared paper metadata, related resources, and managed local copies.</li>
           <li>Managed local copies are moved to macOS Trash. They are not silently unlinked.</li>
           <li>Original source files from the pre-import source path are never deleted.</li>
         </ul>
@@ -21227,12 +21235,12 @@ USER_GUIDE_HTML = """<!doctype html>
         <h3>My Publications</h3>
         <p>My Publications is a personal publication list over shared paper records. Its entries live in <code>my_publications</code> and point to <code>papers</code>. PDFs added by DOI/title lookup or downloaded from My Publications are stored under <code>data/My Publications/</code>. Export order follows saved sort order, and export-excluded rows are skipped.</p>
         <h3>Journal Monitor Add to Library</h3>
-        <p>Journal Monitor may first download PDFs into staging under <code>data/pdfs/</code>. When a monitored paper is added to Library, it enters <code>unsorted</code>. If a PDF exists, Daiqo moves the managed local copy into the Library local-copy folder and updates the paper path. If no PDF exists, the Library shows a shortcut first; downloading later assigns the local copy path.</p>
+        <p>Journal Monitor may first download PDFs into staging under <code>data/pdfs/</code>. When a monitored paper is added to Library, it enters <code>unsorted</code>. If a PDF exists, Gewu Insight moves the managed local copy into the Library local-copy folder and updates the paper path. If no PDF exists, the Library shows a shortcut first; downloading later assigns the local copy path.</p>
       </section>
 
       <section id="metadata">
         <h2>9. Metadata Refresh and Identifiers</h2>
-        <p>Metadata refresh changes SQLite metadata, not the original source files. Depending on the action, Daiqo may use DOI, arXiv, title lookup, Crossref, OpenAlex, Semantic Scholar, PubMed, ADS, or PDF text extraction.</p>
+        <p>Metadata refresh changes SQLite metadata, not the original source files. Depending on the action, Gewu Insight may use DOI, arXiv, title lookup, Crossref, OpenAlex, Semantic Scholar, PubMed, ADS, or PDF text extraction.</p>
         <table>
           <thead><tr><th>Action</th><th>What it does</th><th>When to use it</th></tr></thead>
           <tbody>
@@ -21245,17 +21253,17 @@ USER_GUIDE_HTML = """<!doctype html>
             <tr><td>Find All Missing Identifiers</td><td>Checks active Library and Space papers without DOI/arXiv, using local PDFs and strict title matches through Crossref, OpenAlex, and Semantic Scholar.</td><td>Use as a resumable, rate-limited repair pass for older imports.</td></tr>
           </tbody>
         </table>
-        <p>Refresh history is recorded in <code>paper_metadata_refreshes</code>. This lets Daiqo avoid repeating expensive refreshes and makes failed refreshes easier to diagnose.</p>
+        <p>Refresh history is recorded in <code>paper_metadata_refreshes</code>. This lets Gewu Insight avoid repeating expensive refreshes and makes failed refreshes easier to diagnose.</p>
       </section>
 
       <section id="finder">
         <h2>10. Finder Actions and Practical Rules</h2>
         <ul>
-          <li><strong>Open in Finder</strong> reveals the local copy or matching folder if Daiqo has one. It cannot reveal a file that has not been downloaded or imported yet.</li>
+          <li><strong>Open in Finder</strong> reveals the local copy or matching folder if Gewu Insight has one. It cannot reveal a file that has not been downloaded or imported yet.</li>
           <li><strong>Open in Preview</strong> opens the managed local file, usually a PDF, in macOS Preview.</li>
-          <li><strong>QuickLook with Space</strong> uses Daiqo's internal previewer for PDFs and supported non-PDF file types.</li>
+          <li><strong>QuickLook with Space</strong> uses Gewu Insight's internal previewer for PDFs and supported non-PDF file types.</li>
           <li><strong>Do not manually reorganize <code>data/Library/</code> in Finder</strong> unless you know you are repairing local copies. The UI tree is controlled by SQLite, so manual Finder moves can desynchronize paths.</li>
-          <li><strong>Use the Library UI for organization</strong>: move/copy/delete in Daiqo, then use Open in Finder or Make Copy Desktop when you need real files outside Daiqo.</li>
+          <li><strong>Use the Library UI for organization</strong>: move/copy/delete in Gewu Insight, then use Open in Finder or Make Copy Desktop when you need real files outside Gewu Insight.</li>
         </ul>
       </section>
     </main>
@@ -21270,7 +21278,7 @@ INDEX_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Journal Monitor</title>
+  <title>Gewu Insight</title>
   <style>
     :root {
       --ink: #18212f;
@@ -24996,6 +25004,82 @@ INDEX_HTML = """<!doctype html>
       user-select: none;
     }
     .library-row + .library-row { margin-top: 1px; }
+    .library-inline-add-paper-row {
+      width: 100%;
+      min-height: 36px;
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr) auto;
+      gap: 6px;
+      align-items: center;
+      box-sizing: border-box;
+      padding: 3px 6px;
+      border: 1px solid rgba(15, 107, 110, 0.34);
+      border-radius: 5px;
+      background: #f4faf9;
+      color: var(--ink);
+    }
+    .library-inline-add-paper-row + .library-row { margin-top: 2px; }
+    .library-inline-add-paper-row.table-inline-add-paper-row {
+      min-width: 640px;
+      grid-template-columns: 22px minmax(260px, 1fr) auto;
+      margin-bottom: 2px;
+    }
+    .library-inline-add-paper-icon {
+      width: 20px;
+      height: 20px;
+      display: grid;
+      place-items: center;
+      justify-self: center;
+      border-radius: 4px;
+      background: rgba(15, 107, 110, 0.10);
+      color: var(--accent);
+      font-size: 16px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .library-inline-add-paper-input {
+      min-width: 0;
+      width: 100%;
+      height: 27px;
+      box-sizing: border-box;
+      border: 0;
+      border-bottom: 1px solid rgba(15, 107, 110, 0.42);
+      border-radius: 0;
+      outline: none;
+      background: transparent;
+      color: var(--ink);
+      padding: 0 3px;
+      font: inherit;
+      font-size: 12px;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    .library-inline-add-paper-input:focus { border-bottom-color: var(--accent); }
+    .library-inline-add-paper-input.error { border-bottom-color: #b42318; }
+    .library-inline-add-paper-submit {
+      min-width: 68px;
+      height: 27px;
+      border: 0;
+      border-radius: 5px;
+      background: rgba(15, 107, 110, 0.12);
+      color: var(--accent);
+      padding: 0 8px;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .library-inline-add-paper-submit:hover { background: rgba(15, 107, 110, 0.20); }
+    .library-inline-add-paper-submit:disabled { cursor: default; opacity: 0.58; }
+    .library-inline-add-paper-error {
+      grid-column: 2 / -1;
+      min-width: 0;
+      color: #b42318;
+      font-size: 10px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      padding: 0 3px 2px;
+    }
     .library-row.range-selected { background: #d9ebff; border-color: #b9d7fb; }
     .library-row.range-selected .library-meta { color: #45637f; }
     .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
@@ -28606,7 +28690,7 @@ INDEX_HTML = """<!doctype html>
     <div class="app-startup-card">
       <div class="app-startup-icon">D</div>
       <div class="app-startup-copy">
-        <strong class="app-startup-title" id="appStartupTitle">Starting Daiqo</strong>
+        <strong class="app-startup-title" id="appStartupTitle">Starting Gewu Insight</strong>
         <div id="appStartupMessage">Loading Library.</div>
       </div>
     </div>
@@ -28855,7 +28939,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>OpenAlex</strong><span id="openalexConfiguredLabel">Not configured</span></div>
-              <p>Optional but recommended. Daiqo uses only the daily free allowance and falls back to other metadata sources when that allowance is exhausted.</p>
+              <p>Optional but recommended. Gewu Insight uses only the daily free allowance and falls back to other metadata sources when that allowance is exhausted.</p>
               <div class="citation-token-row">
                 <input class="search" id="openalexKeyInput" type="password" autocomplete="off" placeholder="OpenAlex API key">
                 <button class="smallbtn" id="saveOpenalexKey" type="button">Save</button>
@@ -28926,7 +29010,7 @@ INDEX_HTML = """<!doctype html>
       const startupTitle = document.getElementById("appStartupTitle");
       const startupMessage = document.getElementById("appStartupMessage");
       const startupCover = document.getElementById("appStartupCover");
-      if (startupTitle) startupTitle.textContent = "Daiqo could not start";
+      if (startupTitle) startupTitle.textContent = "Gewu Insight could not start";
       if (startupMessage) startupMessage.textContent = message;
       if (startupCover) startupCover.classList.remove("hidden");
       const root = document.getElementById("papers") || document.body;
@@ -28944,7 +29028,7 @@ INDEX_HTML = """<!doctype html>
         showBootError(error);
         return;
       }
-      console.error(`Daiqo ${source || "runtime"} error`, error);
+      console.error(`Gewu Insight ${source || "runtime"} error`, error);
     }
     window.addEventListener("error", (event) => handleGlobalUiError(event.error || event.message, "runtime"));
     window.addEventListener("unhandledrejection", (event) => handleGlobalUiError(event.reason, "promise"));
@@ -29082,6 +29166,10 @@ INDEX_HTML = """<!doctype html>
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
       workspaceAddPaperBusy: false,
+      libraryInlineAddFolderId: 0,
+      libraryInlineAddQuery: "",
+      libraryInlineAddBusy: false,
+      libraryInlineAddError: "",
       libraryTaskMode: "import",
       libraryImportPath: "",
       libraryImportSourcePaths: [],
@@ -31990,7 +32078,7 @@ INDEX_HTML = """<!doctype html>
             <p>This will remove ${metadataCount} paper record${metadataCount === 1 ? "" : "s"} that are no longer used outside Recycle, including related metadata and source/resource records.</p>
             ${pathRows}
             ${orphanNote}
-            <p>Original imported source files outside Daiqo will not be touched.</p>
+            <p>Original imported source files outside Gewu Insight will not be touched.</p>
             ${shortcutOnlyNote}
             <div class="finder-drop-actions">
               <button type="button" data-confirm="cancel">Cancel</button>
@@ -34329,6 +34417,9 @@ INDEX_HTML = """<!doctype html>
     function renderLibrary() {
       state.mode = "library";
       if (!state.libraryTab?.startsWith("shortcut-") && !state.libraryTab?.startsWith("workspace-")) state.libraryTab = "library";
+      if ((state.libraryTab !== "library" || librarySearchIsActive()) && state.libraryInlineAddFolderId) {
+        resetLibraryInlineAddPaper();
+      }
       stopArxivUpdateCountdown();
       clearFetchProgressDisplay();
       clearMonitorStatusDisplay();
@@ -34371,6 +34462,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-context-menu" id="libraryContextMenu">
           <button type="button" data-action="new-folder">New Folder</button>
+          <button type="button" data-action="add-paper">Add Paper</button>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
@@ -36212,6 +36304,94 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function resetLibraryInlineAddPaper() {
+      state.libraryInlineAddFolderId = 0;
+      state.libraryInlineAddQuery = "";
+      state.libraryInlineAddBusy = false;
+      state.libraryInlineAddError = "";
+    }
+
+    function beginLibraryInlineAddPaper(folderId) {
+      const targetFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
+      if (
+        state.libraryTab !== "library"
+        || librarySearchIsActive()
+        || !libraryFolderById(targetFolderId)
+        || !libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1))
+        || targetFolderId === libraryRecycleFolderId()
+      ) return;
+      state.libraryInlineAddFolderId = targetFolderId;
+      state.libraryInlineAddQuery = "";
+      state.libraryInlineAddBusy = false;
+      state.libraryInlineAddError = "";
+      renderLibrary();
+    }
+
+    function cancelLibraryInlineAddPaper() {
+      if (state.libraryInlineAddBusy) return;
+      resetLibraryInlineAddPaper();
+      renderLibrary();
+      restoreLibraryKeyboardFocus();
+    }
+
+    async function submitLibraryInlineAddPaper() {
+      const targetFolderId = Number(state.libraryInlineAddFolderId || 0);
+      const input = document.querySelector("[data-library-inline-add-paper-input]");
+      const identifier = String(input?.value ?? state.libraryInlineAddQuery ?? "").trim();
+      state.libraryInlineAddQuery = identifier;
+      if (!targetFolderId || !identifier || state.libraryInlineAddBusy) {
+        input?.focus({preventScroll: true});
+        return;
+      }
+      const targetName = libraryFolderPath(targetFolderId) || "current folder";
+      state.libraryInlineAddBusy = true;
+      state.libraryInlineAddError = "";
+      updateLibraryActivityStatus(
+        `Finding paper and adding it to ${targetName}...`,
+        {live: true, clear: false}
+      );
+      renderLibrary();
+      try {
+        const res = await fetch("/api/library/add-paper", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({identifier, folder_id: targetFolderId})
+        });
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not add paper");
+        applyLibraryNavigationSnapshot(data);
+        upsertLibraryItemLocal(data.item);
+        if (data.paper) updatePaperState(data.paper.paper_id || data.paper_id, data.paper);
+        const addedFolderId = Number(data.folder_id || targetFolderId);
+        const added = data.item?.id
+          ? libraryItemById(Number(data.item.id))
+          : state.libraryItems.find((item) => (
+              String(item.paper_id || "") === String(data.paper_id || "")
+              && Number(item.folder_id) === addedFolderId
+            ));
+        resetLibraryInlineAddPaper();
+        if (added) {
+          state.libraryActiveFolderId = addedFolderId;
+          state.libraryCurrentFolderId = addedFolderId;
+          state.librarySelection = {type: "item", id: Number(added.id)};
+          setLibraryColumnSelection(addedFolderId, state.librarySelection);
+        }
+        const paperTitle = String(data.paper?.title || identifier).trim();
+        updateLibraryActivityStatus(
+          `Added ${paperTitle} to ${targetName}.`,
+          {live: false, delay: 4200}
+        );
+      } catch (error) {
+        state.libraryInlineAddBusy = false;
+        state.libraryInlineAddError = error.message || "Could not add paper";
+        updateLibraryActivityStatus(
+          `Add Paper failed: ${state.libraryInlineAddError}`,
+          {live: false, delay: 5200}
+        );
+      }
+      renderLibrary();
+    }
+
     function wireWorkspaceTools() {
       const context = activeLibraryNavigationToolContext();
       if (!context) return;
@@ -37210,6 +37390,27 @@ INDEX_HTML = """<!doctype html>
       return folderIds;
     }
 
+    function libraryInlineAddPaperMarkup(folderId, options = {}) {
+      if (Number(state.libraryInlineAddFolderId || 0) !== Number(folderId || 0)) return "";
+      const error = String(state.libraryInlineAddError || "").trim();
+      const busy = Boolean(state.libraryInlineAddBusy);
+      return `
+        <div class="library-inline-add-paper-row${options.table ? " table-inline-add-paper-row" : ""}"
+          data-library-inline-add-paper data-library-inline-add-folder="${Number(folderId || 0)}">
+          <span class="library-inline-add-paper-icon" aria-hidden="true">+</span>
+          <input class="library-inline-add-paper-input${error ? " error" : ""}"
+            data-library-inline-add-paper-input
+            value="${escapeAttr(state.libraryInlineAddQuery || "")}"
+            placeholder="DOI, arXiv ID, or title"
+            aria-label="DOI, arXiv ID, or paper title"
+            ${busy ? "disabled" : ""}>
+          <button class="library-inline-add-paper-submit" type="button"
+            data-library-inline-add-paper-submit ${busy ? "disabled" : ""}>${busy ? "Finding" : "Add Paper"}</button>
+          ${error ? `<span class="library-inline-add-paper-error">${escapeHtml(error)}</span>` : ""}
+        </div>
+      `;
+    }
+
     function libraryColumnMarkup(folderId, pathFolderIds = new Set(), options = {}) {
       const folder = libraryFolderById(folderId) || {name: "Library"};
       const loaded = libraryFolderLoaded(folderId);
@@ -37220,13 +37421,14 @@ INDEX_HTML = """<!doctype html>
         const data = entry.type === "folder" ? libraryFolderById(entry.id) : libraryItemById(entry.id);
         return data ? libraryRowMarkup(entry.type, data, folderId, pathFolderIds) : "";
       }).join("");
+      const inlineAddPaper = libraryInlineAddPaperMarkup(folderId);
       const width = Number(state.libraryColumnWidths[folderId] || 260);
       return `
         <section class="library-column${options.pathColumn ? " path-column" : ""}" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}" style="--library-column-width:${Math.max(180, Math.min(520, width))}px">
           <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
           <div class="library-column-body">
             ${loaded
-              ? (rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`)
+              ? (inlineAddPaper + rows || `<div class="empty">Right-click to create a folder or add a paper.</div>`)
               : `<div class="empty">Loading folder...</div>`}
           </div>
           <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
@@ -37244,6 +37446,7 @@ INDEX_HTML = """<!doctype html>
       const subtitle = loaded
         ? `${folderCount} folder${folderCount === 1 ? "" : "s"} · ${itemCount} item${itemCount === 1 ? "" : "s"}`
         : "Loading";
+      const inlineAddPaper = libraryInlineAddPaperMarkup(folderId, {table: true});
       return `
         <section class="library-column table-column" data-library-column-folder="${folderId}" data-library-drop-folder="${folderId}">
           <div class="library-table">
@@ -37259,7 +37462,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="library-column-body library-table-body">
               ${loaded
-                ? (rows || `<div class="empty">Right-click to create a folder, or add papers from Report.</div>`)
+                ? (inlineAddPaper + rows || `<div class="empty">Right-click to create a folder or add a paper.</div>`)
                 : `<div class="empty">Loading folder...</div>`}
             </div>
           </div>
@@ -39928,6 +40131,43 @@ INDEX_HTML = """<!doctype html>
     function wireLibraryInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
+      const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
+      const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
+      const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
+      if (inlineAddPaper && inlineAddPaperInput) {
+        ["pointerdown", "click", "contextmenu"].forEach((eventName) => {
+          inlineAddPaper.addEventListener(eventName, (event) => event.stopPropagation());
+        });
+        inlineAddPaperInput.addEventListener("input", () => {
+          state.libraryInlineAddQuery = inlineAddPaperInput.value;
+          if (state.libraryInlineAddError) {
+            state.libraryInlineAddError = "";
+            inlineAddPaperInput.classList.remove("error");
+            inlineAddPaper.querySelector(".library-inline-add-paper-error")?.remove();
+          }
+        });
+        inlineAddPaperInput.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submitLibraryInlineAddPaper();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            cancelLibraryInlineAddPaper();
+          }
+        });
+        inlineAddPaperSubmit?.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          submitLibraryInlineAddPaper();
+        });
+        window.setTimeout(() => {
+          if (!state.libraryInlineAddBusy && document.body.contains(inlineAddPaperInput)) {
+            inlineAddPaperInput.focus({preventScroll: true});
+            inlineAddPaperInput.setSelectionRange(inlineAddPaperInput.value.length, inlineAddPaperInput.value.length);
+          }
+        }, 0);
+      }
       const renameInput = shell.querySelector("[data-library-rename-input]");
       if (renameInput) {
         window.setTimeout(() => {
@@ -40801,7 +41041,7 @@ INDEX_HTML = """<!doctype html>
     function downloadPublishedPdfInBackground(browserFallback, context) {
       const handler = window.webkit?.messageHandlers?.publisherPdfDownload;
       if (!handler || !browserFallback?.url) {
-        throw new Error("The publisher blocked direct PDF access. Open Daiqo.app to use its background browser download.");
+        throw new Error("The publisher blocked direct PDF access. Open Gewu Insight.app to use its background browser download.");
       }
       const token = window.crypto?.randomUUID?.() || `publisher-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       return new Promise((resolve, reject) => {
@@ -41036,7 +41276,7 @@ INDEX_HTML = """<!doctype html>
       if (options.restoreFocus) restoreLibraryQuickLookReturnFocus(returnFocus);
     }
 
-    window.closeDaiqoPreviewFromNative = () => {
+    window.closeGewuInsightPreviewFromNative = () => {
       if (!state.libraryQuickLookOpen) return false;
       closeLibraryQuickLook({restoreFocus: true});
       return true;
@@ -41648,6 +41888,7 @@ INDEX_HTML = """<!doctype html>
       const openNativeButton = menu.querySelector('[data-action="open-native-entry"]');
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
       const copyFolderDesktopButton = menu.querySelector('[data-action="copy-folder-desktop"]');
+      const addPaperButton = menu.querySelector('[data-action="add-paper"]');
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -41756,6 +41997,19 @@ INDEX_HTML = """<!doctype html>
           const id = Number(menu.dataset.entryId || 0);
           hideLibraryContextMenu();
           await runLibraryMenuAction(() => copyLibraryFolderToDesktop(id));
+        };
+      }
+      if (addPaperButton) {
+        const targetFolderId = Number(menu.dataset.parentId || state.libraryActiveFolderId || state.libraryRootId);
+        const canAddPaper = state.libraryTab === "library"
+          && !hasEntry
+          && !librarySearchIsActive()
+          && targetFolderId !== libraryRecycleFolderId()
+          && libraryFolderIsWithin(targetFolderId, Number(state.libraryRootId || 1));
+        addPaperButton.style.display = canAddPaper ? "" : "none";
+        addPaperButton.onclick = () => {
+          hideLibraryContextMenu();
+          beginLibraryInlineAddPaper(targetFolderId);
         };
       }
       if (pasteButton) {
@@ -44300,7 +44554,7 @@ INDEX_HTML = """<!doctype html>
             <h2 id="authorScholarBackfillTitle">Update all Scholar citations for ${escapeHtml(name)}?</h2>
             <p>This re-reads this exact profile and updates Google Scholar citation counts for every saved paper. The profile homepage is also refreshed, and newly discovered publications are marked as new.</p>
             <p>About ${estimatedPages} Scholar page request${estimatedPages === 1 ? "" : "s"} may be needed for ${paperCount} saved publication${paperCount === 1 ? "" : "s"}. Requests are serialized, with 12–24 seconds between profile pages. No other author will be refreshed automatically.</p>
-            <p><strong>If Scholar shows a block page, Daiqo stops and pauses all Scholar access for 24 hours.</strong></p>
+            <p><strong>If Scholar shows a block page, Gewu Insight stops and pauses all Scholar access for 24 hours.</strong></p>
             <div class="finder-drop-actions">
               <button type="button" data-confirm="cancel">Cancel</button>
               <button type="button" class="primary" data-confirm="backfill">Update All Citations</button>
@@ -45660,9 +45914,9 @@ INDEX_HTML = """<!doctype html>
         ? ` · resets ${new Date(openalex.resets_at).toLocaleString()}`
         : "";
       if (openalex?.paused) {
-        return `Daily free allowance reached${reset}. Daiqo is using other metadata sources.`;
+        return `Daily free allowance reached${reset}. Gewu Insight is using other metadata sources.`;
       }
-      return `${quota}${reset}. Paid credits are not used by Daiqo.`;
+      return `${quota}${reset}. Paid credits are not used by Gewu Insight.`;
     }
 
     async function saveCitationOpenalexKey() {
@@ -45974,11 +46228,11 @@ INDEX_HTML = """<!doctype html>
 
     function suggestedThemeKeywordPrompt(subjectName) {
       return [
-        "Create a minimal, non-redundant keyword list for Daiqo Subject Monitor.",
+        "Create a minimal, non-redundant keyword list for Gewu Insight Subject Monitor.",
         "",
         `Subject: "${subjectName}"`,
         "",
-        "Daiqo uses case-insensitive literal matching in paper titles and abstracts. It does not perform stemming, so genuinely different word forms may be kept.",
+        "Gewu Insight uses case-insensitive literal matching in paper titles and abstracts. It does not perform stemming, so genuinely different word forms may be kept.",
         "",
         "Generate the smallest useful set of English search terms for this subject. Usually 4–10 terms are enough. Do not add terms merely to reach a target count.",
         "",

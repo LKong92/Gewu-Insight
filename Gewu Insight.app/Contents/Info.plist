@@ -5,9 +5,9 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Daiqo</string>
+  <string>Gewu Insight</string>
   <key>CFBundleExecutable</key>
-  <string>Paper Monitor</string>
+  <string>Gewu Insight</string>
   <key>CFBundleIdentifier</key>
   <string>local.paper-monitor</string>
   <key>CFBundleIconFile</key>
@@ -15,7 +15,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Daiqo</string>
+  <string>Gewu Insight</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -25,11 +25,11 @@
   <key>LSMinimumSystemVersion</key>
   <string>10.15</string>
   <key>NSDesktopFolderUsageDescription</key>
-  <string>Daiqo uses Desktop access to import and manage files selected for the Library.</string>
+  <string>Gewu Insight uses Desktop access to import and manage files selected for the Library.</string>
   <key>NSDocumentsFolderUsageDescription</key>
-  <string>Daiqo uses Documents access to import and manage files selected for the Library.</string>
+  <string>Gewu Insight uses Documents access to import and manage files selected for the Library.</string>
   <key>NSDownloadsFolderUsageDescription</key>
-  <string>Daiqo uses Downloads access to import literature files selected for the Library.</string>
+  <string>Gewu Insight uses Downloads access to import literature files selected for the Library.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

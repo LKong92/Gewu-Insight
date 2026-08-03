@@ -2,7 +2,7 @@
 #import <WebKit/WebKit.h>
 #include <string.h>
 
-@interface DaiqoWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
+@interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
 @property(nonatomic, copy) NSString *nativeDragCleanupPath;
@@ -10,7 +10,7 @@
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
 @end
 
-@implementation DaiqoWebView
+@implementation GewuInsightWebView
 
 - (instancetype)initWithFrame:(NSRect)frame configuration:(WKWebViewConfiguration *)configuration {
     self = [super initWithFrame:frame configuration:configuration];
@@ -259,11 +259,11 @@
 
 @end
 
-@interface DaiqoWindow : NSWindow
+@interface GewuInsightWindow : NSWindow
 @property(nonatomic, copy) void (^titlebarDoubleClickHandler)(void);
 @end
 
-@implementation DaiqoWindow
+@implementation GewuInsightWindow
 
 - (BOOL)handleTitlebarDoubleClickAction {
     NSEvent *event = NSApp.currentEvent;
@@ -351,7 +351,7 @@
     NSString *port = environment[@"PAPER_MONITOR_PORT"] ?: @"8765";
     self.url = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@:%@", host, port]];
 
-    // Daiqo owns the title-bar double-click gesture. Keep AppKit from applying
+    // Gewu Insight owns the title-bar double-click gesture. Keep AppKit from applying
     // the user's global Fill/Zoom/Minimize choice before our window can toggle.
     [[NSUserDefaults standardUserDefaults] setObject:@"None" forKey:@"AppleActionOnDoubleClick"];
 
@@ -409,11 +409,11 @@
     }
     if (
         activeWindow == self.window
-        && [self.webView isKindOfClass:[DaiqoWebView class]]
-        && ((DaiqoWebView *)self.webView).pdfQuickLookActive
+        && [self.webView isKindOfClass:[GewuInsightWebView class]]
+        && ((GewuInsightWebView *)self.webView).pdfQuickLookActive
     ) {
         [self.webView evaluateJavaScript:
-            @"window.closeDaiqoPreviewFromNative && window.closeDaiqoPreviewFromNative()"
+            @"window.closeGewuInsightPreviewFromNative && window.closeGewuInsightPreviewFromNative()"
             completionHandler:nil];
         return;
     }
@@ -436,10 +436,10 @@
     [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
     configuration.userContentController = userContentController;
-    self.webView = [[DaiqoWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+    self.webView = [[GewuInsightWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
 
-    self.window = [[DaiqoWindow alloc]
+    self.window = [[GewuInsightWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 1280, 860)
                   styleMask:(NSWindowStyleMaskTitled |
                              NSWindowStyleMaskClosable |
@@ -463,7 +463,7 @@
     }
     self.window.contentView = self.webView;
     __weak PaperMonitorDelegate *weakSelf = self;
-    ((DaiqoWindow *)self.window).titlebarDoubleClickHandler = ^{
+    ((GewuInsightWindow *)self.window).titlebarDoubleClickHandler = ^{
         PaperMonitorDelegate *strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.windowDragging = NO;
@@ -485,13 +485,13 @@
         return;
     }
     if ([message.name isEqualToString:@"pdfPreviewState"]) {
-        if (![self.webView isKindOfClass:[DaiqoWebView class]]) return;
+        if (![self.webView isKindOfClass:[GewuInsightWebView class]]) return;
         BOOL active = NO;
         if ([message.body isKindOfClass:[NSDictionary class]]) {
             id value = ((NSDictionary *)message.body)[@"active"];
             if ([value respondsToSelector:@selector(boolValue)]) active = [value boolValue];
         }
-        ((DaiqoWebView *)self.webView).pdfQuickLookActive = active;
+        ((GewuInsightWebView *)self.webView).pdfQuickLookActive = active;
         return;
     }
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {
@@ -508,14 +508,14 @@
         return;
     }
     if ([message.name isEqualToString:@"nativeFileDrag"]) {
-        if (![message.body isKindOfClass:[NSDictionary class]] || ![self.webView isKindOfClass:[DaiqoWebView class]]) {
+        if (![message.body isKindOfClass:[NSDictionary class]] || ![self.webView isKindOfClass:[GewuInsightWebView class]]) {
             return;
         }
         NSDictionary *payload = (NSDictionary *)message.body;
         NSString *path = [payload[@"path"] isKindOfClass:[NSString class]] ? payload[@"path"] : @"";
         NSString *name = [payload[@"name"] isKindOfClass:[NSString class]] ? payload[@"name"] : @"";
         NSString *cleanupPath = [payload[@"cleanup_path"] isKindOfClass:[NSString class]] ? payload[@"cleanup_path"] : @"";
-        DaiqoWebView *webView = (DaiqoWebView *)self.webView;
+        GewuInsightWebView *webView = (GewuInsightWebView *)self.webView;
         webView.nativeDragPath = path;
         webView.nativeDragName = name;
         webView.nativeDragCleanupPath = cleanupPath;
@@ -1208,7 +1208,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error || statusCode < 200 || statusCode >= 300 || ![responsePayload isKindOfClass:[NSDictionary class]]) {
                 NSString *serverError = [responsePayload[@"error"] isKindOfClass:[NSString class]] ? responsePayload[@"error"] : nil;
-                [self failHiddenPublisherDownload:serverError ?: error.localizedDescription ?: @"Could not add the published PDF to Daiqo."];
+                [self failHiddenPublisherDownload:serverError ?: error.localizedDescription ?: @"Could not add the published PDF to Gewu Insight."];
                 return;
             }
             NSString *token = self.hiddenPublisherToken ?: @"";
@@ -1331,8 +1331,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
-    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Daiqo"];
-    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Daiqo"];
+    NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Gewu Insight"];
+    NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Gewu Insight"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
 
@@ -1420,7 +1420,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         ".icon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#0f6b6e,#d7b46a);color:white;font-size:22px;font-weight:800;box-shadow:0 10px 22px rgba(15,107,110,.22);}"
         ".copy{min-width:0;flex:1;}.message{min-height:22px;}"
         "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><div class='icon'>D</div><div class='copy'><strong>Starting Daiqo</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
+        "</style></head><body><div class='card'><div class='icon'>G</div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
     [self.webView loadHTMLString:html baseURL:nil];
 }
 
@@ -1443,7 +1443,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSURL *helperURL = [[[[[NSBundle mainBundle] bundleURL]
         URLByAppendingPathComponent:@"Contents"]
         URLByAppendingPathComponent:@"MacOS"]
-        URLByAppendingPathComponent:@"Paper Monitor Server"];
+        URLByAppendingPathComponent:@"Gewu Insight Server"];
 
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = helperURL;
@@ -1578,7 +1578,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                                  NSWindowStyleMaskResizable)
                         backing:NSBackingStoreBuffered
                           defer:NO];
-        self.userGuideWindow.title = @"User Guide";
+        self.userGuideWindow.title = @"Gewu Insight User Guide";
         self.userGuideWindow.delegate = self;
         self.userGuideWindow.minSize = NSMakeSize(760, 560);
         self.userGuideWindow.contentView = self.userGuideWebView;
@@ -1713,7 +1713,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
     NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Daiqo could not start";
+    alert.messageText = @"Gewu Insight could not start";
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];
