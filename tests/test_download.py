@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from paper_monitor import download
+from paper_monitor.storage import Storage
 
 
 class DownloadCandidateTests(unittest.TestCase):
@@ -312,6 +313,78 @@ class DownloadCandidateTests(unittest.TestCase):
             "https://europepmc.org/api/getPdf?pmcid=PMC5419706",
         )
         self.assertIn(paper["pdf_url"], candidates)
+
+    def test_nature_version_of_record_precedes_stale_reference_pdf(self):
+        paper = {
+            "paper_id": "nature-example",
+            "doi": "10.1038/s41467-026-74221-7",
+            "journal": "Nature Communications",
+            "pdf_url": (
+                "https://www.nature.com/articles/"
+                "s41467-026-74221-7_reference.pdf"
+            ),
+            "landing_url": "",
+            "url": "",
+        }
+        with patch.object(download, "crossref_pdf_candidates", return_value=[]):
+            candidates = download.collect_pdf_candidates(paper)["main"]
+
+        self.assertEqual(
+            candidates[0],
+            "https://www.nature.com/articles/s41467-026-74221-7.pdf",
+        )
+        self.assertEqual(candidates[-1], paper["pdf_url"])
+
+    def test_nature_reference_url_detection_ignores_query_string(self):
+        self.assertTrue(
+            download.is_nature_reference_pdf_url(
+                "https://www.nature.com/articles/example_reference.pdf?download=1"
+            )
+        )
+        self.assertFalse(
+            download.is_nature_reference_pdf_url(
+                "https://www.nature.com/articles/example.pdf"
+            )
+        )
+
+    def test_refresh_reuses_current_numbered_pdf_in_target_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_dir = Path(tmp)
+            desired = target_dir / "paper_merged.pdf"
+            desired.write_bytes(b"old")
+            current = target_dir / "paper_merged 2.pdf"
+            current.write_bytes(b"current")
+
+            self.assertEqual(
+                download.unique_download_path(desired, current_path=str(current)),
+                current.resolve(),
+            )
+
+    def test_successful_pdf_url_is_synced_across_matching_doi_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                for paper_id in ("arxiv_example", "doi_example"):
+                    storage.upsert_paper(
+                        {
+                            "paper_id": paper_id,
+                            "doi": "10.1038/example",
+                            "title": "Example",
+                            "journal": "Nature Communications",
+                            "pdf_url": "https://www.nature.com/articles/example_reference.pdf",
+                        }
+                    )
+                canonical_url = "https://www.nature.com/articles/example.pdf"
+                storage.update_download_status(
+                    "arxiv_example",
+                    status="success",
+                    pdf_url=canonical_url,
+                )
+
+                self.assertEqual(storage.get_paper("arxiv_example")["pdf_url"], canonical_url)
+                self.assertEqual(storage.get_paper("doi_example")["pdf_url"], canonical_url)
+            finally:
+                storage.close()
 
     def test_science_supplement_uses_aaas_sm_pdf_url(self):
         self.assertEqual(

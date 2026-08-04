@@ -1451,6 +1451,7 @@ class Storage:
         main_pdf_path: str | None = None,
         supplement_pdf_paths: list[str] | None = None,
         merged_pdf_path: str | None = None,
+        pdf_url: str | None = None,
     ) -> None:
         self.conn.execute(
             """
@@ -1460,6 +1461,7 @@ class Storage:
                 main_pdf_path = COALESCE(?, main_pdf_path),
                 supplement_pdf_paths = COALESCE(?, supplement_pdf_paths),
                 merged_pdf_path = COALESCE(?, merged_pdf_path),
+                pdf_url = COALESCE(?, pdf_url),
                 downloaded_at = ?
             WHERE paper_id = ?
             """,
@@ -1469,10 +1471,26 @@ class Storage:
                 main_pdf_path,
                 json.dumps(supplement_pdf_paths, ensure_ascii=False) if supplement_pdf_paths is not None else None,
                 merged_pdf_path,
+                pdf_url,
                 now_iso(),
                 paper_id,
             ),
         )
+        if pdf_url:
+            doi_row = self.conn.execute(
+                "SELECT doi FROM papers WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchone()
+            doi = str(doi_row["doi"] or "").strip() if doi_row else ""
+            if doi:
+                # The same publication can have both an arXiv-backed record
+                # and a DOI-backed record.  Keep their successful publisher
+                # PDF source aligned so a later visit cannot reintroduce a
+                # stale accepted-manuscript URL.
+                self.conn.execute(
+                    "UPDATE papers SET pdf_url = ? WHERE LOWER(TRIM(doi)) = LOWER(?)",
+                    (pdf_url, doi),
+                )
         self.conn.commit()
 
     def record_theme_result(

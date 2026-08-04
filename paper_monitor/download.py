@@ -45,6 +45,7 @@ def download_paper(
     candidates = collect_pdf_candidates(paper)
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
     main_pdf_path: Path | None = preserved_main_pdf_path
+    main_pdf_url = ""
     supplement_paths: list[Path] = []
     messages: list[str] = []
 
@@ -53,6 +54,7 @@ def download_paper(
             path = target_dir / "main.pdf"
             if try_download_pdf(url, path, messages):
                 main_pdf_path = path
+                main_pdf_url = url
                 break
 
     for index, url in enumerate(candidates["supplements"], start=1):
@@ -115,22 +117,29 @@ def download_paper(
         current_path=current_merged_path,
     )
     working_merged_path = merged_path
-    if preserved_main_pdf_path and merged_path == preserved_main_pdf_path:
-        working_merged_path = merged_path.with_name(f".{merged_path.stem}-supplement-merge.pdf")
+    replacing_existing_pdf = merged_path.exists()
+    if replacing_existing_pdf or (preserved_main_pdf_path and merged_path == preserved_main_pdf_path):
+        working_merged_path = merged_path.with_name(f".{merged_path.stem}-download-merge.pdf")
+        working_merged_path.unlink(missing_ok=True)
+    downloaded_pdf_replaced = False
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
         merge_pdfs(merge_inputs, working_merged_path)
         if working_merged_path != merged_path:
             working_merged_path.replace(merged_path)
+        downloaded_pdf_replaced = True
         status = "success" if supplement_paths else "partial"
         message = "downloaded and merged; temporary PDFs removed" if supplement_paths else "main PDF saved as merged PDF; no PDF supplement found"
     except Exception as exc:
         if working_merged_path != merged_path:
             working_merged_path.unlink(missing_ok=True)
-        if main_pdf_path != merged_path:
+        if not replacing_existing_pdf and main_pdf_path != merged_path:
             shutil.copyfile(main_pdf_path, merged_path)
         status = "partial"
-        message = f"main PDF saved as merged PDF; supplement merge failed: {exc}"
+        if replacing_existing_pdf:
+            message = f"existing PDF kept; refreshed PDF merge failed: {exc}"
+        else:
+            message = f"main PDF saved as merged PDF; supplement merge failed: {exc}"
 
     intermediate_paths = list(supplement_paths)
     if not preserved_main_pdf_path:
@@ -144,6 +153,7 @@ def download_paper(
         main_pdf_path=str(merged_path),
         supplement_pdf_paths=[],
         merged_pdf_path=str(merged_path),
+        pdf_url=main_pdf_url if downloaded_pdf_replaced else None,
     )
     return {
         "status": status,
@@ -183,6 +193,19 @@ def unique_download_path(path: Path, *, current_path: str = "") -> Path:
         current_resolved = Path(current_path).expanduser().resolve() if current_path else None
     except OSError:
         current_resolved = None
+    # A forced refresh must replace the paper's current canonical file even
+    # when an older collision suffix (for example ``merged 2.pdf``) is part of
+    # that canonical name.  Otherwise every refresh creates another numbered
+    # copy and leaves the database pointing at a moving filename.
+    try:
+        if (
+            current_resolved
+            and current_resolved.exists()
+            and current_resolved.parent == path.parent.expanduser().resolve()
+        ):
+            return current_resolved
+    except OSError:
+        pass
     if not path.exists():
         return path
     try:
@@ -222,10 +245,18 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     if doi.startswith("10.1126/"):
         main.extend(science_open_access_pdf_candidates(doi))
         supplements.extend(science_supplement_pdf_candidates(doi))
+    doi_candidates = doi_pdf_candidates(doi)
+    # Nature keeps some accepted-manuscript ``*_reference.pdf`` URLs alive
+    # after the version of record is published.  A stale URL can therefore
+    # remain perfectly downloadable and prevent the canonical article PDF
+    # from ever being attempted.  Put the DOI-derived version-of-record URL
+    # first; reference PDFs remain available only as final fallbacks.
+    if doi.startswith("10.1038/") and doi_candidates:
+        main.append(doi_candidates.pop(0))
     main.extend(journal_pdf_candidates(paper))
     if paper.get("pdf_url"):
         main.append(paper["pdf_url"])
-    main.extend(doi_pdf_candidates(doi))
+    main.extend(doi_candidates)
     crossref_candidates = crossref_pdf_candidates(doi)
     main.extend(science_direct_pdf_candidates(crossref_candidates))
     main.extend(crossref_candidates)
@@ -259,8 +290,14 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
         except Exception:
             pass
 
+    main = dedup(main)
+    if doi.startswith("10.1038/"):
+        main = [url for url in main if not is_nature_reference_pdf_url(url)] + [
+            url for url in main if is_nature_reference_pdf_url(url)
+        ]
+
     return {
-        "main": dedup(main),
+        "main": main,
         "supplements": [url for url in dedup(supplements) if url not in main],
         "supplement_documents": dedup(supplement_documents),
     }
@@ -280,6 +317,11 @@ def doi_pdf_candidates(doi: str) -> list[str]:
         candidates.append(f"https://www.science.org/doi/epdf/{doi}")
     candidates.append(f"https://doi.org/{doi}")
     return candidates
+
+
+def is_nature_reference_pdf_url(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    return "nature.com" in parsed.netloc.lower() and parsed.path.lower().endswith("_reference.pdf")
 
 
 def journal_pdf_candidates(paper: dict[str, Any]) -> list[str]:
