@@ -22405,15 +22405,15 @@ INDEX_HTML = """<!doctype html>
       color: var(--ink);
     }
     .view-switch.active {
-      color: var(--ink);
-      background: var(--paper);
+      color: #1f4f7a;
+      background: var(--active-view-surface, var(--paper));
       box-shadow: none;
       position: relative;
       z-index: 1;
     }
     .view-switcher.keyboard-active .view-switch.active {
-      color: #075b5e;
-      border-color: rgba(15, 107, 110, 0.68);
+      color: #1f4f7a;
+      border-color: #1f4f7a;
       border-bottom-color: transparent;
       box-shadow: none;
     }
@@ -22428,11 +22428,11 @@ INDEX_HTML = """<!doctype html>
     }
     .view-switch.active::before {
       left: -14px;
-      background: radial-gradient(circle at 0 0, transparent 14px, var(--paper) 15px);
+      background: radial-gradient(circle at 0 0, transparent 14px, var(--active-view-surface, var(--paper)) 15px);
     }
     .view-switch.active::after {
       right: -14px;
-      background: radial-gradient(circle at 100% 0, transparent 14px, var(--paper) 15px);
+      background: radial-gradient(circle at 100% 0, transparent 14px, var(--active-view-surface, var(--paper)) 15px);
     }
     .view-switch-dot {
       position: absolute;
@@ -22968,8 +22968,8 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-section.workspace-section .library-tab-section-tools {
       grid-template-columns: 30px;
-      border-color: #c9ddc0;
-      background: #f2f9ef;
+      border-color: #c5d9ee;
+      background: #f1f6fc;
     }
     .library-tab-section.workspace-section .library-tab-section-tools button { width: 30px; }
     .library-tab-section-tools:hover,
@@ -22991,7 +22991,7 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-tab-section-tools button:last-child { border-right: 0; }
-    .library-tab-section-tools button:hover:not(:disabled) { color: var(--accent); background: rgba(15, 107, 110, 0.08); }
+    .library-tab-section-tools button:hover:not(:disabled) { color: var(--accent); background: rgba(31, 79, 122, 0.08); }
     .library-tab-section-tools button:disabled { color: #667085; cursor: default; }
     .library-tab-scroll {
       position: relative;
@@ -23114,12 +23114,12 @@ INDEX_HTML = """<!doctype html>
       border-color: var(--library-tab-active-border);
     }
     .library-tab.workspace-tab {
-      --library-tab-bg: #edf7e9;
-      --library-tab-border: #c9ddc0;
-      --library-tab-color: #1f3320;
-      --library-tab-active-bg: #d9edcf;
-      --library-tab-active-border: #a9c99a;
-      --library-tab-active-color: #142516;
+      --library-tab-bg: #edf4fb;
+      --library-tab-border: #c5d9ee;
+      --library-tab-color: #173c62;
+      --library-tab-active-bg: #dce8f5;
+      --library-tab-active-border: #9fc0df;
+      --library-tab-active-color: #123556;
     }
     .library-tab.workspace-tab.active {
       background: var(--library-tab-active-bg);
@@ -23173,7 +23173,7 @@ INDEX_HTML = """<!doctype html>
       margin: 0;
       flex-wrap: nowrap;
       grid-column: 1 / -1;
-      background: #f7f8fa;
+      background: transparent;
       min-width: 0;
     }
     .workspace-tool-group {
@@ -23188,7 +23188,7 @@ INDEX_HTML = """<!doctype html>
       border: 0;
       border-radius: 7px;
       padding: 0 8px;
-      background: #f2f2f2;
+      background: transparent;
       box-shadow: inset 0 0 0 1px rgba(216, 216, 220, 0.78);
       color: var(--ink);
       font-size: 12px;
@@ -23196,8 +23196,8 @@ INDEX_HTML = """<!doctype html>
     }
     .workspace-tools input.search:focus {
       outline: 0;
-      background: #fff;
-      box-shadow: inset 0 0 0 1px rgba(15, 107, 110, 0.64), 0 0 0 3px rgba(15, 107, 110, 0.08);
+      background: transparent;
+      box-shadow: inset 0 0 0 1px #1f4f7a;
     }
     #workspaceNameInput {
       width: 200px;
@@ -23211,8 +23211,8 @@ INDEX_HTML = """<!doctype html>
       min-height: 28px;
       border: 0;
       border-radius: 7px;
-      background: #d9d9d9;
-      color: #2f3948;
+      background: rgba(31, 79, 122, 0.12);
+      color: #1f2328;
       padding: 0 9px;
       font-size: 12px;
       font-weight: 650;
@@ -23221,19 +23221,27 @@ INDEX_HTML = """<!doctype html>
       box-shadow: none;
     }
     .workspace-tools .smallbtn:hover {
-      background: #d9d9d9;
-      color: var(--accent);
+      background: rgba(31, 79, 122, 0.20);
+      color: #1f2328;
       box-shadow: none;
     }
     .workspace-tools .workspace-move-library-button {
       margin-left: auto;
       flex: 0 0 auto;
-      background: #e6ecef;
-      color: #344054;
+      background: rgba(31, 79, 122, 0.12);
+      color: #1f2328;
     }
     .workspace-tools .workspace-move-library-button:hover {
-      background: #dce7e9;
-      color: var(--accent);
+      background: rgba(31, 79, 122, 0.20);
+      color: #1f2328;
+    }
+    .workspace-tools #workspaceAddDoiButton {
+      background: rgba(31, 79, 122, 0.12);
+      color: #1f2328;
+    }
+    .workspace-tools #workspaceAddDoiButton:hover {
+      background: rgba(31, 79, 122, 0.20);
+      color: #1f2328;
     }
     .library-tab.drag-over {
       border-color: var(--accent);
@@ -23269,7 +23277,7 @@ INDEX_HTML = """<!doctype html>
     .my-publications-tools .search:focus {
       outline: 0;
       background: #fff;
-      box-shadow: inset 0 0 0 1px rgba(15, 107, 110, 0.64), 0 0 0 3px rgba(15, 107, 110, 0.08);
+      box-shadow: inset 0 0 0 1px rgba(31, 79, 122, 0.64), 0 0 0 3px rgba(31, 79, 122, 0.08);
     }
     .my-publications-tools .smallbtn {
       min-height: 28px;
@@ -23343,7 +23351,7 @@ INDEX_HTML = """<!doctype html>
       font-weight: 650;
       white-space: nowrap;
     }
-    .publication-export-options button:hover { background: #eef5f4; color: var(--accent-strong); }
+    .publication-export-options button:hover { background: #eef4fb; color: var(--accent-strong); }
     .my-publications-profile-strip {
       display: flex;
       align-items: center;
@@ -23400,7 +23408,7 @@ INDEX_HTML = """<!doctype html>
       height: 28px;
       border-radius: 50%;
       border: 0;
-      background: #eef5f4;
+      background: #eef4fb;
       color: var(--accent-strong);
       font-weight: 800;
       display: grid;
@@ -23747,12 +23755,12 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-row.drag-over-before td {
       transform: translateY(24px);
-      box-shadow: 0 -20px 0 rgba(15, 107, 110, 0.14), inset 0 3px 0 var(--accent);
+      box-shadow: 0 -20px 0 rgba(31, 79, 122, 0.14), inset 0 3px 0 var(--accent);
       transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
     .my-publications-row.drag-over-after td {
       transform: translateY(-24px);
-      box-shadow: 0 20px 0 rgba(15, 107, 110, 0.14), inset 0 -3px 0 var(--accent);
+      box-shadow: 0 20px 0 rgba(31, 79, 122, 0.14), inset 0 -3px 0 var(--accent);
       transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
     .my-publications-title-cell {
@@ -25008,34 +25016,21 @@ INDEX_HTML = """<!doctype html>
       width: 100%;
       min-height: 36px;
       display: grid;
-      grid-template-columns: 22px minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 6px;
       align-items: center;
       box-sizing: border-box;
       padding: 3px 6px;
-      border: 1px solid rgba(15, 107, 110, 0.34);
+      border: 1px solid #b7cbe0;
       border-radius: 5px;
-      background: #f4faf9;
+      background: #fff;
       color: var(--ink);
     }
     .library-inline-add-paper-row + .library-row { margin-top: 2px; }
     .library-inline-add-paper-row.table-inline-add-paper-row {
       min-width: 640px;
-      grid-template-columns: 22px minmax(260px, 1fr) auto;
+      grid-template-columns: minmax(260px, 1fr) auto;
       margin-bottom: 2px;
-    }
-    .library-inline-add-paper-icon {
-      width: 20px;
-      height: 20px;
-      display: grid;
-      place-items: center;
-      justify-self: center;
-      border-radius: 4px;
-      background: rgba(15, 107, 110, 0.10);
-      color: var(--accent);
-      font-size: 16px;
-      font-weight: 800;
-      line-height: 1;
     }
     .library-inline-add-paper-input {
       min-width: 0;
@@ -25043,7 +25038,7 @@ INDEX_HTML = """<!doctype html>
       height: 27px;
       box-sizing: border-box;
       border: 0;
-      border-bottom: 1px solid rgba(15, 107, 110, 0.42);
+      border-bottom: 1px solid rgba(31, 79, 122, 0.42);
       border-radius: 0;
       outline: none;
       background: transparent;
@@ -25061,7 +25056,7 @@ INDEX_HTML = """<!doctype html>
       height: 27px;
       border: 0;
       border-radius: 5px;
-      background: rgba(15, 107, 110, 0.12);
+      background: rgba(31, 79, 122, 0.12);
       color: var(--accent);
       padding: 0 8px;
       font-size: 11px;
@@ -25069,10 +25064,10 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
       cursor: pointer;
     }
-    .library-inline-add-paper-submit:hover { background: rgba(15, 107, 110, 0.20); }
+    .library-inline-add-paper-submit:hover { background: rgba(31, 79, 122, 0.20); }
     .library-inline-add-paper-submit:disabled { cursor: default; opacity: 0.58; }
     .library-inline-add-paper-error {
-      grid-column: 2 / -1;
+      grid-column: 1 / -1;
       min-width: 0;
       color: #b42318;
       font-size: 10px;
@@ -25084,12 +25079,12 @@ INDEX_HTML = """<!doctype html>
     .library-row.range-selected .library-meta { color: #45637f; }
     .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
     .library-row.path-parent { background: #dedede; border-color: #dedede; color: #1f2328; }
-    .library-row.drag-over { border-color: var(--accent); background: #eef9f8; }
+    .library-row.drag-over { border-color: var(--accent); background: #eef5fb; }
     .library-row.active:not(.range-selected) .library-meta { color: rgba(255, 255, 255, 0.86); }
     .library-row.path-parent .library-meta { color: #717171; }
     .library-shell.finder-drag-over .library-columns {
       border-color: var(--accent);
-      box-shadow: inset 0 0 0 2px rgba(20, 184, 166, 0.18);
+      box-shadow: inset 0 0 0 2px rgba(31, 79, 122, 0.18);
     }
     .library-column.finder-drop-column-target::after {
       content: "";
@@ -25293,7 +25288,7 @@ INDEX_HTML = """<!doctype html>
       width: 10px;
       height: 3px;
       border-radius: 3px;
-      background: #0f9f8f;
+      background: #4e8fcb;
       box-shadow: 0 -5px 0 -1px #d7e2ee;
     }
     .library-entry-icon.linked-document {
@@ -25405,9 +25400,9 @@ INDEX_HTML = """<!doctype html>
     .library-activity-status.live {
       color: var(--accent-strong);
       font-weight: 700;
-      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(224,245,241,0.72) 18%, rgba(219,243,239,0.95) 50%, rgba(224,245,241,0.72) 82%, rgba(255,255,255,0) 100%);
-      border-color: rgba(15, 107, 110, 0.16);
-      box-shadow: 0 0 0 1px rgba(15, 107, 110, 0.04);
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(226,238,250,0.72) 18%, rgba(219,234,248,0.95) 50%, rgba(226,238,250,0.72) 82%, rgba(255,255,255,0) 100%);
+      border-color: rgba(31, 79, 122, 0.16);
+      box-shadow: 0 0 0 1px rgba(31, 79, 122, 0.04);
       animation: libraryActivityGlow 1.45s ease-in-out infinite;
     }
     .library-activity-status.live::after {
@@ -25416,14 +25411,14 @@ INDEX_HTML = """<!doctype html>
       height: 7px;
       border-radius: 999px;
       background: var(--accent);
-      box-shadow: 0 0 0 0 rgba(15, 107, 110, 0.35);
+      box-shadow: 0 0 0 0 rgba(31, 79, 122, 0.35);
       animation: livePulse 1.1s infinite;
       flex: 0 0 auto;
     }
     .library-activity-status.ok {
-      color: #14845f;
-      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(229,246,238,0.8) 20%, rgba(230,248,239,0.95) 50%, rgba(229,246,238,0.8) 80%, rgba(255,255,255,0) 100%);
-      border-color: rgba(20, 132, 95, 0.12);
+      color: #1f4f7a;
+      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(230,240,251,0.8) 20%, rgba(227,238,250,0.95) 50%, rgba(230,240,251,0.8) 80%, rgba(255,255,255,0) 100%);
+      border-color: rgba(31, 79, 122, 0.12);
     }
     .library-activity-status.err {
       color: #b42318;
@@ -25431,8 +25426,8 @@ INDEX_HTML = """<!doctype html>
       border-color: rgba(180, 35, 24, 0.12);
     }
     @keyframes livePulse {
-      0%, 100% { transform: scale(0.78); opacity: 0.55; box-shadow: 0 0 0 0 rgba(15, 107, 110, 0.28); }
-      50% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 5px rgba(15, 107, 110, 0); }
+      0%, 100% { transform: scale(0.78); opacity: 0.55; box-shadow: 0 0 0 0 rgba(31, 79, 122, 0.28); }
+      50% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 5px rgba(31, 79, 122, 0); }
     }
     @keyframes libraryActivityGlow {
       0%, 100% { filter: brightness(0.98); }
@@ -27114,9 +27109,9 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
     }
     .library-add-folder-row:hover,
-    .library-add-folder-row.active { background: #eef6f6; }
+    .library-add-folder-row.active { background: #eef4fb; }
     .library-add-folder-row.selected {
-      background: #0f6b6e;
+      background: #1f4f7a;
       color: #fff;
     }
     .library-add-folder-row.selected .library-add-folder-option { color: #fff; }
@@ -27155,10 +27150,10 @@ INDEX_HTML = """<!doctype html>
       border-radius: 2px 2px 0 0;
       background: #c4ceda;
     }
-    .library-add-folder-option.unsorted .library-add-folder-icon { background: #0f9f8f; }
+    .library-add-folder-option.unsorted .library-add-folder-icon { background: #4e8fcb; }
     .library-add-folder-option.unsorted .library-add-folder-icon::before { background: #78c3ff; }
-    .library-add-folder-option.workspace-root .library-add-folder-icon { background: #73b9a6; }
-    .library-add-folder-option.workspace-root .library-add-folder-icon::before { background: #a7d8c9; }
+    .library-add-folder-option.workspace-root .library-add-folder-icon { background: #6397c8; }
+    .library-add-folder-option.workspace-root .library-add-folder-icon::before { background: #a9cbea; }
     .library-add-folder-option.workspace-root.main-library .library-add-folder-icon { background: #d6a84f; }
     .library-add-folder-option.workspace-root.main-library .library-add-folder-icon::before { background: #efd38c; }
     .library-add-folder-name {
@@ -27221,8 +27216,8 @@ INDEX_HTML = """<!doctype html>
     .my-publications-shell .library-detail button.action.citation-comments-button:focus,
     .my-publications-shell .library-detail button.action.citation-comments-button:focus-visible {
       border: 0 !important;
-      background: #0f6b6e !important;
-      background-color: #0f6b6e !important;
+      background: #1f4f7a !important;
+      background-color: #1f4f7a !important;
       background-image: none !important;
       color: #fff !important;
       -webkit-text-fill-color: #fff !important;
@@ -27242,7 +27237,7 @@ INDEX_HTML = """<!doctype html>
       gap: 4px;
       font-size: 12px;
     }
-    .manual-drop:hover, .manual-drop.dragging { border-color: var(--accent); color: var(--accent); background: #f0f9f9; }
+    .manual-drop:hover, .manual-drop.dragging { border-color: var(--accent); color: var(--accent); background: #f0f5fb; }
     .manual-drop input { display: none; }
     .status {
       font-size: 12px;
@@ -27688,6 +27683,16 @@ INDEX_HTML = """<!doctype html>
       --flat-tonal: #f1f3f5;
     }
 
+    /* Library and My Publications share a blue, rather than green, identity. */
+    .app.library-mode {
+      --accent: #1f4f7a;
+      --accent-strong: #163e62;
+      --ok: #1f4f7a;
+      --flat-selected: #dce8f5;
+      --active-view-surface: #fff;
+    }
+    .app.library-mode:has(.my-publications-shell) { --active-view-surface: #f2f2f2; }
+
     /* Journal and Subject Monitor use the same blue accent as Author Monitor. */
     .app.report-mode,
     .app.theme-mode {
@@ -27695,6 +27700,7 @@ INDEX_HTML = """<!doctype html>
       --accent-strong: #163e62;
       --ok: #1f4f7a;
       --flat-selected: #dce8f5;
+      --active-view-surface: #fff;
     }
 
     .app.report-mode .sidebar,
@@ -27816,7 +27822,7 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .sidebar-view-switcher.keyboard-active .view-switch.active,
     .app.theme-mode .sidebar-view-switcher.keyboard-active .view-switch.active {
       color: #1f4f7a;
-      border-color: rgba(31, 79, 122, 0.68);
+      border-color: #1f4f7a;
       border-bottom-color: transparent;
     }
     .app.report-mode .sidebar-late-arrivals-head .late-dot,
@@ -28277,6 +28283,7 @@ INDEX_HTML = """<!doctype html>
     .app.author-mode {
       --accent: #1f4f7a;
       --accent-strong: #163e62;
+      --active-view-surface: #f2f2f2;
       background: #f2f2f2;
     }
     .app.author-mode .main,
@@ -28309,7 +28316,7 @@ INDEX_HTML = """<!doctype html>
     }
     .app.author-mode .author-monitor-shell[data-keyboard-pane="authors"] .author-monitor-rail,
     .app.author-mode .author-monitor-shell[data-keyboard-pane="papers"] .author-monitor-list-panel {
-      box-shadow: inset 0 2px 0 rgba(31, 79, 122, 0.58);
+      box-shadow: inset 0 2px 0 #1f4f7a;
     }
     .app.author-mode .author-monitor-add {
       border: 0;
@@ -37397,7 +37404,6 @@ INDEX_HTML = """<!doctype html>
       return `
         <div class="library-inline-add-paper-row${options.table ? " table-inline-add-paper-row" : ""}"
           data-library-inline-add-paper data-library-inline-add-folder="${Number(folderId || 0)}">
-          <span class="library-inline-add-paper-icon" aria-hidden="true">+</span>
           <input class="library-inline-add-paper-input${error ? " error" : ""}"
             data-library-inline-add-paper-input
             value="${escapeAttr(state.libraryInlineAddQuery || "")}"
@@ -47840,7 +47846,17 @@ INDEX_HTML = """<!doctype html>
       showMonitorStatusMessage(error.message);
     }));
     $("sideLibraryMode").addEventListener("click", loadLibrary);
-    document.addEventListener("pointerdown", () => leavePrimaryKeyboardRoot({focus: false}), true);
+    document.addEventListener("pointerdown", (event) => {
+      leavePrimaryKeyboardRoot({focus: false});
+      if (
+        state.libraryInlineAddFolderId
+        && !state.libraryInlineAddBusy
+        && !event.target.closest?.("[data-library-inline-add-paper]")
+        && !event.target.closest?.('[data-action="add-paper"]')
+      ) {
+        cancelLibraryInlineAddPaper();
+      }
+    }, true);
     wireLibraryImportTools();
     $("addMyPublication").addEventListener("click", () => searchMyPublications("auto"));
     $("findMyPublications").addEventListener("click", () => searchMyPublications("author"));
