@@ -255,7 +255,7 @@ class LibraryNavigationTabTests(unittest.TestCase):
             return_value=openalex_response,
         ), patch.object(
             ui_server,
-            "request_with_retries",
+            "semantic_scholar_request",
             return_value=semantic_response,
         ):
             found = ui_server.identifier_from_title_lookup(
@@ -277,7 +277,7 @@ class LibraryNavigationTabTests(unittest.TestCase):
             side_effect=RuntimeError("OpenAlex offline"),
         ), patch.object(
             ui_server,
-            "request_with_retries",
+            "semantic_scholar_request",
             side_effect=RuntimeError("Semantic Scholar offline"),
         ):
             found = ui_server.identifier_from_title_lookup(

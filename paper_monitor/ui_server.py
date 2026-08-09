@@ -92,6 +92,13 @@ from .sources.publisher import (
     enrich_image_from_landing_page,
     sync_aps_rss_feeds,
 )
+from .sources.semantic_scholar import (
+    SEMANTIC_SCHOLAR_API_KEY_SETTING,
+    configure_semantic_scholar_api_key,
+    semantic_scholar_api_key,
+    semantic_scholar_request,
+    test_semantic_scholar_api_key,
+)
 from .storage import Storage
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
 from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
@@ -313,6 +320,9 @@ def run_ui_server(
     try:
         configure_openalex_api_key(
             credential_storage.get_setting(OPENALEX_API_KEY_SETTING, "")
+        )
+        configure_semantic_scholar_api_key(
+            credential_storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
         )
     finally:
         credential_storage.close()
@@ -3061,6 +3071,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             token = ads_api_token(storage)
             openalex = openalex_settings_payload(storage, refresh=True)
+            semantic_scholar = semantic_scholar_settings_payload(storage)
         finally:
             storage.close()
         self.send_json({
@@ -3069,12 +3080,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "status": "configured" if token else "not_configured",
             },
             "openalex": openalex,
+            "semantic_scholar": semantic_scholar,
         })
 
     def handle_set_citation_settings(self, payload: dict[str, Any]) -> None:
         provider = clean_text(str(payload.get("provider") or "ads")).lower()
         if provider == "openalex":
             self.handle_set_openalex_citation_settings(payload)
+            return
+        if provider == "semantic_scholar":
+            self.handle_set_semantic_scholar_citation_settings(payload)
             return
         action = clean_text(str(payload.get("action") or "save")).lower()
         requested_token = clean_text(str(payload.get("ads_token") or ""))
@@ -3157,6 +3172,44 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     "paused": False,
                 }
             self.send_json({"openalex": openalex_settings_to_api(result)})
+        finally:
+            storage.close()
+
+    def handle_set_semantic_scholar_citation_settings(
+        self,
+        payload: dict[str, Any],
+    ) -> None:
+        action = clean_text(str(payload.get("action") or "save")).lower()
+        requested_key = clean_text(str(payload.get("semantic_scholar_key") or ""))
+        storage = Storage(self.configured_db_path)
+        try:
+            stored_key = semantic_scholar_stored_api_key(storage)
+            environment_key = clean_text(os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""))
+            if action == "clear":
+                storage.set_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, "")
+                configure_semantic_scholar_api_key("")
+                self.send_json({
+                    "semantic_scholar": semantic_scholar_settings_payload(storage),
+                })
+                return
+            key = requested_key or stored_key or environment_key
+            if action == "test":
+                result = test_semantic_scholar_api_key(key)
+                result["configured"] = bool(stored_key or environment_key)
+                result["source"] = "sqlite" if stored_key else ("environment" if environment_key else "")
+                self.send_json({"semantic_scholar": result})
+                return
+            if not requested_key:
+                self.send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Paste a Semantic Scholar API key before saving",
+                )
+                return
+            storage.set_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, requested_key)
+            configure_semantic_scholar_api_key(requested_key)
+            result = test_semantic_scholar_api_key(requested_key)
+            result.update({"configured": True, "source": "sqlite"})
+            self.send_json({"semantic_scholar": result})
         finally:
             storage.close()
 
@@ -5008,6 +5061,10 @@ def run_theme_keyword_recommendation_fetchers(search_terms: list[str]) -> list[t
 
 
 def theme_keyword_fetcher_can_run_in_subprocess(source_name: str, fetcher: Any) -> bool:
+    if source_name == "semantic_scholar" and semantic_scholar_api_key():
+        # Keep authenticated Semantic Scholar requests in this process so the
+        # SQLite-loaded key and the shared 1 RPS limiter remain effective.
+        return False
     return THEME_KEYWORD_FETCHER_SUBPROCESS_NAMES.get(source_name) == getattr(fetcher, "__name__", "")
 
 
@@ -5291,7 +5348,7 @@ def fetch_crossref_keyword_records(query: str) -> list[dict[str, Any]]:
 
 def fetch_semantic_keyword_records(query: str) -> list[dict[str, Any]]:
     fields = "title,abstract,tldr"
-    response = request_with_retries(
+    response = semantic_scholar_request(
         "GET",
         "https://api.semanticscholar.org/graph/v1/paper/search",
         params={"query": query, "limit": 25, "fields": fields},
@@ -6460,7 +6517,7 @@ def search_semantic_scholar_works(
         params["year"] = str(start_date.year)
     else:
         params["year"] = f"{start_date.year}-{end_date.year}"
-    response = request_with_retries(
+    response = semantic_scholar_request(
         "GET",
         "https://api.semanticscholar.org/graph/v1/paper/search",
         params=params,
@@ -9285,7 +9342,7 @@ def identifier_from_title_lookup(title: str) -> dict[str, str]:
     except Exception as exc:
         lookup_errors.append(f"OpenAlex: {exc}")
     try:
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             "https://api.semanticscholar.org/graph/v1/paper/search",
             params={
@@ -10047,7 +10104,7 @@ def semantic_scholar_enrichment_for_paper(
             candidates.append(data)
     title = clean_text(paper.get("title") or "")
     if title:
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             "https://api.semanticscholar.org/graph/v1/paper/search",
             params={"query": title, "limit": 3, "fields": fields},
@@ -10122,7 +10179,7 @@ def semantic_scholar_enrichment_by_ref(
     if not clean_text(ref):
         return None
     try:
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             f"https://api.semanticscholar.org/graph/v1/paper/{quote(ref, safe='')}",
             params={"fields": fields},
@@ -11668,6 +11725,24 @@ def openalex_api_key(storage: Storage) -> str:
     return clean_text(storage.get_setting(OPENALEX_API_KEY_SETTING, ""))
 
 
+def semantic_scholar_stored_api_key(storage: Storage) -> str:
+    return clean_text(storage.get_setting(SEMANTIC_SCHOLAR_API_KEY_SETTING, ""))
+
+
+def semantic_scholar_settings_payload(storage: Storage) -> dict[str, Any]:
+    stored_key = semantic_scholar_stored_api_key(storage)
+    environment_key = clean_text(os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""))
+    configure_semantic_scholar_api_key(stored_key)
+    configured = bool(stored_key or environment_key)
+    return {
+        "configured": configured,
+        "status": "configured" if configured else "anonymous",
+        "ok": None,
+        "source": "sqlite" if stored_key else ("environment" if environment_key else ""),
+        "rate_limit_rps": 1,
+    }
+
+
 def openalex_settings_to_api(status: dict[str, Any]) -> dict[str, Any]:
     def rounded(value: Any) -> float | None:
         try:
@@ -11805,7 +11880,7 @@ def search_semantic_scholar_authors(
     query = clean_text(author_name)
     if not query:
         return []
-    response = request_with_retries(
+    response = semantic_scholar_request(
         "GET",
         "https://api.semanticscholar.org/graph/v1/author/search",
         params={
@@ -11878,7 +11953,7 @@ def fetch_semantic_scholar_author_profile(
     normalized_id = normalize_semantic_scholar_author_id(author_id)
     if not normalized_id:
         raise ValueError("A valid Semantic Scholar author ID is required")
-    response = request_with_retries(
+    response = semantic_scholar_request(
         "GET",
         f"https://api.semanticscholar.org/graph/v1/author/{normalized_id}",
         params={
@@ -11937,7 +12012,7 @@ def fetch_semantic_scholar_author_publications(
     papers: list[dict[str, Any]] = []
     while remaining > 0:
         page_size = min(100, remaining)
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             f"https://api.semanticscholar.org/graph/v1/author/{normalized_id}/papers",
             params={
@@ -14089,7 +14164,7 @@ def resolve_google_scholar_candidate_to_arxiv(candidate: dict[str, Any]) -> dict
         return None
     fields = "paperId,externalIds,title,year,venue,citationCount,url"
     try:
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             "https://api.semanticscholar.org/graph/v1/paper/search",
             params={"query": title, "limit": 5, "fields": fields},
@@ -15084,7 +15159,7 @@ def fetch_semantic_scholar_citation_contexts(paper: dict[str, Any], *, limit: in
     if not paper_ref:
         return []
     doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    response = request_with_retries(
+    response = semantic_scholar_request(
         "GET",
         f"https://api.semanticscholar.org/graph/v1/paper/{quote(paper_ref, safe='')}/citations",
         params={
@@ -15146,7 +15221,7 @@ def fetch_semantic_scholar_influential_citations(paper: dict[str, Any], *, limit
         "citingPaper.externalIds,citingPaper.authors,citingPaper.citationCount,citingPaper.influentialCitationCount"
     )
     while len(citations) < limit and offset < 1000:
-        response = request_with_retries(
+        response = semantic_scholar_request(
             "GET",
             f"https://api.semanticscholar.org/graph/v1/paper/{quote(paper_ref, safe='')}/citations",
             params={"fields": fields, "limit": 100, "offset": offset},
@@ -28942,7 +29017,7 @@ INDEX_HTML = """<!doctype html>
           <div class="settings-modal-body">
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>Built-in Sources</strong><span>Always available</span></div>
-              <p>Semantic Scholar, Crossref, arXiv, and DataCite continue to work without extra setup. OpenAlex can use a free API key below.</p>
+              <p>Crossref, arXiv, and DataCite work without extra setup. OpenAlex and Semantic Scholar support anonymous access and optional API keys; NASA ADS can use an optional API token below.</p>
             </div>
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>OpenAlex</strong><span id="openalexConfiguredLabel">Not configured</span></div>
@@ -28954,6 +29029,17 @@ INDEX_HTML = """<!doctype html>
                 <button class="smallbtn" id="clearOpenalexKey" type="button">Clear</button>
               </div>
               <div class="citation-settings-status" id="openalexCitationSettingsStatus"></div>
+            </div>
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Semantic Scholar</strong><span id="semanticScholarConfiguredLabel">Anonymous</span></div>
+              <p>Optional but recommended. Authenticated requests use the private key locally with the documented <code>x-api-key</code> header and stay below the 1 request-per-second limit across all endpoints. Without a key, anonymous access remains available.</p>
+              <div class="citation-token-row">
+                <input class="search" id="semanticScholarKeyInput" type="password" autocomplete="off" placeholder="Semantic Scholar API key">
+                <button class="smallbtn" id="saveSemanticScholarKey" type="button">Save</button>
+                <button class="smallbtn" id="testSemanticScholarKey" type="button">Test</button>
+                <button class="smallbtn" id="clearSemanticScholarKey" type="button">Clear</button>
+              </div>
+              <div class="citation-settings-status" id="semanticScholarCitationSettingsStatus"></div>
             </div>
             <div class="citation-source-setting">
               <div class="citation-source-setting-head"><strong>NASA ADS</strong><span id="adsConfiguredLabel">Not configured</span></div>
@@ -45863,23 +45949,31 @@ INDEX_HTML = """<!doctype html>
       $("citationSettingsStatus").className = "citation-settings-status";
       $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
+      $("semanticScholarCitationSettingsStatus").textContent = "Loading Semantic Scholar settings...";
+      $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
       $("adsTokenInput").value = "";
       $("openalexKeyInput").value = "";
+      $("semanticScholarKeyInput").value = "";
       try {
         const res = await fetch("/api/settings/citation");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not load citation settings");
         updateCitationSettingsUi(data.ads || {});
         updateOpenalexSettingsUi(data.openalex || {});
+        updateSemanticScholarSettingsUi(data.semantic_scholar || {});
         $("citationSettingsStatus").textContent = data.ads?.configured ? "ADS token is saved locally." : "ADS is optional and currently disabled.";
         $("citationSettingsStatus").className = `citation-settings-status${data.ads?.configured ? " ok" : ""}`;
         $("openalexCitationSettingsStatus").textContent = openalexSettingsStatusText(data.openalex || {});
         $("openalexCitationSettingsStatus").className = `citation-settings-status${data.openalex?.paused || data.openalex?.ok === false ? " err" : (data.openalex?.configured ? " ok" : "")}`;
+        $("semanticScholarCitationSettingsStatus").textContent = semanticScholarSettingsStatusText(data.semantic_scholar || {});
+        $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.configured ? " ok" : ""}`;
       } catch (error) {
         $("citationSettingsStatus").textContent = error.message || "Could not load citation settings";
         $("citationSettingsStatus").className = "citation-settings-status err";
         $("openalexCitationSettingsStatus").textContent = error.message || "Could not load OpenAlex settings";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+        $("semanticScholarCitationSettingsStatus").textContent = error.message || "Could not load Semantic Scholar settings";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
       }
       $("openalexKeyInput")?.focus({preventScroll: true});
     }
@@ -45889,6 +45983,7 @@ INDEX_HTML = """<!doctype html>
       $("citationSettingsBackdrop")?.setAttribute("aria-hidden", "true");
       $("adsTokenInput").value = "";
       $("openalexKeyInput").value = "";
+      $("semanticScholarKeyInput").value = "";
     }
 
     function updateCitationSettingsUi(ads) {
@@ -45902,6 +45997,28 @@ INDEX_HTML = """<!doctype html>
       $("openalexConfiguredLabel").textContent = paused
         ? "Free limit reached"
         : (configured ? "Configured" : "Not configured");
+    }
+
+    function updateSemanticScholarSettingsUi(semanticScholar) {
+      $("semanticScholarConfiguredLabel").textContent = semanticScholar?.configured
+        ? "Configured"
+        : "Anonymous";
+    }
+
+    function semanticScholarSettingsStatusText(semanticScholar) {
+      if (!semanticScholar?.configured) {
+        return "Semantic Scholar is using anonymous access. Add a key for an independent 1 request-per-second allowance.";
+      }
+      if (semanticScholar?.status === "invalid" || semanticScholar?.ok === false) {
+        return "The Semantic Scholar key is saved, but the connection test failed.";
+      }
+      if (semanticScholar?.status === "rate_limited") {
+        return "Semantic Scholar is temporarily rate limited. The saved key will be retried with exponential backoff.";
+      }
+      if (semanticScholar?.status === "unavailable") {
+        return "Semantic Scholar could not be reached. The saved key remains available for later requests.";
+      }
+      return "Semantic Scholar key is saved locally. Requests use x-api-key and a shared limit below 1 request per second.";
     }
 
     function openalexSettingsStatusText(openalex) {
@@ -45997,6 +46114,86 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         $("openalexCitationSettingsStatus").textContent = error.message || "Could not clear OpenAlex key";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function saveCitationSemanticScholarKey() {
+      const key = $("semanticScholarKeyInput")?.value || "";
+      if (!key.trim()) {
+        $("semanticScholarCitationSettingsStatus").textContent = "Paste a Semantic Scholar API key before saving.";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
+        return;
+      }
+      $("semanticScholarCitationSettingsStatus").textContent = "Saving and checking the Semantic Scholar key...";
+      $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: "semantic_scholar", semantic_scholar_key: key})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save Semantic Scholar key");
+        updateSemanticScholarSettingsUi(data.semantic_scholar || {});
+        $("semanticScholarKeyInput").value = "";
+        $("semanticScholarCitationSettingsStatus").textContent = semanticScholarSettingsStatusText(data.semantic_scholar || {});
+        $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.ok === false ? " err" : " ok"}`;
+      } catch (error) {
+        $("semanticScholarCitationSettingsStatus").textContent = error.message || "Could not save Semantic Scholar key";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function testCitationSemanticScholarKey() {
+      const key = $("semanticScholarKeyInput")?.value || "";
+      $("semanticScholarCitationSettingsStatus").textContent = "Testing Semantic Scholar connection...";
+      $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            provider: "semantic_scholar",
+            action: "test",
+            semantic_scholar_key: key
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not test Semantic Scholar key");
+        updateSemanticScholarSettingsUi(data.semantic_scholar || {});
+        const semanticStatus = data.semantic_scholar?.status || "";
+        $("semanticScholarCitationSettingsStatus").textContent = data.semantic_scholar?.ok
+          ? "Semantic Scholar connection works."
+          : (semanticStatus === "rate_limited"
+              ? "Semantic Scholar is temporarily rate limited. Try the test again later."
+              : (semanticStatus === "unavailable"
+                  ? "Semantic Scholar could not be reached. Try again when the network is available."
+                  : "Semantic Scholar key is missing or invalid."));
+        $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.ok ? " ok" : (semanticStatus === "invalid" ? " err" : "")}`;
+      } catch (error) {
+        $("semanticScholarCitationSettingsStatus").textContent = error.message || "Could not test Semantic Scholar key";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    async function clearCitationSemanticScholarKey() {
+      $("semanticScholarCitationSettingsStatus").textContent = "Clearing Semantic Scholar key...";
+      $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/citation", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({provider: "semantic_scholar", action: "clear"})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not clear Semantic Scholar key");
+        updateSemanticScholarSettingsUi(data.semantic_scholar || {});
+        $("semanticScholarKeyInput").value = "";
+        $("semanticScholarCitationSettingsStatus").textContent = "Semantic Scholar key cleared. Anonymous access remains available.";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
+      } catch (error) {
+        $("semanticScholarCitationSettingsStatus").textContent = error.message || "Could not clear Semantic Scholar key";
+        $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
       }
     }
 
@@ -48047,10 +48244,19 @@ INDEX_HTML = """<!doctype html>
     $("saveOpenalexKey").addEventListener("click", saveCitationOpenalexKey);
     $("testOpenalexKey").addEventListener("click", testCitationOpenalexKey);
     $("clearOpenalexKey").addEventListener("click", clearCitationOpenalexKey);
+    $("saveSemanticScholarKey").addEventListener("click", saveCitationSemanticScholarKey);
+    $("testSemanticScholarKey").addEventListener("click", testCitationSemanticScholarKey);
+    $("clearSemanticScholarKey").addEventListener("click", clearCitationSemanticScholarKey);
     $("openalexKeyInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
         saveCitationOpenalexKey();
+      }
+    });
+    $("semanticScholarKeyInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveCitationSemanticScholarKey();
       }
     });
     $("adsTokenInput").addEventListener("keydown", (event) => {
