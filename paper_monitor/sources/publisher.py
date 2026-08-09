@@ -4,7 +4,9 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote, urljoin
 
@@ -12,6 +14,7 @@ from bs4 import BeautifulSoup
 
 from ..aps import APS_CANONICAL_NAMES_BY_SLUG, aps_journal_slug
 from ..http import USER_AGENT
+from .crossref import fetch_crossref_journal
 from ..text import clean_text, make_paper_id, normalize_doi, normalize_publication_title
 
 import requests
@@ -33,6 +36,205 @@ _APS_RSS_LAST_REQUEST_AT = 0.0
 _APS_RSS_BLOCKED_UNTIL = 0.0
 _APS_ABSTRACT_CACHE: dict[str, tuple[float, str]] = {}
 _APS_RSS_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+_JOURNAL_FEED_LAST_REQUEST_AT: dict[str, float] = {}
+_JOURNAL_FEED_BLOCKED_UNTIL: dict[str, float] = {}
+
+
+@dataclass(frozen=True)
+class JournalFeedDefinition:
+    key: str
+    publisher: str
+    journal_name: str
+    url: str
+    parser: str = "standard"
+    doi_prefixes: tuple[str, ...] = ()
+    allowed_item_types: tuple[str, ...] = ()
+    required_item_categories: tuple[str, ...] = ()
+    include_abstract: bool = True
+    source_name: str = "journal_feed"
+    fallback_issns: tuple[str, ...] = ()
+
+
+def aps_journal_feed_definitions() -> dict[str, JournalFeedDefinition]:
+    return {
+        f"aps:{slug}": JournalFeedDefinition(
+            key=f"aps:{slug}",
+            publisher="APS",
+            journal_name=name,
+            url=f"https://feeds.aps.org/rss/recent/{slug}.xml",
+            parser="aps_rdf",
+            doi_prefixes=("10.1103/",),
+            source_name="aps_rss",
+        )
+        for slug, name in APS_CANONICAL_NAMES_BY_SLUG.items()
+    }
+
+
+def journal_feed_definitions() -> dict[str, JournalFeedDefinition]:
+    """Return the curated official feeds used by Subject Monitor."""
+    definitions = aps_journal_feed_definitions()
+    research_item_types = (
+        "research article",
+        "research",
+        "report",
+        "reports",
+        "research resource",
+        "review",
+        "review article",
+    )
+    definitions.update(
+        {
+            "aaas:science": JournalFeedDefinition(
+                key="aaas:science",
+                publisher="AAAS",
+                journal_name="Science",
+                url="https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
+                doi_prefixes=("10.1126/",),
+                allowed_item_types=research_item_types,
+                include_abstract=False,
+            ),
+            "aaas:science-advances": JournalFeedDefinition(
+                key="aaas:science-advances",
+                publisher="AAAS",
+                journal_name="Science Advances",
+                url="https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv",
+                doi_prefixes=("10.1126/",),
+                allowed_item_types=research_item_types,
+                include_abstract=False,
+            ),
+            "nature:nature-physics": JournalFeedDefinition(
+                key="nature:nature-physics",
+                publisher="Springer Nature",
+                journal_name="Nature Physics",
+                url="https://www.nature.com/nphys/journal/vaop/ncurrent/rss.rdf",
+                doi_prefixes=("10.1038/",),
+            ),
+            "nature:communications-physics": JournalFeedDefinition(
+                key="nature:communications-physics",
+                publisher="Springer Nature",
+                journal_name="Communications Physics",
+                url="https://www.nature.com/commsphys.rss",
+                doi_prefixes=("10.1038/",),
+            ),
+            "iop:new-journal-of-physics": JournalFeedDefinition(
+                key="iop:new-journal-of-physics",
+                publisher="IOP Publishing",
+                journal_name="New Journal of Physics",
+                url="https://iopscience.iop.org/journal/rss/1367-2630",
+                doi_prefixes=("10.1088/",),
+            ),
+            "iop:reports-on-progress-in-physics": JournalFeedDefinition(
+                key="iop:reports-on-progress-in-physics",
+                publisher="IOP Publishing",
+                journal_name="Reports on Progress in Physics",
+                url="https://iopscience.iop.org/journal/rss/1361-6633",
+                doi_prefixes=("10.1088/",),
+            ),
+            "nature:nature-reviews-physics": JournalFeedDefinition(
+                key="nature:nature-reviews-physics",
+                publisher="Springer Nature",
+                journal_name="Nature Reviews Physics",
+                url="https://www.nature.com/natrevphys.rss",
+                doi_prefixes=("10.1038/",),
+            ),
+            "nature:npj-quantum-materials": JournalFeedDefinition(
+                key="nature:npj-quantum-materials",
+                publisher="Springer Nature",
+                journal_name="npj Quantum Materials",
+                url="https://www.nature.com/npjquantmats.rss",
+                doi_prefixes=("10.1038/",),
+            ),
+            "iop:journal-of-physics-condensed-matter": JournalFeedDefinition(
+                key="iop:journal-of-physics-condensed-matter",
+                publisher="IOP Publishing",
+                journal_name="Journal of Physics: Condensed Matter",
+                url="https://iopscience.iop.org/journal/rss/1361-648X",
+                doi_prefixes=("10.1088/",),
+            ),
+            "nature:npj-quantum-information": JournalFeedDefinition(
+                key="nature:npj-quantum-information",
+                publisher="Springer Nature",
+                journal_name="npj Quantum Information",
+                url="https://www.nature.com/npjqi.rss",
+                doi_prefixes=("10.1038/",),
+            ),
+            "iop:quantum-science-and-technology": JournalFeedDefinition(
+                key="iop:quantum-science-and-technology",
+                publisher="IOP Publishing",
+                journal_name="Quantum Science and Technology",
+                url="https://iopscience.iop.org/journal/rss/2058-9565",
+                doi_prefixes=("10.1088/",),
+            ),
+            "aip:applied-physics-letters": JournalFeedDefinition(
+                key="aip:applied-physics-letters",
+                publisher="AIP Publishing",
+                journal_name="Applied Physics Letters",
+                url="https://pubs.aip.org/rss/site_1000017/LatestOpenIssueArticles_1000011.xml",
+                doi_prefixes=("10.1063/",),
+            ),
+            "nature:nature-materials": JournalFeedDefinition(
+                key="nature:nature-materials",
+                publisher="Springer Nature",
+                journal_name="Nature Materials",
+                url="https://www.nature.com/nmat/journal/vaop/ncurrent/rss.rdf",
+                doi_prefixes=("10.1038/",),
+            ),
+            "nature:nature-nanotechnology": JournalFeedDefinition(
+                key="nature:nature-nanotechnology",
+                publisher="Springer Nature",
+                journal_name="Nature Nanotechnology",
+                url="https://www.nature.com/nnano/journal/vaop/ncurrent/rss.rdf",
+                doi_prefixes=("10.1038/",),
+            ),
+            "iop:2d-materials": JournalFeedDefinition(
+                key="iop:2d-materials",
+                publisher="IOP Publishing",
+                journal_name="2D Materials",
+                url="https://iopscience.iop.org/journal/rss/2053-1583",
+                doi_prefixes=("10.1088/",),
+            ),
+            "aip:avs-quantum-science": JournalFeedDefinition(
+                key="aip:avs-quantum-science",
+                publisher="AIP Publishing",
+                journal_name="AVS Quantum Science",
+                url="https://pubs.aip.org/rss/site_1000079/1000042.xml",
+                doi_prefixes=("10.1116/",),
+            ),
+            "aip:journal-of-applied-physics": JournalFeedDefinition(
+                key="aip:journal-of-applied-physics",
+                publisher="AIP Publishing",
+                journal_name="Journal of Applied Physics",
+                url="https://pubs.aip.org/rss/site_1000029/LatestOpenIssueArticles_1000017.xml",
+                doi_prefixes=("10.1063/",),
+            ),
+            "acs:nano-letters": JournalFeedDefinition(
+                key="acs:nano-letters",
+                publisher="American Chemical Society",
+                journal_name="Nano Letters",
+                url="https://pubs.acs.org/action/showFeed?type=axatoc&feed=rss&jc=nalefd",
+                doi_prefixes=("10.1021/",),
+                fallback_issns=("1530-6992",),
+            ),
+            "quantum:quantum": JournalFeedDefinition(
+                key="quantum:quantum",
+                publisher="Verein zur Foerderung des Open Access Publizierens in den Quantenwissenschaften",
+                journal_name="Quantum",
+                url="https://quantum-journal.org/feed/",
+                doi_prefixes=("10.22331/",),
+                required_item_categories=("paper",),
+            ),
+            "aip:review-of-scientific-instruments": JournalFeedDefinition(
+                key="aip:review-of-scientific-instruments",
+                publisher="AIP Publishing",
+                journal_name="Review of Scientific Instruments",
+                url="https://pubs.aip.org/aip/rsi",
+                parser="aip_homepage",
+                doi_prefixes=("10.1063/",),
+                fallback_issns=("1089-7623",),
+            ),
+        }
+    )
+    return definitions
 
 
 def enrich_aps_abstract_from_rss(paper: dict[str, Any], *, storage: Any = None) -> dict[str, Any]:
@@ -185,6 +387,247 @@ def parse_aps_rss_entries(
     return papers
 
 
+def parse_journal_feed_entries(
+    payload: bytes | str,
+    definition: JournalFeedDefinition,
+) -> list[dict[str, Any]]:
+    if definition.parser == "aps_rdf":
+        return parse_aps_rss_entries(
+            payload,
+            journal_slug=definition.key.removeprefix("aps:"),
+            journal_name=definition.journal_name,
+        )
+    if definition.parser not in {"standard", "aip_homepage"}:
+        raise ValueError(f"Unsupported journal feed parser: {definition.parser}")
+    return parse_standard_journal_feed_entries(payload, definition)
+
+
+def parse_standard_journal_feed_entries(
+    payload: bytes | str,
+    definition: JournalFeedDefinition,
+) -> list[dict[str, Any]]:
+    """Parse common RSS 2.0, RSS 1.0/RDF, and Atom journal feeds."""
+    root = parse_journal_feed_xml(payload)
+    items = [node for node in root.iter() if xml_local_name(node.tag) in {"item", "entry"}]
+    papers: list[dict[str, Any]] = []
+    for item in items:
+        item_type = clean_text(feed_element_text(item, {"type"})).casefold()
+        if journal_feed_item_type_is_excluded(item_type):
+            continue
+        if definition.allowed_item_types and item_type not in {
+            value.casefold() for value in definition.allowed_item_types
+        }:
+            continue
+        categories = {
+            clean_text(" ".join(node.itertext())).casefold()
+            for node in item.iter()
+            if xml_local_name(node.tag) == "category"
+        }
+        if definition.required_item_categories and not categories.intersection(
+            value.casefold() for value in definition.required_item_categories
+        ):
+            continue
+        title = normalize_publication_title(feed_element_text(item, {"title"}))
+        if not title or journal_feed_title_is_excluded(title):
+            continue
+        link = feed_entry_link(item)
+        doi = feed_entry_doi(item, link)
+        if definition.doi_prefixes and not any(
+            doi.startswith(prefix.casefold()) for prefix in definition.doi_prefixes
+        ):
+            continue
+        publication_date = normalize_feed_publication_date(
+            feed_element_text(item, {"publicationdate", "date", "pubdate", "published", "updated"})
+        )
+        if not publication_date:
+            continue
+        journal_name = clean_text(
+            feed_element_text(item, {"publicationname", "source"}) or definition.journal_name
+        )
+        url = link or (f"https://doi.org/{doi}" if doi else "")
+        authors = feed_entry_authors(item)
+        abstract = feed_entry_abstract(item) if definition.include_abstract else ""
+        raw = {
+            "DOI": doi,
+            "title": [title],
+            "author": [{"name": author} for author in authors],
+            "container-title": [journal_name],
+            "published-online": {"date-parts": [[int(part) for part in publication_date.split("-")]]},
+            "type": "journal-article",
+            "journal_feed": {
+                "feed_key": definition.key,
+                "publisher": definition.publisher,
+                "feed_url": definition.url,
+                "publication_date": publication_date,
+                "item_type": item_type,
+            },
+            "_paper_monitor_sources": [definition.source_name],
+        }
+        papers.append(
+            {
+                "paper_id": make_paper_id(doi, title, journal_name, publication_date),
+                "doi": doi,
+                "title": title,
+                "journal": journal_name,
+                "publication_date": publication_date,
+                "abstract": abstract,
+                "abstract_source": definition.source_name if abstract else "missing",
+                "url": url,
+                "landing_url": url,
+                "pdf_url": "",
+                "source": definition.source_name,
+                "type": "journal-article",
+                "type_crossref": "journal-article",
+                "publisher_section": "published",
+                "section_allowed": True,
+                "raw": raw,
+            }
+        )
+    return papers
+
+
+def parse_journal_feed_xml(payload: bytes | str) -> ET.Element:
+    """Parse publisher XML, repairing only invalid controls and bare ampersands."""
+    try:
+        return ET.fromstring(payload)
+    except ET.ParseError:
+        text = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else payload
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+        text = re.sub(r"&(?!#\d+;|#x[0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]+;)", "&amp;", text)
+        return ET.fromstring(text)
+
+
+def journal_feed_title_is_excluded(title: str) -> bool:
+    text = clean_text(title).casefold()
+    prefixes = (
+        "author correction:",
+        "publisher correction:",
+        "correction:",
+        "erratum:",
+        "retraction note:",
+        "retraction:",
+        "editorial:",
+        "book review:",
+        "issue masthead",
+    )
+    return text.startswith(prefixes)
+
+
+def journal_feed_item_type_is_excluded(item_type: str) -> bool:
+    text = clean_text(item_type).casefold()
+    if not text:
+        return False
+    excluded_markers = (
+        "correction",
+        "editorial",
+        "news",
+        "book review",
+        "announcement",
+        "obituary",
+        "retraction",
+        "erratum",
+        "addendum",
+        "masthead",
+        "cover",
+    )
+    return any(marker in text for marker in excluded_markers)
+
+
+def xml_local_name(tag: Any) -> str:
+    return str(tag or "").rsplit("}", 1)[-1].casefold()
+
+
+def feed_element_text(element: ET.Element, local_names: set[str]) -> str:
+    names = {name.casefold() for name in local_names}
+    for node in element.iter():
+        if node is element or xml_local_name(node.tag) not in names:
+            continue
+        text = clean_text(" ".join(node.itertext()))
+        if text:
+            return text
+    return ""
+
+
+def feed_entry_link(item: ET.Element) -> str:
+    for node in item.iter():
+        if xml_local_name(node.tag) != "link":
+            continue
+        href = clean_text(node.attrib.get("href") or "")
+        rel = clean_text(node.attrib.get("rel") or "alternate").casefold()
+        if href and rel in {"", "alternate"}:
+            return href
+        text = clean_text(" ".join(node.itertext()))
+        if text:
+            return text
+    return ""
+
+
+def feed_entry_doi(item: ET.Element, link: str = "") -> str:
+    candidates = [
+        feed_element_text(item, {"doi"}),
+        feed_element_text(item, {"identifier"}),
+        feed_element_text(item, {"guid"}),
+        feed_element_text(item, {"id"}),
+        link,
+        feed_element_text(item, {"description"}),
+        feed_element_text(item, {"encoded"}),
+        feed_element_text(item, {"content"}),
+    ]
+    for value in candidates:
+        doi = normalize_doi(value)
+        if doi.startswith("10.") and "/" in doi:
+            return doi
+        match = re.search(r"10\.\d{4,9}/[^\s<>\"']+", value or "", flags=re.IGNORECASE)
+        if match:
+            return normalize_doi(match.group(0).rstrip(".,;:)\]"))
+    return ""
+
+
+def normalize_feed_publication_date(value: str) -> str:
+    text = clean_text(value)
+    match = re.search(r"(?<!\d)(\d{4})[-/](\d{2})[-/](\d{2})(?!\d)", text)
+    if match:
+        candidate = "-".join(match.groups())
+        try:
+            return datetime.fromisoformat(candidate).date().isoformat()
+        except ValueError:
+            return ""
+    try:
+        return parsedate_to_datetime(text).date().isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return ""
+
+
+def feed_entry_authors(item: ET.Element) -> list[str]:
+    authors: list[str] = []
+    for node in item.iter():
+        local_name = xml_local_name(node.tag)
+        if local_name == "author":
+            name = feed_element_text(node, {"name"}) or clean_text(" ".join(node.itertext()))
+        elif local_name == "creator":
+            name = clean_text(" ".join(node.itertext()))
+        else:
+            continue
+        for candidate in aps_rss_author_names(name):
+            if candidate not in authors:
+                authors.append(candidate)
+    return authors
+
+
+def feed_entry_abstract(item: ET.Element) -> str:
+    for local_name in ("encoded", "summary", "description", "content"):
+        value = feed_element_text(item, {local_name})
+        if not value:
+            continue
+        soup = BeautifulSoup(value, "html.parser")
+        paragraphs = [clean_text(node.get_text(" ", strip=True)) for node in soup.find_all("p")]
+        candidates = [text for text in paragraphs if len(text) >= 40]
+        abstract = max(candidates, key=len, default=clean_text(soup.get_text(" ", strip=True)))
+        if len(abstract) >= 40:
+            return abstract
+    return ""
+
+
 def aps_rss_item_abstract(item: ET.Element) -> str:
     rss = "{http://purl.org/rss/1.0/}"
     content = "{http://purl.org/rss/1.0/modules/content/}"
@@ -215,13 +658,31 @@ def sync_aps_rss_feeds(
     force: bool = False,
     cache_seconds: int = APS_RSS_CACHE_SECONDS,
 ) -> dict[str, Any]:
-    global _APS_RSS_BLOCKED_UNTIL, _APS_RSS_LAST_REQUEST_AT
     requested = journal_slugs or list(APS_CANONICAL_NAMES_BY_SLUG)
-    targets = [
-        (slug, APS_CANONICAL_NAMES_BY_SLUG[slug])
-        for slug in requested
-        if slug in APS_CANONICAL_NAMES_BY_SLUG
-    ]
+    feed_keys = [f"aps:{slug}" for slug in requested if slug in APS_CANONICAL_NAMES_BY_SLUG]
+    summary = sync_journal_feeds(
+        storage,
+        feed_keys=feed_keys,
+        force=force,
+        cache_seconds=cache_seconds,
+    )
+    summary["feeds"] = {
+        key.removeprefix("aps:"): value for key, value in summary["feeds"].items()
+    }
+    return summary
+
+
+def sync_journal_feeds(
+    storage: Any,
+    *,
+    feed_keys: list[str] | None = None,
+    definitions: dict[str, JournalFeedDefinition] | None = None,
+    force: bool = False,
+    cache_seconds: int = APS_RSS_CACHE_SECONDS,
+) -> dict[str, Any]:
+    registry = definitions or journal_feed_definitions()
+    requested = feed_keys or list(registry)
+    targets = [registry[key] for key in requested if key in registry]
     summary: dict[str, Any] = {
         "status": "empty",
         "feeds": {},
@@ -230,57 +691,75 @@ def sync_aps_rss_feeds(
         "errors": [],
     }
     with _APS_RSS_LOCK:
-        for slug, name in targets:
-            state = storage.get_aps_rss_feed(slug)
-            if not force and aps_rss_feed_state_is_fresh(state, success_ttl_seconds=cache_seconds):
+        for definition in targets:
+            publisher_key = definition.publisher.casefold()
+            state = storage.get_journal_feed(definition.key)
+            if not force and journal_feed_state_is_fresh(state, success_ttl_seconds=cache_seconds):
                 count = int((state or {}).get("entry_count") or 0)
-                summary["feeds"][slug] = {"status": "cached", "entries": count}
+                summary["feeds"][definition.key] = {"status": "cached", "entries": count}
                 summary["entries"] += count
                 continue
             now = time.monotonic()
-            if now < _APS_RSS_BLOCKED_UNTIL:
-                summary["feeds"][slug] = {"status": "cooldown", "entries": 0}
+            blocked_until = _JOURNAL_FEED_BLOCKED_UNTIL.get(publisher_key, 0.0)
+            if now < blocked_until:
+                summary["feeds"][definition.key] = {"status": "cooldown", "entries": 0}
                 continue
-            wait_seconds = APS_RSS_REQUEST_INTERVAL_SECONDS - (now - _APS_RSS_LAST_REQUEST_AT)
+            last_request_at = _JOURNAL_FEED_LAST_REQUEST_AT.get(publisher_key, 0.0)
+            wait_seconds = APS_RSS_REQUEST_INTERVAL_SECONDS - (now - last_request_at)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
             headers = {"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"}
-            if state and state.get("etag"):
+            if definition.parser != "aip_homepage" and state and state.get("etag"):
                 headers["If-None-Match"] = str(state["etag"])
-            if state and state.get("last_modified"):
+            if definition.parser != "aip_homepage" and state and state.get("last_modified"):
                 headers["If-Modified-Since"] = str(state["last_modified"])
             try:
                 response = requests.get(
-                    f"https://feeds.aps.org/rss/recent/{slug}.xml",
+                    definition.url,
                     headers=headers,
                     timeout=10,
                     allow_redirects=True,
                 )
-                _APS_RSS_LAST_REQUEST_AT = time.monotonic()
+                if definition.parser == "aip_homepage":
+                    response.raise_for_status()
+                    feed_url = aip_homepage_feed_url(response.content, definition.url)
+                    time.sleep(APS_RSS_REQUEST_INTERVAL_SECONDS)
+                    response = requests.get(
+                        feed_url,
+                        headers={"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"},
+                        timeout=10,
+                        allow_redirects=True,
+                    )
+                requested_at = time.monotonic()
+                _JOURNAL_FEED_LAST_REQUEST_AT[publisher_key] = requested_at
                 if response.status_code in {403, 429}:
-                    _APS_RSS_BLOCKED_UNTIL = _APS_RSS_LAST_REQUEST_AT + APS_ABSTRACT_BLOCK_COOLDOWN_SECONDS
+                    _JOURNAL_FEED_BLOCKED_UNTIL[publisher_key] = (
+                        requested_at + APS_ABSTRACT_BLOCK_COOLDOWN_SECONDS
+                    )
                     response.raise_for_status()
                 if response.status_code == 304:
                     count = int((state or {}).get("entry_count") or 0)
-                    storage.record_aps_rss_feed(
-                        journal_slug=slug,
-                        journal_name=name,
+                    storage.record_journal_feed(
+                        feed_key=definition.key,
+                        publisher=definition.publisher,
+                        journal_name=definition.journal_name,
+                        feed_url=definition.url,
+                        parser=definition.parser,
                         status="success",
                         entry_count=count,
                         success=True,
                     )
-                    summary["feeds"][slug] = {"status": "not_modified", "entries": count}
+                    summary["feeds"][definition.key] = {"status": "not_modified", "entries": count}
                     summary["entries"] += count
                     continue
                 response.raise_for_status()
-                papers = parse_aps_rss_entries(
-                    response.content,
-                    journal_slug=slug,
-                    journal_name=name,
-                )
-                storage.record_aps_rss_feed(
-                    journal_slug=slug,
-                    journal_name=name,
+                papers = parse_journal_feed_entries(response.content, definition)
+                storage.record_journal_feed(
+                    feed_key=definition.key,
+                    publisher=definition.publisher,
+                    journal_name=definition.journal_name,
+                    feed_url=definition.url,
+                    parser=definition.parser,
                     status="running",
                     entry_count=int((state or {}).get("entry_count") or 0),
                 )
@@ -289,21 +768,24 @@ def sync_aps_rss_feeds(
                     created += int(
                         storage.merge_paper_missing_metadata(
                             paper,
-                            source_name="aps_rss",
+                            source_name=definition.source_name,
                             commit=False,
                         )
                     )
-                storage.record_aps_rss_entries(slug, papers)
-                storage.record_aps_rss_feed(
-                    journal_slug=slug,
-                    journal_name=name,
+                storage.record_journal_feed_entries(definition.key, papers)
+                storage.record_journal_feed(
+                    feed_key=definition.key,
+                    publisher=definition.publisher,
+                    journal_name=definition.journal_name,
+                    feed_url=definition.url,
+                    parser=definition.parser,
                     status="success",
                     entry_count=len(papers),
                     etag=clean_text(response.headers.get("ETag") or ""),
                     last_modified=clean_text(response.headers.get("Last-Modified") or ""),
                     success=True,
                 )
-                summary["feeds"][slug] = {
+                summary["feeds"][definition.key] = {
                     "status": "success",
                     "entries": len(papers),
                     "created": created,
@@ -312,17 +794,72 @@ def sync_aps_rss_feeds(
                 summary["created"] += created
             except (requests.RequestException, ET.ParseError, ValueError) as exc:
                 message = clean_text(str(exc))[:500]
-                storage.record_aps_rss_feed(
-                    journal_slug=slug,
-                    journal_name=name,
+                if definition.fallback_issns:
+                    try:
+                        papers = journal_feed_crossref_fallback(definition)
+                        storage.record_journal_feed(
+                            feed_key=definition.key,
+                            publisher=definition.publisher,
+                            journal_name=definition.journal_name,
+                            feed_url=definition.url,
+                            parser=definition.parser,
+                            status="running",
+                            entry_count=int((state or {}).get("entry_count") or 0),
+                            message=f"Official RSS unavailable; using Crossref: {message}",
+                        )
+                        created = 0
+                        for paper in papers:
+                            created += int(
+                                storage.merge_paper_missing_metadata(
+                                    paper,
+                                    source_name=definition.source_name,
+                                    commit=False,
+                                )
+                            )
+                        storage.record_journal_feed_entries(definition.key, papers)
+                        storage.record_journal_feed(
+                            feed_key=definition.key,
+                            publisher=definition.publisher,
+                            journal_name=definition.journal_name,
+                            feed_url=definition.url,
+                            parser=definition.parser,
+                            status="success",
+                            entry_count=len(papers),
+                            success=True,
+                            message=f"Official RSS unavailable; using Crossref: {message}",
+                        )
+                        summary["feeds"][definition.key] = {
+                            "status": "fallback",
+                            "entries": len(papers),
+                            "created": created,
+                            "message": "Official RSS unavailable; using Crossref",
+                        }
+                        summary["entries"] += len(papers)
+                        summary["created"] += created
+                        continue
+                    except requests.RequestException as fallback_exc:
+                        fallback_message = clean_text(str(fallback_exc))[:500]
+                        message = f"{message}; Crossref fallback failed: {fallback_message}"[:500]
+                storage.record_journal_feed(
+                    feed_key=definition.key,
+                    publisher=definition.publisher,
+                    journal_name=definition.journal_name,
+                    feed_url=definition.url,
+                    parser=definition.parser,
                     status="error",
                     entry_count=int((state or {}).get("entry_count") or 0),
                     message=message,
                 )
-                summary["feeds"][slug] = {"status": "error", "entries": 0, "message": message}
-                summary["errors"].append(f"{name}: {message}")
+                summary["feeds"][definition.key] = {
+                    "status": "error",
+                    "entries": 0,
+                    "message": message,
+                }
+                summary["errors"].append(f"{definition.journal_name}: {message}")
     statuses = [str(item.get("status") or "") for item in summary["feeds"].values()]
-    successful = [status for status in statuses if status in {"success", "cached", "not_modified"}]
+    successful = [
+        status for status in statuses if status in {"success", "cached", "not_modified", "fallback"}
+    ]
     failed = [status for status in statuses if status in {"error", "cooldown"}]
     if successful and failed:
         summary["status"] = "partial"
@@ -333,7 +870,62 @@ def sync_aps_rss_feeds(
     return summary
 
 
-def aps_rss_feed_state_is_fresh(
+def aip_homepage_feed_url(payload: bytes | str, homepage_url: str) -> str:
+    soup = BeautifulSoup(payload, "html.parser")
+    candidates: list[tuple[str, str]] = []
+    for link in soup.find_all("a", href=True):
+        href = clean_text(link.get("href") or "")
+        if "/rss/" not in href or not href.casefold().endswith(".xml"):
+            continue
+        candidates.append((clean_text(link.get_text(" ", strip=True)).casefold(), urljoin(homepage_url, href)))
+    if not candidates:
+        raise ValueError("Official AIP RSS link was not found on the journal homepage")
+    for label, url in candidates:
+        if "current" in label:
+            return url
+    return candidates[0][1]
+
+
+def journal_feed_crossref_fallback(definition: JournalFeedDefinition) -> list[dict[str, Any]]:
+    end_date = date.today()
+    papers = fetch_crossref_journal(
+        journal_name=definition.journal_name,
+        issns=list(definition.fallback_issns),
+        start_date=end_date - timedelta(days=90),
+        end_date=end_date,
+        rows=100,
+        max_pages=2,
+    )
+    accepted: list[dict[str, Any]] = []
+    for paper in papers:
+        doi = normalize_doi(paper.get("doi") or "")
+        title = clean_text(paper.get("title") or "")
+        if definition.doi_prefixes and not any(
+            doi.startswith(prefix.casefold()) for prefix in definition.doi_prefixes
+        ):
+            continue
+        if not title or journal_feed_title_is_excluded(title):
+            continue
+        raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
+        source_names = raw.get("_paper_monitor_sources")
+        if not isinstance(source_names, list):
+            source_names = []
+        if definition.source_name not in source_names:
+            source_names.append(definition.source_name)
+        raw["_paper_monitor_sources"] = source_names
+        raw["journal_feed"] = {
+            "feed_key": definition.key,
+            "publisher": definition.publisher,
+            "feed_url": definition.url,
+            "fallback": "crossref",
+        }
+        paper["raw"] = raw
+        paper["source"] = definition.source_name
+        accepted.append(paper)
+    return accepted
+
+
+def journal_feed_state_is_fresh(
     state: dict[str, Any] | None,
     *,
     success_ttl_seconds: int = APS_RSS_CACHE_SECONDS,
@@ -356,6 +948,14 @@ def aps_rss_feed_state_is_fresh(
         return False
     ttl = max(60, int(success_ttl_seconds)) if status == "success" else APS_RSS_FAILURE_CACHE_SECONDS
     return 0 <= age < ttl
+
+
+def aps_rss_feed_state_is_fresh(
+    state: dict[str, Any] | None,
+    *,
+    success_ttl_seconds: int = APS_RSS_CACHE_SECONDS,
+) -> bool:
+    return journal_feed_state_is_fresh(state, success_ttl_seconds=success_ttl_seconds)
 
 
 def parse_rmp_rss_abstracts(payload: bytes | str) -> dict[str, str]:
@@ -508,6 +1108,8 @@ def reset_aps_abstract_fetch_state() -> None:
         _APS_ABSTRACT_BLOCKED_UNTIL = 0.0
     with _APS_RSS_LOCK:
         _APS_RSS_CACHE.clear()
+        _JOURNAL_FEED_LAST_REQUEST_AT.clear()
+        _JOURNAL_FEED_BLOCKED_UNTIL.clear()
         _APS_RSS_LAST_REQUEST_AT = 0.0
         _APS_RSS_BLOCKED_UNTIL = 0.0
 

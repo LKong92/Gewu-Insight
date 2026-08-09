@@ -589,7 +589,7 @@ class ThemeMonitorTest(unittest.TestCase):
                     )
 
                     self.assertEqual(calls, ["quantum materials"])
-                    self.assertEqual(result["source_counts"]["local_aps_rss"], 1)
+                    self.assertEqual(result["source_counts"]["local_journal_feeds"], 1)
                     self.assertEqual(result["source_counts"]["online_source"], 1)
                     papers = storage.list_theme_papers(
                         window_start=selected.isoformat(),

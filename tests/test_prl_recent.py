@@ -16,13 +16,17 @@ from paper_monitor.reporting import section_badge_background, section_color
 from paper_monitor.sources.crossref import fetch_crossref_journal, normalize_crossref_item
 from paper_monitor.sources.openalex import fetch_openalex_work_by_doi, normalize_openalex_item
 from paper_monitor.sources.publisher import (
+    JournalFeedDefinition,
     enrich_aps_abstract_from_rss,
     enrich_rmp_abstract_from_aps,
     enrich_rmp_abstract_from_rss,
+    journal_feed_definitions,
     parse_aps_rss_entries,
+    parse_journal_feed_entries,
     parse_rmp_rss_abstracts,
     reset_aps_abstract_fetch_state,
     sync_aps_rss_feeds,
+    sync_journal_feeds,
 )
 from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
@@ -431,6 +435,280 @@ class PrlRecentTests(unittest.TestCase):
                     end_date="2026-08-01",
                 )
                 self.assertEqual([paper["doi"] for paper in subject_papers], ["10.1103/example-materials"])
+            finally:
+                storage.close()
+
+    def test_standard_journal_feed_keeps_research_items_and_exact_dates(self) -> None:
+        payload = b"""<?xml version='1.0'?>
+        <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+          xmlns='http://purl.org/rss/1.0/'
+          xmlns:dc='http://purl.org/dc/elements/1.1/'
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'>
+          <item rdf:about='https://www.science.org/doi/abs/10.1126/science.example'>
+            <title>A quantum materials result from an official feed</title>
+            <link>https://www.science.org/doi/abs/10.1126/science.example</link>
+            <dc:date>2026-08-06T07:00:00Z</dc:date>
+            <dc:type>Research Article</dc:type>
+            <prism:doi>10.1126/science.example</prism:doi>
+            <prism:publicationName>Science</prism:publicationName>
+          </item>
+          <item rdf:about='https://www.science.org/doi/abs/10.1126/science.book'>
+            <title>A book notice that must not enter Subject Monitor</title>
+            <dc:date>2026-08-06T07:00:00Z</dc:date>
+            <dc:type>Books et al.</dc:type>
+            <prism:doi>10.1126/science.book</prism:doi>
+          </item>
+        </rdf:RDF>"""
+        definition = JournalFeedDefinition(
+            key="aaas:science",
+            publisher="AAAS",
+            journal_name="Science",
+            url="https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
+            doi_prefixes=("10.1126/",),
+            allowed_item_types=("research article",),
+            include_abstract=False,
+        )
+
+        papers = parse_journal_feed_entries(payload, definition)
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["doi"], "10.1126/science.example")
+        self.assertEqual(papers[0]["publication_date"], "2026-08-06")
+        self.assertEqual(papers[0]["journal"], "Science")
+        self.assertEqual(papers[0]["abstract"], "")
+
+    def test_curated_physics_feed_registry_contains_both_expansion_batches(self) -> None:
+        definitions = journal_feed_definitions()
+        expected = {
+            "nature:nature-physics",
+            "nature:communications-physics",
+            "iop:new-journal-of-physics",
+            "iop:reports-on-progress-in-physics",
+            "nature:nature-reviews-physics",
+            "nature:npj-quantum-materials",
+            "iop:journal-of-physics-condensed-matter",
+            "nature:npj-quantum-information",
+            "iop:quantum-science-and-technology",
+            "aip:applied-physics-letters",
+            "nature:nature-materials",
+            "nature:nature-nanotechnology",
+            "iop:2d-materials",
+            "aip:avs-quantum-science",
+            "aip:journal-of-applied-physics",
+            "acs:nano-letters",
+            "quantum:quantum",
+            "aip:review-of-scientific-instruments",
+        }
+
+        self.assertTrue(expected.issubset(definitions))
+        self.assertEqual(definitions["quantum:quantum"].required_item_categories, ("paper",))
+        self.assertEqual(definitions["acs:nano-letters"].fallback_issns, ("1530-6992",))
+
+    def test_quantum_feed_extracts_doi_from_description_and_rejects_news(self) -> None:
+        payload = b"""<?xml version='1.0'?><rss version='2.0'><channel>
+          <item><title>A research result</title><link>https://quantum-journal.org/papers/example/</link>
+            <pubDate>Fri, 07 Aug 2026 14:10:44 +0000</pubDate><category>Paper</category>
+            <description><![CDATA[<a href='https://doi.org/10.22331/q-example'>DOI</a><p class='abstract'>A sufficiently long abstract describing a quantum information research result for feed parsing.</p>]]></description>
+          </item>
+          <item><title>Journal announcement</title><link>https://quantum-journal.org/news/example/</link>
+            <pubDate>Fri, 07 Aug 2026 14:10:44 +0000</pubDate><category>News</category>
+            <description>https://doi.org/10.22331/q-news</description>
+          </item>
+        </channel></rss>"""
+        definition = journal_feed_definitions()["quantum:quantum"]
+
+        papers = parse_journal_feed_entries(payload, definition)
+
+        self.assertEqual([paper["doi"] for paper in papers], ["10.22331/q-example"])
+        self.assertIn("quantum information", papers[0]["abstract"])
+
+    def test_standard_feed_repairs_bare_ampersand_and_filters_corrections(self) -> None:
+        payload = b"""<rss><channel>
+          <item><title>Quantum A & B coupling</title><link>https://doi.org/10.2000/research</link>
+            <pubDate>Thu, 06 Aug 2026 07:00:00 GMT</pubDate><doi>10.2000/research</doi></item>
+          <item><title>Publisher Correction: Quantum result</title><link>https://doi.org/10.2000/correction</link>
+            <pubDate>Thu, 06 Aug 2026 07:00:00 GMT</pubDate><doi>10.2000/correction</doi></item>
+        </channel></rss>"""
+        definition = JournalFeedDefinition(
+            key="publisher:journal",
+            publisher="Publisher",
+            journal_name="Journal",
+            url="https://example.test/rss",
+            doi_prefixes=("10.2000/",),
+        )
+
+        papers = parse_journal_feed_entries(payload, definition)
+
+        self.assertEqual([paper["doi"] for paper in papers], ["10.2000/research"])
+        self.assertIn("& B coupling", papers[0]["title"])
+
+    def test_blocked_official_feed_uses_issn_fallback(self) -> None:
+        class BlockedResponse:
+            status_code = 403
+            content = b""
+            headers: dict[str, str] = {}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                raise HTTPError("blocked")
+
+        definition = JournalFeedDefinition(
+            key="acs:nano-letters-test",
+            publisher="American Chemical Society Test",
+            journal_name="Nano Letters",
+            url="https://pubs.acs.org/example.xml",
+            doi_prefixes=("10.1021/",),
+            fallback_issns=("1530-6992",),
+        )
+        fallback_paper = normalize_crossref_item(
+            {
+                "DOI": "10.1021/acs.nanolett.example",
+                "URL": "https://doi.org/10.1021/acs.nanolett.example",
+                "title": ["A nanoscale quantum materials result"],
+                "container-title": ["Nano Letters"],
+                "published-online": {"date-parts": [[2026, 8, 6]]},
+                "type": "journal-article",
+            },
+            "Nano Letters",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                with patch(
+                    "paper_monitor.sources.publisher.requests.get",
+                    return_value=BlockedResponse(),
+                ), patch(
+                    "paper_monitor.sources.publisher.fetch_crossref_journal",
+                    return_value=[fallback_paper],
+                ):
+                    summary = sync_journal_feeds(
+                        storage,
+                        definitions={definition.key: definition},
+                        force=True,
+                    )
+
+                self.assertEqual(summary["status"], "success")
+                self.assertEqual(summary["feeds"][definition.key]["status"], "fallback")
+                saved = storage.list_journal_feed_papers(
+                    start_date="2026-08-06",
+                    end_date="2026-08-06",
+                )
+                self.assertEqual([paper["doi"] for paper in saved], ["10.1021/acs.nanolett.example"])
+            finally:
+                storage.close()
+
+    def test_journal_feed_failures_are_isolated_by_publisher(self) -> None:
+        payload = b"""<rss><channel><item>
+          <title>A valid quantum materials research article</title>
+          <link>https://doi.org/10.2000/example</link>
+          <pubDate>Thu, 06 Aug 2026 07:00:00 GMT</pubDate>
+          <type>Research Article</type>
+          <doi>10.2000/example</doi>
+        </item></channel></rss>"""
+
+        class BlockedResponse:
+            status_code = 429
+            content = b""
+            headers: dict[str, str] = {}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                raise HTTPError("rate limited")
+
+        class SuccessResponse:
+            status_code = 200
+            content = payload
+            headers: dict[str, str] = {}
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        definitions = {
+            "blocked:one": JournalFeedDefinition(
+                key="blocked:one",
+                publisher="Blocked Publisher",
+                journal_name="Blocked Journal",
+                url="https://blocked.example/feed",
+            ),
+            "healthy:one": JournalFeedDefinition(
+                key="healthy:one",
+                publisher="Healthy Publisher",
+                journal_name="Healthy Journal",
+                url="https://healthy.example/feed",
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                with patch(
+                    "paper_monitor.sources.publisher.requests.get",
+                    side_effect=[BlockedResponse(), SuccessResponse()],
+                ) as request:
+                    summary = sync_journal_feeds(storage, definitions=definitions, force=True)
+
+                self.assertEqual(request.call_count, 2)
+                self.assertEqual(summary["status"], "partial")
+                self.assertEqual(summary["feeds"]["blocked:one"]["status"], "error")
+                self.assertEqual(summary["feeds"]["healthy:one"]["status"], "success")
+                papers = storage.list_journal_feed_papers(
+                    start_date="2026-08-06",
+                    end_date="2026-08-06",
+                )
+                self.assertEqual([paper["doi"] for paper in papers], ["10.2000/example"])
+            finally:
+                storage.close()
+
+    def test_legacy_aps_feed_cache_migrates_without_removing_legacy_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                paper = {
+                    "paper_id": "doi_legacy_aps_feed",
+                    "doi": "10.1103/legacy-feed",
+                    "title": "A legacy APS feed record",
+                    "journal": "Physical Review Materials",
+                    "publication_date": "2026-08-01",
+                    "abstract": "",
+                    "url": "https://doi.org/10.1103/legacy-feed",
+                    "source": "aps_rss",
+                    "type": "journal-article",
+                    "type_crossref": "journal-article",
+                    "publisher_section": "published",
+                    "section_allowed": True,
+                    "raw": {"type": "journal-article"},
+                }
+                storage.upsert_paper(paper)
+                storage.conn.execute(
+                    """
+                    INSERT INTO aps_rss_feeds (
+                      journal_slug, journal_name, status, entry_count, checked_at, success_at
+                    ) VALUES ('prmaterials', 'Physical Review Materials', 'success', 1, '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
+                    """
+                )
+                storage.conn.execute(
+                    """
+                    INSERT INTO aps_rss_entries (
+                      journal_slug, paper_id, publication_date, first_seen_at, last_seen_at
+                    ) VALUES ('prmaterials', 'doi_legacy_aps_feed', '2026-08-01', '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
+                    """
+                )
+                storage.conn.execute("DELETE FROM journal_feed_entries")
+                storage.conn.execute("DELETE FROM journal_feeds")
+                storage.conn.commit()
+
+                storage._migrate_aps_rss_to_journal_feeds()
+
+                self.assertIsNotNone(storage.get_journal_feed("aps:prmaterials"))
+                papers = storage.list_journal_feed_papers(
+                    start_date="2026-08-01",
+                    end_date="2026-08-01",
+                )
+                self.assertEqual([item["paper_id"] for item in papers], ["doi_legacy_aps_feed"])
+                legacy_count = storage.conn.execute(
+                    "SELECT COUNT(*) FROM aps_rss_entries WHERE journal_slug = 'prmaterials'"
+                ).fetchone()[0]
+                self.assertEqual(legacy_count, 1)
             finally:
                 storage.close()
 

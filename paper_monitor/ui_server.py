@@ -90,7 +90,7 @@ from .sources.publisher import (
     APS_RSS_SUBJECT_CACHE_SECONDS,
     enrich_from_landing_page,
     enrich_image_from_landing_page,
-    sync_aps_rss_feeds,
+    sync_journal_feeds,
 )
 from .sources.semantic_scholar import (
     SEMANTIC_SCHOLAR_API_KEY_SETTING,
@@ -5774,27 +5774,27 @@ def run_theme_monitor(
                     progress_date,
                     group_key,
                     status="running",
-                    current_source="local_aps_rss",
+                    current_source="local_journal_feeds",
                     source_completed=1,
                     source_total=source_totals[group_key],
                 )
-        local_aps_rss, local_aps_rss_status, local_aps_rss_message = local_aps_rss_theme_candidates(
+        local_journal_feeds, local_journal_feeds_status, local_journal_feeds_message = local_journal_feed_theme_candidates(
             storage,
             start_date=start_date,
             end_date=end_date,
             refresh=refresh_aps_rss,
         )
-        summary["source_counts"]["local_aps_rss"] = len(local_aps_rss)
-        summary["source_statuses"]["local_aps_rss"] = local_aps_rss_status
-        summary["raw_results"] += len(local_aps_rss)
-        for paper in local_aps_rss:
+        summary["source_counts"]["local_journal_feeds"] = len(local_journal_feeds)
+        summary["source_statuses"]["local_journal_feeds"] = local_journal_feeds_status
+        summary["raw_results"] += len(local_journal_feeds)
+        for paper in local_journal_feeds:
             add_theme_candidate(
                 candidates,
                 candidate_sources,
                 candidate_queries,
                 paper,
-                source_name="local_aps_rss",
-                query="local APS RSS",
+                source_name="local_journal_feeds",
+                query="official journal feeds",
             )
 
         for source_index, (source_name, fetcher) in enumerate(source_fetchers, start=2):
@@ -5875,7 +5875,7 @@ def run_theme_monitor(
         candidate_rows: list[dict[str, str]] = []
         for merge_key, paper in candidates.items():
             sources = candidate_sources.get(merge_key, set())
-            if not sources.intersection({"local_arxiv", "local_aps_rss"}):
+            if not sources.intersection({"local_arxiv", "local_journal_feeds"}):
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
                 storage.upsert_paper(paper)
@@ -5887,7 +5887,7 @@ def run_theme_monitor(
                         "window_start": window_start,
                         "window_end": window_end,
                         "query_plan_hash": plan_hash
-                        if source_name in {"local_arxiv", "local_aps_rss"}
+                        if source_name in {"local_arxiv", "local_journal_feeds"}
                         else source_plan_hashes.get(source_name, theme_source_plan_hash(source_name, start_date, end_date, query_plan)),
                     }
                 )
@@ -5908,12 +5908,12 @@ def run_theme_monitor(
             failed_tasks: list[dict[str, str]] = []
             source_statuses = {
                 "local_arxiv": local_arxiv_status,
-                "local_aps_rss": local_aps_rss_status,
+                "local_journal_feeds": local_journal_feeds_status,
             }
             if local_arxiv_message:
                 group_errors.append(local_arxiv_message)
-            if local_aps_rss_message:
-                group_errors.append(local_aps_rss_message)
+            if local_journal_feeds_message:
+                group_errors.append(local_journal_feeds_message)
             group_queries = [query for query in query_plan if group_key in query_groups.get(query, set())]
             for source_name, _fetcher in source_fetchers:
                 if retry_tasks_by_group is not None and source_name not in retry_sources_by_group.get(group_key, set()):
@@ -6337,26 +6337,26 @@ def local_arxiv_theme_candidates(
     return [], "error", clean_text(row["message"] or "Local arXiv update failed.")
 
 
-def local_aps_rss_theme_candidates(
+def local_journal_feed_theme_candidates(
     storage: Storage,
     *,
     start_date: date,
     end_date: date,
     refresh: bool = False,
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Refresh the shared APS feed cache once, then query the requested window locally."""
+    """Refresh official journal feeds once, then query the requested window locally."""
     sync = (
-        sync_aps_rss_feeds(storage, cache_seconds=APS_RSS_SUBJECT_CACHE_SECONDS)
+        sync_journal_feeds(storage, cache_seconds=APS_RSS_SUBJECT_CACHE_SECONDS)
         if refresh
         else {"status": "empty", "errors": []}
     )
-    papers = storage.list_aps_rss_papers(
+    papers = storage.list_journal_feed_papers(
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
     )
     sync_status = clean_text(sync.get("status") or "")
     errors = [clean_text(message) for message in (sync.get("errors") or []) if clean_text(message)]
-    # APS RSS is an additive local cache. A temporary feed failure must not
+    # Journal feeds are an additive local cache. A temporary failure must not
     # downgrade an otherwise successful Subject Monitor search.
     if papers:
         status = "success"
@@ -6366,6 +6366,22 @@ def local_aps_rss_theme_candidates(
         status = "not_available"
     message = "; ".join(errors[:3])
     return papers, status, message
+
+
+def local_aps_rss_theme_candidates(
+    storage: Storage,
+    *,
+    start_date: date,
+    end_date: date,
+    refresh: bool = False,
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Backward-compatible name for the original APS-only local source."""
+    return local_journal_feed_theme_candidates(
+        storage,
+        start_date=start_date,
+        end_date=end_date,
+        refresh=refresh,
+    )
 
 
 def match_local_arxiv_for_all_subjects(storage: Storage, selected_date: date) -> dict[str, int]:
@@ -34064,6 +34080,7 @@ INDEX_HTML = """<!doctype html>
 	        arxiv: "arXiv",
 	        local_arxiv: "Local arXiv",
 	        local_aps_rss: "Local APS RSS",
+	        local_journal_feeds: "Official journal feeds",
 	        pubmed: "PubMed"
 	      };
 	      return labels[String(source || "")] || String(source || "");
