@@ -20,6 +20,8 @@
 - Keep the left calendar/filter column independent from report scrolling.
 - Calendar day counts should show numbers only.
 - Preserve download and analysis status so repeated actions are visible and avoidable.
+- Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
+- Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
 
 ## Commands
 
