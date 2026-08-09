@@ -4,15 +4,14 @@ from paper_monitor.ui_server import INDEX_HTML
 
 
 class SubjectMonitorUiTests(unittest.TestCase):
-    def test_subject_toolbar_has_refresh_and_optional_sources_hidden_by_default(self):
+    def test_subject_toolbar_has_refresh_and_optional_arxiv_hidden_by_default(self):
         toolbar = INDEX_HTML.split('id="themeToolbarActions"', 1)[1].split('</div>', 1)[0]
 
         self.assertIn('id="forceThemeFetch"', toolbar)
         self.assertIn('>Refresh</button>', toolbar)
         self.assertIn('id="themeArxivToggle"', toolbar)
-        self.assertIn('id="themeZenodoToggle"', toolbar)
         self.assertNotIn('id="themeArxivToggle" checked', toolbar)
-        self.assertNotIn('id="themeZenodoToggle" checked', toolbar)
+        self.assertNotIn('Zenodo', toolbar)
 
     def test_subjects_render_as_journal_style_tabs(self):
         render_tabs = INDEX_HTML.split('function renderThemeTabs', 1)[1].split(
@@ -33,16 +32,16 @@ class SubjectMonitorUiTests(unittest.TestCase):
 
         self.assertIn('return knownThemeGroupKeys();', selection)
 
-    def test_arxiv_and_zenodo_filters_are_display_only(self):
+    def test_arxiv_filter_is_display_only_and_zenodo_controls_are_removed(self):
         visible = INDEX_HTML.split('function themeVisiblePapers', 1)[1].split(
             'function themePaperMatchesGroup', 1
         )[0]
 
         self.assertIn('state.showThemeArxiv || !themePaperIsArxiv(paper)', visible)
-        self.assertIn('state.showThemeZenodo || !themePaperIsZenodo(paper)', visible)
         self.assertNotIn('/api/', visible)
-        self.assertIn('doi.startsWith("10.5281/zenodo.")', INDEX_HTML)
-        self.assertIn('url.includes("zenodo.org/")', INDEX_HTML)
+        self.assertNotIn('themeZenodoToggle', INDEX_HTML)
+        self.assertNotIn('showThemeZenodo', INDEX_HTML)
+        self.assertNotIn('themePaperIsZenodo', INDEX_HTML)
 
     def test_figure_mode_keeps_a_stable_column_when_image_lookup_fails(self):
         render_paper = INDEX_HTML.split('function renderPaper', 1)[1].split(

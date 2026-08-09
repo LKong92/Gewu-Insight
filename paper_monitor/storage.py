@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
-from .text import is_placeholder_publication_title, normalize_publication_title
+from .text import is_placeholder_publication_title, normalize_publication_title, paper_is_from_zenodo
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
@@ -1572,6 +1572,8 @@ class Storage:
         order: list[str] = []
         for row in rows:
             item = dict(row)
+            if paper_is_from_zenodo(item):
+                continue
             paper_id = str(item.get("paper_id") or "")
             if not paper_id:
                 continue

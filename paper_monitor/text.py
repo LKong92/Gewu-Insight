@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from html import unescape
+import json
 import re
 from typing import Any
 
@@ -613,6 +614,61 @@ def normalize_doi(value: str | None) -> str:
     doi = doi.removeprefix("https://doi.org/")
     doi = doi.removeprefix("http://doi.org/")
     return doi.lower()
+
+
+def paper_is_from_zenodo(paper: dict[str, Any]) -> bool:
+    """Return whether publication metadata identifies a Zenodo record."""
+    doi = normalize_doi(paper.get("doi"))
+    if doi.startswith("10.5281/"):
+        return True
+
+    for key in ("journal", "source"):
+        value = clean_text(paper.get(key)).lower()
+        if value == "zenodo" or value.startswith("zenodo ") or value.startswith("zenodo ("):
+            return True
+
+    for key in ("url", "landing_url", "pdf_url"):
+        if "zenodo.org/" in clean_text(paper.get(key)).lower():
+            return True
+
+    raw = paper.get("raw")
+    if raw is None:
+        raw = paper.get("raw_json")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                raw = {}
+    return _zenodo_in_source_metadata(raw)
+
+
+def _zenodo_in_source_metadata(value: Any, *, metadata_key: str = "") -> bool:
+    if isinstance(value, dict):
+        return any(
+            _zenodo_in_source_metadata(item, metadata_key=str(key).lower())
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_zenodo_in_source_metadata(item, metadata_key=metadata_key) for item in value)
+    if metadata_key not in {
+        "doi",
+        "id",
+        "url",
+        "landing_url",
+        "landing_page_url",
+        "pdf_url",
+        "source",
+        "source_name",
+        "venue",
+        "journal",
+        "publisher",
+        "repository",
+        "display_name",
+        "host_organization_name",
+    }:
+        return False
+    text = clean_text(value).lower()
+    return "zenodo.org/" in text or text == "zenodo" or text.startswith("zenodo ") or text.startswith("10.5281/")
 
 
 def journal_name_for_doi(journal_name: Any, doi: str | None) -> str:

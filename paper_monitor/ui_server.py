@@ -100,7 +100,7 @@ from .sources.semantic_scholar import (
     test_semantic_scholar_api_key,
 )
 from .storage import Storage
-from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, safe_slug
+from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, paper_is_from_zenodo, safe_slug
 from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
 
 
@@ -6113,12 +6113,16 @@ def run_theme_source_plan(
         query_plan_hash=plan_hash,
     )
     force_refresh = trigger in {"manual", "manual_search"}
-    cached_papers = storage.list_theme_candidates(
-        window_start=start_date.isoformat(),
-        window_end=end_date.isoformat(),
-        sources=[source_name],
-        query_plan_hash=plan_hash,
-    )
+    cached_papers = [
+        paper
+        for paper in storage.list_theme_candidates(
+            window_start=start_date.isoformat(),
+            window_end=end_date.isoformat(),
+            sources=[source_name],
+            query_plan_hash=plan_hash,
+        )
+        if not paper_is_from_zenodo(paper)
+    ]
     cached_tasks = {
         str(task.get("query") or ""): task
         for task in storage.list_theme_source_tasks(int(latest["id"]))
@@ -6225,7 +6229,11 @@ def run_theme_source_plan(
                 time.sleep(float(THEME_SOURCE_MIN_INTERVAL_SECONDS.get(source_name, 1.0)))
             queries_attempted += 1
             try:
-                papers = fetcher(query, start_date, end_date)
+                papers = [
+                    paper
+                    for paper in fetcher(query, start_date, end_date)
+                    if not paper_is_from_zenodo(paper)
+                ]
             except Exception as exc:
                 consecutive_failures += 1
                 message = theme_fetch_error_message("Subject Monitor", exc, source_name=source_name)
@@ -6404,7 +6412,7 @@ def add_theme_candidate(
     source_name: str,
     query: str,
 ) -> None:
-    if not clean_text(paper.get("paper_id") or ""):
+    if not clean_text(paper.get("paper_id") or "") or paper_is_from_zenodo(paper):
         return
     merge_key = theme_candidate_merge_key(paper)
     current = candidates.get(merge_key)
@@ -6753,6 +6761,8 @@ def theme_candidate_in_window(paper: dict[str, Any], start_date: date, end_date:
 
 
 def theme_candidate_is_literature_like(paper: dict[str, Any]) -> bool:
+    if paper_is_from_zenodo(paper):
+        return False
     raw = paper.get("raw") if isinstance(paper.get("raw"), dict) else {}
     type_values = [
         paper.get("type"),
@@ -28846,7 +28856,6 @@ INDEX_HTML = """<!doctype html>
             <div class="toolbar-actions hidden theme-toolbar-actions" id="themeToolbarActions">
               <button class="smallbtn" id="forceThemeFetch" type="button" title="Refresh all subjects for this date">Refresh</button>
               <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle"> arXiv</label>
-              <label class="toolbar-toggle"><input type="checkbox" id="themeZenodoToggle"> Zenodo</label>
             </div>
             <div class="auto-update-status" id="autoUpdateStatus" aria-live="polite"></div>
             <div class="library-search-tools" id="librarySearchTools">
@@ -29204,7 +29213,6 @@ INDEX_HTML = """<!doctype html>
       selectedThemeGroups: new Set(),
       activeThemeGroupKey: "",
       showThemeArxiv: false,
-      showThemeZenodo: false,
       themeGroup: "ALL",
       themeFromDate: initialToday,
       themeUntilDate: initialToday,
@@ -47504,23 +47512,10 @@ INDEX_HTML = """<!doctype html>
       return journal === "arxiv" || journal.startsWith("arxiv ") || journal.startsWith("arxiv (") || source === "arxiv";
     }
 
-    function themePaperIsZenodo(paper) {
-      const journal = String(paper?.journal || "").trim().toLowerCase();
-      const source = String(paper?.source || "").trim().toLowerCase();
-      const doi = String(paper?.doi || "").trim().toLowerCase();
-      const url = String(paper?.url || "").trim().toLowerCase();
-      return journal === "zenodo"
-        || journal.startsWith("zenodo ")
-        || source === "zenodo"
-        || doi.startsWith("10.5281/zenodo.")
-        || url.includes("zenodo.org/");
-    }
-
     function themeVisiblePapers() {
       const query = String(state.themeQuery || "").trim();
       return (state.themePapers || []).filter((paper) => (
         (state.showThemeArxiv || !themePaperIsArxiv(paper))
-        && (state.showThemeZenodo || !themePaperIsZenodo(paper))
         && (!query || librarySearchMatches([
           paper.title,
           paper.abstract,
@@ -47735,7 +47730,6 @@ INDEX_HTML = """<!doctype html>
         const hiddenSources = [];
         const groupPapers = state.themePapers.filter((paper) => themePaperMatchesGroup(paper, activeGroup.key));
         if (!state.showThemeArxiv && groupPapers.some(themePaperIsArxiv)) hiddenSources.push("arXiv");
-        if (!state.showThemeZenodo && groupPapers.some(themePaperIsZenodo)) hiddenSources.push("Zenodo");
         const hiddenMessage = hiddenSources.length ? ` ${hiddenSources.join(" and ")} entries are hidden.` : "";
         showMonitorStatusMessage(`No visible papers in this subject for this date.${hiddenMessage}`);
       }
@@ -47765,8 +47759,6 @@ INDEX_HTML = """<!doctype html>
 	        : "Refresh all subjects for this date";
 	      const arxivToggle = $("themeArxivToggle");
 	      if (arxivToggle) arxivToggle.checked = Boolean(state.showThemeArxiv);
-	      const zenodoToggle = $("themeZenodoToggle");
-	      if (zenodoToggle) zenodoToggle.checked = Boolean(state.showThemeZenodo);
 	    }
 
     function formatThemeFetchTime(value) {
@@ -48114,10 +48106,6 @@ INDEX_HTML = """<!doctype html>
     });
     $("themeArxivToggle")?.addEventListener("change", (event) => {
       state.showThemeArxiv = Boolean(event.target.checked);
-      renderThemeMonitor();
-    });
-    $("themeZenodoToggle")?.addEventListener("change", (event) => {
-      state.showThemeZenodo = Boolean(event.target.checked);
       renderThemeMonitor();
     });
     $("refreshAuthorMonitor")?.addEventListener("click", () => refreshAuthorMonitor());

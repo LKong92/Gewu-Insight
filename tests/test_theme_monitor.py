@@ -7,6 +7,7 @@ from pathlib import Path
 from paper_monitor.storage import Storage
 from paper_monitor.ui_server import (
     ELECTRIDE_RECOMMENDED_KEYWORDS,
+    add_theme_candidate,
     get_fetch_progress,
     missing_fetch_journals_for_date,
     missing_theme_group_keys_for_date,
@@ -59,6 +60,69 @@ class ThemeMonitorTest(unittest.TestCase):
             },
         }
         self.assertFalse(theme_candidate_is_literature_like(paper))
+
+    def test_zenodo_article_is_never_accepted_as_a_subject_candidate(self):
+        paper = {
+            "paper_id": "doi_zenodo_article",
+            "doi": "10.5281/zenodo.14503029",
+            "title": "Repository record presented as an article",
+            "journal": "Example Journal",
+            "url": "https://doi.org/10.5281/zenodo.14503029",
+            "type": "article",
+            "raw": {},
+        }
+        candidates = {}
+        candidate_sources = {}
+        candidate_queries = {}
+
+        self.assertFalse(theme_candidate_is_literature_like(paper))
+        add_theme_candidate(
+            candidates,
+            candidate_sources,
+            candidate_queries,
+            paper,
+            source_name="openalex",
+            query="repository record",
+        )
+        self.assertEqual(candidates, {})
+
+    def test_cached_zenodo_subject_results_are_not_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                paper = {
+                    "paper_id": "doi_cached_zenodo",
+                    "doi": "10.5281/zenodo.14503029",
+                    "title": "Cached Zenodo record",
+                    "journal": "Zenodo",
+                    "publication_date": "2026-06-02",
+                    "url": "https://zenodo.org/records/14503029",
+                    "source": "openalex",
+                    "type": "article",
+                    "section_allowed": True,
+                }
+                storage.upsert_paper(paper)
+                storage.record_theme_result(
+                    paper_id=paper["paper_id"],
+                    group_key="electride",
+                    group_name="Electride",
+                    query="electride",
+                    score=1,
+                    hits=["electride"],
+                    window_start="2026-06-02",
+                    window_end="2026-06-02",
+                )
+
+                self.assertEqual(
+                    storage.list_theme_papers(
+                        window_start="2026-06-02",
+                        window_end="2026-06-02",
+                        group_keys=["electride"],
+                    ),
+                    [],
+                )
+            finally:
+                storage.close()
 
     def test_journal_article_is_literature_like(self):
         paper = {
@@ -363,6 +427,60 @@ class ThemeMonitorTest(unittest.TestCase):
         import paper_monitor.ui_server as ui_server
 
         self.assertNotIn("arxiv", [name for name, _fetcher in ui_server.theme_source_fetchers()])
+
+    def test_zenodo_records_are_removed_at_the_network_source_boundary(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"quantum": {"name": "Quantum", "queries": ["quantum materials"]}}
+
+        def zenodo_source(query, start_date, end_date):
+            return [
+                {
+                    "paper_id": "doi_network_zenodo",
+                    "doi": "10.5281/zenodo.14503029",
+                    "title": "Zenodo record presented as an article",
+                    "journal": "Example Journal",
+                    "publication_date": selected.isoformat(),
+                    "abstract": "Quantum materials repository record.",
+                    "url": "https://doi.org/10.5281/zenodo.14503029",
+                    "source": "mock_source",
+                    "type": "journal-article",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                    "raw": {"type": "journal-article"},
+                }
+            ]
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("mock_source", zenodo_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    result = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["quantum"],
+                        theme_groups=groups,
+                    )
+
+                    self.assertEqual(result["source_counts"]["mock_source"], 0)
+                    self.assertEqual(result["raw_results"], 0)
+                    self.assertEqual(result["saved"], 0)
+                    self.assertEqual(
+                        storage.list_theme_papers(
+                            window_start=selected.isoformat(),
+                            window_end=selected.isoformat(),
+                            group_keys=["quantum"],
+                        ),
+                        [],
+                    )
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
 
     def test_local_arxiv_is_matched_without_network_and_keeps_its_source(self):
         import paper_monitor.ui_server as ui_server
