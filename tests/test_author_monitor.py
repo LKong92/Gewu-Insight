@@ -1799,6 +1799,117 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_metrics_pubmed_refresh_can_preserve_personal_author_marks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                candidate = paper("metrics-paper", "Metrics Paper", "2026-07-24")
+                candidate["doi"] = "10.1234/metrics.1"
+                candidate["raw"] = {"authors": ["Ada Author", "Ben Author"]}
+                storage.upsert_paper(candidate)
+                publication = storage.add_my_publication(paper_id="metrics-paper")
+                publication_id = int(publication["id"])
+                storage.set_my_publication_author_mark(
+                    publication_id=publication_id,
+                    author_index=0,
+                    author_name="Ada Author",
+                    first_author=False,
+                    co_first_author=True,
+                    corresponding_author=False,
+                )
+                before = storage.get_my_publication(publication_id=publication_id)
+                before_marks = json.loads(before["author_marks"])
+
+                pubmed = {
+                    "pmid": "123456",
+                    "author_affiliations": [
+                        {"name": "Ada Author", "roles": {"first_author": True}},
+                        {"name": "Ben Author", "roles": {"corresponding_author": True}},
+                    ],
+                }
+                with patch.object(ui_server, "pubmed_metadata_from_doi", return_value=pubmed):
+                    ui_server.refresh_pubmed_if_possible(
+                        storage,
+                        storage.get_paper("metrics-paper"),
+                        doi="10.1234/metrics.1",
+                        sync_author_marks=False,
+                    )
+
+                after = storage.get_my_publication(publication_id=publication_id)
+                self.assertEqual(json.loads(after["author_marks"]), before_marks)
+                self.assertEqual(after["first_author"], before["first_author"])
+                self.assertEqual(after["corresponding_author"], before["corresponding_author"])
+                refreshed_raw = json.loads(storage.get_paper("metrics-paper")["raw_json"])
+                self.assertEqual(refreshed_raw["pubmed"]["pmid"], "123456")
+            finally:
+                storage.close()
+
+    def test_metrics_job_preserves_role_fields_and_role_based_statistics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                candidate = paper("metrics-job-paper", "Metrics Job Paper", "2026-07-24")
+                candidate["doi"] = "10.1234/metrics-job.1"
+                candidate["raw"] = {"authors": ["Ada Author", "Ben Author"]}
+                storage.upsert_paper(candidate)
+                publication = storage.add_my_publication(paper_id="metrics-job-paper")
+                publication_id = int(publication["id"])
+                storage.set_my_publication_roles(
+                    publication_id=publication_id,
+                    first_author=False,
+                    corresponding_author=False,
+                    review_article=True,
+                )
+                storage.set_my_publication_author_mark(
+                    publication_id=publication_id,
+                    author_index=0,
+                    author_name="Ada Author",
+                    first_author=False,
+                    co_first_author=True,
+                    corresponding_author=False,
+                )
+                before = storage.get_my_publication(publication_id=publication_id)
+            finally:
+                storage.close()
+
+            normalized = {
+                "paper_id": "metrics-job-paper",
+                "doi": "10.1234/metrics-job.1",
+                "title": "Metrics Job Paper",
+                "journal": "Example Journal",
+                "publication_date": "2026-07-24",
+                "raw": {"cited_by_count": 12},
+            }
+            pubmed = {
+                "pmid": "654321",
+                "author_affiliations": [
+                    {"name": "Ada Author", "roles": {"first_author": True}},
+                    {"name": "Ben Author", "roles": {"corresponding_author": True}},
+                ],
+            }
+            with (
+                patch.object(ui_server, "publication_metrics_metadata_from_doi", return_value=normalized),
+                patch.object(ui_server, "pubmed_metadata_from_doi", return_value=pubmed),
+                patch.object(ui_server, "refresh_semantic_scholar_if_possible", side_effect=lambda _storage, value, **_kwargs: value),
+                patch.object(ui_server, "refresh_ads_if_possible", side_effect=lambda _storage, value, **_kwargs: value),
+            ):
+                job_id = ui_server.create_my_publication_metrics_job()
+                ui_server.run_my_publication_metrics_job(job_id=job_id, db_path=db_path)
+
+            storage = Storage(db_path)
+            try:
+                after = storage.get_my_publication(publication_id=publication_id)
+                for field in ("first_author", "corresponding_author", "review_article", "author_marks"):
+                    self.assertEqual(after[field], before[field])
+                self.assertEqual(ui_server.get_my_publication_metrics_job(job_id)["status"], "completed")
+                self.assertEqual(
+                    ui_server.get_my_publication_metrics_job(job_id)["publications"][0]["corresponding_author"],
+                    bool(before["corresponding_author"]),
+                )
+            finally:
+                storage.close()
+
 
 class AuthorMonitorUiContractTests(unittest.TestCase):
     def test_monitor_list_payloads_omit_heavy_detail_only_fields(self):

@@ -152,6 +152,62 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("myPublicationsLoadingDetailMarkup()", renderer)
         self.assertIn("scheduleMyPublicationsPrefetch();", ui_server.INDEX_HTML)
 
+    def test_my_publications_uses_one_bottom_activity_bar_without_guidance(self) -> None:
+        status_text = self.js_function("myPublicationSearchStatusText")
+        status_items = self.js_function("myPublicationStatusItems")
+        profile_markup = self.js_function("myPublicationScholarProfileMarkup")
+        search_results = self.js_function("myPublicationSearchResultsMarkup")
+        renderer = self.js_function("renderMyPublications")
+
+        self.assertNotIn("myPublicationNameHint", ui_server.INDEX_HTML)
+        self.assertNotIn("Use DOI/arXiv/title, or search by name", ui_server.INDEX_HTML)
+        self.assertNotIn("Working on the lookup", ui_server.INDEX_HTML)
+        self.assertIn('if (!results.length) return "";', search_results)
+        self.assertIn('return state.myPublicationSearchStatus || "";', status_text)
+        self.assertIn('class="my-publications-status-bar" aria-live="polite"', renderer)
+        self.assertIn("myPublicationStatusBarMarkup()", renderer)
+        self.assertIn('grid-template-rows: minmax(0, 1fr) 28px;', ui_server.INDEX_HTML)
+        self.assertIn('.my-publications-status-bar .publication-search-status:empty', ui_server.INDEX_HTML)
+        self.assertIn('.my-publications-status-bar .publication-search-status.secondary', ui_server.INDEX_HTML)
+        publication_status_css = ui_server.INDEX_HTML.split(".publication-search-status {", 1)[1].split("}", 1)[0]
+        publication_live_css = ui_server.INDEX_HTML.split(".publication-search-status.live {", 1)[1].split("}", 1)[0]
+        library_live_css = ui_server.INDEX_HTML.split(".library-activity-status.live {", 1)[1].split("}", 1)[0]
+        author_live_css = ui_server.INDEX_HTML.split(".author-monitor-status-bar .library-activity-status.live {", 1)[1].split("}", 1)[0]
+        self.assertIn("font-size: 12px;", publication_status_css)
+        self.assertIn("line-height: 16px;", publication_status_css)
+        self.assertIn("font-weight: 700;", publication_live_css)
+        self.assertIn("animation: statusLiveBreath 1.8s", publication_live_css)
+        self.assertIn("animation: statusLiveBreath 1.8s", library_live_css)
+        self.assertIn("animation: statusLiveBreath 1.8s", author_live_css)
+        self.assertIn("@keyframes statusDotBreath", ui_server.INDEX_HTML)
+        self.assertIn("rgba(190, 216, 241, 0.58)", ui_server.INDEX_HTML)
+        self.assertIn("color: rgba(31, 79, 122, 0.38);", ui_server.INDEX_HTML)
+        self.assertIn("color: rgba(31, 79, 122, 1);", ui_server.INDEX_HTML)
+        self.assertNotIn("@keyframes statusFlow", ui_server.INDEX_HTML)
+        self.assertNotIn(".publication-search-status.live::after", ui_server.INDEX_HTML)
+        self.assertNotIn(".library-activity-status.live::after", ui_server.INDEX_HTML)
+        self.assertNotIn(".author-monitor-status-bar .library-activity-status.live::after", ui_server.INDEX_HTML)
+        status_bar_css = ui_server.INDEX_HTML.split(".my-publications-status-bar {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: #f2f2f2;", status_bar_css)
+        self.assertIn("state.myPublicationActivities", status_items)
+        self.assertIn("slice(0, 2)", status_items)
+        self.assertIn("const profileLabel = `Using ${profile.name", profile_markup)
+        self.assertNotIn("state.myPublicationSearchStatus", profile_markup)
+        self.assertNotIn("state.myPublicationActivities", profile_markup)
+        self.assertIn('.library-controls:has(.my-publications-tools.open)', ui_server.INDEX_HTML)
+        self.assertIn('margin: 2px 0 10px;', ui_server.INDEX_HTML)
+        profile_host_css = ui_server.INDEX_HTML.split("#myPublicationProfileStripHost {", 1)[1].split("}", 1)[0]
+        avatar_css = ui_server.INDEX_HTML.split(".my-publications-profile-avatar {", 1)[1].split("}", 1)[0]
+        clear_css = ui_server.INDEX_HTML.split(".my-publications-profile-clear {", 1)[1].split("}", 1)[0]
+        self.assertIn("height: 28px;", profile_host_css)
+        self.assertIn("max-height: 28px;", profile_host_css)
+        self.assertIn("width: 42px;", avatar_css)
+        self.assertIn("height: 42px;", avatar_css)
+        self.assertIn("width: 18px;", clear_css)
+        self.assertIn("height: 18px;", clear_css)
+        tools_markup = ui_server.INDEX_HTML.split('<div class="my-publications-tools" id="myPublicationsTools">', 1)[1].split('</div>\n          </div>\n          <div class="papers"', 1)[0]
+        self.assertNotIn('id="publicationSearchStatus"', tools_markup)
+
     def test_monitor_switch_preserves_loaded_paper_images(self) -> None:
         stasher = self.js_function("stashCurrentMonitorPaperSurface")
         renderer = self.js_function("renderMonitorPaperList")

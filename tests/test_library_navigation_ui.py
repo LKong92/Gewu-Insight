@@ -28,10 +28,17 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertNotIn('data-nav-remove="workspace"', INDEX_HTML)
         self.assertIn("wireLibraryNavigationTabDrag(button, \"shortcut\")", INDEX_HTML)
         self.assertIn("wireLibraryNavigationTabDrag(button, \"workspace\")", INDEX_HTML)
+        self.assertIn('data-nav-draggable="true"', INDEX_HTML)
+        self.assertIn('button.addEventListener("pointerdown"', INDEX_HTML)
+        self.assertIn('button.addEventListener("pointermove"', INDEX_HTML)
+        self.assertIn('button.addEventListener("pointerup"', INDEX_HTML)
+        self.assertIn("document.elementFromPoint(clientX, clientY)", INDEX_HTML)
         self.assertIn("async function moveLibraryNavigationTab", INDEX_HTML)
         self.assertIn('}-tabs/reorder`, {', INDEX_HTML)
         self.assertIn("state.libraryNavDropTargetId", INDEX_HTML)
         self.assertIn("if (shouldCommit)", INDEX_HTML)
+        self.assertNotRegex(INDEX_HTML, r'\stype="button"\s+draggable="true"\s+data-shortcut-tab')
+        self.assertNotRegex(INDEX_HTML, r'\stype="button"\s+draggable="true"\s+data-workspace-tab')
         self.assertNotIn('if (!window.confirm(message)) return;', INDEX_HTML)
 
     def test_shortcut_and_space_context_menu_uses_library_style_without_rename(self) -> None:
@@ -50,7 +57,8 @@ class LibraryNavigationUiTests(unittest.TestCase):
 
     def test_only_navigation_tabs_fade_while_section_tools_stay_emphasized(self) -> None:
         self.assertIn(".library-tab-rail .library-tab:not(.active)", INDEX_HTML)
-        self.assertIn("filter: saturate(0.28) brightness(1.12);", INDEX_HTML)
+        self.assertIn("opacity: var(--library-tab-idle-opacity);", INDEX_HTML)
+        self.assertIn("filter: var(--library-tab-idle-filter);", INDEX_HTML)
         tools_css = INDEX_HTML.split(".library-tab-section-tools {", 1)[1].split(
             ".library-tab-section.workspace-section", 1
         )[0]
@@ -58,6 +66,17 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("filter: none;", tools_css)
         self.assertNotIn("opacity: 0.34;", tools_css)
         self.assertIn(".library-tab-section-tools button:disabled { color: #667085;", INDEX_HTML)
+
+    def test_root_shortcut_and_space_tabs_use_distinct_blue_depths(self) -> None:
+        root_css = INDEX_HTML.split(".library-tab.root-tab {", 1)[1].split("}", 1)[0]
+        shortcut_css = INDEX_HTML.split(".library-tab.shortcut-tab {", 1)[1].split("}", 1)[0]
+        workspace_css = INDEX_HTML.split(".library-tab.workspace-tab {", 1)[1].split("}", 1)[0]
+        self.assertIn("--library-tab-active-bg: #78a6d3;", root_css)
+        self.assertIn("--library-tab-active-bg: #a8c8e6;", shortcut_css)
+        self.assertIn("--library-tab-active-bg: #d3e6f6;", workspace_css)
+        self.assertIn("--library-tab-idle-opacity: 0.38;", root_css)
+        self.assertIn("--library-tab-idle-opacity: 0.44;", shortcut_css)
+        self.assertIn("--library-tab-idle-opacity: 0.5;", workspace_css)
 
     def test_navigation_rail_never_scrolls_horizontally(self) -> None:
         rail_css = INDEX_HTML.split(".library-tab-rail {", 1)[1].split("}", 1)[0]

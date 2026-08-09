@@ -9735,6 +9735,7 @@ def refresh_pubmed_if_possible(
     doi: str = "",
     timeout: int = 20,
     max_retries: int = 2,
+    sync_author_marks: bool = True,
 ) -> dict[str, Any] | None:
     if not paper:
         return paper
@@ -9755,7 +9756,8 @@ def refresh_pubmed_if_possible(
     if pubmed.get("pmcid"):
         raw["pmcid"] = pubmed.get("pmcid")
     updated = storage.update_paper_raw_json(paper_id, raw) or paper
-    sync_my_publication_pubmed_author_marks(storage, paper_id=paper_id, pubmed=pubmed)
+    if sync_author_marks:
+        sync_my_publication_pubmed_author_marks(storage, paper_id=paper_id, pubmed=pubmed)
     if not clean_text(updated.get("abstract") or "") and clean_text(pubmed.get("abstract") or ""):
         updated = storage.refresh_paper_metadata(
             paper_id,
@@ -17553,7 +17555,14 @@ def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
                 pubmed_enriched = False
                 if pubmed_doi and looks_like_doi(pubmed_doi):
                     before_pubmed = parse_raw_json(updated or {})
-                    updated = refresh_pubmed_if_possible(storage, updated, doi=pubmed_doi, timeout=12, max_retries=1) or updated
+                    updated = refresh_pubmed_if_possible(
+                        storage,
+                        updated,
+                        doi=pubmed_doi,
+                        timeout=12,
+                        max_retries=1,
+                        sync_author_marks=False,
+                    ) or updated
                     after_pubmed = parse_raw_json(updated or {})
                     pubmed_enriched = bool(after_pubmed.get("pubmed")) and after_pubmed.get("pubmed") != before_pubmed.get("pubmed")
                     updated = storage.get_paper(paper_id) or updated
@@ -17565,7 +17574,14 @@ def run_my_publication_metrics_job(*, job_id: str, db_path: Path) -> None:
                     str((final_paper or {}).get("doi") or final_raw.get("published_doi") or final_raw.get("doi") or doi)
                 )
                 if final_pubmed_doi and looks_like_doi(final_pubmed_doi) and not final_raw.get("pubmed"):
-                    final_paper = refresh_pubmed_if_possible(storage, final_paper, doi=final_pubmed_doi, timeout=12, max_retries=1) or final_paper
+                    final_paper = refresh_pubmed_if_possible(
+                        storage,
+                        final_paper,
+                        doi=final_pubmed_doi,
+                        timeout=12,
+                        max_retries=1,
+                        sync_author_marks=False,
+                    ) or final_paper
                     pubmed_enriched = bool(parse_raw_json(final_paper or {}).get("pubmed"))
                 if normalized or pubmed_enriched or (enriched and enriched.get("semantic_scholar_json")) or (ads_enriched and ads_summary(ads_enriched)):
                     refreshed += 1
@@ -22994,6 +23010,8 @@ INDEX_HTML = """<!doctype html>
       --library-tab-active-bg: #e2e9f3;
       --library-tab-active-border: #b8c5d8;
       --library-tab-active-color: #111827;
+      --library-tab-idle-opacity: 0.68;
+      --library-tab-idle-filter: saturate(0.82) brightness(1.04);
       min-height: 34px;
       border: 1px solid var(--library-tab-border);
       border-radius: 7px;
@@ -23151,13 +23169,13 @@ INDEX_HTML = """<!doctype html>
       transition: opacity 150ms ease, filter 150ms ease, background-color 150ms ease, border-color 150ms ease, color 150ms ease;
     }
     .library-tab-rail .library-tab:not(.active) {
-      opacity: 0.34;
-      filter: saturate(0.28) brightness(1.12);
+      opacity: var(--library-tab-idle-opacity);
+      filter: var(--library-tab-idle-filter);
     }
     .library-tab-rail .library-tab:not(.active):hover,
     .library-tab-rail .library-tab:not(.active):focus-visible {
-      opacity: 0.62;
-      filter: saturate(0.65) brightness(1.04);
+      opacity: 0.68;
+      filter: saturate(0.82) brightness(1.03);
     }
     .library-tab-rail .library-tab.nav-dragging { opacity: 0.46; }
     .library-tab-rail .library-tab.drag-over-before { box-shadow: inset -3px 0 0 var(--accent); }
@@ -23199,29 +23217,41 @@ INDEX_HTML = """<!doctype html>
       background: radial-gradient(circle at 100% 0, transparent 18px, var(--library-tab-active-bg) 19px);
     }
     .library-tab.shortcut-tab {
-      --library-tab-bg: #f3f5f8;
-      --library-tab-border: #d8dee8;
-      --library-tab-active-bg: #e2e9f3;
-      --library-tab-active-border: #b8c5d8;
+      --library-tab-bg: #e8f0f8;
+      --library-tab-border: #cad8e6;
+      --library-tab-color: #516b84;
+      --library-tab-active-bg: #a8c8e6;
+      --library-tab-active-border: #78a5cf;
+      --library-tab-active-color: #153a5e;
+      --library-tab-idle-opacity: 0.44;
+      --library-tab-idle-filter: saturate(0.58) brightness(1.08);
     }
     .library-tab.root-tab {
-      --library-tab-bg: #f3f5f8;
-      --library-tab-border: #d8dee8;
-      --library-tab-active-bg: #e2e9f3;
-      --library-tab-active-border: #b8c5d8;
+      --library-tab-bg: #e1eaf4;
+      --library-tab-border: #c2d0df;
+      --library-tab-color: #45627e;
+      --library-tab-active-bg: #78a6d3;
+      --library-tab-active-border: #4f83b6;
+      --library-tab-active-color: #0f3152;
+      --library-tab-idle-opacity: 0.38;
+      --library-tab-idle-filter: saturate(0.5) brightness(1.1);
     }
     .library-tab.shortcut-tab.active {
       background: var(--library-tab-active-bg);
       border-color: var(--library-tab-active-border);
     }
     .library-tab.workspace-tab {
-      --library-tab-bg: #edf4fb;
-      --library-tab-border: #c5d9ee;
-      --library-tab-color: #173c62;
-      --library-tab-active-bg: #dce8f5;
-      --library-tab-active-border: #9fc0df;
-      --library-tab-active-color: #123556;
+      --library-tab-bg: #f0f5fa;
+      --library-tab-border: #d7e1eb;
+      --library-tab-color: #62778c;
+      --library-tab-active-bg: #d3e6f6;
+      --library-tab-active-border: #a6c7e3;
+      --library-tab-active-color: #234b6e;
+      --library-tab-idle-opacity: 0.5;
+      --library-tab-idle-filter: saturate(0.46) brightness(1.08);
     }
+    .library-tab[data-nav-draggable="true"] { cursor: grab; }
+    .library-tab[data-nav-draggable="true"].nav-dragging { cursor: grabbing; }
     .library-tab.workspace-tab.active {
       background: var(--library-tab-active-bg);
       border-color: var(--library-tab-active-border);
@@ -23350,7 +23380,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-tools {
       display: none;
-      align-items: flex-start;
+      align-items: center;
       gap: 4px 8px;
       flex-wrap: wrap;
       width: 100%;
@@ -23358,12 +23388,10 @@ INDEX_HTML = """<!doctype html>
       margin-left: 0;
       justify-content: space-between;
     }
-    .my-publications-tools.open { display: flex; }
-    .my-publications-tool-note {
-      flex: 1 0 100%;
-      max-width: 100%;
-      margin: 0 0 2px;
+    .library-controls:has(.my-publications-tools.open) {
+      margin: 2px 0 10px;
     }
+    .my-publications-tools.open { display: flex; }
     .my-publications-tools .search {
       min-height: 28px;
       border: 0;
@@ -23413,15 +23441,22 @@ INDEX_HTML = """<!doctype html>
       overflow: visible;
       margin-left: -18px;
     }
-    #myPublicationName { flex: 1 1 220px; min-width: 170px; }
+    .my-publications-name-search {
+      flex: 1 1 220px;
+      min-width: 170px;
+    }
+    #myPublicationName { width: 100%; }
     #publicationSearchBox { flex: 0 1 165px; width: 165px; min-width: 125px; }
     #myPublicationProfileStripHost {
       flex: 0 0 344px;
       min-width: 0;
+      height: 28px;
       min-height: 28px;
+      max-height: 28px;
       display: flex;
       align-items: center;
       justify-content: flex-end;
+      overflow: visible;
     }
     .publication-export-menu {
       position: relative;
@@ -23461,8 +23496,11 @@ INDEX_HTML = """<!doctype html>
       flex: 1 1 auto;
       min-width: 0;
       max-width: 100%;
+      height: 28px;
       min-height: 28px;
+      max-height: 28px;
       margin-left: auto;
+      overflow: visible;
     }
     .my-publications-profile-statuses {
       display: flex;
@@ -23491,22 +23529,9 @@ INDEX_HTML = """<!doctype html>
       display: block;
       text-overflow: ellipsis;
     }
-    .my-publications-profile-status.live {
-      color: #3e6470;
-      background: rgba(14, 116, 144, 0.035);
-    }
-    .my-publications-profile-status.live::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background: linear-gradient(90deg, transparent 0%, rgba(14, 116, 144, 0.04) 28%, rgba(14, 116, 144, 0.16) 50%, rgba(14, 116, 144, 0.04) 72%, transparent 100%);
-      background-size: 260% 100%;
-      animation: statusFlow 2.8s ease-in-out infinite;
-    }
     .my-publications-profile-avatar {
-      width: 28px;
-      height: 28px;
+      width: 42px;
+      height: 42px;
       border-radius: 50%;
       border: 0;
       background: #eef4fb;
@@ -23531,8 +23556,9 @@ INDEX_HTML = """<!doctype html>
       object-fit: cover;
     }
     .my-publications-profile-clear {
-      width: 22px;
-      min-height: 22px;
+      width: 18px;
+      height: 18px;
+      min-height: 18px;
       border: 0;
       border-radius: 50%;
       background: #d9d9d9;
@@ -23541,7 +23567,7 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       place-items: center;
       padding: 0;
-      font-size: 15px;
+      font-size: 12px;
       line-height: 1;
       flex: 0 0 auto;
     }
@@ -23558,8 +23584,8 @@ INDEX_HTML = """<!doctype html>
       max-width: 160px;
     }
     .workspace.note-open .my-publications-profile-avatar {
-      width: 34px;
-      height: 34px;
+      width: 38px;
+      height: 38px;
     }
     .workspace.note-open .my-publications-profile-clear { display: none; }
     .scholar-profile-input { width: min(320px, 45vw); }
@@ -23586,32 +23612,56 @@ INDEX_HTML = """<!doctype html>
     .publication-search-status {
       position: relative;
       overflow: hidden;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.25;
-      min-height: 15px;
-      border-radius: 7px;
-      padding: 1px 4px;
+      color: #667085;
+      font-size: 12px;
+      line-height: 16px;
+      min-height: 18px;
+      border-radius: 3px;
+      padding: 2px 6px;
       transition: color 240ms ease, background-color 240ms ease;
     }
     .publication-search-status.live {
-      color: #3e6470;
-      background: rgba(14, 116, 144, 0.035);
+      color: var(--accent-strong);
+      font-weight: 700;
+      padding-left: 16px;
+      background: transparent;
+      animation: statusLiveBreath 1.8s ease-in-out infinite;
     }
-    .publication-search-status.live::after {
+    .publication-search-status.live::before {
       content: "";
       position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background: linear-gradient(90deg, transparent 0%, rgba(14, 116, 144, 0.03) 28%, rgba(14, 116, 144, 0.12) 50%, rgba(14, 116, 144, 0.03) 72%, transparent 100%);
-      background-size: 260% 100%;
-      animation: statusFlow 2.8s ease-in-out infinite;
-      opacity: 0.82;
+      left: 5px;
+      top: 50%;
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      transform: translateY(-50%);
+      background: var(--accent);
+      box-shadow: 0 0 0 2px rgba(31, 79, 122, 0.18);
+      animation: statusDotBreath 1.8s ease-in-out infinite;
+      z-index: 1;
     }
-    @keyframes statusFlow {
-      0% { background-position: 120% 0; opacity: 0.42; }
-      45% { opacity: 0.9; }
-      100% { background-position: -120% 0; opacity: 0.42; }
+    @keyframes statusLiveBreath {
+      0%, 100% {
+        background-color: rgba(190, 216, 241, 0);
+        color: rgba(31, 79, 122, 0.38);
+      }
+      50% {
+        background-color: rgba(190, 216, 241, 0.58);
+        color: rgba(31, 79, 122, 1);
+      }
+    }
+    @keyframes statusDotBreath {
+      0%, 100% {
+        transform: translateY(-50%) scale(0.72);
+        opacity: 0.38;
+        box-shadow: 0 0 0 0 rgba(31, 79, 122, 0);
+      }
+      50% {
+        transform: translateY(-50%) scale(1.2);
+        opacity: 1;
+        box-shadow: 0 0 0 3px rgba(31, 79, 122, 0.18);
+      }
     }
     .publication-search-results {
       display: grid;
@@ -24676,7 +24726,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-shell {
       grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-      grid-template-rows: minmax(0, 1fr) 8px;
+      grid-template-rows: minmax(0, 1fr) 28px;
       column-gap: 11px;
       margin-left: -18px;
       width: calc(100% + 18px);
@@ -24694,9 +24744,51 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-shell > .library-pane {
       grid-column: 2;
+      grid-row: 1;
       border-left: 0;
       background: #f2f2f2;
       grid-template-rows: minmax(0, 1fr);
+    }
+    .my-publications-shell > .my-publications-panel {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    .my-publications-status-bar {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      min-width: 0;
+      height: 28px;
+      min-height: 28px;
+      border-top: 1px solid #d8d8dc;
+      background: #f2f2f2;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 0 8px;
+      overflow: hidden;
+    }
+    .my-publications-status-bar .publication-search-status {
+      width: fit-content;
+      max-width: calc(100% - 8px);
+      flex: 0 1 auto;
+      min-height: 18px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 3px;
+      padding: 2px 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .my-publications-status-bar .publication-search-status:empty {
+      display: none;
+    }
+    .my-publications-status-bar .publication-search-status.live {
+      padding-left: 16px;
+    }
+    .my-publications-status-bar .publication-search-status.secondary {
+      margin-left: auto;
+      justify-content: flex-end;
     }
     .my-publications-shell .library-pane-header {
       display: none;
@@ -25501,20 +25593,26 @@ INDEX_HTML = """<!doctype html>
     .library-activity-status.live {
       color: var(--accent-strong);
       font-weight: 700;
-      background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(226,238,250,0.72) 18%, rgba(219,234,248,0.95) 50%, rgba(226,238,250,0.72) 82%, rgba(255,255,255,0) 100%);
-      border-color: rgba(31, 79, 122, 0.16);
-      box-shadow: 0 0 0 1px rgba(31, 79, 122, 0.04);
-      animation: libraryActivityGlow 1.45s ease-in-out infinite;
+      position: relative;
+      justify-content: flex-start;
+      border: 0;
+      border-radius: 3px;
+      padding: 2px 6px 2px 16px;
+      background: transparent;
+      animation: statusLiveBreath 1.8s ease-in-out infinite;
     }
-    .library-activity-status.live::after {
+    .library-activity-status.live::before {
       content: "";
-      width: 7px;
-      height: 7px;
+      position: absolute;
+      left: 5px;
+      top: 50%;
+      width: 6px;
+      height: 6px;
       border-radius: 999px;
       background: var(--accent);
-      box-shadow: 0 0 0 0 rgba(31, 79, 122, 0.35);
-      animation: livePulse 1.1s infinite;
-      flex: 0 0 auto;
+      box-shadow: 0 0 0 2px rgba(31, 79, 122, 0.18);
+      animation: statusDotBreath 1.8s ease-in-out infinite;
+      z-index: 1;
     }
     .library-activity-status.ok {
       color: #1f4f7a;
@@ -25525,14 +25623,6 @@ INDEX_HTML = """<!doctype html>
       color: #b42318;
       background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,235,231,0.82) 20%, rgba(255,239,236,0.98) 50%, rgba(255,235,231,0.82) 80%, rgba(255,255,255,0) 100%);
       border-color: rgba(180, 35, 24, 0.12);
-    }
-    @keyframes livePulse {
-      0%, 100% { transform: scale(0.78); opacity: 0.55; box-shadow: 0 0 0 0 rgba(31, 79, 122, 0.28); }
-      50% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 5px rgba(31, 79, 122, 0); }
-    }
-    @keyframes libraryActivityGlow {
-      0%, 100% { filter: brightness(0.98); }
-      50% { filter: brightness(1.06); }
     }
     .library-path-item {
       min-width: 0;
@@ -26849,9 +26939,10 @@ INDEX_HTML = """<!doctype html>
       display: none;
     }
     .author-monitor-status-bar .library-activity-status.live {
-      background: rgba(14, 116, 144, 0.025);
-      box-shadow: none;
-      animation: none;
+      color: var(--accent-strong);
+      font-weight: 700;
+      background: transparent;
+      animation: statusLiveBreath 1.8s ease-in-out infinite;
     }
     .author-monitor-status-bar .library-activity-status.live::before {
       content: "";
@@ -26863,20 +26954,9 @@ INDEX_HTML = """<!doctype html>
       border-radius: 999px;
       transform: translateY(-50%);
       background: var(--accent);
-      box-shadow: 0 0 0 2px rgba(15, 107, 110, 0.1);
+      box-shadow: 0 0 0 2px rgba(31, 79, 122, 0.18);
+      animation: statusDotBreath 1.8s ease-in-out infinite;
       z-index: 1;
-    }
-    .author-monitor-status-bar .library-activity-status.live::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      width: auto;
-      height: auto;
-      border-radius: 0;
-      pointer-events: none;
-      background: linear-gradient(90deg, transparent 0%, rgba(14, 116, 144, 0.03) 28%, rgba(14, 116, 144, 0.14) 50%, rgba(14, 116, 144, 0.03) 72%, transparent 100%);
-      background-size: 260% 100%;
-      animation: statusFlow 2.8s ease-in-out infinite;
     }
     .author-monitor-empty {
       padding: 28px 18px;
@@ -28887,9 +28967,10 @@ INDEX_HTML = """<!doctype html>
           <div class="monitor-status-host" id="monitorStatusHost"></div>
           <div class="library-controls" id="libraryControls">
             <div class="my-publications-tools" id="myPublicationsTools">
-              <div class="publication-search-status my-publications-tool-note" id="publicationSearchStatus">Use DOI/arXiv/title, or search by name with optional units: Name; Unit A; Unit B.</div>
               <div class="my-publications-tool-left">
-                <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
+                <div class="my-publications-name-search">
+                  <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
+                </div>
                 <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
                 <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics and PubMed metadata" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
                 <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
@@ -29279,6 +29360,7 @@ INDEX_HTML = """<!doctype html>
       libraryNavDropTargetId: "",
       libraryNavDropAfter: false,
       libraryNavDropCommitted: false,
+      libraryNavSuppressClick: false,
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
@@ -35768,10 +35850,10 @@ INDEX_HTML = """<!doctype html>
       const workspaceLayout = libraryNavigationTabLayout(state.libraryWorkspaceTabs, (_tab, index) => libraryWorkspaceLabel(index));
       const rootTab = `<button class="library-tab root-tab${state.libraryTab === "library" ? " active" : ""}" style="--tab-top:0px;--library-tab-length:${rootLength}px" type="button" data-root-tab="library" title="Library"><span class="library-tab-label">Library</span></button>`;
       const shortcutTabs = state.libraryShortcutTabs.map((tab, index) => (
-        `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${shortcutLayout.entries[index].top}px;--library-tab-length:${shortcutLayout.entries[index].length}px" type="button" draggable="true" data-shortcut-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryShortcutLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryShortcutLabel(index))}</span></button>`
+        `<button class="library-tab shortcut-tab${state.libraryTab === `shortcut-${index}` ? " active" : ""}" style="--tab-top:${shortcutLayout.entries[index].top}px;--library-tab-length:${shortcutLayout.entries[index].length}px" type="button" data-nav-draggable="true" data-shortcut-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryShortcutLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryShortcutLabel(index))}</span></button>`
       )).join("");
       const workspaceTabs = state.libraryWorkspaceTabs.map((tab, index) => (
-        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${workspaceLayout.entries[index].top}px;--library-tab-length:${workspaceLayout.entries[index].length}px" type="button" draggable="true" data-workspace-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
+        `<button class="library-tab workspace-tab${state.libraryTab === `workspace-${index}` ? " active" : ""}" style="--tab-top:${workspaceLayout.entries[index].top}px;--library-tab-length:${workspaceLayout.entries[index].length}px" type="button" data-nav-draggable="true" data-workspace-tab="${index}" data-nav-tab-id="${escapeAttr(tab.tab_id || "")}" title="${escapeAttr(libraryWorkspaceLabel(index))}"><span class="library-tab-label">${escapeHtml(libraryWorkspaceLabel(index))}</span></button>`
       )).join("");
       const shortcutRemoveDisabled = state.libraryTab?.startsWith("shortcut-") ? "" : " disabled";
       root.innerHTML = `
@@ -35810,17 +35892,16 @@ INDEX_HTML = """<!doctype html>
         button.addEventListener("click", () => runLibraryMenuAction(() => removeActiveLibraryNavigationTab(button.dataset.navRemove || "shortcut")));
       });
       root.querySelectorAll("[data-shortcut-tab]").forEach((button) => {
-        button.addEventListener("click", () => openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0)));
+        button.addEventListener("click", (event) => {
+          if (consumeLibraryNavigationDragClick(event)) return;
+          openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0));
+        });
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
           showLibraryTabContextMenu(event, "shortcut", Number(button.dataset.shortcutTab || 0));
         });
         button.addEventListener("dragover", (event) => {
-          if (state.libraryNavDragType === "shortcut") {
-            markLibraryNavigationDrop(event, button, "shortcut");
-            return;
-          }
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
           event.preventDefault();
@@ -35832,10 +35913,6 @@ INDEX_HTML = """<!doctype html>
           button.classList.remove("drag-over", "drag-over-before", "drag-over-after");
         });
         button.addEventListener("drop", async (event) => {
-          if (state.libraryNavDragType === "shortcut") {
-            await dropLibraryNavigationTab(event, button, "shortcut");
-            return;
-          }
           const payload = libraryDragPayload(event);
           if (payload?.type !== "folder") return;
           event.preventDefault();
@@ -35846,18 +35923,15 @@ INDEX_HTML = """<!doctype html>
         wireLibraryNavigationTabDrag(button, "shortcut");
       });
       root.querySelectorAll("[data-workspace-tab]").forEach((button) => {
-        button.addEventListener("click", () => openLibraryWorkspaceTab(Number(button.dataset.workspaceTab || 0)));
+        button.addEventListener("click", (event) => {
+          if (consumeLibraryNavigationDragClick(event)) return;
+          openLibraryWorkspaceTab(Number(button.dataset.workspaceTab || 0));
+        });
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
           showLibraryTabContextMenu(event, "workspace", Number(button.dataset.workspaceTab || 0));
         });
-        button.addEventListener("dragover", (event) => markLibraryNavigationDrop(event, button, "workspace"));
-        button.addEventListener("dragleave", (event) => {
-          if (event.relatedTarget && button.contains(event.relatedTarget)) return;
-          button.classList.remove("drag-over-before", "drag-over-after");
-        });
-        button.addEventListener("drop", (event) => dropLibraryNavigationTab(event, button, "workspace"));
         wireLibraryNavigationTabDrag(button, "workspace");
       });
       restoreLibraryNavigationScroll();
@@ -35940,70 +36014,103 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function wireLibraryNavigationTabDrag(button, type) {
-      button.addEventListener("dragstart", (event) => {
-        state.libraryNavDragType = type;
-        state.libraryNavDragTabId = button.dataset.navTabId || "";
+    function consumeLibraryNavigationDragClick(event) {
+      if (!state.libraryNavSuppressClick) return false;
+      state.libraryNavSuppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return true;
+    }
+
+    function updateLibraryNavigationPointerDrop(type, clientX, clientY) {
+      const selector = type === "shortcut" ? "[data-shortcut-tab]" : "[data-workspace-tab]";
+      const target = document.elementFromPoint(clientX, clientY)?.closest(selector);
+      document.querySelectorAll(".library-tab.drag-over-before, .library-tab.drag-over-after").forEach((candidate) => {
+        if (candidate !== target) candidate.classList.remove("drag-over-before", "drag-over-after");
+      });
+      if (!target || target.dataset.navTabId === state.libraryNavDragTabId) {
         state.libraryNavDropTargetId = "";
         state.libraryNavDropAfter = false;
-        state.libraryNavDropCommitted = false;
-        button.classList.add("nav-dragging");
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", state.libraryNavDragTabId);
-      });
-      button.addEventListener("dragend", () => {
-        const dragType = state.libraryNavDragType;
+        return;
+      }
+      const rect = target.getBoundingClientRect();
+      const after = clientY > rect.top + rect.height / 2;
+      state.libraryNavDropTargetId = target.dataset.navTabId || "";
+      state.libraryNavDropAfter = after;
+      target.classList.toggle("drag-over-before", !after);
+      target.classList.toggle("drag-over-after", after);
+      const scroller = target.closest(".library-tab-scroll");
+      if (!scroller) return;
+      const scrollRect = scroller.getBoundingClientRect();
+      if (clientY < scrollRect.top + 28) scroller.scrollTop -= 10;
+      if (clientY > scrollRect.bottom - 28) scroller.scrollTop += 10;
+      updateLibraryNavigationScrollEdges(type);
+    }
+
+    function wireLibraryNavigationTabDrag(button, type) {
+      let pointerId = null;
+      let startX = 0;
+      let startY = 0;
+      let dragging = false;
+
+      const finish = (event, commit) => {
+        if (pointerId === null || event.pointerId !== pointerId) return;
+        const activePointerId = pointerId;
+        const didDrag = dragging;
+        if (dragging) updateLibraryNavigationPointerDrop(type, event.clientX, event.clientY);
         const dragTabId = state.libraryNavDragTabId;
         const targetTabId = state.libraryNavDropTargetId;
         const placeAfter = state.libraryNavDropAfter;
-        const shouldCommit = !state.libraryNavDropCommitted && dragType === type && dragTabId && targetTabId && dragTabId !== targetTabId;
+        const shouldCommit = commit && dragging && dragTabId && targetTabId && dragTabId !== targetTabId;
+        pointerId = null;
+        dragging = false;
+        if (button.hasPointerCapture?.(activePointerId)) button.releasePointerCapture(activePointerId);
         state.libraryNavDragType = "";
         state.libraryNavDragTabId = "";
         state.libraryNavDropTargetId = "";
         state.libraryNavDropAfter = false;
-        state.libraryNavDropCommitted = false;
         clearLibraryNavigationDragMarkers();
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
+        if (!commit || !didDrag) return;
+        state.libraryNavSuppressClick = true;
+        window.setTimeout(() => { state.libraryNavSuppressClick = false; }, 0);
+        event.preventDefault();
         if (shouldCommit) {
-          runLibraryMenuAction(() => moveLibraryNavigationTab(dragType, dragTabId, targetTabId, placeAfter));
+          runLibraryMenuAction(() => moveLibraryNavigationTab(type, dragTabId, targetTabId, placeAfter));
         }
-      });
-    }
+      };
 
-    function markLibraryNavigationDrop(event, button, type) {
-      if (state.libraryNavDragType !== type || !state.libraryNavDragTabId || state.libraryNavDragTabId === button.dataset.navTabId) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      document.querySelectorAll(".library-tab.drag-over-before, .library-tab.drag-over-after").forEach((candidate) => {
-        if (candidate !== button) candidate.classList.remove("drag-over-before", "drag-over-after");
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || pointerId !== null) return;
+        pointerId = event.pointerId;
+        startX = event.clientX;
+        startY = event.clientY;
+        dragging = false;
+        button.setPointerCapture?.(pointerId);
       });
-      const rect = button.getBoundingClientRect();
-      const after = event.clientY > rect.top + rect.height / 2;
-      state.libraryNavDropTargetId = button.dataset.navTabId || "";
-      state.libraryNavDropAfter = after;
-      button.classList.toggle("drag-over-before", !after);
-      button.classList.toggle("drag-over-after", after);
-      const scroller = button.closest(".library-tab-scroll");
-      if (scroller) {
-        const scrollRect = scroller.getBoundingClientRect();
-        if (event.clientY < scrollRect.top + 28) scroller.scrollTop -= 10;
-        if (event.clientY > scrollRect.bottom - 28) scroller.scrollTop += 10;
-      }
-    }
-
-    async function dropLibraryNavigationTab(event, button, type) {
-      if (state.libraryNavDragType !== type || !state.libraryNavDragTabId || state.libraryNavDragTabId === button.dataset.navTabId) return;
-      event.preventDefault();
-      const rect = button.getBoundingClientRect();
-      const after = event.clientY > rect.top + rect.height / 2;
-      const dragTabId = state.libraryNavDragTabId;
-      const targetTabId = button.dataset.navTabId || "";
-      state.libraryNavDropCommitted = true;
-      state.libraryNavDragType = "";
-      state.libraryNavDragTabId = "";
-      state.libraryNavDropTargetId = "";
-      state.libraryNavDropAfter = false;
-      clearLibraryNavigationDragMarkers();
-      await runLibraryMenuAction(() => moveLibraryNavigationTab(type, dragTabId, targetTabId, after));
+      button.addEventListener("pointermove", (event) => {
+        if (pointerId === null || event.pointerId !== pointerId) return;
+        if (!dragging && Math.hypot(event.clientX - startX, event.clientY - startY) < 5) return;
+        if (!dragging) {
+          dragging = true;
+          state.libraryNavSuppressClick = false;
+          state.libraryNavDragType = type;
+          state.libraryNavDragTabId = button.dataset.navTabId || "";
+          state.libraryNavDropTargetId = "";
+          state.libraryNavDropAfter = false;
+          button.classList.add("nav-dragging");
+          document.body.style.userSelect = "none";
+          document.body.style.cursor = "grabbing";
+        }
+        event.preventDefault();
+        updateLibraryNavigationPointerDrop(type, event.clientX, event.clientY);
+      });
+      button.addEventListener("pointerup", (event) => finish(event, true));
+      button.addEventListener("pointercancel", (event) => finish(event, false));
+      button.addEventListener("lostpointercapture", (event) => {
+        if (pointerId !== null && event.pointerId === pointerId) finish(event, false);
+      });
     }
 
     async function openLibraryShortcutTab(index) {
@@ -36610,6 +36717,9 @@ INDEX_HTML = """<!doctype html>
             ${libraryPaneHeaderMarkup({hideLoader: true})}
             <div class="library-detail" id="libraryDetail">${loading ? myPublicationsLoadingDetailMarkup() : ""}</div>
           </aside>
+          <div class="my-publications-status-bar" aria-live="polite">
+            ${myPublicationStatusBarMarkup()}
+          </div>
         </div>
         <div class="library-context-menu my-publication-context-menu" id="myPublicationContextMenu">
           <button type="button" data-action="toggle-my-publication-head">Hide</button>
@@ -36683,20 +36793,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateMyPublicationSearchStatusText() {
-      const status = document.querySelector(".publication-search-status");
-      if (status) {
-        status.textContent = myPublicationSearchStatusText();
-        status.className = `${myPublicationSearchStatusClass()} my-publications-tool-note`;
-      }
+      updateMyPublicationStatusBar();
       updateMyPublicationScholarProfileStrip();
     }
 
     function myPublicationSearchStatusText() {
-      return state.myPublicationSearchStatus || "Use DOI/arXiv/title, or search by name with optional units: Name; Unit A; Unit B.";
-    }
-
-    function myPublicationSearchStatusClass() {
-      return `publication-search-status${myPublicationSearchStatusIsLive() ? " live" : ""}`;
+      return state.myPublicationSearchStatus || "";
     }
 
     function myPublicationSearchStatusIsLive(text = state.myPublicationSearchStatus) {
@@ -36704,21 +36806,63 @@ INDEX_HTML = """<!doctype html>
       return /(adding|building|checking|deleting|fetching|importing|matching|refreshing|reimporting|resolving|retrying|searching|starting|stopping|updating)/i.test(String(text || ""));
     }
 
+    function myPublicationStatusItems() {
+      const statusText = myPublicationSearchStatusText();
+      const searchItem = statusText
+        ? {id: "search", text: statusText, live: myPublicationSearchStatusIsLive(statusText)}
+        : null;
+      const activities = (state.myPublicationActivities || [])
+        .filter((activity) => activity?.text)
+        .map((activity) => ({
+          id: activity.id || "",
+          text: activity.text,
+          live: activity.live !== false
+        }));
+      if (searchItem?.live) return [searchItem, ...activities].slice(0, 2);
+      if (activities.length) return activities.slice(0, 2);
+      return searchItem ? [searchItem] : [];
+    }
+
+    function myPublicationStatusClass(item, secondary = false) {
+      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}`;
+    }
+
+    function myPublicationStatusBarMarkup() {
+      const items = myPublicationStatusItems();
+      return [0, 1].map((index) => {
+        const item = items[index] || null;
+        const id = index === 0 ? "publicationSearchStatus" : "myPublicationSecondaryStatus";
+        return `<span class="${myPublicationStatusClass(item, index === 1)}" id="${id}" title="${escapeAttr(item?.text || "")}">${escapeHtml(item?.text || "")}</span>`;
+      }).join("");
+    }
+
+    function updateMyPublicationStatusBar() {
+      const items = myPublicationStatusItems();
+      ["publicationSearchStatus", "myPublicationSecondaryStatus"].forEach((id, index) => {
+        const status = $(id);
+        if (!status) return;
+        const item = items[index] || null;
+        status.textContent = item?.text || "";
+        status.className = myPublicationStatusClass(item, index === 1);
+        status.title = item?.text || "";
+      });
+    }
+
     function myPublicationScholarProfileMarkup() {
       const profile = state.myPublicationScholarProfile || {};
       const profileUrl = scholarProfileExternalUrl(profile);
       const hasSavedProfile = Boolean(profile.name || profile.avatar_url || profileUrl || profile.user_id);
-      const chips = myPublicationProfileStatusChips(profile);
-      if (!hasSavedProfile && !chips.length) return "";
+      if (!hasSavedProfile) return "";
       const avatarUrl = profile.avatar_url || "";
       const initials = scholarProfileInitials(profile.name || "") || "GS";
+      const profileLabel = `Using ${profile.name || "Google Scholar profile"}`;
       const avatarMarkup = avatarUrl
         ? `<img src="${escapeHtml(avatarUrl)}" alt="${escapeHtml(profile.name || "Google Scholar profile")}" data-fallback="${escapeAttr(initials)}" onerror="this.onerror=null; if (this.parentElement) this.parentElement.textContent=this.dataset.fallback || 'GS';">`
         : `${escapeHtml(initials)}`;
       return `
         <div class="my-publications-profile-strip" id="myPublicationProfileStrip">
           <div class="my-publications-profile-statuses">
-            ${chips.map((chip) => `<div class="my-publications-profile-status${chip.live ? " live" : ""}" title="${escapeHtml(chip.text)}">${escapeHtml(chip.text)}</div>`).join("")}
+            <div class="my-publications-profile-status" title="${escapeAttr(profileLabel)}">${escapeHtml(profileLabel)}</div>
           </div>
           ${profileUrl
             ? `<button class="my-publications-profile-avatar" type="button" data-action="open-scholar-profile" title="Open Google Scholar profile" aria-label="Open Google Scholar profile">${avatarMarkup}</button>`
@@ -36728,31 +36872,17 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
-    function myPublicationProfileStatusChips(profile = {}) {
-      const chips = [];
-      const statusText = state.myPublicationSearchStatus || "";
-      if (myPublicationSearchStatusIsLive(statusText)) chips.push({id: "search", text: statusText, live: true});
-      (state.myPublicationActivities || []).forEach((activity) => {
-        if (activity?.text) chips.push({id: activity.id || "", text: activity.text, live: activity.live !== false});
-      });
-      const profileUrl = scholarProfileExternalUrl(profile);
-      if (!chips.length && (profile.name || profile.avatar_url || profileUrl || profile.user_id)) {
-        chips.push({id: "profile", text: `Using ${profile.name || "Google Scholar profile"}`, live: false});
-      }
-      return chips.slice(0, 4);
-    }
-
     function setMyPublicationActivity(id, text, options = {}) {
       if (!id || !text) return;
       const next = (state.myPublicationActivities || []).filter((activity) => activity.id !== id);
       next.push({id, text, live: options.live !== false});
       state.myPublicationActivities = next.slice(-4);
-      updateMyPublicationScholarProfileStrip();
+      updateMyPublicationStatusBar();
     }
 
     function clearMyPublicationActivity(id) {
       state.myPublicationActivities = (state.myPublicationActivities || []).filter((activity) => activity.id !== id);
-      updateMyPublicationScholarProfileStrip();
+      updateMyPublicationStatusBar();
     }
 
     function updateMyPublicationScholarProfileStrip() {
@@ -37195,16 +37325,7 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationSearchResultsMarkup() {
       const results = state.myPublicationSearchResults || [];
-      if (!results.length) {
-        const status = state.myPublicationSearchStatus || "";
-        if (/importing|matching|searching|resolving|loading/i.test(status)) {
-          return `<div class="publication-search-result placeholder">Working on the lookup. Results will appear here when the profile or title matches come back.</div>`;
-        }
-        if (/no |0 |failed|blocked|error/i.test(status)) {
-          return `<div class="publication-search-result placeholder">${escapeHtml(status)}</div>`;
-        }
-        return "";
-      }
+      if (!results.length) return "";
       return myPublicationSearchResultViewItems(results).map(({candidate, index}) => {
         if (candidate.candidate_type === "scholar-profile") {
           const meta = [
@@ -39185,11 +39306,8 @@ INDEX_HTML = """<!doctype html>
     async function exportPublicationList(format) {
       closePublicationExportMenu();
       const requestedFormat = format || "docx";
-      const status = $("publicationSearchStatus");
-      if (status) {
-        status.textContent = "Exporting publication list...";
-        status.className = "publication-search-status live my-publications-tool-note";
-      }
+      state.myPublicationSearchStatus = "Exporting publication list...";
+      updateMyPublicationSearchStatusText();
       if (format === "overleaf") {
         window.open("https://www.overleaf.com/project", "_blank", "noopener");
       }
@@ -39205,19 +39323,14 @@ INDEX_HTML = """<!doctype html>
         const openStatus = data.open?.status || "";
         const opened = openStatus === "opened" || openStatus === "copied";
         const targetPath = data.open?.desktop_path || data.path || "";
-        state.myPublicationSearchStatus = openStatus === "copied"
+        const resultText = openStatus === "copied"
           ? `Exported ${data.filename}. Zip copied to Desktop.`
           : (opened ? `Exported ${data.filename}. Opened.` : `Exported ${data.filename}. Could not open automatically.`);
-        if (status) {
-          status.textContent = `${state.myPublicationSearchStatus} Path: ${targetPath}`;
-          status.className = `publication-search-status ${opened ? "ok" : "err"} my-publications-tool-note`;
-        }
+        state.myPublicationSearchStatus = `${resultText} Path: ${targetPath}`;
+        updateMyPublicationSearchStatusText();
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Export failed";
-        if (status) {
-          status.textContent = state.myPublicationSearchStatus;
-          status.className = "publication-search-status err my-publications-tool-note";
-        }
+        updateMyPublicationSearchStatusText();
       }
     }
 
