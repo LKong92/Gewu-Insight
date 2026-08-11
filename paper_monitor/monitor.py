@@ -13,6 +13,7 @@ from .sources.publisher import (
     enrich_aps_abstract_from_page,
     enrich_aps_abstract_from_rss,
     enrich_from_landing_page,
+    enrich_image_from_landing_page,
 )
 from .storage import Storage
 from .text import clean_text
@@ -123,18 +124,6 @@ def fetch_one_journal(
         policy = config.section_policies.get(journal.section_policy, {})
         blocked = 0
         for paper in dedup_by_id(collected):
-            existing = storage.get_paper(paper["paper_id"])
-            if existing:
-                for field in (
-                    "abstract",
-                    "abstract_source",
-                    "image_url",
-                    "pdf_url",
-                    "publisher_section",
-                    "section_allowed",
-                ):
-                    if paper.get(field) in (None, "") and existing.get(field) not in (None, ""):
-                        paper[field] = existing[field]
             apply_fast_section_hints(paper, journal)
             if (
                 enrich
@@ -164,25 +153,22 @@ def fetch_one_journal(
                     # that predates the all-journal RSS path; otherwise a historical
                     # PRL/PRB refresh could turn into many publisher page requests.
                     if not paper.get("abstract") and aps_journal_slug(journal.name) == "rmp":
-                        paper = enrich_aps_abstract_from_page(paper, storage=storage)
-            needs_landing_classification = (
-                paper.get("section_allowed") is None
-                or clean_text(paper.get("publisher_section") or "").casefold() in {"", "unknown"}
-            )
-            if (
-                enrich
-                and not journal.skip_landing_enrichment
-                and paper.get("section_allowed") is not False
-                and needs_landing_classification
-            ):
+                        paper = enrich_aps_abstract_from_page(paper)
+            if enrich and not journal.skip_landing_enrichment and paper.get("section_allowed") is not False:
                 paper = enrich_from_landing_page(
                     paper,
                     section_policy=policy,
                     keep_unknown=config.keep_unknown_sections,
-                    storage=storage,
                 )
             elif paper.get("section_allowed") is None:
                 paper["section_allowed"] = config.keep_unknown_sections
+            if (
+                enrich
+                and journal.skip_landing_enrichment
+                and paper.get("section_allowed") is not False
+                and not is_aps_lifecycle_journal(journal.name)
+            ):
+                paper = enrich_image_from_landing_page(paper)
 
             if paper.get("section_allowed") is False:
                 blocked += 1

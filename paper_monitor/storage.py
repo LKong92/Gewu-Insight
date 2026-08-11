@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 6
+STORAGE_SCHEMA_VERSION = 5
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -212,33 +212,6 @@ CREATE TABLE IF NOT EXISTS aps_rss_entries (
 CREATE INDEX IF NOT EXISTS idx_aps_rss_entries_date
 ON aps_rss_entries(publication_date, journal_slug);
 
-CREATE TABLE IF NOT EXISTS journal_feeds (
-  feed_key TEXT PRIMARY KEY,
-  publisher TEXT NOT NULL,
-  journal_name TEXT NOT NULL,
-  feed_url TEXT NOT NULL,
-  parser TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'never',
-  entry_count INTEGER NOT NULL DEFAULT 0,
-  message TEXT,
-  etag TEXT,
-  last_modified TEXT,
-  checked_at TEXT,
-  success_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS journal_feed_entries (
-  feed_key TEXT NOT NULL REFERENCES journal_feeds(feed_key) ON DELETE CASCADE,
-  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
-  publication_date TEXT NOT NULL,
-  first_seen_at TEXT NOT NULL,
-  last_seen_at TEXT NOT NULL,
-  PRIMARY KEY (feed_key, paper_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_journal_feed_entries_date
-ON journal_feed_entries(publication_date, feed_key);
-
 CREATE TABLE IF NOT EXISTS my_publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
@@ -434,7 +407,6 @@ class Storage:
             if schema_version < STORAGE_SCHEMA_VERSION:
                 self.conn.executescript(SCHEMA)
                 self._ensure_schema_columns()
-                self._migrate_aps_rss_to_journal_feeds()
                 self._ensure_library_root()
                 self._seed_library_from_existing_papers()
                 self.conn.execute(
@@ -443,46 +415,6 @@ class Storage:
                 self.conn.commit()
             self._sync_arxiv_calendar_timezone()
             self._reclassify_aps_records()
-
-    def _migrate_aps_rss_to_journal_feeds(self) -> None:
-        """Seed the generic feed cache without changing the historical APS tables."""
-        self.conn.execute(
-            """
-            INSERT OR IGNORE INTO journal_feeds (
-              feed_key, publisher, journal_name, feed_url, parser, status,
-              entry_count, message, etag, last_modified, checked_at, success_at
-            )
-            SELECT
-              'aps:' || journal_slug,
-              'APS',
-              journal_name,
-              'https://feeds.aps.org/rss/recent/' || journal_slug || '.xml',
-              'aps_rdf',
-              status,
-              entry_count,
-              message,
-              etag,
-              last_modified,
-              checked_at,
-              success_at
-            FROM aps_rss_feeds
-            """
-        )
-        self.conn.execute(
-            """
-            INSERT OR IGNORE INTO journal_feed_entries (
-              feed_key, paper_id, publication_date, first_seen_at, last_seen_at
-            )
-            SELECT
-              'aps:' || journal_slug,
-              paper_id,
-              publication_date,
-              first_seen_at,
-              last_seen_at
-            FROM aps_rss_entries
-            """
-        )
-        self.conn.commit()
 
     def _ensure_schema_columns(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -1298,157 +1230,12 @@ class Storage:
         )
         self.conn.commit()
 
-    def get_journal_feed(self, feed_key: str) -> dict[str, Any] | None:
+    def get_aps_rss_feed(self, journal_slug: str) -> dict[str, Any] | None:
         row = self.conn.execute(
-            "SELECT * FROM journal_feeds WHERE feed_key = ?",
-            (str(feed_key),),
+            "SELECT * FROM aps_rss_feeds WHERE journal_slug = ?",
+            (str(journal_slug),),
         ).fetchone()
         return dict(row) if row else None
-
-    def record_journal_feed(
-        self,
-        *,
-        feed_key: str,
-        publisher: str,
-        journal_name: str,
-        feed_url: str,
-        parser: str,
-        status: str,
-        entry_count: int,
-        message: str = "",
-        etag: str = "",
-        last_modified: str = "",
-        success: bool = False,
-    ) -> None:
-        timestamp = now_iso()
-        self.conn.execute(
-            """
-            INSERT INTO journal_feeds (
-              feed_key, publisher, journal_name, feed_url, parser, status,
-              entry_count, message, etag, last_modified, checked_at, success_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(feed_key) DO UPDATE SET
-              publisher = excluded.publisher,
-              journal_name = excluded.journal_name,
-              feed_url = excluded.feed_url,
-              parser = excluded.parser,
-              status = excluded.status,
-              entry_count = excluded.entry_count,
-              message = excluded.message,
-              etag = CASE WHEN excluded.etag != '' THEN excluded.etag ELSE journal_feeds.etag END,
-              last_modified = CASE
-                WHEN excluded.last_modified != '' THEN excluded.last_modified
-                ELSE journal_feeds.last_modified
-              END,
-              checked_at = excluded.checked_at,
-              success_at = CASE
-                WHEN excluded.success_at IS NOT NULL THEN excluded.success_at
-                ELSE journal_feeds.success_at
-              END
-            """,
-            (
-                str(feed_key),
-                str(publisher),
-                str(journal_name),
-                str(feed_url),
-                str(parser),
-                str(status),
-                max(0, int(entry_count or 0)),
-                str(message or ""),
-                str(etag or ""),
-                str(last_modified or ""),
-                timestamp,
-                timestamp if success else None,
-            ),
-        )
-        self.conn.commit()
-
-    def record_journal_feed_entries(self, feed_key: str, papers: Iterable[dict[str, Any]]) -> None:
-        timestamp = now_iso()
-        rows = [
-            (
-                str(feed_key),
-                str(paper.get("paper_id") or ""),
-                str(paper.get("publication_date") or "")[:10],
-                timestamp,
-                timestamp,
-            )
-            for paper in papers
-            if paper.get("paper_id") and paper.get("publication_date")
-        ]
-        if not rows:
-            return
-        self.conn.executemany(
-            """
-            INSERT INTO journal_feed_entries (
-              feed_key, paper_id, publication_date, first_seen_at, last_seen_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(feed_key, paper_id) DO UPDATE SET
-              publication_date = excluded.publication_date,
-              last_seen_at = excluded.last_seen_at
-            """,
-            rows,
-        )
-        self.conn.commit()
-
-    def list_journal_feed_papers(
-        self,
-        *,
-        start_date: str,
-        end_date: str,
-        feed_keys: Iterable[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        clauses = [
-            "journal_feed_entries.publication_date >= ?",
-            "journal_feed_entries.publication_date <= ?",
-            "(papers.section_allowed IS NULL OR papers.section_allowed != 0)",
-        ]
-        params: list[Any] = [str(start_date), str(end_date)]
-        keys = [str(key) for key in (feed_keys or []) if str(key)]
-        if feed_keys is not None and not keys:
-            return []
-        if keys:
-            placeholders = ", ".join(["?"] * len(keys))
-            clauses.append(f"journal_feed_entries.feed_key IN ({placeholders})")
-            params.extend(keys)
-        rows = self.conn.execute(
-            f"""
-            SELECT papers.*, journal_feed_entries.feed_key AS journal_feed_key
-            FROM journal_feed_entries
-            JOIN papers ON papers.paper_id = journal_feed_entries.paper_id
-            WHERE {" AND ".join(clauses)}
-            ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
-            """,
-            params,
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def journal_feed_abstracts(self, feed_key: str) -> dict[str, str]:
-        rows = self.conn.execute(
-            """
-            SELECT papers.doi, papers.abstract
-            FROM journal_feed_entries
-            JOIN papers ON papers.paper_id = journal_feed_entries.paper_id
-            WHERE journal_feed_entries.feed_key = ?
-              AND papers.doi IS NOT NULL
-              AND papers.doi != ''
-              AND papers.abstract IS NOT NULL
-              AND papers.abstract != ''
-            """,
-            (str(feed_key),),
-        ).fetchall()
-        return {
-            str(row["doi"] or "").lower(): str(row["abstract"] or "")
-            for row in rows
-            if row["doi"] and row["abstract"]
-        }
-
-    # Backward-compatible APS accessors. New feed code uses the generic tables.
-    def get_aps_rss_feed(self, journal_slug: str) -> dict[str, Any] | None:
-        state = self.get_journal_feed(f"aps:{journal_slug}")
-        if state:
-            state["journal_slug"] = str(journal_slug)
-        return state
 
     def record_aps_rss_feed(
         self,
@@ -1462,22 +1249,70 @@ class Storage:
         last_modified: str = "",
         success: bool = False,
     ) -> None:
-        self.record_journal_feed(
-            feed_key=f"aps:{journal_slug}",
-            publisher="APS",
-            journal_name=journal_name,
-            feed_url=f"https://feeds.aps.org/rss/recent/{journal_slug}.xml",
-            parser="aps_rdf",
-            status=status,
-            entry_count=entry_count,
-            message=message,
-            etag=etag,
-            last_modified=last_modified,
-            success=success,
+        timestamp = now_iso()
+        self.conn.execute(
+            """
+            INSERT INTO aps_rss_feeds (
+              journal_slug, journal_name, status, entry_count, message,
+              etag, last_modified, checked_at, success_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(journal_slug) DO UPDATE SET
+              journal_name = excluded.journal_name,
+              status = excluded.status,
+              entry_count = excluded.entry_count,
+              message = excluded.message,
+              etag = CASE WHEN excluded.etag != '' THEN excluded.etag ELSE aps_rss_feeds.etag END,
+              last_modified = CASE
+                WHEN excluded.last_modified != '' THEN excluded.last_modified
+                ELSE aps_rss_feeds.last_modified
+              END,
+              checked_at = excluded.checked_at,
+              success_at = CASE
+                WHEN excluded.success_at IS NOT NULL THEN excluded.success_at
+                ELSE aps_rss_feeds.success_at
+              END
+            """,
+            (
+                str(journal_slug),
+                str(journal_name),
+                str(status),
+                max(0, int(entry_count or 0)),
+                str(message or ""),
+                str(etag or ""),
+                str(last_modified or ""),
+                timestamp,
+                timestamp if success else None,
+            ),
         )
+        self.conn.commit()
 
     def record_aps_rss_entries(self, journal_slug: str, papers: Iterable[dict[str, Any]]) -> None:
-        self.record_journal_feed_entries(f"aps:{journal_slug}", papers)
+        timestamp = now_iso()
+        rows = [
+            (
+                str(journal_slug),
+                str(paper.get("paper_id") or ""),
+                str(paper.get("publication_date") or "")[:10],
+                timestamp,
+                timestamp,
+            )
+            for paper in papers
+            if paper.get("paper_id") and paper.get("publication_date")
+        ]
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO aps_rss_entries (
+              journal_slug, paper_id, publication_date, first_seen_at, last_seen_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(journal_slug, paper_id) DO UPDATE SET
+              publication_date = excluded.publication_date,
+              last_seen_at = excluded.last_seen_at
+            """,
+            rows,
+        )
+        self.conn.commit()
 
     def list_aps_rss_papers(
         self,
@@ -1486,19 +1321,50 @@ class Storage:
         end_date: str,
         journal_slugs: Iterable[str] | None = None,
     ) -> list[dict[str, Any]]:
-        feed_keys = None if journal_slugs is None else [f"aps:{slug}" for slug in journal_slugs]
-        papers = self.list_journal_feed_papers(
-            start_date=start_date,
-            end_date=end_date,
-            feed_keys=feed_keys,
-        )
-        for paper in papers:
-            feed_key = str(paper.get("journal_feed_key") or "")
-            paper["aps_rss_journal_slug"] = feed_key.removeprefix("aps:")
-        return papers
+        clauses = [
+            "aps_rss_entries.publication_date >= ?",
+            "aps_rss_entries.publication_date <= ?",
+            "(papers.section_allowed IS NULL OR papers.section_allowed != 0)",
+        ]
+        params: list[Any] = [str(start_date), str(end_date)]
+        slugs = [str(slug) for slug in (journal_slugs or []) if str(slug)]
+        if journal_slugs is not None and not slugs:
+            return []
+        if slugs:
+            placeholders = ", ".join(["?"] * len(slugs))
+            clauses.append(f"aps_rss_entries.journal_slug IN ({placeholders})")
+            params.extend(slugs)
+        rows = self.conn.execute(
+            f"""
+            SELECT papers.*, aps_rss_entries.journal_slug AS aps_rss_journal_slug
+            FROM aps_rss_entries
+            JOIN papers ON papers.paper_id = aps_rss_entries.paper_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY papers.publication_date DESC, papers.journal ASC, papers.title ASC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def aps_rss_abstracts(self, journal_slug: str) -> dict[str, str]:
-        return self.journal_feed_abstracts(f"aps:{journal_slug}")
+        rows = self.conn.execute(
+            """
+            SELECT papers.doi, papers.abstract
+            FROM aps_rss_entries
+            JOIN papers ON papers.paper_id = aps_rss_entries.paper_id
+            WHERE aps_rss_entries.journal_slug = ?
+              AND papers.doi IS NOT NULL
+              AND papers.doi != ''
+              AND papers.abstract IS NOT NULL
+              AND papers.abstract != ''
+            """,
+            (str(journal_slug),),
+        ).fetchall()
+        return {
+            str(row["doi"] or "").lower(): str(row["abstract"] or "")
+            for row in rows
+            if row["doi"] and row["abstract"]
+        }
 
     def list_theme_candidates(
         self,

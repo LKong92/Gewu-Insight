@@ -133,37 +133,6 @@ def fetch_arxiv_by_id(
     return normalize_arxiv_entry(entries[0])
 
 
-def fetch_arxiv_by_doi(
-    doi: str,
-    *,
-    timeout: int = 12,
-    max_retries: int = 1,
-) -> dict[str, Any] | None:
-    """Resolve an exact published DOI through arXiv's public Export API."""
-    normalized_doi = normalize_doi(doi)
-    if not normalized_doi:
-        return None
-    wait_for_arxiv_rate_limit()
-    response = request_with_retries(
-        "GET",
-        "https://export.arxiv.org/api/query",
-        params={
-            "search_query": f'doi:"{normalized_doi}"',
-            "start": 0,
-            "max_results": 3,
-        },
-        timeout=timeout,
-        max_retries=max_retries,
-    )
-    root = ET.fromstring(response.content)
-    entries = root.findall("atom:entry", ATOM_NS)
-    for entry in entries:
-        paper = normalize_arxiv_entry(entry)
-        if normalize_doi(str(paper.get("doi") or "")) == normalized_doi:
-            return paper
-    return None
-
-
 def fetch_arxiv_by_ids(
     arxiv_ids: list[str],
     *,

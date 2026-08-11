@@ -42,7 +42,7 @@ def download_paper(
     target_dir = target_dir if target_dir is not None else pdf_dir / paper_id
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    candidates = collect_pdf_candidates(paper, storage=storage)
+    candidates = collect_pdf_candidates(paper)
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
     main_pdf_path: Path | None = preserved_main_pdf_path
     main_pdf_url = ""
@@ -52,14 +52,14 @@ def download_paper(
     if not main_pdf_path:
         for index, url in enumerate(candidates["main"]):
             path = target_dir / "main.pdf"
-            if try_download_pdf(url, path, messages, storage=storage):
+            if try_download_pdf(url, path, messages):
                 main_pdf_path = path
                 main_pdf_url = url
                 break
 
     for index, url in enumerate(candidates["supplements"], start=1):
         path = target_dir / f"supplement_{index}.pdf"
-        if try_download_pdf(url, path, messages, storage=storage):
+        if try_download_pdf(url, path, messages):
             supplement_paths.append(path)
 
     for index, url in enumerate(candidates.get("supplement_documents") or [], start=1):
@@ -67,7 +67,6 @@ def download_paper(
             url,
             target_dir / f"supplement_document_{index}",
             messages,
-            storage=storage,
         )
         if not source_path:
             continue
@@ -234,11 +233,7 @@ def remove_intermediate_pdfs(paths: list[Path], *, keep: Path) -> None:
             pass
 
 
-def collect_pdf_candidates(
-    paper: dict[str, Any],
-    *,
-    storage: Storage | None = None,
-) -> dict[str, list[str]]:
+def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     main: list[str] = []
     supplements: list[str] = []
     supplement_documents: list[str] = []
@@ -270,11 +265,11 @@ def collect_pdf_candidates(
     if landing_url:
         try:
             if doi.startswith("10.1103/"):
-                response = request_aps_page(landing_url, storage=storage)
+                response = request_aps_page(landing_url)
                 if response is None:
                     raise RuntimeError("APS page request paused by rate-limit protection")
             else:
-                response = request_with_retries("GET", landing_url, publisher_storage=storage)
+                response = request_with_retries("GET", landing_url)
             page_url = response.url or landing_url
             soup = BeautifulSoup(response.text, "html.parser")
             for tag in soup.find_all("meta", attrs={"name": "citation_pdf_url"}):
@@ -641,21 +636,9 @@ def normalize_doi(value: Any) -> str:
     return doi.strip().lower()
 
 
-def try_download_pdf(
-    url: str,
-    path: Path,
-    messages: list[str],
-    *,
-    storage: Storage | None = None,
-) -> bool:
+def try_download_pdf(url: str, path: Path, messages: list[str]) -> bool:
     try:
-        response = request_with_retries(
-            "GET",
-            url,
-            headers=pdf_request_headers(url),
-            stream=True,
-            publisher_storage=storage,
-        )
+        response = request_with_retries("GET", url, headers=pdf_request_headers(url), stream=True)
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
@@ -685,8 +668,6 @@ def try_download_word_supplement(
     url: str,
     path_without_suffix: Path,
     messages: list[str],
-    *,
-    storage: Storage | None = None,
 ) -> Path | None:
     try:
         response = request_with_retries(
@@ -694,7 +675,6 @@ def try_download_word_supplement(
             url,
             headers=pdf_request_headers(url),
             stream=True,
-            publisher_storage=storage,
         )
         content = response.content
         content_type = response.headers.get("content-type", "").lower()
