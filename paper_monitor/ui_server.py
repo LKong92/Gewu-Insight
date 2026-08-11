@@ -23252,7 +23252,7 @@ INDEX_HTML = """<!doctype html>
       --library-tab-bg: #e8f0f8;
       --library-tab-border: #cad8e6;
       --library-tab-color: #516b84;
-      --library-tab-active-bg: #a8c8e6;
+      --library-tab-active-bg: rgba(82, 179, 209, 0.5);
       --library-tab-active-border: #78a5cf;
       --library-tab-active-color: #153a5e;
       --library-tab-idle-opacity: 0.44;
@@ -23262,7 +23262,7 @@ INDEX_HTML = """<!doctype html>
       --library-tab-bg: #e1eaf4;
       --library-tab-border: #c2d0df;
       --library-tab-color: #45627e;
-      --library-tab-active-bg: #78a6d3;
+      --library-tab-active-bg: rgba(101, 164, 248, 0.5);
       --library-tab-active-border: #4f83b6;
       --library-tab-active-color: #0f3152;
       --library-tab-idle-opacity: 0.38;
@@ -23276,7 +23276,7 @@ INDEX_HTML = """<!doctype html>
       --library-tab-bg: #f0f5fa;
       --library-tab-border: #d7e1eb;
       --library-tab-color: #62778c;
-      --library-tab-active-bg: #d3e6f6;
+      --library-tab-active-bg: rgba(140, 174, 243, 0.5);
       --library-tab-active-border: #a6c7e3;
       --library-tab-active-color: #234b6e;
       --library-tab-idle-opacity: 0.5;
