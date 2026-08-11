@@ -13,7 +13,16 @@ from urllib.parse import quote, urljoin
 from bs4 import BeautifulSoup
 
 from ..aps import APS_CANONICAL_NAMES_BY_SLUG, aps_journal_slug
-from ..http import USER_AGENT
+from ..http import (
+    PublisherAccessBlockedError,
+    USER_AGENT,
+    get_with_local_proxy_fallback,
+    note_publisher_response,
+    publisher_automation_headers,
+    publisher_background_batch,
+    publisher_request_guard,
+    reset_publisher_access_state,
+)
 from .crossref import fetch_crossref_journal
 from ..text import clean_text, make_paper_id, normalize_doi, normalize_publication_title
 
@@ -275,16 +284,23 @@ def aps_rss_abstracts(journal: str, *, storage: Any = None) -> dict[str, str]:
         cached_at, cached_abstracts = _APS_RSS_CACHE.get(slug, (0.0, {}))
         if cached_at and now - cached_at < APS_RSS_CACHE_SECONDS:
             return dict(cached_abstracts)
+        url = f"https://feeds.aps.org/rss/recent/{slug}.xml"
         try:
-            response = requests.get(
-                f"https://feeds.aps.org/rss/recent/{slug}.xml",
-                headers={"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"},
-                timeout=10,
-                allow_redirects=True,
-            )
+            with publisher_request_guard(url, access_kind="feed"):
+                response = get_with_local_proxy_fallback(
+                    url,
+                    headers=publisher_automation_headers(
+                        url,
+                        {"Accept": "application/rss+xml,application/xml,text/xml"},
+                        access_kind="feed",
+                    ),
+                    timeout=10,
+                    allow_redirects=True,
+                )
+                note_publisher_response(response, url, access_kind="feed")
             response.raise_for_status()
             abstracts = parse_aps_rss_abstracts(response.content)
-        except (requests.RequestException, ET.ParseError):
+        except (requests.RequestException, PublisherAccessBlockedError, ET.ParseError):
             abstracts = {}
         _APS_RSS_CACHE[slug] = (time.monotonic(), abstracts)
         return dict(abstracts)
@@ -447,6 +463,7 @@ def parse_standard_journal_feed_entries(
         url = link or (f"https://doi.org/{doi}" if doi else "")
         authors = feed_entry_authors(item)
         abstract = feed_entry_abstract(item) if definition.include_abstract else ""
+        image_url = feed_entry_image_url(item, link)
         raw = {
             "DOI": doi,
             "title": [title],
@@ -460,6 +477,7 @@ def parse_standard_journal_feed_entries(
                 "feed_url": definition.url,
                 "publication_date": publication_date,
                 "item_type": item_type,
+                "image_url": image_url,
             },
             "_paper_monitor_sources": [definition.source_name],
         }
@@ -472,6 +490,7 @@ def parse_standard_journal_feed_entries(
                 "publication_date": publication_date,
                 "abstract": abstract,
                 "abstract_source": definition.source_name if abstract else "missing",
+                "image_url": image_url,
                 "url": url,
                 "landing_url": url,
                 "pdf_url": "",
@@ -628,6 +647,28 @@ def feed_entry_abstract(item: ET.Element) -> str:
     return ""
 
 
+def feed_entry_image_url(item: ET.Element, link: str = "") -> str:
+    for node in item.iter():
+        local_name = xml_local_name(node.tag)
+        candidate = clean_text(node.get("url") or node.get("href") or "")
+        media_type = clean_text(node.get("type") or "").casefold()
+        medium = clean_text(node.get("medium") or "").casefold()
+        if not candidate:
+            continue
+        if local_name == "thumbnail" or media_type.startswith("image/") or medium == "image":
+            return urljoin(link, candidate)
+    for local_name in ("encoded", "description", "summary", "content"):
+        value = feed_element_text(item, {local_name})
+        if not value or "<img" not in value.casefold():
+            continue
+        soup = BeautifulSoup(value, "html.parser")
+        image = soup.find("img")
+        candidate = clean_text(image.get("src") or image.get("data-src") or "") if image else ""
+        if candidate:
+            return urljoin(link, candidate)
+    return ""
+
+
 def aps_rss_item_abstract(item: ET.Element) -> str:
     rss = "{http://purl.org/rss/1.0/}"
     content = "{http://purl.org/rss/1.0/modules/content/}"
@@ -680,6 +721,43 @@ def sync_journal_feeds(
     force: bool = False,
     cache_seconds: int = APS_RSS_CACHE_SECONDS,
 ) -> dict[str, Any]:
+    with publisher_background_batch(blocking=False) as acquired:
+        if acquired:
+            return _sync_journal_feeds_locked(
+                storage,
+                feed_keys=feed_keys,
+                definitions=definitions,
+                force=force,
+                cache_seconds=cache_seconds,
+            )
+    registry = definitions or journal_feed_definitions()
+    requested = feed_keys or list(registry)
+    feeds: dict[str, dict[str, Any]] = {}
+    entries = 0
+    for key in requested:
+        if key not in registry:
+            continue
+        state = storage.get_journal_feed(key)
+        count = int((state or {}).get("entry_count") or 0)
+        feeds[key] = {"status": "deferred", "entries": count}
+        entries += count
+    return {
+        "status": "deferred",
+        "feeds": feeds,
+        "entries": entries,
+        "created": 0,
+        "errors": [],
+    }
+
+
+def _sync_journal_feeds_locked(
+    storage: Any,
+    *,
+    feed_keys: list[str] | None = None,
+    definitions: dict[str, JournalFeedDefinition] | None = None,
+    force: bool = False,
+    cache_seconds: int = APS_RSS_CACHE_SECONDS,
+) -> dict[str, Any]:
     registry = definitions or journal_feed_definitions()
     requested = feed_keys or list(registry)
     targets = [registry[key] for key in requested if key in registry]
@@ -708,28 +786,40 @@ def sync_journal_feeds(
             wait_seconds = APS_RSS_REQUEST_INTERVAL_SECONDS - (now - last_request_at)
             if wait_seconds > 0:
                 time.sleep(wait_seconds)
-            headers = {"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"}
+            headers = publisher_automation_headers(
+                definition.url,
+                {"Accept": "application/rss+xml,application/rdf+xml,application/xml,text/xml"},
+                access_kind="feed",
+            )
             if definition.parser != "aip_homepage" and state and state.get("etag"):
                 headers["If-None-Match"] = str(state["etag"])
             if definition.parser != "aip_homepage" and state and state.get("last_modified"):
                 headers["If-Modified-Since"] = str(state["last_modified"])
             try:
-                response = requests.get(
-                    definition.url,
-                    headers=headers,
-                    timeout=10,
-                    allow_redirects=True,
-                )
+                with publisher_request_guard(definition.url, storage=storage, access_kind="feed"):
+                    response = get_with_local_proxy_fallback(
+                        definition.url,
+                        headers=headers,
+                        timeout=10,
+                        allow_redirects=True,
+                    )
+                    note_publisher_response(response, definition.url, storage=storage, access_kind="feed")
                 if definition.parser == "aip_homepage":
                     response.raise_for_status()
                     feed_url = aip_homepage_feed_url(response.content, definition.url)
                     time.sleep(APS_RSS_REQUEST_INTERVAL_SECONDS)
-                    response = requests.get(
-                        feed_url,
-                        headers={"User-Agent": USER_AGENT, "Accept": "application/xml,text/xml"},
-                        timeout=10,
-                        allow_redirects=True,
-                    )
+                    with publisher_request_guard(feed_url, storage=storage, access_kind="feed"):
+                        response = get_with_local_proxy_fallback(
+                            feed_url,
+                            headers=publisher_automation_headers(
+                                feed_url,
+                                {"Accept": "application/rss+xml,application/xml,text/xml"},
+                                access_kind="feed",
+                            ),
+                            timeout=10,
+                            allow_redirects=True,
+                        )
+                        note_publisher_response(response, feed_url, storage=storage, access_kind="feed")
                 requested_at = time.monotonic()
                 _JOURNAL_FEED_LAST_REQUEST_AT[publisher_key] = requested_at
                 if response.status_code in {403, 429}:
@@ -792,7 +882,7 @@ def sync_journal_feeds(
                 }
                 summary["entries"] += len(papers)
                 summary["created"] += created
-            except (requests.RequestException, ET.ParseError, ValueError) as exc:
+            except (requests.RequestException, PublisherAccessBlockedError, ET.ParseError, ValueError) as exc:
                 message = clean_text(str(exc))[:500]
                 if definition.fallback_issns:
                     try:
@@ -963,7 +1053,7 @@ def parse_rmp_rss_abstracts(payload: bytes | str) -> dict[str, str]:
     return parse_aps_rss_abstracts(payload)
 
 
-def enrich_aps_abstract_from_page(paper: dict[str, Any]) -> dict[str, Any]:
+def enrich_aps_abstract_from_page(paper: dict[str, Any], *, storage: Any = None) -> dict[str, Any]:
     if clean_text(paper.get("abstract") or ""):
         return paper
     journal = clean_text(paper.get("journal") or "").casefold()
@@ -992,7 +1082,7 @@ def enrich_aps_abstract_from_page(paper: dict[str, Any]) -> dict[str, Any]:
         escaped_doi = quote(doi, safe="/")
         urls = [f"https://journals.aps.org/{slug}/abstract/{escaped_doi}"]
         for url in urls:
-            response = request_aps_page(url)
+            response = request_aps_page(url, storage=storage)
             if response is None:
                 cache_aps_abstract(doi, "")
                 return paper
@@ -1034,7 +1124,7 @@ def cache_aps_abstract(doi: str, abstract: str) -> None:
     _APS_ABSTRACT_CACHE[doi] = (time.monotonic(), clean_text(abstract))
 
 
-def request_aps_page(url: str) -> requests.Response | None:
+def request_aps_page(url: str, *, storage: Any = None) -> requests.Response | None:
     global _APS_ABSTRACT_BLOCKED_UNTIL, _APS_ABSTRACT_LAST_REQUEST_AT
     with _APS_ABSTRACT_REQUEST_LOCK:
         now = time.monotonic()
@@ -1044,13 +1134,18 @@ def request_aps_page(url: str) -> requests.Response | None:
         if wait_seconds > 0:
             time.sleep(wait_seconds)
         try:
-            response = requests.get(
-                url,
-                headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-                timeout=10,
-                allow_redirects=True,
-            )
-        except requests.RequestException:
+            with publisher_request_guard(url, storage=storage):
+                response = get_with_local_proxy_fallback(
+                    url,
+                    headers=publisher_automation_headers(
+                        url,
+                        {"Accept": "text/html,application/xhtml+xml"},
+                    ),
+                    timeout=10,
+                    allow_redirects=True,
+                )
+                note_publisher_response(response, url, storage=storage)
+        except (requests.RequestException, PublisherAccessBlockedError):
             _APS_ABSTRACT_LAST_REQUEST_AT = time.monotonic()
             return None
         _APS_ABSTRACT_LAST_REQUEST_AT = time.monotonic()
@@ -1112,21 +1207,30 @@ def reset_aps_abstract_fetch_state() -> None:
         _JOURNAL_FEED_BLOCKED_UNTIL.clear()
         _APS_RSS_LAST_REQUEST_AT = 0.0
         _APS_RSS_BLOCKED_UNTIL = 0.0
+    reset_publisher_access_state()
 
 
-def enrich_from_landing_page(paper: dict[str, Any], section_policy: dict[str, list[str]], keep_unknown: bool) -> dict[str, Any]:
+def enrich_from_landing_page(
+    paper: dict[str, Any],
+    section_policy: dict[str, list[str]],
+    keep_unknown: bool,
+    *,
+    storage: Any = None,
+) -> dict[str, Any]:
     url = paper.get("landing_url") or paper.get("url")
     if not url:
         paper["section_allowed"] = keep_unknown
         return paper
 
     try:
-        response = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=8,
-            allow_redirects=True,
-        )
+        with publisher_request_guard(url, storage=storage):
+            response = get_with_local_proxy_fallback(
+                url,
+                headers=publisher_automation_headers(url),
+                timeout=8,
+                allow_redirects=True,
+            )
+            note_publisher_response(response, url, storage=storage)
         response.raise_for_status()
     except Exception as exc:
         if paper.get("section_allowed") is None:
@@ -1161,19 +1265,21 @@ def enrich_from_landing_page(paper: dict[str, Any], section_policy: dict[str, li
     return paper
 
 
-def enrich_image_from_landing_page(paper: dict[str, Any]) -> dict[str, Any]:
+def enrich_image_from_landing_page(paper: dict[str, Any], *, storage: Any = None) -> dict[str, Any]:
     if paper.get("image_url"):
         return paper
     url = paper.get("landing_url") or paper.get("url")
     if not url:
         return paper
     try:
-        response = requests.get(
-            url,
-            headers={"User-Agent": USER_AGENT},
-            timeout=8,
-            allow_redirects=True,
-        )
+        with publisher_request_guard(url, storage=storage, access_kind="figure"):
+            response = get_with_local_proxy_fallback(
+                url,
+                headers=publisher_automation_headers(url, access_kind="figure"),
+                timeout=8,
+                allow_redirects=True,
+            )
+            note_publisher_response(response, url, storage=storage, access_kind="figure")
         response.raise_for_status()
     except Exception as exc:
         paper["landing_fetch_error"] = str(exc)
@@ -1189,12 +1295,36 @@ def enrich_image_from_landing_page(paper: dict[str, Any]) -> dict[str, Any]:
     return paper
 
 
+def fetch_arxiv_first_figure_url(arxiv_id: str) -> str:
+    """Fetch the first article figure from arXiv's HTML rendition.
+
+    Published papers can use this as a figure-only fallback without revisiting
+    a publisher article page that has already rejected background access.
+    """
+    identifier = clean_text(arxiv_id)
+    if not re.fullmatch(r"(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?/\d{7})(?:v\d+)?", identifier, flags=re.I):
+        return ""
+    html_url = f"https://arxiv.org/html/{quote(identifier, safe='/')}"
+    try:
+        response = get_with_local_proxy_fallback(
+            html_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+            timeout=12,
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+    except Exception:
+        return ""
+    document_url = (response.url or html_url).rstrip("/") + "/"
+    return extract_first_image_url(BeautifulSoup(response.text, "html.parser"), document_url)
+
+
 def extract_arxiv_html_first_figure_url(abs_soup: BeautifulSoup, abs_url: str) -> str:
     html_url = extract_arxiv_html_url(abs_soup, abs_url)
     if not html_url:
         return ""
     try:
-        response = requests.get(
+        response = get_with_local_proxy_fallback(
             html_url,
             headers={"User-Agent": USER_AGENT},
             timeout=12,
@@ -1203,7 +1333,8 @@ def extract_arxiv_html_first_figure_url(abs_soup: BeautifulSoup, abs_url: str) -
         response.raise_for_status()
     except Exception:
         return ""
-    return extract_first_image_url(BeautifulSoup(response.text, "html.parser"), response.url or html_url)
+    document_url = (response.url or html_url).rstrip("/") + "/"
+    return extract_first_image_url(BeautifulSoup(response.text, "html.parser"), document_url)
 
 
 def extract_arxiv_html_url(soup: BeautifulSoup, base_url: str) -> str:

@@ -58,13 +58,13 @@ from .download import (
     publisher_browser_candidate,
     science_supplement_pdf_candidates,
 )
-from .http import request_with_retries
+from .http import publisher_background_batch, publisher_group_for_url, request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import merge_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_doi, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import (
     OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES,
@@ -90,6 +90,7 @@ from .sources.publisher import (
     APS_RSS_SUBJECT_CACHE_SECONDS,
     enrich_from_landing_page,
     enrich_image_from_landing_page,
+    fetch_arxiv_first_figure_url,
     sync_journal_feeds,
 )
 from .sources.semantic_scholar import (
@@ -280,6 +281,9 @@ AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
+PAPER_FIGURE_CACHE_MAX_BYTES = 12 * 1024 * 1024
+_PAPER_FIGURE_CACHE_LOCKS: dict[str, threading.Lock] = {}
+_PAPER_FIGURE_CACHE_LOCKS_GUARD = threading.Lock()
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
@@ -421,6 +425,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/paper-figure":
                 self.handle_paper_figure(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/paper-image":
+                self.handle_paper_image(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/page-proxy":
                 self.handle_page_proxy(parse_qs(parsed.query))
@@ -864,6 +871,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 journals=self.configured_journals,
             )
             papers = annotate_papers_with_library_status(storage, papers)
+            fetch_errors = journal_fetch_errors_for_date(storage, selected, self.configured_journals)
             late_unread_ids = unread_late_arrival_paper_ids(storage, selected, self.configured_journals)
             late_arrivals = late_arrivals_for_seen_date(storage, selected, self.configured_journals)
         finally:
@@ -886,6 +894,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "forcedFetch": force_fetch,
                 "refreshedJournal": refresh_journal,
                 "missingJournals": missing_journals,
+                "fetchErrors": fetch_errors,
                 "fetchActive": is_fetch_active(selected),
             }
         )
@@ -4307,14 +4316,70 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
             if not paper.get("image_url"):
-                enriched = enrich_image_from_landing_page(dict(paper))
-                image_url = enriched.get("image_url") or ""
+                image_url = discover_paper_figure_url(paper, storage=storage)
                 if image_url:
                     storage.update_image_url(paper_id, image_url)
-                    paper = storage.get_paper(paper_id) or enriched
+                    paper = storage.get_paper(paper_id) or {**paper, "image_url": image_url}
         finally:
             storage.close()
         self.send_json({"paper": paper_to_api(paper)})
+
+    def handle_paper_image(self, query: dict[str, list[str]]) -> None:
+        paper_id = first(query, "paper_id")
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = storage.get_paper(paper_id)
+            image_url = clean_text((paper or {}).get("image_url") or "")
+            if not paper or not image_url:
+                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper image not found")
+                return
+            parsed = urlparse(image_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, "Paper image URL is invalid")
+                return
+            cache_dir = self.configured_db_path.parent / "cache" / "paper_figures"
+            lock = paper_figure_cache_lock(paper_id)
+            with lock:
+                cached = cached_paper_figure(cache_dir, paper_id)
+                if cached is None:
+                    response = request_with_retries(
+                        "GET",
+                        image_url,
+                        headers={
+                            "Accept": "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+                            "Referer": clean_text(paper.get("landing_url") or paper.get("url") or ""),
+                        },
+                        timeout=20,
+                        max_retries=2,
+                        publisher_storage=storage,
+                        publisher_access_kind="image",
+                    )
+                    content = response.content
+                    if len(content) > PAPER_FIGURE_CACHE_MAX_BYTES:
+                        raise ValueError("Paper image exceeds the cache size limit")
+                    content_type, suffix = paper_figure_content_type(content, response.headers, response.url or image_url)
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    cached = cache_dir / f"{paper_figure_cache_key(paper_id)}{suffix}"
+                    temporary = cache_dir / f".{cached.name}.{threading.get_ident()}.tmp"
+                    temporary.write_bytes(content)
+                    temporary.replace(cached)
+                else:
+                    content_type = mimetypes.guess_type(str(cached))[0] or "image/jpeg"
+                data = cached.read_bytes()
+        except Exception as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, clean_text(str(exc)) or "Could not cache paper image")
+            return
+        finally:
+            storage.close()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_page_proxy(self, query: dict[str, list[str]]) -> None:
         url = first(query, "url") or ""
@@ -4322,12 +4387,17 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid http(s) URL is required")
             return
-        response = request_with_retries(
-            "GET",
-            url,
-            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
-            timeout=20,
-        )
+        storage = Storage(self.configured_db_path)
+        try:
+            response = request_with_retries(
+                "GET",
+                url,
+                headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+                timeout=20,
+                publisher_storage=storage,
+            )
+        finally:
+            storage.close()
         content_type = response.headers.get("Content-Type", "text/html; charset=utf-8")
         if "text/html" in content_type.lower():
             data = prepare_internal_page_html(response.text, response.url).encode("utf-8")
@@ -7244,6 +7314,56 @@ def cache_file_entries(root: Path) -> tuple[int, list[tuple[float, int, Path]]]:
     return total, entries
 
 
+def paper_figure_cache_key(paper_id: str) -> str:
+    return hashlib.sha256(str(paper_id).encode("utf-8")).hexdigest()
+
+
+def paper_figure_cache_lock(paper_id: str) -> threading.Lock:
+    key = paper_figure_cache_key(paper_id)
+    with _PAPER_FIGURE_CACHE_LOCKS_GUARD:
+        return _PAPER_FIGURE_CACHE_LOCKS.setdefault(key, threading.Lock())
+
+
+def cached_paper_figure(cache_dir: Path, paper_id: str) -> Path | None:
+    key = paper_figure_cache_key(paper_id)
+    for suffix in (".jpg", ".png", ".webp", ".gif", ".avif", ".svg"):
+        candidate = cache_dir / f"{key}{suffix}"
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    return None
+
+
+def paper_figure_content_type(
+    content: bytes,
+    headers: Any,
+    response_url: str,
+) -> tuple[str, str]:
+    if not content:
+        raise ValueError("Paper image response was empty")
+    header_value = clean_text(
+        (headers or {}).get("Content-Type")
+        or (headers or {}).get("content-type")
+        or ""
+    ).split(";", 1)[0].casefold()
+    stripped = content.lstrip()[:512].lower()
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", ".jpg"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", ".png"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif", ".gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp", ".webp"
+    if len(content) >= 12 and content[4:12] in {b"ftypavif", b"ftypavis"}:
+        return "image/avif", ".avif"
+    if stripped.startswith(b"<svg") or (stripped.startswith(b"<?xml") and b"<svg" in stripped):
+        return "image/svg+xml", ".svg"
+    guessed = mimetypes.guess_type(urlparse(response_url).path)[0] or ""
+    if header_value.startswith("image/") or guessed.startswith("image/"):
+        raise ValueError("Paper image format was not recognized")
+    raise ValueError("Paper image request returned non-image content")
+
+
 def prune_empty_cache_dirs(root: Path) -> None:
     if not root.exists():
         return
@@ -7338,14 +7458,15 @@ def fetch_missing_sources_for_date(
         def update_journal_progress(journal: str, journal_completed: int, _journal_total: int) -> None:
             update_fetch_progress(selected, journal=journal, completed=completed + journal_completed, total=total)
 
-        run_journal_monitor(
-            config=fetch_config,
-            storage=storage,
-            start_date=journal_start_date,
-            end_date=selected_date,
-            enrich=True,
-            progress_callback=update_journal_progress,
-        )
+        with publisher_background_batch(blocking=True):
+            run_journal_monitor(
+                config=fetch_config,
+                storage=storage,
+                start_date=journal_start_date,
+                end_date=selected_date,
+                enrich=True,
+                progress_callback=update_journal_progress,
+            )
         completed += len(journal_names)
 
     if ARXIV_JOURNAL_NAME in missing_sources:
@@ -7409,12 +7530,18 @@ def json_setting(storage: Storage, key: str, default: Any) -> Any:
 def run_auto_journal_monitor_once(db_path: Path, run_date: date) -> None:
     config = load_config()
     journals = [name for name in configured_source_names(config) if name != ARXIV_JOURNAL_NAME]
-    targets = [run_date - timedelta(days=1), run_date]
+    # Fetch the combined yesterday/today window first. The resulting fetch run
+    # covers both dates, so the second pass normally becomes a local no-op.
+    targets = [run_date, run_date - timedelta(days=1)]
     results: list[dict[str, Any]] = []
 
     for target_date in targets:
         selected = target_date.isoformat()
-        sources = manual_refresh_journals_for_date(selected, journals)
+        preflight_storage = Storage(db_path)
+        try:
+            sources = missing_fetch_journals_for_date(preflight_storage, selected, journals)
+        finally:
+            preflight_storage.close()
         if not sources:
             results.append({"date": selected, "status": "skipped", "reason": "no sources"})
             continue
@@ -8344,6 +8471,17 @@ def published_pdf_browser_fallback(
     }
 
 
+def paper_image_proxy_url(paper: dict[str, Any]) -> str:
+    paper_id = clean_text(paper.get("paper_id") or "")
+    image_url = clean_text(paper.get("image_url") or "")
+    if not paper_id or not image_url:
+        return ""
+    parsed = urlparse(image_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return image_url
+    return "/api/paper-image?paper_id=" + quote(paper_id, safe="")
+
+
 def paper_to_api(
     paper: dict[str, Any],
     *,
@@ -8403,6 +8541,7 @@ def paper_to_api(
         "fields": classify_fields(paper),
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
+        "image_proxy_url": paper_image_proxy_url(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
@@ -8464,6 +8603,7 @@ def monitor_paper_to_api(
         "fields": fields,
         "discipline": "other" if fields == ["other"] else "physical",
         "image_url": paper.get("image_url") or "",
+        "image_proxy_url": paper_image_proxy_url(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
@@ -9488,8 +9628,7 @@ def publication_metadata_from_doi(
     candidates = search_crossref_publications(doi, kind="doi", timeout=timeout, max_retries=max_retries)
     if not candidates:
         return None
-    normalized = paper_from_publication_candidate(candidates[0])
-    return enrich_from_landing_page(dict(normalized), {}, True)
+    return paper_from_publication_candidate(candidates[0])
 
 
 def publication_metadata_from_datacite_doi(
@@ -13284,6 +13423,7 @@ def paper_to_my_publication_summary_api(paper: dict[str, Any]) -> dict[str, Any]
             "nature_reference": compact_nature_reference(paper),
             "google_scholar_url": "",
             "image_url": paper.get("image_url") or "",
+            "image_proxy_url": paper_image_proxy_url(paper),
             "bibtex": "",
             "abstract": "",
             "pubmed": {},
@@ -14467,6 +14607,71 @@ def arxiv_identifier_for_paper(paper: dict[str, Any]) -> str:
             if identifier:
                 return identifier
     return ""
+
+
+def resolve_arxiv_identifier_for_figure(paper: dict[str, Any]) -> str:
+    """Resolve a published paper to arXiv without visiting its publisher page."""
+    existing = arxiv_identifier_for_paper(paper)
+    if existing:
+        return existing
+    doi = normalize_publication_doi(str(paper.get("doi") or ""))
+    if not doi or not looks_like_doi(doi):
+        return ""
+    try:
+        preprint = fetch_arxiv_by_doi(doi, timeout=12, max_retries=1)
+    except Exception:
+        preprint = None
+    identifier = arxiv_identifier_for_paper(preprint or {})
+    if identifier:
+        return identifier
+
+    # Semantic Scholar is a secondary fallback because very recent publisher
+    # records can arrive there later than the DOI link in arXiv itself.
+    candidate = semantic_scholar_enrichment_by_ref(
+        f"DOI:{doi}",
+        fields="paperId,externalIds,title",
+        timeout=12,
+        max_retries=1,
+    )
+    if not candidate:
+        return ""
+    external_ids = candidate.get("externalIds") if isinstance(candidate.get("externalIds"), dict) else {}
+    candidate_doi = normalize_publication_doi(str(external_ids.get("DOI") or external_ids.get("doi") or ""))
+    if candidate_doi and candidate_doi != doi:
+        return ""
+    return normalize_arxiv_identifier(
+        str(external_ids.get("ArXiv") or external_ids.get("arXiv") or external_ids.get("ARXIV") or "")
+    )
+
+
+def discover_paper_figure_url(paper: dict[str, Any], *, storage: Storage | None = None) -> str:
+    """Discover one figure while avoiding hostile publisher article pages."""
+    current = clean_text(paper.get("image_url") or "")
+    if current:
+        return current
+
+    arxiv_id = arxiv_identifier_for_paper(paper)
+    landing_url = clean_text(paper.get("landing_url") or paper.get("url") or "")
+    publisher_group = publisher_group_for_url(landing_url)
+    publisher_page_is_hostile = publisher_group in {"aps", "aaas"}
+
+    if not arxiv_id and publisher_page_is_hostile:
+        arxiv_id = resolve_arxiv_identifier_for_figure(paper)
+    if arxiv_id:
+        image_url = fetch_arxiv_first_figure_url(arxiv_id)
+        if image_url:
+            return image_url
+
+    if publisher_page_is_hostile:
+        return ""
+
+    enriched = enrich_image_from_landing_page(dict(paper), storage=storage)
+    image_url = clean_text(enriched.get("image_url") or "")
+    if image_url:
+        return image_url
+
+    arxiv_id = resolve_arxiv_identifier_for_figure(paper)
+    return fetch_arxiv_first_figure_url(arxiv_id) if arxiv_id else ""
 
 
 def arxiv_identifier_from_raw_values(value: Any, *, depth: int = 0) -> str:
@@ -18349,6 +18554,54 @@ def missing_fetch_journals_for_date(storage: Storage, selected: str, journals: l
     if ARXIV_JOURNAL_NAME in missing and (arxiv_ready_at is None or now < arxiv_ready_at):
         missing.remove(ARXIV_JOURNAL_NAME)
     return missing
+
+
+def journal_fetch_errors_for_date(storage: Storage, selected: str, journals: list[str]) -> list[dict[str, str]]:
+    if not journals:
+        return []
+    placeholders = ", ".join(["?"] * len(journals))
+    rows = storage.conn.execute(
+        f"""
+        SELECT id, journal, source, status, message, started_at
+        FROM fetch_runs
+        WHERE monitor_type = 'journal'
+          AND window_start <= ?
+          AND window_end >= ?
+          AND journal IN ({placeholders})
+        ORDER BY started_at DESC, id DESC
+        """,
+        (selected, selected, *journals),
+    ).fetchall()
+    latest: dict[str, Any] = {}
+    for row in rows:
+        journal = clean_text(row["journal"] or "")
+        if journal and journal not in latest:
+            latest[journal] = row
+    errors: list[dict[str, str]] = []
+    for journal in journals:
+        row = latest.get(journal)
+        if row is None or row["status"] != "error":
+            continue
+        raw_message = clean_text(row["message"] or "")
+        message_key = raw_message.casefold()
+        if "proxyerror" in message_key or "127.0.0.1" in message_key or "localhost" in message_key:
+            message = "The configured local proxy is unavailable. Retrying without the proxy may help."
+        elif "nameresolution" in message_key or "name or service not known" in message_key:
+            message = "The network DNS lookup failed."
+        elif "timeout" in message_key:
+            message = "The network request timed out."
+        elif "publisher access paused" in message_key:
+            message = "Publisher access is temporarily paused by rate-limit protection."
+        else:
+            message = "The network request failed."
+        errors.append(
+            {
+                "journal": journal,
+                "source": clean_text(row["source"] or "network"),
+                "message": message,
+            }
+        )
+    return errors
 
 
 def manual_refresh_journals_for_date(selected: str, journals: list[str]) -> list[str]:
@@ -29535,6 +29788,7 @@ INDEX_HTML = """<!doctype html>
       reportSequence: 0,
       reportCache: {},
       reportCacheOrder: [],
+      reportFetchErrors: [],
       monitorPaperDomCache: {report: null, theme: null},
       monitorReturnViewports: {report: null, theme: null},
       monthCacheKey: "",
@@ -29554,7 +29808,8 @@ INDEX_HTML = """<!doctype html>
       figureQueue: [],
       queuedFigureIds: new Set(),
       activeFigureHydrations: 0,
-      maxFigureHydrations: 2,
+      maxFigureHydrations: 3,
+      figureVisibilityObserver: null,
       figureFailures: new Set(),
       selectionMarquee: null,
       suppressClickOnce: false,
@@ -29826,6 +30081,7 @@ INDEX_HTML = """<!doctype html>
       state.journals = data.journals || state.journals;
       syncSelectedJournals();
       state.papers = data.papers || [];
+      state.reportFetchErrors = Array.isArray(data.fetchErrors) ? data.fetchErrors : [];
       state.lateArrivals = Array.isArray(data.lateArrivals) ? data.lateArrivals : [];
       renderSubjectFilters();
       renderFilters();
@@ -30200,6 +30456,7 @@ INDEX_HTML = """<!doctype html>
         .map((paper) => [
           paper.paper_id || "",
           paper.image_url || "",
+          paper.image_proxy_url || "",
           paper.download_status || "",
           paper.analysis_status || ""
         ].join(":"))
@@ -32981,6 +33238,7 @@ INDEX_HTML = """<!doctype html>
         paper.fields,
         paper.discipline,
         paper.image_url,
+        paper.image_proxy_url,
         paper.url,
         paper.merged_pdf_path,
         paper.analysis_path,
@@ -33047,6 +33305,7 @@ INDEX_HTML = """<!doctype html>
         root.dataset.monitorMode = mode;
         root.dataset.monitorSignature = signature;
         delete state.monitorPaperDomCache[mode];
+        observeVisibleReportFigures(root);
         window.requestAnimationFrame(() => {
           root.scrollTop = Number(cached.scrollTop || 0);
           updateReportPaperSelectionDom();
@@ -33061,6 +33320,7 @@ INDEX_HTML = """<!doctype html>
       root.dataset.monitorMode = mode;
       root.dataset.monitorSignature = signature;
       root.scrollTop = 0;
+      observeVisibleReportFigures(root);
       return true;
     }
 
@@ -33107,10 +33367,12 @@ INDEX_HTML = """<!doctype html>
           .join(" · ");
         const auto = autoMonitorStatusDetails("report");
         const updates = auto.parts.slice(1).join(" · ") || "not run yet";
-        warning = auto.warning;
+        const errors = state.reportFetchErrors || [];
+        warning = auto.warning || Boolean(errors.length);
         rows.push(monitorSidebarSummaryRow("Papers", `${state.papers.length} total · ${filtered.length} shown`));
         rows.push(monitorSidebarSummaryRow("Fields", selectedFieldText || "All fields"));
         rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
+        if (errors.length) rows.push(monitorSidebarSummaryRow("Errors", `${errors.length} sources failed`, "errors"));
       } else {
         const summary = state.themeSummary || {};
         const visiblePapers = themeVisiblePapers();
@@ -33172,8 +33434,15 @@ INDEX_HTML = """<!doctype html>
       }
       if (!groups.length) {
         clearMonitorPaperSurface(root, "report");
-        markNoMatchDate(state.selectedDate, true);
-        appendMonitorStatusMessage("No matching papers for this date.");
+        const fetchErrors = state.reportFetchErrors || [];
+        if (fetchErrors.length) {
+          markNoMatchDate(state.selectedDate, false);
+          const reason = fetchErrors[0]?.message || "Network requests failed.";
+          appendMonitorStatusMessage(`Fetch failed for ${fetchErrors.length} sources. ${reason}`);
+        } else {
+          markNoMatchDate(state.selectedDate, true);
+          appendMonitorStatusMessage("No matching papers for this date.");
+        }
         return;
       } else {
         markNoMatchDate(state.selectedDate, false);
@@ -38050,10 +38319,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryDetailFigureMarkup(paper) {
-      if (!paper?.image_url) return "";
+      const imageUrl = paperFigureUrl(paper);
+      if (!imageUrl) return "";
       return `
         <figure class="library-detail-figure">
-          <img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "First figure")}" loading="lazy">
+          <img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(paper.title || "First figure")}" loading="lazy">
         </figure>
       `;
     }
@@ -45253,8 +45523,6 @@ INDEX_HTML = """<!doctype html>
           showReportFigurePlaceholderForArticle(article);
           syncCurrentMonitorPaperSignature();
         }, {once: true});
-      } else if (reserveFigure && !paper.image_url) {
-        queuePaperFigureHydration(paper.paper_id);
       }
       return article;
     }
@@ -45334,9 +45602,14 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function paperFigureUrl(paper) {
+      return String(paper?.image_proxy_url || paper?.image_url || "");
+    }
+
     function reportFigureMarkup(paper) {
-      if (paper.image_url) {
-        return `<figure class="paper-figure"><img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>`;
+      const imageUrl = paperFigureUrl(paper);
+      if (imageUrl) {
+        return `<figure class="paper-figure"><img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy"></figure>`;
       }
       return `<figure class="paper-figure missing"><div class="paper-figure-placeholder"></div></figure>`;
     }
@@ -45357,11 +45630,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateReportFigure(paper) {
-      if (!state.showFigures || !paper?.paper_id || !paper.image_url) return;
+      const imageUrl = paperFigureUrl(paper);
+      if (!state.showFigures || !paper?.paper_id || !imageUrl) return;
       document.querySelectorAll(`.paper[data-paper-id="${CSS.escape(String(paper.paper_id))}"]`).forEach((article) => {
         article.classList.add("with-figure");
         const figure = article.querySelector(".paper-figure");
-        const markup = `<img src="${escapeAttr(paper.image_url)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy">`;
+        const markup = `<img src="${escapeAttr(imageUrl)}" alt="${escapeAttr(paper.title || "Paper figure")}" loading="lazy">`;
         if (figure) {
           figure.classList.remove("missing");
           figure.innerHTML = markup;
@@ -45390,6 +45664,25 @@ INDEX_HTML = """<!doctype html>
       state.queuedFigureIds.add(paperId);
       state.figureQueue.push(paperId);
       drainFigureQueue();
+    }
+
+    function observeVisibleReportFigures(root = $("papers")) {
+      state.figureVisibilityObserver?.disconnect();
+      state.figureVisibilityObserver = null;
+      if (!state.showFigures || !root || typeof IntersectionObserver === "undefined") return;
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          observer.unobserve(entry.target);
+          queuePaperFigureHydration(entry.target.dataset.paperId || "");
+        });
+      }, {root, rootMargin: "240px 0px", threshold: 0.01});
+      state.figureVisibilityObserver = observer;
+      root.querySelectorAll(".paper.with-figure").forEach((article) => {
+        const paperId = article.dataset.paperId || "";
+        if (!paperId || article.querySelector(".paper-figure img") || state.figureFailures.has(paperId)) return;
+        observer.observe(article);
+      });
     }
 
     function drainFigureQueue() {

@@ -10,8 +10,8 @@ from unittest.mock import patch
 from requests import HTTPError
 
 from paper_monitor.aps import aps_journal_slug, is_aps_lifecycle_journal
-from paper_monitor.config import JournalConfig
-from paper_monitor.monitor import apply_fast_section_hints, dedup_by_id
+from paper_monitor.config import AppConfig, JournalConfig
+from paper_monitor.monitor import apply_fast_section_hints, dedup_by_id, fetch_one_journal
 from paper_monitor.reporting import section_badge_background, section_color
 from paper_monitor.sources.crossref import fetch_crossref_journal, normalize_crossref_item
 from paper_monitor.sources.openalex import fetch_openalex_work_by_doi, normalize_openalex_item
@@ -443,7 +443,8 @@ class PrlRecentTests(unittest.TestCase):
         <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
           xmlns='http://purl.org/rss/1.0/'
           xmlns:dc='http://purl.org/dc/elements/1.1/'
-          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'>
+          xmlns:prism='http://prismstandard.org/namespaces/basic/2.0/'
+          xmlns:media='http://search.yahoo.com/mrss/'>
           <item rdf:about='https://www.science.org/doi/abs/10.1126/science.example'>
             <title>A quantum materials result from an official feed</title>
             <link>https://www.science.org/doi/abs/10.1126/science.example</link>
@@ -451,6 +452,7 @@ class PrlRecentTests(unittest.TestCase):
             <dc:type>Research Article</dc:type>
             <prism:doi>10.1126/science.example</prism:doi>
             <prism:publicationName>Science</prism:publicationName>
+            <media:thumbnail url='https://www.science.org/cms/asset/example.jpg'/>
           </item>
           <item rdf:about='https://www.science.org/doi/abs/10.1126/science.book'>
             <title>A book notice that must not enter Subject Monitor</title>
@@ -476,6 +478,7 @@ class PrlRecentTests(unittest.TestCase):
         self.assertEqual(papers[0]["publication_date"], "2026-08-06")
         self.assertEqual(papers[0]["journal"], "Science")
         self.assertEqual(papers[0]["abstract"], "")
+        self.assertEqual(papers[0]["image_url"], "https://www.science.org/cms/asset/example.jpg")
 
     def test_curated_physics_feed_registry_contains_both_expansion_batches(self) -> None:
         definitions = journal_feed_definitions()
@@ -936,6 +939,51 @@ class PrlRecentTests(unittest.TestCase):
 
         self.assertEqual(formal["publisher_section"], "published")
         self.assertTrue(formal["section_allowed"])
+
+    def test_skip_landing_enrichment_never_fetches_science_article_pages(self) -> None:
+        journal = JournalConfig(
+            name="Science",
+            issns=["0036-8075"],
+            openalex_source_id=None,
+            section_policy="science",
+            skip_landing_enrichment=True,
+        )
+        config = AppConfig(
+            fetch_lookback_days=2,
+            report_days=2,
+            keep_unknown_sections=True,
+            journals=[journal],
+            section_policies={"science": {}},
+        )
+        paper = normalize_crossref_item(
+            {
+                "DOI": "10.1126/science.example",
+                "URL": "https://www.science.org/doi/10.1126/science.example",
+                "title": ["A condensed-matter research result"],
+                "container-title": ["Science"],
+                "published-online": {"date-parts": [[2026, 8, 11]]},
+                "type": "journal-article",
+            },
+            "Science",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "papers.sqlite")
+            try:
+                with patch("paper_monitor.monitor.fetch_crossref_journal", return_value=[paper]), patch(
+                    "paper_monitor.monitor.enrich_from_landing_page"
+                ) as landing_fetch:
+                    result = fetch_one_journal(
+                        config=config,
+                        storage=storage,
+                        journal=journal,
+                        start_date=date(2026, 8, 11),
+                        end_date=date(2026, 8, 11),
+                        enrich=True,
+                    )
+                landing_fetch.assert_not_called()
+                self.assertEqual(result["saved"], 1)
+            finally:
+                storage.close()
 
     def test_formal_record_replaces_same_doi_accepted_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
