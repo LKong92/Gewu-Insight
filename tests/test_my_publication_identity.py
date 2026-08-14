@@ -33,13 +33,28 @@ class MyPublicationIdentityTests(unittest.TestCase):
 
         self.assertEqual(effective_my_publication_name(settings), "Lingyuan Kong")
 
+    def test_scholar_profile_name_is_used_when_saved_name_is_a_scholar_url(self):
+        settings = FakeSettings({
+            "my_publications_name": "https://scholar.google.com/citations?user=5uWv_XgAAAAJ&hl=en",
+            MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING: json.dumps({"name": "Lingyuan Kong"}),
+        })
+
+        self.assertEqual(effective_my_publication_name(settings), "Lingyuan Kong")
+
     def test_browser_matching_uses_scholar_profile_as_fallback(self):
         self.assertIn(
             'const profileName = state.myPublicationScholarProfile?.name || "";',
             INDEX_HTML,
         )
+        self.assertIn('usableInputValue || state.myPublicationName || profileName', INDEX_HTML)
+
+    def test_browser_does_not_treat_a_scholar_url_as_the_author_name(self):
         self.assertIn(
-            'input?.value || state.myPublicationName || profileName',
+            'const usableInputValue = myPublicationQueryIsScholarUrl(inputValue) ? "" : inputValue;',
+            INDEX_HTML,
+        )
+        self.assertIn(
+            'if (myPublicationQueryIsScholarUrl(value)) return state.myPublicationName || "";',
             INDEX_HTML,
         )
 

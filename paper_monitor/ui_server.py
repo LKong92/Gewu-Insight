@@ -1249,7 +1249,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
-            my_name = storage.get_setting("my_publications_name", "")
+            my_name = effective_my_publication_name(storage)
             scholar_profile = load_my_publications_scholar_profile(storage)
         finally:
             storage.close()
@@ -2275,7 +2275,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         my_name = " ".join(str(payload.get("name") or "").split())
         storage = Storage(self.configured_db_path)
         try:
-            storage.set_setting("my_publications_name", my_name)
+            if google_scholar_user_id(my_name):
+                my_name = effective_my_publication_name(storage)
+            else:
+                storage.set_setting("my_publications_name", my_name)
         finally:
             storage.close()
         self.send_json({"myName": my_name})
@@ -13201,7 +13204,7 @@ def load_my_publications_scholar_profile(storage: Storage) -> dict[str, Any]:
 
 def effective_my_publication_name(storage: Storage) -> str:
     saved_name = clean_text(storage.get_setting("my_publications_name", ""))
-    if saved_name:
+    if saved_name and not google_scholar_user_id(saved_name):
         return saved_name
     return clean_text(load_my_publications_scholar_profile(storage).get("name") or "")
 
@@ -13764,7 +13767,7 @@ def search_google_scholar_profiles(search_text: str, *, limit: int = 20) -> list
     author_name, affiliations = parse_author_search_query(search_text)
     if not author_name:
         return []
-    query = clean_text(f"{author_name} {' '.join(affiliations)} Google Scholar profile")
+    query = clean_text(f"{author_name} {' '.join(affiliations)}")
     profiles = [
         profile
         for profile in fetch_google_scholar_profiles_from_search(query, limit=limit)
@@ -13816,8 +13819,8 @@ def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 
     try:
         response = google_scholar_request_with_spacing(
             "GET",
-            "https://scholar.google.com/scholar",
-            params={"hl": "en", "q": search_text},
+            "https://scholar.google.com/citations",
+            params={"view_op": "search_authors", "hl": "en", "mauthors": search_text},
             headers={
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -13835,8 +13838,8 @@ def fetch_google_scholar_profiles_from_search(search_text: str, *, limit: int = 
     soup = BeautifulSoup(response.text, "html.parser")
     profiles: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for link in soup.select('a[href*="/citations?user="]'):
-        profile = google_scholar_search_link_to_profile(link)
+    for row in soup.select(".gs_ai_chpr"):
+        profile = google_scholar_author_row_to_profile(row)
         user_id = clean_text(profile.get("user_id") or "")
         if not user_id or user_id in seen:
             continue
@@ -13866,31 +13869,6 @@ def google_scholar_request_with_spacing(
             return request_with_retries(method, url, **kwargs)
         finally:
             GOOGLE_SCHOLAR_LAST_REQUEST_AT = time.monotonic()
-
-
-def google_scholar_search_link_to_profile(link: Any) -> dict[str, Any]:
-    name = clean_text(link.get_text(" "))
-    href = clean_text(link.get("href") or "")
-    profile_url = urljoin("https://scholar.google.com", href)
-    user_id = google_scholar_user_id(profile_url)
-    result = link.find_parent(class_="gs_r")
-    context = ""
-    if result:
-        context = clean_text(
-            (result.select_one(".gs_a").get_text(" ") if result.select_one(".gs_a") else "")
-            or (result.select_one(".gs_rs").get_text(" ") if result.select_one(".gs_rs") else "")
-            or result.get_text(" ")
-        )
-    return {
-        "candidate_type": "scholar-profile",
-        "name": name,
-        "affiliation": context,
-        "email": "",
-        "cited_by": "",
-        "interests": [],
-        "url": profile_url,
-        "user_id": user_id,
-    }
 
 
 def google_scholar_author_row_to_profile(row: Any) -> dict[str, Any]:
@@ -14243,12 +14221,16 @@ def title_tokens(value: str) -> set[str]:
 
 
 def google_scholar_user_id(profile_url: str) -> str:
-    parsed = urlparse(profile_url)
-    host = parsed.netloc.lower()
-    if "scholar.google." not in host:
+    value = clean_text(profile_url)
+    if re.match(r"^scholar\.google\.", value, flags=re.IGNORECASE):
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if not re.fullmatch(r"scholar\.google\.[a-z]{2,3}(?:\.[a-z]{2})?", host):
         return ""
     query = parse_qs(parsed.query)
-    return clean_text((query.get("user") or [""])[0])
+    user_id = clean_text((query.get("user") or [""])[0])
+    return user_id if re.fullmatch(r"[A-Za-z0-9_-]+", user_id) else ""
 
 
 def google_scholar_row_to_publication(row: Any) -> dict[str, Any] | None:
@@ -29001,9 +28983,9 @@ INDEX_HTML = """<!doctype html>
             <div class="my-publications-tools" id="myPublicationsTools">
               <div class="my-publications-tool-left">
                 <div class="my-publications-name-search">
-                  <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B">
+                  <input class="search" id="myPublicationName" placeholder="Name; affiliation A; affiliation B, or Google Scholar URL">
                 </div>
-                <button class="smallbtn" id="findMyPublications" type="button">Find by Name</button>
+                <button class="smallbtn" id="findMyPublications" type="button">Find Profile</button>
                 <button class="smallbtn" id="refreshMyPublicationMetrics" type="button" title="Refresh citation metrics and PubMed metadata" ${state.myPublicationMetricsRefreshing ? "disabled" : ""}>Refresh Metrics</button>
                 <input class="search" id="publicationSearchBox" placeholder="DOI, arXiv, Zenodo, or title">
                 <button class="smallbtn" id="addMyPublication" type="button">Add</button>
@@ -38427,7 +38409,9 @@ INDEX_HTML = """<!doctype html>
     function currentMyPublicationName() {
       const input = $("myPublicationName");
       const profileName = state.myPublicationScholarProfile?.name || "";
-      return (input?.value || state.myPublicationName || profileName).split(/[;；]/)[0].trim();
+      const inputValue = String(input?.value || "").trim();
+      const usableInputValue = myPublicationQueryIsScholarUrl(inputValue) ? "" : inputValue;
+      return (usableInputValue || state.myPublicationName || profileName).split(/[;；]/)[0].trim();
     }
 
     function authorSignaturesMatch(target, candidate) {
@@ -40134,6 +40118,7 @@ INDEX_HTML = """<!doctype html>
 
     async function saveMyPublicationName() {
       const value = $("myPublicationName")?.value || "";
+      if (myPublicationQueryIsScholarUrl(value)) return state.myPublicationName || "";
       const res = await fetch("/api/my-publications/name", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -40154,6 +40139,11 @@ INDEX_HTML = """<!doctype html>
 
     function myPublicationAuthorCacheKey(value) {
       return String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+    }
+
+    function myPublicationQueryIsScholarUrl(value) {
+      const query = String(value || "").trim();
+      return /^(?:https?:\/\/)?scholar\.google\.[a-z.]+\/citations\?(?:[^#]*&)?user=[A-Za-z0-9_-]+(?:[&#]|$)/i.test(query);
     }
 
     function cacheMyPublicationAuthorResults(key) {
@@ -40181,11 +40171,14 @@ INDEX_HTML = """<!doctype html>
       const query = kind === "author" ? ($("myPublicationName")?.value || state.myPublicationName || "") : ($("publicationSearchBox")?.value || "");
       const cleanQuery = query.trim();
       if (!cleanQuery) return;
-      if (kind === "author") await saveMyPublicationName();
+      const scholarUrlQuery = kind === "author" && myPublicationQueryIsScholarUrl(cleanQuery);
+      if (kind === "author" && !scholarUrlQuery) await saveMyPublicationName();
       const authorCacheKey = kind === "author" ? myPublicationAuthorCacheKey(cleanQuery) : "";
       if (authorCacheKey && restoreMyPublicationAuthorResults(authorCacheKey)) return;
       state.myPublicationSearchToken += 1;
-      state.myPublicationSearchStatus = kind === "author" ? "Matching Google Scholar profiles..." : "Searching publications...";
+      state.myPublicationSearchStatus = kind === "author"
+        ? (scholarUrlQuery ? "Opening Google Scholar profile..." : "Matching Google Scholar profiles...")
+        : "Searching publications...";
       state.myPublicationSearchResults = [];
       state.myPublicationSearchScrollTop = 0;
       renderMyPublications();
@@ -40256,6 +40249,10 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
         if (searchToken !== state.myPublicationSearchToken) return;
         state.myPublicationScholarProfile = {...(state.myPublicationScholarProfile || {}), ...(data.profile || {})};
+        const nameInput = $("myPublicationName");
+        if (nameInput && myPublicationQueryIsScholarUrl(nameInput.value)) {
+          nameInput.value = state.myPublicationName || data.profile?.name || profileName || "";
+        }
         state.myPublicationSearchResults = data.results || [];
         sortMyPublicationSearchResultsByAdded();
         const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
@@ -40273,7 +40270,7 @@ INDEX_HTML = """<!doctype html>
       } finally {
         if (button) {
           button.disabled = false;
-          button.textContent = "Find by Name";
+          button.textContent = "Find Profile";
         }
       }
       renderMyPublications();
@@ -48236,15 +48233,20 @@ INDEX_HTML = """<!doctype html>
         searchMyPublications("auto");
       }
     });
-    $("myPublicationName").addEventListener("change", () => saveMyPublicationName().catch(() => {}));
+    $("myPublicationName").addEventListener("change", (event) => {
+      if (myPublicationQueryIsScholarUrl(event.target.value)) return;
+      saveMyPublicationName().catch(() => {});
+    });
     $("myPublicationName").addEventListener("input", (event) => {
-      state.myPublicationName = event.target.value || "";
+      if (!myPublicationQueryIsScholarUrl(event.target.value)) {
+        state.myPublicationName = event.target.value || "";
+      }
       refreshLibraryDetailAuthors();
     });
     $("myPublicationName").addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        saveMyPublicationName().catch(() => {});
+        searchMyPublications("author");
       }
     });
     $("toggleReportPanel").addEventListener("click", toggleReportPanel);

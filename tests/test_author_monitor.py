@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from paper_monitor import ui_server
@@ -852,6 +853,56 @@ class AuthorMonitorRefreshTests(unittest.TestCase):
         fetch.assert_called_once()
         self.assertEqual(results, [profile])
         self.assertIn("Ada Author Example University", fetch.call_args.args[0])
+
+    def test_profile_search_uses_scholar_author_directory_not_paper_results(self):
+        response = SimpleNamespace(
+            text="""
+            <div class="gs_ai_chpr">
+              <h3 class="gs_ai_name"><a href="/citations?user=5uWv_XgAAAAJ&amp;hl=en">Lingyuan Kong</a></h3>
+              <div class="gs_ai_aff">Institute of Physics</div>
+              <div class="gs_ai_eml">Verified email</div>
+              <div class="gs_ai_cby">Cited by 123</div>
+              <a class="gs_ai_one_int">Condensed matter physics</a>
+            </div>
+            """,
+            url="https://scholar.google.com/citations?view_op=search_authors",
+        )
+        with patch.object(
+            ui_server,
+            "google_scholar_request_with_spacing",
+            return_value=response,
+        ) as request:
+            profiles = ui_server.fetch_google_scholar_profiles_from_search(
+                "Lingyuan Kong",
+                limit=20,
+            )
+
+        self.assertEqual(profiles[0]["name"], "Lingyuan Kong")
+        self.assertEqual(profiles[0]["user_id"], "5uWv_XgAAAAJ")
+        self.assertEqual(profiles[0]["affiliation"], "Institute of Physics")
+        self.assertEqual(request.call_args.args[:2], ("GET", "https://scholar.google.com/citations"))
+        self.assertEqual(request.call_args.kwargs["params"]["view_op"], "search_authors")
+        self.assertEqual(request.call_args.kwargs["params"]["mauthors"], "Lingyuan Kong")
+
+    def test_scholar_profile_url_validation_accepts_google_and_rejects_lookalikes(self):
+        self.assertEqual(
+            ui_server.google_scholar_user_id(
+                "https://scholar.google.com/citations?user=5uWv_XgAAAAJ&hl=en"
+            ),
+            "5uWv_XgAAAAJ",
+        )
+        self.assertEqual(
+            ui_server.google_scholar_user_id(
+                "scholar.google.com/citations?user=5uWv_XgAAAAJ&hl=en"
+            ),
+            "5uWv_XgAAAAJ",
+        )
+        self.assertEqual(
+            ui_server.google_scholar_user_id(
+                "https://scholar.google.com.evil.example/citations?user=5uWv_XgAAAAJ"
+            ),
+            "",
+        )
 
     def test_researchgate_url_search_matches_openalex_without_fetching_researchgate(self):
         search_text = (
