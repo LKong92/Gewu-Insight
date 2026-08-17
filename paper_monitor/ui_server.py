@@ -118,6 +118,9 @@ AUTHOR_PHOTO_TYPES = {
     "png": ("png", "image/png"),
     "webp": ("webp", "image/webp"),
 }
+AUTHOR_PHOTO_DOWNLOAD_INTERVAL_SECONDS = 0.4
+AUTHOR_PHOTO_DOWNLOAD_LOCK = threading.Lock()
+AUTHOR_PHOTO_DOWNLOAD_LAST_AT = 0.0
 
 
 MACOS_TRASH_JXA = r'''
@@ -1671,6 +1674,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             author.get("avatar_override_path"),
             self.configured_db_path,
         )
+        if not photo_path or not photo_path.exists() or not photo_path.is_file():
+            author = cache_author_monitor_source_photo(
+                self.configured_db_path,
+                author_monitor_id,
+            ) or author
+            photo_path = managed_author_photo_path(
+                author.get("avatar_override_path"),
+                self.configured_db_path,
+            )
         if not photo_path or not photo_path.exists() or not photo_path.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "Author photo not found")
             return
@@ -12468,6 +12480,85 @@ def save_author_monitor_photo(
             temp_path.unlink()
 
 
+def google_scholar_avatar_source_url(value: Any) -> str:
+    url = clean_text(value or "")
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https":
+        return ""
+    if host == "scholar.googleusercontent.com" and parsed.path == "/citations":
+        return url
+    if host == "scholar.google.com" and parsed.path.startswith("/citations/images/"):
+        return url
+    return ""
+
+
+def cache_author_monitor_source_photo(
+    db_path: Path,
+    author_monitor_id: int,
+) -> dict[str, Any] | None:
+    global AUTHOR_PHOTO_DOWNLOAD_LAST_AT
+    with AUTHOR_PHOTO_DOWNLOAD_LOCK:
+        storage = Storage(db_path)
+        try:
+            author = storage.get_author_monitor(int(author_monitor_id))
+        finally:
+            storage.close()
+        if not author:
+            return None
+        existing_path = managed_author_photo_path(
+            author.get("avatar_override_path"),
+            db_path,
+        )
+        if existing_path and existing_path.exists() and existing_path.is_file():
+            return author
+        if clean_text(author.get("source_type") or "google_scholar") != "google_scholar":
+            return None
+        source_url = google_scholar_avatar_source_url(author.get("avatar_url"))
+        if not source_url:
+            return None
+        elapsed = time.monotonic() - AUTHOR_PHOTO_DOWNLOAD_LAST_AT
+        if AUTHOR_PHOTO_DOWNLOAD_LAST_AT > 0 and elapsed < AUTHOR_PHOTO_DOWNLOAD_INTERVAL_SECONDS:
+            time.sleep(AUTHOR_PHOTO_DOWNLOAD_INTERVAL_SECONDS - elapsed)
+        profile_url = clean_text(author.get("profile_url") or "")
+        referer = profile_url if google_scholar_user_id(profile_url) else "https://scholar.google.com/"
+        try:
+            response = request_with_retries(
+                "GET",
+                source_url,
+                headers={
+                    "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+                    "Referer": referer,
+                },
+                timeout=20,
+                max_retries=1,
+                retry_on_429=False,
+            )
+            AUTHOR_PHOTO_DOWNLOAD_LAST_AT = time.monotonic()
+            content = bytes(response.content or b"")
+            author_photo_type(content)
+        except Exception:
+            AUTHOR_PHOTO_DOWNLOAD_LAST_AT = time.monotonic()
+            return None
+        storage = Storage(db_path)
+        try:
+            current = storage.get_author_monitor(int(author_monitor_id))
+        finally:
+            storage.close()
+        if not current:
+            return None
+        current_path = managed_author_photo_path(
+            current.get("avatar_override_path"),
+            db_path,
+        )
+        if current_path and current_path.exists() and current_path.is_file():
+            return current
+        try:
+            return save_author_monitor_photo(db_path, int(author_monitor_id), content)
+        except (KeyError, OSError, ValueError):
+            return None
+
+
 def author_monitor_avatar_url(row: dict[str, Any]) -> str:
     raw_override = clean_text(row.get("avatar_override_path") or "")
     override_path = Path(raw_override).expanduser().resolve() if raw_override else None
@@ -12482,7 +12573,13 @@ def author_monitor_avatar_url(row: dict[str, Any]) -> str:
             "/api/author-monitor/photo?author_id="
             f"{int(row.get('id') or 0)}&v={version}"
         )
-    return clean_text(row.get("avatar_url") or "")
+    source_avatar_url = clean_text(row.get("avatar_url") or "")
+    if (
+        clean_text(row.get("source_type") or "google_scholar") == "google_scholar"
+        and google_scholar_avatar_source_url(source_avatar_url)
+    ):
+        return f"/api/author-monitor/photo?author_id={int(row.get('id') or 0)}"
+    return source_avatar_url
 
 
 def author_monitor_to_api(row: dict[str, Any]) -> dict[str, Any]:

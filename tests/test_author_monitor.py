@@ -340,6 +340,92 @@ class AuthorMonitorStorageTests(unittest.TestCase):
             self.assertEqual(saved_path.name, f"author-{author_id}.png")
             self.assertEqual(saved_path.read_bytes(), b"\x89PNG\r\n\x1a\nmanaged")
 
+    def test_scholar_avatar_is_cached_once_and_served_from_local_api(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                profile = scholar_profile("cached-photo", "Cached Photo")
+                profile["avatar_url"] = (
+                    "https://scholar.googleusercontent.com/citations"
+                    "?view_op=view_photo&user=cached-photo&citpid=2"
+                )
+                author = storage.add_author_monitor(profile)
+                author_id = int(author["id"])
+                initial = ui_server.author_monitor_to_api(author)
+            finally:
+                storage.close()
+
+            response = SimpleNamespace(content=b"\xff\xd8\xffcached")
+            with patch.object(
+                ui_server,
+                "request_with_retries",
+                return_value=response,
+            ) as request:
+                cached = ui_server.cache_author_monitor_source_photo(
+                    db_path,
+                    author_id,
+                )
+                repeated = ui_server.cache_author_monitor_source_photo(
+                    db_path,
+                    author_id,
+                )
+
+            saved_path = Path(cached["avatar_override_path"])
+            self.assertEqual(
+                initial["avatar_url"],
+                f"/api/author-monitor/photo?author_id={author_id}",
+            )
+            self.assertEqual(saved_path.read_bytes(), b"\xff\xd8\xffcached")
+            self.assertEqual(repeated["avatar_override_path"], str(saved_path))
+            request.assert_called_once()
+
+    def test_scholar_avatar_cache_never_overwrites_a_manual_photo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            manual_path = Path(tmp) / "author_photos" / "author-1.png"
+            manual_path.parent.mkdir()
+            manual_path.write_bytes(b"\x89PNG\r\n\x1a\nmanual")
+            storage = Storage(db_path)
+            try:
+                profile = scholar_profile("manual-photo", "Manual Photo")
+                profile["avatar_url"] = (
+                    "https://scholar.googleusercontent.com/citations"
+                    "?view_op=view_photo&user=manual-photo&citpid=2"
+                )
+                author = storage.add_author_monitor(profile)
+                author_id = int(author["id"])
+                storage.set_author_monitor_avatar_override(
+                    author_id,
+                    str(manual_path),
+                )
+            finally:
+                storage.close()
+
+            with patch.object(ui_server, "request_with_retries") as request:
+                cached = ui_server.cache_author_monitor_source_photo(
+                    db_path,
+                    author_id,
+                )
+
+            self.assertEqual(cached["avatar_override_path"], str(manual_path))
+            self.assertEqual(manual_path.read_bytes(), b"\x89PNG\r\n\x1a\nmanual")
+            request.assert_not_called()
+
+    def test_scholar_avatar_cache_rejects_untrusted_hosts(self):
+        self.assertEqual(
+            ui_server.google_scholar_avatar_source_url(
+                "https://scholar.googleusercontent.com.evil.example/citations?view_op=view_photo"
+            ),
+            "",
+        )
+        self.assertEqual(
+            ui_server.google_scholar_avatar_source_url(
+                "https://scholar.googleusercontent.com/citations?view_op=view_photo"
+            ),
+            "https://scholar.googleusercontent.com/citations?view_op=view_photo",
+        )
+
     def test_author_citation_total_falls_back_to_saved_scholar_paper_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
