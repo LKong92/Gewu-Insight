@@ -38682,7 +38682,7 @@ INDEX_HTML = """<!doctype html>
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
+          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
         </div>
@@ -38869,7 +38869,7 @@ INDEX_HTML = """<!doctype html>
         <div class="actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
-          ${paper.url ? `<button class="action" data-action="open-library-page">Open Page</button>` : ""}
+          ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
           <span class="publication-role-flags">
@@ -44038,7 +44038,7 @@ INDEX_HTML = """<!doctype html>
         <div class="actions author-detail-actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="author-preview-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download Again" : "Download PDF"}</button>
-          ${paper.url ? `<button class="action" data-action="author-open-page">Open Page</button>` : ""}
+          ${paper.url ? `<button class="action" data-action="author-open-page">Open Website</button>` : ""}
         </div>
         ${paper.google_scholar_url ? `
           <div class="actions author-detail-actions">
