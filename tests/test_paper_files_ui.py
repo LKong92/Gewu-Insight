@@ -55,7 +55,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
         self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
         self.assertIn(">Add File</button>", INDEX_HTML)
-        self.assertIn("Version of Record", INDEX_HTML)
+        self.assertIn("Published Version", INDEX_HTML)
         self.assertIn("Accepted Manuscript", INDEX_HTML)
         self.assertIn("Preprint", INDEX_HTML)
 
@@ -71,20 +71,54 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('fetch("/api/paper-files/preferred", {', INDEX_HTML)
         self.assertIn('fetch("/api/paper-files/delete", {', INDEX_HTML)
         self.assertIn('fetch("/api/paper-files/arxiv", {', INDEX_HTML)
-        self.assertIn('fetch("/api/paper-files/version-role", {', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/role", {', INDEX_HTML)
 
-    def test_paper_version_type_is_an_inline_compact_popup(self) -> None:
+    def test_pdf_download_refreshes_the_files_resource_cache(self) -> None:
+        downloader = INDEX_HTML.split("async function downloadLibraryPdf", 1)[1].split(
+            "function captureLibraryQuickLookReturnFocus", 1
+        )[0]
+        self.assertIn("await loadPaperFiles(paper.paper_id, {force: true});", downloader)
+
+    def test_every_paper_file_type_is_an_inline_compact_popup(self) -> None:
         self.assertIn('class="paper-file-version-picker"', INDEX_HTML)
         self.assertIn('class="paper-file-version-select"', INDEX_HTML)
         self.assertIn('class="paper-file-version-arrows"', INDEX_HTML)
-        self.assertIn('data-action="set-paper-file-version-role"', INDEX_HTML)
-        self.assertIn('["other", "Imported PDF"]', INDEX_HTML)
-        self.assertIn('["version_of_record", "Version of Record"]', INDEX_HTML)
-        self.assertIn('["first_published", "First Published"]', INDEX_HTML)
-        self.assertIn('["accepted_manuscript", "Accepted Manuscript"]', INDEX_HTML)
-        self.assertIn('["preprint", "Preprint"]', INDEX_HTML)
-        self.assertIn("async function setPaperFileVersionRole", INDEX_HTML)
+        self.assertIn('data-action="set-paper-file-role"', INDEX_HTML)
+        self.assertIn('["publication_version:other", "Imported PDF"]', INDEX_HTML)
+        self.assertIn('["publication_version:version_of_record", "Published Version"]', INDEX_HTML)
+        self.assertIn('["publication_version:accepted_manuscript", "Accepted Manuscript"]', INDEX_HTML)
+        self.assertIn('["publication_version:preprint", "Preprint"]', INDEX_HTML)
+        self.assertIn('["figure", "Image"]', INDEX_HTML)
+        self.assertIn('["supplement", "Supplement"]', INDEX_HTML)
+        self.assertIn('["note", "Note"]', INDEX_HTML)
+        self.assertIn('["presentation", "Presentation"]', INDEX_HTML)
+        self.assertIn('["data", "Data"]', INDEX_HTML)
+        self.assertIn('["code", "Code"]', INDEX_HTML)
+        self.assertIn('["other", "Other File"]', INDEX_HTML)
+        self.assertNotIn('"First Published"', INDEX_HTML)
+        self.assertIn("async function setPaperFileRole", INDEX_HTML)
         self.assertIn("font-size: 9px;", INDEX_HTML)
+
+    def test_add_file_and_files_panel_drop_import_before_classification(self) -> None:
+        panel = INDEX_HTML.split("function paperFilesPanelMarkup", 1)[1].split(
+            "async function loadPaperFiles", 1
+        )[0]
+        self.assertNotIn("data-paper-file-role", panel)
+        self.assertIn('data-action="choose-paper-file"', panel)
+
+        association_target = INDEX_HTML.split("function libraryFileAssociationTargetFromPoint", 1)[1].split(
+            "function libraryPdfDropTargetFromPoint", 1
+        )[0]
+        self.assertIn('fileRole: "other"', association_target)
+        self.assertIn('versionRole: ""', association_target)
+        self.assertNotIn('panel.querySelector("[data-paper-file-role]")', association_target)
+
+        uploader = INDEX_HTML.split("async function uploadPaperFiles", 1)[1].split(
+            "async function setPreferredPaperFile", 1
+        )[0]
+        self.assertIn('form.append("file_role", "other")', uploader)
+        self.assertIn('fileRole: "other"', uploader)
+        self.assertNotIn('role = "figure"', uploader)
 
     def test_files_panel_can_collapse_and_non_primary_files_can_be_deleted(self) -> None:
         self.assertIn('data-action="toggle-paper-files"', INDEX_HTML)

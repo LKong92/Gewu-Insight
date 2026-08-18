@@ -115,7 +115,9 @@ def download_paper(
     current_merged_path = str(paper.get("merged_pdf_path") or "")
     merged_path = unique_download_path(
         target_dir / f"{safe_slug(paper.get('title') or paper_id, 80)}_merged.pdf",
-        current_path=current_merged_path,
+        # A forced refresh is a new version candidate.  Keep the current file
+        # untouched until the resource layer has archived or de-duplicated it.
+        current_path="" if force else current_merged_path,
     )
     working_merged_path = merged_path
     replacing_existing_pdf = merged_path.exists()

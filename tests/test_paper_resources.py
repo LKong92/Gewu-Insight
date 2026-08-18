@@ -397,17 +397,18 @@ class PaperResourceStorageTests(unittest.TestCase):
         resource_id = int(resource["id"])
 
         expected_labels = {
-            "version_of_record": "Version of Record",
-            "first_published": "First Published",
+            "version_of_record": "Published Version",
+            "first_published": "Published Version",
             "accepted_manuscript": "Accepted Manuscript",
             "preprint": "Preprint",
             "other": "Imported PDF",
         }
         for version_role, label in expected_labels.items():
-            updated = ui_server.update_paper_resource_version_role(
+            updated = ui_server.update_paper_resource_role(
                 self.storage,
                 "manual-version-role",
                 resource_id,
+                "publication_version",
                 version_role,
             )
             self.assertEqual(updated["version_role"], version_role)
@@ -416,6 +417,76 @@ class PaperResourceStorageTests(unittest.TestCase):
             self.assertEqual(updated["display_name"], "Imported.pdf")
 
         self.assertEqual(pdf.read_bytes(), original_bytes)
+
+    def test_attachment_role_can_be_changed_without_moving_or_renaming_file(self) -> None:
+        self.add_paper("editable-attachment-role")
+        image = self.root / "data" / "Associated Files" / "figure with original name.jpg"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(b"image bytes")
+        resource = self.storage.create_paper_resource(
+            paper_id="editable-attachment-role",
+            stored_path=str(image),
+            display_name=image.name,
+            file_role="other",
+            version_label="Other File",
+            mime_type="image/jpeg",
+            kind="jpg",
+        )
+        resource_id = int(resource["id"])
+        original_bytes = image.read_bytes()
+
+        expected_labels = {
+            "figure": "Image",
+            "supplement": "Supplement",
+            "note": "Note",
+            "presentation": "Presentation",
+            "data": "Data",
+            "code": "Code",
+            "other": "Other File",
+        }
+        for file_role, label in expected_labels.items():
+            updated = ui_server.update_paper_resource_role(
+                self.storage,
+                "editable-attachment-role",
+                resource_id,
+                file_role,
+                "",
+            )
+            self.assertEqual(updated["file_role"], file_role)
+            self.assertIsNone(updated["version_role"])
+            self.assertEqual(updated["version_label"], label)
+            self.assertEqual(updated["stored_path"], str(image))
+            self.assertEqual(updated["display_name"], image.name)
+
+        self.assertEqual(image.read_bytes(), original_bytes)
+        with self.assertRaisesRegex(ValueError, "Only PDFs"):
+            ui_server.update_paper_resource_role(
+                self.storage,
+                "editable-attachment-role",
+                resource_id,
+                "publication_version",
+                "version_of_record",
+            )
+
+    def test_current_default_pdf_cannot_be_reclassified_as_an_attachment(self) -> None:
+        self.add_paper("primary-role-guard")
+        pdf = self.write_pdf("Primary.pdf")
+        self.storage.update_download_status(
+            "primary-role-guard",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("primary-role-guard")
+
+        with self.assertRaisesRegex(ValueError, "current default PDF"):
+            ui_server.update_paper_resource_role(
+                self.storage,
+                "primary-role-guard",
+                int(resource["id"]),
+                "figure",
+                "",
+            )
 
     def test_non_pdf_cannot_be_selected_as_preferred_pdf(self) -> None:
         self.add_paper("paper-with-note")
@@ -607,7 +678,14 @@ class PaperResourceStorageTests(unittest.TestCase):
             force=True,
         )
         old_bytes = primary.read_bytes()
-        primary.write_bytes(b"%PDF-1.4\nrefreshed published file\n%%EOF\n")
+        downloaded = self.write_pdf("Topic/downloaded-refresh.pdf")
+        downloaded.write_bytes(b"%PDF-1.4\nrefreshed published file\n%%EOF\n")
+        self.storage.update_download_status(
+            "paper-download-history",
+            status="partial",
+            main_pdf_path=str(downloaded),
+            merged_pdf_path=str(downloaded),
+        )
 
         current = ui_server.register_downloaded_paper_resource(
             self.storage,
@@ -628,7 +706,77 @@ class PaperResourceStorageTests(unittest.TestCase):
         previous_path = Path(previous["stored_path"])
         self.assertIn("Associated Files/Library/Topic", str(previous_path))
         self.assertEqual(previous_path.read_bytes(), old_bytes)
-        self.assertEqual(primary.read_bytes(), b"%PDF-1.4\nrefreshed published file\n%%EOF\n")
+        current_path = Path(paper["merged_pdf_path"])
+        self.assertEqual(current_path.name, "example [Published Version].pdf")
+        self.assertEqual(current_path.read_bytes(), b"%PDF-1.4\nrefreshed published file\n%%EOF\n")
+        self.assertFalse(primary.exists())
+        self.assertFalse(downloaded.exists())
+
+    def test_browser_downloaded_publisher_pdf_archives_preprint_instead_of_overwriting_it(self) -> None:
+        self.add_paper("paper-browser-publisher-upgrade")
+        preprint = self.write_pdf("Topic/1602.05061.pdf")
+        preprint_bytes = preprint.read_bytes()
+        publisher = self.write_pdf("Downloads/PhysRevB.93.235142.pdf")
+        publisher.write_bytes(b"%PDF-1.4\npublished version\n%%EOF\n")
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ? WHERE paper_id = ?",
+            ("10.1103/physrevb.93.235142", "paper-browser-publisher-upgrade"),
+        )
+        self.storage.update_paper_raw_json(
+            "paper-browser-publisher-upgrade",
+            {"arxiv_id": "1602.05061"},
+        )
+        self.storage.update_download_status(
+            "paper-browser-publisher-upgrade",
+            status="success",
+            main_pdf_path=str(preprint),
+            merged_pdf_path=str(preprint),
+        )
+        preprint_resource = self.storage.ensure_primary_pdf_resource(
+            "paper-browser-publisher-upgrade"
+        )
+        self.storage.conn.execute(
+            """
+            UPDATE resources
+            SET file_role = 'publication_version', version_role = 'preprint',
+                version_label = 'Preprint'
+            WHERE id = ?
+            """,
+            (int(preprint_resource["id"]),),
+        )
+        self.storage.conn.commit()
+
+        self.storage.set_preferred_paper_resource(
+            "paper-browser-publisher-upgrade",
+            int(preprint_resource["id"]),
+        )
+
+        target, paper = ui_server.attach_downloaded_publisher_pdf_to_paper(
+            self.storage,
+            paper_id="paper-browser-publisher-upgrade",
+            context={
+                "publisher_download_kind": "publisher-main-pdf",
+                "publisher_download_target_url": "https://link.aps.org/doi/pdf/10.1103/PhysRevB.93.235142",
+            },
+            source_path=publisher,
+        )
+
+        resources = self.storage.list_paper_resources("paper-browser-publisher-upgrade")
+        self.assertEqual(len(resources), 2)
+        current = next(resource for resource in resources if resource["is_primary"])
+        archived = next(resource for resource in resources if not resource["is_primary"])
+        self.assertEqual(current["version_role"], "version_of_record")
+        self.assertEqual(current["version_label"], "Published Version")
+        self.assertEqual(Path(current["stored_path"]).resolve(), target)
+        self.assertEqual(target.parent.resolve(), preprint.parent.resolve())
+        self.assertEqual(target.name, publisher.name)
+        self.assertEqual(target.read_bytes(), publisher.read_bytes())
+        self.assertEqual(archived["version_role"], "preprint")
+        self.assertEqual(Path(archived["stored_path"]).read_bytes(), preprint_bytes)
+        self.assertIn("Associated Files/Library/Topic", archived["stored_path"])
+        self.assertEqual(int(paper["primary_resource_id"]), int(current["id"]))
+        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(Path(paper["merged_pdf_path"]).resolve(), target)
 
     def test_download_from_arxiv_is_preprint_even_when_paper_has_doi(self) -> None:
         self.add_paper("paper-doi-with-arxiv-pdf")
@@ -693,6 +841,69 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertTrue(current["sha256"])
         self.assertEqual(len(self.storage.list_paper_resources("paper-download-identical")), 1)
         self.assertFalse(self.associated_root.exists())
+
+    def test_identical_publisher_refresh_repairs_preprint_label_and_filename(self) -> None:
+        self.add_paper("paper-repair-publisher-refresh")
+        current_path = self.write_pdf("Topic/1602.05061.pdf")
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ? WHERE paper_id = ?",
+            ("10.1103/physrevb.93.235142", "paper-repair-publisher-refresh"),
+        )
+        self.storage.update_download_status(
+            "paper-repair-publisher-refresh",
+            status="success",
+            main_pdf_path=str(current_path),
+            merged_pdf_path=str(current_path),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("paper-repair-publisher-refresh")
+        self.storage.conn.execute(
+            """
+            UPDATE resources
+            SET version_role = 'preprint', version_label = 'Preprint'
+            WHERE id = ?
+            """,
+            (int(resource["id"]),),
+        )
+        self.storage.conn.commit()
+        self.storage.set_preferred_paper_resource(
+            "paper-repair-publisher-refresh",
+            int(resource["id"]),
+        )
+        snapshot = ui_server.snapshot_primary_resource_before_download(
+            self.storage,
+            "paper-repair-publisher-refresh",
+            force=True,
+        )
+        duplicate_download = self.write_pdf("Topic/duplicate-publisher-download.pdf")
+        duplicate_download.write_bytes(current_path.read_bytes())
+        self.storage.update_download_status(
+            "paper-repair-publisher-refresh",
+            status="partial",
+            main_pdf_path=str(duplicate_download),
+            merged_pdf_path=str(duplicate_download),
+        )
+
+        repaired = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "paper-repair-publisher-refresh",
+            result={
+                "status": "partial",
+                "main_pdf_url": "https://harvest.aps.org/v2/journals/articles/10.1103/physrevb.93.235142/fulltext",
+            },
+            snapshot=snapshot,
+        )
+        ui_server.cleanup_download_resource_snapshot(snapshot)
+
+        paper = self.storage.get_paper("paper-repair-publisher-refresh")
+        repaired_path = Path(paper["merged_pdf_path"])
+        self.assertEqual(repaired["version_role"], "version_of_record")
+        self.assertEqual(repaired["version_label"], "Published Version")
+        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(repaired_path.name, "physrevb.93.235142 [Published Version].pdf")
+        self.assertEqual(repaired_path.read_bytes(), b"%PDF-1.4\nfixture\n%%EOF\n")
+        self.assertFalse(current_path.exists())
+        self.assertFalse(duplicate_download.exists())
+        self.assertEqual(len(self.storage.list_paper_resources("paper-repair-publisher-refresh")), 1)
 
     def test_complete_export_filter_is_used_only_for_verified_manifest(self) -> None:
         export_root = self.root / "Export"

@@ -523,8 +523,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/paper-files/preferred":
                 self.handle_set_preferred_paper_file(payload)
                 return
-            if parsed.path == "/api/paper-files/version-role":
-                self.handle_set_paper_file_version_role(payload)
+            if parsed.path in {"/api/paper-files/role", "/api/paper-files/version-role"}:
+                self.handle_set_paper_file_role(payload)
                 return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
@@ -1355,19 +1355,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             }
         )
 
-    def handle_set_paper_file_version_role(self, payload: dict[str, Any]) -> None:
+    def handle_set_paper_file_role(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         resource_id = int(payload.get("resource_id") or 0)
+        file_role = clean_text(str(payload.get("file_role") or "publication_version"))
         version_role = clean_text(str(payload.get("version_role") or ""))
         if not paper_id or resource_id <= 0:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id and resource_id are required")
             return
         storage = Storage(self.configured_db_path)
         try:
-            update_paper_resource_version_role(
+            update_paper_resource_role(
                 storage,
                 paper_id,
                 resource_id,
+                file_role,
                 version_role,
             )
             response = paper_files_state_payload(storage, paper_id)
@@ -1400,6 +1402,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     context=payload,
                     source_path=Path(source_path),
                 )
+            elif publisher_download_kind in {"aaas-published-pdf", "publisher-main-pdf"}:
+                target_path, paper = attach_downloaded_publisher_pdf_to_paper(
+                    storage,
+                    paper_id=paper_id,
+                    context=payload,
+                    source_path=Path(source_path),
+                )
             else:
                 target_path, paper = attach_manual_pdf_to_paper(
                     storage,
@@ -1409,26 +1418,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     source_path=Path(source_path),
                     preserve_filename=payload.get("preserve_filename") is not False,
                 )
-                if publisher_download_kind == "aaas-published-pdf":
-                    storage.update_download_status(
-                        paper_id,
-                        status="partial",
-                        message="published Science main PDF saved; supplementary PDF pending",
-                        main_pdf_path=str(target_path),
-                        supplement_pdf_paths=[],
-                        merged_pdf_path=str(target_path),
-                    )
-                    paper = storage.get_paper(paper_id)
-                elif publisher_download_kind == "publisher-main-pdf":
-                    storage.update_download_status(
-                        paper_id,
-                        status="success",
-                        message="publisher PDF downloaded through Gewu Insight browser session",
-                        main_pdf_path=str(target_path),
-                        supplement_pdf_paths=[],
-                        merged_pdf_path=str(target_path),
-                    )
-                    paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -19811,7 +19800,7 @@ def adopt_existing_paper_resource(
         raise FileNotFoundError(stored_text or source_text or "Paper file not found")
     move_source = bool(stored_source and source == stored_source)
     role = clean_text(file_role or "other").lower().replace("-", "_")
-    if role not in {"publication_version", "supplement", "note", "presentation", "data", "code", "other"}:
+    if role not in {"publication_version", "supplement", "figure", "note", "presentation", "data", "code", "other"}:
         role = "other"
     version = clean_text(version_role or "").lower().replace("-", "_") if role == "publication_version" else ""
     if role == "publication_version" and version not in {"version_of_record", "first_published", "accepted_manuscript", "preprint", "other"}:
@@ -19860,38 +19849,60 @@ def adopt_existing_paper_resource(
     return storage.get_paper_resource(int(resource_id)) or {}
 
 
-def update_paper_resource_version_role(
+def update_paper_resource_role(
     storage: Storage,
     paper_id: str,
     resource_id: int,
+    file_role: str,
     version_role: str,
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    if clean_text(resource.get("file_role") or "") != "publication_version" or not storage.resource_is_pdf(resource):
-        raise ValueError("Only paper-version PDFs can be reclassified")
-    role = clean_text(version_role).lower().replace("-", "_")
-    labels = {
-        "version_of_record": "Version of Record",
-        "first_published": "First Published",
+    role = clean_text(file_role or "other").lower().replace("-", "_")
+    allowed_roles = {"publication_version", "supplement", "figure", "note", "presentation", "data", "code", "other"}
+    if role not in allowed_roles:
+        raise ValueError("Unknown file type")
+    is_primary = int(paper.get("primary_resource_id") or 0) == int(resource_id)
+    if is_primary and role != "publication_version":
+        raise ValueError("The current default PDF must remain a paper version")
+    version = clean_text(version_role or "other").lower().replace("-", "_")
+    version_labels = {
+        "version_of_record": "Published Version",
+        "first_published": "Published Version",
         "accepted_manuscript": "Accepted Manuscript",
         "preprint": "Preprint",
         "other": "Imported PDF",
     }
-    if role not in labels:
+    if role == "publication_version" and not storage.resource_is_pdf(resource):
+        raise ValueError("Only PDFs can be classified as paper versions")
+    if role == "publication_version" and version not in version_labels:
         raise ValueError("Unknown paper version type")
-    version_number = int(resource.get("version_number") or 0) if role == "preprint" else 0
-    version_label = f"Preprint v{version_number}" if version_number else labels[role]
+    attachment_labels = {
+        "supplement": "Supplement",
+        "figure": "Image",
+        "note": "Note",
+        "presentation": "Presentation",
+        "data": "Data",
+        "code": "Code",
+        "other": "Other File",
+    }
+    version_number = int(resource.get("version_number") or 0) if role == "publication_version" and version == "preprint" else 0
+    version_label = (
+        f"Preprint v{version_number}"
+        if version_number
+        else (version_labels[version] if role == "publication_version" else attachment_labels[role])
+    )
     storage.conn.execute(
         """
         UPDATE resources
-        SET version_role = ?, version_label = ?, version_number = ?, updated_at = ?
+        SET file_role = ?, version_role = ?, version_label = ?, version_number = ?, updated_at = ?
         WHERE id = ? AND paper_id = ?
         """,
         (
             role,
+            version if role == "publication_version" else None,
             version_label,
             version_number or None,
             now_iso(),
@@ -19968,6 +19979,8 @@ def associated_resource_subdir(file_role: str) -> str:
         return "Versions"
     if file_role == "supplement":
         return "Supplements"
+    if file_role == "figure":
+        return "Figures"
     return "Files"
 
 
@@ -19999,7 +20012,10 @@ def snapshot_primary_resource_before_download(
     temporary = Path(temporary_name)
     try:
         shutil.copy2(canonical, temporary)
-        digest = clean_text(primary.get("sha256") or "") or sha256_for_file(temporary)
+        # The on-disk bytes are authoritative here.  A resource hash can be stale
+        # after an older in-place refresh, which must not make a changed PDF look
+        # identical and suppress version archiving.
+        digest = sha256_for_file(temporary)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -20031,6 +20047,32 @@ def downloaded_version_role(paper: dict[str, Any], source_url: str = "") -> str:
     return "other"
 
 
+def downloaded_version_label(version_role: str) -> str:
+    return {
+        "version_of_record": "Published Version",
+        "preprint": "Preprint",
+        "accepted_manuscript": "Accepted Manuscript",
+        "first_published": "Published Version",
+    }.get(clean_text(version_role or ""), "Imported PDF")
+
+
+def downloaded_primary_filename(
+    paper: dict[str, Any],
+    *,
+    version_role: str,
+    fallback_path: Path,
+) -> str:
+    if version_role != "version_of_record":
+        return fallback_path.name
+    doi = normalize_doi(paper.get("doi") or "")
+    suffix = doi.split("/", 1)[1] if "/" in doi else doi
+    base = finder_safe_name(suffix.replace("/", "_"), safe_slug(paper.get("title") or "Published Version", 80))
+    return finder_safe_name(
+        f"{base} [Published Version].pdf",
+        f"{safe_slug(paper.get('title') or 'Published Version', 80)} [Published Version].pdf",
+    )
+
+
 def register_downloaded_paper_resource(
     storage: Storage,
     paper_id: str,
@@ -20046,6 +20088,8 @@ def register_downloaded_paper_resource(
     if not paper or not canonical:
         return None
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
+    new_version_role = downloaded_version_role(paper, download_source_url)
+    new_version_label = downloaded_version_label(new_version_role)
     new_digest = sha256_for_file(canonical)
     if not snapshot:
         primary = storage.ensure_primary_pdf_resource(str(paper_id))
@@ -20062,11 +20106,54 @@ def register_downloaded_paper_resource(
     old_id = int(old_resource.get("id") or 0)
     old_digest = clean_text(snapshot.get("sha256") or "")
     if new_digest == old_digest:
-        storage.conn.execute(
-            "UPDATE resources SET sha256 = ?, stored_path = ?, missing_status = '', updated_at = ? WHERE id = ?",
-            (new_digest, str(canonical), now_iso(), old_id),
+        old_canonical = Path(snapshot.get("canonical_path") or canonical).expanduser().resolve()
+        if canonical != old_canonical and old_canonical.exists() and old_canonical.is_file():
+            canonical.unlink(missing_ok=True)
+            canonical = old_canonical
+        final_path = canonical
+        desired_name = downloaded_primary_filename(
+            paper,
+            version_role=new_version_role,
+            fallback_path=canonical,
         )
-        storage.conn.commit()
+        if desired_name != canonical.name:
+            final_path = unique_path_in_dir(canonical.parent / desired_name)
+            shutil.move(str(canonical), str(final_path))
+        try:
+            storage.conn.execute("BEGIN IMMEDIATE")
+            storage.conn.execute(
+                """
+                UPDATE resources
+                SET sha256 = ?, stored_path = ?, display_name = ?, file_role = 'publication_version',
+                    version_role = ?, version_label = ?, source_url = COALESCE(NULLIF(?, ''), source_url),
+                    missing_status = '', updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_digest,
+                    str(final_path),
+                    final_path.name,
+                    new_version_role,
+                    new_version_label,
+                    download_source_url,
+                    now_iso(),
+                    old_id,
+                ),
+            )
+            storage.conn.execute(
+                """
+                UPDATE papers
+                SET main_pdf_path = ?, merged_pdf_path = ?, preferred_resource_id = NULL
+                WHERE paper_id = ?
+                """,
+                (str(final_path), str(final_path), str(paper_id)),
+            )
+            storage.conn.commit()
+        except Exception:
+            storage.conn.rollback()
+            if final_path != canonical and final_path.exists() and not canonical.exists():
+                shutil.move(str(final_path), str(canonical))
+            raise
         return storage.get_paper_resource(old_id)
 
     temporary = snapshot.get("temporary_path")
@@ -20074,11 +20161,28 @@ def register_downloaded_paper_resource(
         raise FileNotFoundError("Previous PDF snapshot was not preserved")
     versions_dir = associated_work_dir_for_paper(storage, str(paper_id)) / "Versions"
     versions_dir.mkdir(parents=True, exist_ok=True)
-    archived_name = paper_resource_archive_name(old_resource, Path(snapshot.get("canonical_path") or canonical))
+    old_canonical = Path(snapshot.get("canonical_path") or canonical).expanduser().resolve()
+    archived_name = paper_resource_archive_name(old_resource, old_canonical)
     archived_path = unique_path_in_dir(versions_dir / archived_name)
-    temporary.replace(archived_path)
+    archive_source = (
+        old_canonical
+        if old_canonical != canonical and old_canonical.exists() and old_canonical.is_file()
+        else temporary
+    )
+    desired_name = downloaded_primary_filename(
+        paper,
+        version_role=new_version_role,
+        fallback_path=canonical,
+    )
+    final_path = canonical
     created_id = 0
+    archived = False
     try:
+        archive_source.replace(archived_path)
+        archived = True
+        if desired_name != canonical.name:
+            final_path = unique_path_in_dir(canonical.parent / desired_name)
+            shutil.move(str(canonical), str(final_path))
         storage.conn.execute("BEGIN IMMEDIATE")
         timestamp = now_iso()
         storage.conn.execute(
@@ -20091,10 +20195,11 @@ def register_downloaded_paper_resource(
         )
         created = storage.create_paper_resource(
             paper_id=str(paper_id),
-            stored_path=str(canonical),
-            display_name=canonical.name,
+            stored_path=str(final_path),
+            display_name=final_path.name,
             file_role="publication_version",
-            version_role=downloaded_version_role(paper, download_source_url),
+            version_role=new_version_role,
+            version_label=new_version_label,
             source_url=download_source_url,
             storage_mode="managed",
             sha256=new_digest,
@@ -20106,13 +20211,28 @@ def register_downloaded_paper_resource(
         )
         created_id = int(created.get("id") or 0)
         storage.conn.execute(
-            "UPDATE papers SET primary_resource_id = ? WHERE paper_id = ?",
-            (created_id, str(paper_id)),
+            """
+            UPDATE papers
+            SET primary_resource_id = ?, preferred_resource_id = NULL,
+                main_pdf_path = ?, merged_pdf_path = ?
+            WHERE paper_id = ?
+            """,
+            (created_id, str(final_path), str(final_path), str(paper_id)),
         )
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
-        archived_path.unlink(missing_ok=True)
+        try:
+            if archived and final_path.exists():
+                final_path.unlink()
+            if archived:
+                old_canonical.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(archived_path), str(old_canonical))
+            elif temporary.exists() and old_canonical == canonical:
+                canonical.unlink(missing_ok=True)
+                temporary.replace(old_canonical)
+        except OSError:
+            pass
         raise
     return storage.get_paper_resource(created_id)
 
@@ -20133,7 +20253,7 @@ def attach_file_to_paper(
         raise KeyError(str(paper_id))
     if not content:
         raise ValueError("File is empty")
-    allowed_roles = {"publication_version", "supplement", "note", "presentation", "data", "code", "other"}
+    allowed_roles = {"publication_version", "supplement", "figure", "note", "presentation", "data", "code", "other"}
     role = clean_text(file_role or "other").lower().replace("-", "_")
     if role not in allowed_roles:
         role = "other"
@@ -20187,10 +20307,110 @@ def attach_file_to_paper(
     return resource
 
 
+def attach_downloaded_publisher_pdf_to_paper(
+    storage: Storage,
+    *,
+    paper_id: str,
+    context: dict[str, Any],
+    source_path: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Register a browser-downloaded publisher PDF without replacing history."""
+    paper = storage.get_paper(str(paper_id))
+    if not paper:
+        raise KeyError(str(paper_id))
+    source = source_path.expanduser().resolve()
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(f"PDF file was not found: {source_path}")
+    with source.open("rb") as handle:
+        if b"%PDF-" not in handle.read(1024):
+            raise ValueError("Publisher download must be a valid PDF")
+
+    publisher_kind = clean_text(context.get("publisher_download_kind") or "")
+    source_url = clean_text(
+        context.get("publisher_download_target_url")
+        or context.get("publisher_download_referer")
+        or paper.get("pdf_url")
+        or ""
+    )
+    resource = attach_file_to_paper(
+        storage,
+        paper_id=str(paper_id),
+        filename=source.name,
+        content=source.read_bytes(),
+        file_role="publication_version",
+        version_role="version_of_record",
+        version_label="Published Version",
+        added_via=publisher_kind or "publisher_browser_download",
+    )
+    resource_id = int(resource.get("id") or 0)
+    if resource.get("duplicate") and resource_id:
+        # A prior buggy refresh may already have written the publisher bytes into a
+        # resource still labelled Preprint.  The publisher origin is authoritative
+        # for this copy, so repair its classification without renaming the file.
+        storage.conn.execute(
+            """
+            UPDATE resources
+            SET file_role = 'publication_version', version_role = 'version_of_record',
+                version_label = 'Published Version', version_number = NULL,
+                source_url = COALESCE(NULLIF(?, ''), source_url), updated_at = ?
+            WHERE id = ? AND paper_id = ?
+            """,
+            (source_url, now_iso(), resource_id, str(paper_id)),
+        )
+        storage.conn.commit()
+        resource = storage.get_paper_resource(resource_id) or resource
+        if should_promote_new_paper_version(storage, str(paper_id), resource):
+            resource = promote_paper_resource(storage, str(paper_id), resource_id)
+    elif resource_id and source_url:
+        storage.conn.execute(
+            "UPDATE resources SET source_url = ?, updated_at = ? WHERE id = ?",
+            (source_url, now_iso(), resource_id),
+        )
+        storage.conn.commit()
+        resource = storage.get_paper_resource(resource_id) or resource
+
+    # Download is an explicit request for the newest publisher version.  Return
+    # to automatic ranking instead of leaving an older manually preferred
+    # preprint as the resolved CURRENT file.
+    storage.set_preferred_paper_resource(str(paper_id), None)
+    refreshed = storage.get_paper(str(paper_id)) or paper
+    if resource_id and int(refreshed.get("primary_resource_id") or 0) != resource_id:
+        resource = promote_paper_resource(storage, str(paper_id), resource_id)
+
+    refreshed = storage.get_paper(str(paper_id)) or paper
+    is_primary = int(refreshed.get("primary_resource_id") or 0) == resource_id
+    message = (
+        "published Science main PDF saved; supplementary PDF pending"
+        if publisher_kind == "aaas-published-pdf"
+        else "publisher PDF downloaded and saved as a new paper version"
+    )
+    storage.conn.execute(
+        """
+        UPDATE papers
+        SET download_status = ?, download_message = ?, downloaded_at = ?,
+            pdf_url = COALESCE(NULLIF(?, ''), pdf_url)
+        WHERE paper_id = ?
+        """,
+        (
+            "partial" if publisher_kind == "aaas-published-pdf" else "success",
+            message if is_primary else f"{message}; current preferred version kept",
+            now_iso(),
+            source_url,
+            str(paper_id),
+        ),
+    )
+    storage.conn.commit()
+    refreshed = storage.get_paper(str(paper_id)) or refreshed
+    stored_path = storage.resource_local_path(resource)
+    if not stored_path:
+        raise FileNotFoundError("Downloaded publisher PDF was not stored")
+    return Path(stored_path).expanduser().resolve(), refreshed
+
+
 def paper_resource_archive_name(resource: dict[str, Any], fallback_path: Path) -> str:
     labels = {
-        "version_of_record": "Version of Record",
-        "first_published": "First Published",
+        "version_of_record": "Published Version",
+        "first_published": "Published Version",
         "accepted_manuscript": "Accepted Manuscript",
         "preprint": resource.get("version_label") or (
             f"Preprint v{int(resource.get('version_number') or 0)}"
@@ -37559,9 +37779,13 @@ INDEX_HTML = """<!doctype html>
       const element = document.elementFromPoint(x, y);
       const panel = element?.closest?.("[data-paper-files-panel]");
       if (panel?.dataset.paperId) {
-        const selection = String(panel.querySelector("[data-paper-file-role]")?.value || "other");
-        const [fileRole, versionRole = ""] = selection.split(":", 2);
-        return {paperId: String(panel.dataset.paperId), fileRole, versionRole, element: panel, kind: "files-panel"};
+        return {
+          paperId: String(panel.dataset.paperId),
+          fileRole: "other",
+          versionRole: "",
+          element: panel,
+          kind: "files-panel"
+        };
       }
       const resourceColumn = element?.closest?.("[data-library-resource-paper]");
       if (resourceColumn?.dataset.libraryResourcePaper) {
@@ -40225,8 +40449,8 @@ INDEX_HTML = """<!doctype html>
 
     function paperFileRoleLabel(file) {
       const versionLabels = {
-        version_of_record: "Version of Record",
-        first_published: "First Published",
+        version_of_record: "Published Version",
+        first_published: "Published Version",
         accepted_manuscript: "Accepted Manuscript",
         preprint: file.version_label || (file.version_number ? `arXiv v${file.version_number}` : "Preprint"),
         other: file.version_label || (file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF")
@@ -40234,12 +40458,13 @@ INDEX_HTML = """<!doctype html>
       if (file.file_role === "publication_version") return versionLabels[file.version_role || "other"] || "Publication Version";
       return {
         supplement: "Supplement",
+        figure: "Image",
         note: "Note",
         presentation: "Presentation",
         data: "Data",
         code: "Code",
-        other: "File"
-      }[file.file_role || "other"] || "File";
+        other: file.version_label || "Other File"
+      }[file.file_role || "other"] || "Other File";
     }
 
     function paperFileGroup(file) {
@@ -40249,22 +40474,37 @@ INDEX_HTML = """<!doctype html>
       return "FILES";
     }
 
-    function paperFileVersionRoleOptions(file) {
-      const selected = String(file.version_role || "other");
-      return [
-        ["other", "Imported PDF"],
-        ["version_of_record", "Version of Record"],
-        ["first_published", "First Published"],
-        ["accepted_manuscript", "Accepted Manuscript"],
-        ["preprint", "Preprint"]
-      ].map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+    function paperFileRoleOptions(file) {
+      const selected = file.file_role === "publication_version"
+        ? `publication_version:${file.version_role || "other"}`
+        : String(file.file_role || "other");
+      const pdfLike = String(file.extension || "").toLowerCase() === ".pdf"
+        || String(file.mime_type || "").toLowerCase() === "application/pdf"
+        || file.file_role === "publication_version";
+      const options = pdfLike ? [
+        ["publication_version:other", "Imported PDF"],
+        ["publication_version:version_of_record", "Published Version"],
+        ["publication_version:accepted_manuscript", "Accepted Manuscript"],
+        ["publication_version:preprint", "Preprint"]
+      ] : [];
+      if (selected === "publication_version:first_published") {
+        options.splice(2, 0, ["publication_version:first_published", "Published Version"]);
+      }
+      if (!file.is_primary) options.push(
+        ["figure", "Image"],
+        ["supplement", "Supplement"],
+        ["note", "Note"],
+        ["presentation", "Presentation"],
+        ["data", "Data"],
+        ["code", "Code"],
+        ["other", "Other File"]
+      );
+      return options.map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
     }
 
     function paperFileRowMarkup(file) {
       const name = file.display_name || file.local_path?.split("/").pop() || "Attached File";
-      const roleControl = file.file_role === "publication_version"
-        ? `<span class="paper-file-version-picker" title="Change version type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-action="set-paper-file-version-role" data-paper-file-id="${Number(file.id || 0)}" aria-label="Version type for ${escapeAttr(name)}">${paperFileVersionRoleOptions(file)}</select></span>`
-        : `<span>${escapeHtml(paperFileRoleLabel(file))}</span>`;
+      const roleControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-action="set-paper-file-role" data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
       const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean);
       const ext = String(file.extension || "").replace(/^\./, "") || "none";
       return `
@@ -40313,16 +40553,6 @@ INDEX_HTML = """<!doctype html>
               <strong>Files${snapshot ? ` · ${files.length}` : ""}</strong>
             </button>
             <span class="paper-files-add-controls">
-              <select data-paper-file-role aria-label="File type">
-                <option value="other">Other File</option>
-                <option value="note">Note</option>
-                <option value="presentation">Presentation</option>
-                <option value="supplement">Supplement</option>
-                <option value="publication_version:version_of_record">Version of Record</option>
-                <option value="publication_version:first_published">First Published</option>
-                <option value="publication_version:accepted_manuscript">Accepted Manuscript</option>
-                <option value="publication_version:preprint">Preprint</option>
-              </select>
               <button class="action" type="button" data-action="choose-paper-file">Add File</button>
               <input type="file" data-paper-file-input hidden multiple>
             </span>
@@ -40357,14 +40587,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function uploadPaperFiles(panel, paperId, fileList) {
-      const selection = String(panel.querySelector("[data-paper-file-role]")?.value || "other");
-      const [fileRole, versionRole = ""] = selection.split(":", 2);
       const files = Array.from(fileList || []);
       for (const file of files) {
         const form = new FormData();
         form.append("paper_id", paperId);
-        form.append("file_role", fileRole);
-        form.append("version_role", versionRole);
+        form.append("file_role", "other");
+        form.append("version_role", "");
         form.append("file", file, file.name);
         const res = await fetch("/api/paper-files", {method: "POST", body: form});
         const data = await res.json();
@@ -40377,7 +40605,9 @@ INDEX_HTML = """<!doctype html>
     async function uploadPaperFilePaths(paperId, paths, {fileRole = "other", versionRole = "", addedVia = "paper_details_path"} = {}) {
       const selectedPaths = Array.from(paths || []).filter(Boolean);
       for (const sourcePath of selectedPaths) {
-        const role = String(sourcePath).toLowerCase().endsWith(".pdf") ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
+        const lowerPath = String(sourcePath).toLowerCase();
+        const isPdf = lowerPath.endsWith(".pdf");
+        const role = isPdf ? fileRole : (fileRole === "publication_version" ? "other" : fileRole);
         const res = await fetch("/api/paper-files/path", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
@@ -40403,8 +40633,8 @@ INDEX_HTML = """<!doctype html>
       if (!paperId || !paths.length) return;
       try {
         await uploadPaperFilePaths(paperId, paths, {
-          fileRole: payload.file_role || "other",
-          versionRole: payload.version_role || "",
+          fileRole: "other",
+          versionRole: "",
           addedVia: "paper_details_native_chooser"
         });
         if (state.libraryTab === "my-publications") renderPublicationDetail();
@@ -40442,14 +40672,14 @@ INDEX_HTML = """<!doctype html>
       return data;
     }
 
-    async function setPaperFileVersionRole(paperId, resourceId, versionRole) {
-      const res = await fetch("/api/paper-files/version-role", {
+    async function setPaperFileRole(paperId, resourceId, fileRole, versionRole = "") {
+      const res = await fetch("/api/paper-files/role", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, version_role: versionRole})
+        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, file_role: fileRole, version_role: versionRole})
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not change version type");
+      if (!res.ok) throw new Error(data.error || "Could not change file type");
       state.paperFilesByPaperId[String(paperId)] = data;
       if (data.paper) updatePaperState(paperId, data.paper);
       return data;
@@ -40474,11 +40704,9 @@ INDEX_HTML = """<!doctype html>
         downloadArxivPreprintVersions(paper, "all", event.currentTarget);
       });
       panel.querySelector('[data-action="choose-paper-file"]')?.addEventListener("click", () => {
-        const selection = String(panel.querySelector("[data-paper-file-role]")?.value || "other");
-        const [fileRole, versionRole = ""] = selection.split(":", 2);
         const nativeChooser = window.webkit?.messageHandlers?.paperFileChooser;
         if (nativeChooser) {
-          nativeChooser.postMessage({paper_id: paper.paper_id, file_role: fileRole, version_role: versionRole});
+          nativeChooser.postMessage({paper_id: paper.paper_id});
           return;
         }
         input?.click();
@@ -40510,18 +40738,19 @@ INDEX_HTML = """<!doctype html>
         }
       }));
       panel.querySelectorAll('[data-action="auto-paper-file"]').forEach((button) => button.addEventListener("click", () => setPreferredPaperFile(paper.paper_id, null).catch(() => {})));
-      panel.querySelectorAll('[data-action="set-paper-file-version-role"]').forEach((select) => select.addEventListener("change", async () => {
+      panel.querySelectorAll('[data-action="set-paper-file-role"]').forEach((select) => select.addEventListener("change", async () => {
         const resourceId = Number(select.dataset.paperFileId || 0);
+        const [fileRole, versionRole = ""] = String(select.value || "other").split(":", 2);
         select.disabled = true;
         try {
-          await setPaperFileVersionRole(paper.paper_id, resourceId, select.value || "other");
+          await setPaperFileRole(paper.paper_id, resourceId, fileRole, versionRole);
           if (state.libraryTab === "my-publications") renderPublicationDetail();
           else renderLibrary();
         } catch (error) {
           select.disabled = false;
           const status = root.querySelector("#libraryDetailStatus");
           if (status) {
-            status.textContent = error.message || "Could not change version type";
+            status.textContent = error.message || "Could not change file type";
             status.className = "library-detail-status err";
           }
           loadPaperFiles(paper.paper_id, {force: true}).catch(() => {});
@@ -43981,6 +44210,7 @@ INDEX_HTML = """<!doctype html>
         const payload = {...libraryPdfContextPayload(paper.paper_id), force: Boolean(options.force)};
         const data = await requestPaperPdfDownload(payload);
         updatePaperState(paper.paper_id, data.paper);
+        await loadPaperFiles(paper.paper_id, {force: true});
         if (status) {
           status.textContent = options.force ? "PDF refreshed" : "PDF downloaded";
           status.className = "library-detail-status ok";
