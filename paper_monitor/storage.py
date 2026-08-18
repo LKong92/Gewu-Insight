@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 7
+STORAGE_SCHEMA_VERSION = 8
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -510,6 +510,7 @@ class Storage:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_sha256 ON resources(sha256)")
         self._backfill_paper_storage_keys()
         self._backfill_primary_pdf_resources()
+        self._reclassify_legacy_pdf_versions()
         self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
@@ -688,6 +689,133 @@ class Storage:
             return int(path.stat().st_size) if path.is_file() else None
         except OSError:
             return None
+
+    @staticmethod
+    def _paper_arxiv_identifiers(paper: dict[str, Any]) -> list[str]:
+        try:
+            raw = json.loads(str(paper.get("raw_json") or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
+        versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
+        preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
+        candidates = [
+            raw.get("arxiv_id"),
+            raw.get("versioned_arxiv_id"),
+            preprint.get("arxiv_id"),
+            preprint.get("versioned_arxiv_id"),
+            preprint_version.get("arxiv_id"),
+            preprint_version.get("versioned_arxiv_id"),
+        ]
+        paper_id = str(paper.get("paper_id") or "")
+        if paper_id.lower().startswith("arxiv_"):
+            candidates.append(paper_id[6:])
+        normalized: list[str] = []
+        for candidate in candidates:
+            value = str(candidate or "").strip()
+            value = re.sub(r"^arxiv:\s*", "", value, flags=re.IGNORECASE)
+            value = re.sub(r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/", "", value, flags=re.IGNORECASE)
+            value = re.sub(r"\.pdf(?:\?.*)?$", "", value, flags=re.IGNORECASE)
+            value = re.sub(r"v\d+$", "", value, flags=re.IGNORECASE)
+            if value and value.casefold() not in {item.casefold() for item in normalized}:
+                normalized.append(value)
+        return normalized
+
+    @classmethod
+    def _legacy_pdf_version_metadata(
+        cls,
+        paper: dict[str, Any],
+        path_text: str,
+        source_url: str = "",
+    ) -> tuple[str, str, int | None, str]:
+        source_url = str(source_url or "").strip()
+        source_host = re.sub(r"^www\.", "", re.sub(r"^https?://", "", source_url, flags=re.IGNORECASE).split("/", 1)[0]).casefold()
+        explicit_arxiv_source = source_host == "arxiv.org" or source_host.endswith(".arxiv.org")
+        if source_url and not explicit_arxiv_source:
+            return "other", "Imported PDF", None, source_url
+        filename = Path(path_text).name
+        stem = Path(filename).stem.strip()
+        stem = re.sub(r"\s*\[[^\]]+\]\s*$", "", stem).strip()
+        version_match = re.search(r"v(\d+)$", stem, flags=re.IGNORECASE)
+        if not version_match and explicit_arxiv_source:
+            version_match = re.search(r"v(\d+)(?:\.pdf)?(?:\?.*)?$", source_url, flags=re.IGNORECASE)
+        version_number = int(version_match.group(1)) if version_match else None
+        unversioned_stem = re.sub(r"v\d+$", "", stem, flags=re.IGNORECASE)
+        comparable_stem = unversioned_stem.replace("_", "/").casefold()
+        identifiers = cls._paper_arxiv_identifiers(paper)
+        if explicit_arxiv_source:
+            source_identifier = re.sub(
+                r"^https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/",
+                "",
+                source_url,
+                flags=re.IGNORECASE,
+            )
+            source_identifier = re.sub(r"\.pdf(?:\?.*)?$", "", source_identifier, flags=re.IGNORECASE)
+            source_identifier = re.sub(r"v\d+$", "", source_identifier, flags=re.IGNORECASE)
+            if source_identifier and source_identifier.casefold() not in {item.casefold() for item in identifiers}:
+                identifiers.insert(0, source_identifier)
+        for identifier in identifiers:
+            comparable_identifier = identifier.replace("_", "/").casefold()
+            if not explicit_arxiv_source and comparable_stem != comparable_identifier:
+                continue
+            label = f"Preprint v{version_number}" if version_number else "Preprint"
+            version_suffix = f"v{version_number}" if version_number else ""
+            return (
+                "preprint",
+                label,
+                version_number,
+                source_url or f"https://arxiv.org/pdf/{identifier}{version_suffix}",
+            )
+        if explicit_arxiv_source:
+            label = f"Preprint v{version_number}" if version_number else "Preprint"
+            return "preprint", label, version_number, source_url
+        return "other", "Imported PDF", None, ""
+
+    def _reclassify_legacy_pdf_versions(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT r.id, r.stored_path, r.source_path, r.display_name,
+                   r.source_url AS resource_source_url,
+                   p.*
+            FROM resources r
+            JOIN papers p ON p.paper_id = r.paper_id
+            WHERE r.added_via = 'legacy_backfill'
+              AND r.file_role = 'publication_version'
+              AND COALESCE(r.version_role, 'other') = 'other'
+            """
+        ).fetchall()
+        timestamp = now_iso()
+        for row in rows:
+            record = dict(row)
+            path_text = str(
+                record.get("display_name")
+                or record.get("stored_path")
+                or record.get("source_path")
+                or ""
+            )
+            version_role, version_label, version_number, source_url = self._legacy_pdf_version_metadata(
+                record,
+                path_text,
+                str(record.get("resource_source_url") or ""),
+            )
+            self.conn.execute(
+                """
+                UPDATE resources
+                SET version_role = ?, version_label = ?, version_number = ?,
+                    source_url = COALESCE(NULLIF(source_url, ''), ?), updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    version_role,
+                    version_label,
+                    version_number,
+                    source_url,
+                    timestamp,
+                    int(record.get("id") or 0),
+                ),
+            )
 
     def _backfill_primary_pdf_resources(self) -> None:
         rows = self.conn.execute(
@@ -1555,6 +1683,10 @@ class Storage:
             path_text = str(paper.get("merged_pdf_path") or paper.get("main_pdf_path") or "").strip()
             if not paper_id or not path_text:
                 continue
+            version_role, version_label, version_number, source_url = self._legacy_pdf_version_metadata(
+                paper,
+                path_text,
+            )
             primary_id = int(paper.get("primary_resource_id") or 0)
             primary = self.conn.execute(
                 "SELECT * FROM resources WHERE id = ? AND paper_id = ?",
@@ -1595,7 +1727,10 @@ class Storage:
                     UPDATE resources
                     SET display_name = COALESCE(NULLIF(display_name, ''), ?),
                         file_role = COALESCE(NULLIF(file_role, ''), 'publication_version'),
-                        version_role = COALESCE(NULLIF(version_role, ''), 'other'),
+                        version_role = COALESCE(NULLIF(version_role, ''), ?),
+                        version_label = COALESCE(NULLIF(version_label, ''), ?),
+                        version_number = COALESCE(version_number, ?),
+                        source_url = COALESCE(NULLIF(source_url, ''), ?),
                         storage_mode = COALESCE(NULLIF(storage_mode, ''), ?),
                         added_via = COALESCE(NULLIF(added_via, ''), 'legacy_backfill'),
                         missing_status = ?, updated_at = ?
@@ -1603,6 +1738,10 @@ class Storage:
                     """,
                     (
                         Path(path_text).name,
+                        version_role,
+                        version_label,
+                        version_number,
+                        source_url,
                         self._resource_storage_mode(path_text),
                         "" if Path(path_text).expanduser().exists() else "missing",
                         timestamp,
@@ -1615,10 +1754,11 @@ class Storage:
                     INSERT INTO resources (
                       paper_id, stored_path, original_filename, kind, mime_type,
                       import_as, size_bytes, display_name, file_role, version_role,
-                      storage_mode, added_via, missing_status, status, created_at, updated_at
+                      version_label, version_number, source_url, storage_mode,
+                      added_via, missing_status, status, created_at, updated_at
                     ) VALUES (?, ?, ?, 'pdf', 'application/pdf', 'primary_pdf', ?, ?,
-                              'publication_version', 'other', ?, 'legacy_backfill', ?,
-                              'imported', ?, ?)
+                              'publication_version', ?, ?, ?, ?, ?, 'legacy_backfill',
+                              ?, 'imported', ?, ?)
                     """,
                     (
                         paper_id,
@@ -1626,6 +1766,10 @@ class Storage:
                         Path(path_text).name,
                         self._resource_size(path_text),
                         Path(path_text).name,
+                        version_role,
+                        version_label,
+                        version_number,
+                        source_url,
                         self._resource_storage_mode(path_text),
                         "" if Path(path_text).expanduser().exists() else "missing",
                         timestamp,

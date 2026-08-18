@@ -61,6 +61,234 @@ class PaperResourceStorageTests(unittest.TestCase):
             self.storage.storage_key_for_paper_id("arxiv_2506.19903"),
         )
 
+    def test_manual_preprint_identifier_override_can_replace_and_clear_source_value(self) -> None:
+        self.add_paper("published-with-wrong-preprint")
+        self.storage.update_paper_raw_json(
+            "published-with-wrong-preprint",
+            {"preprint": {"arxiv_id": "cond-mat/0604211"}},
+        )
+        paper = self.storage.get_paper("published-with-wrong-preprint")
+        self.assertEqual(ui_server.preprint_identifier(paper), "cond-mat/0604211")
+
+        updated = ui_server.update_manual_preprint_identifier(
+            self.storage,
+            "published-with-wrong-preprint",
+            "https://arxiv.org/abs/2501.12345v2",
+        )
+        raw = json.loads(updated["raw_json"])
+        self.assertEqual(ui_server.preprint_identifier(updated), "2501.12345")
+        self.assertEqual(ui_server.arxiv_identifier_for_paper(updated), "2501.12345")
+        self.assertEqual(raw["preprint"]["arxiv_id"], "cond-mat/0604211")
+        self.assertTrue(raw["manual_preprint_identifier_override"])
+        self.assertEqual(raw["manual_preprint_identifier"], "2501.12345")
+
+        refreshed_payload = ui_server.merge_refreshed_metadata(
+            updated,
+            {
+                "paper_id": updated["paper_id"],
+                "title": updated["title"],
+                "journal": updated["journal"],
+                "raw": {"arxiv_id": "2601.99999"},
+            },
+        )
+        refreshed = self.storage.refresh_paper_metadata(updated["paper_id"], refreshed_payload)
+        self.assertEqual(ui_server.preprint_identifier(refreshed), "2501.12345")
+
+        cleared = ui_server.update_manual_preprint_identifier(
+            self.storage,
+            "published-with-wrong-preprint",
+            "",
+        )
+        self.assertEqual(ui_server.preprint_identifier(cleared), "")
+        self.assertEqual(ui_server.arxiv_identifier_for_paper(cleared), "")
+
+    def test_manual_preprint_identifier_rejects_invalid_value(self) -> None:
+        self.add_paper("invalid-manual-preprint")
+        with self.assertRaisesRegex(ValueError, "valid arXiv identifier"):
+            ui_server.update_manual_preprint_identifier(
+                self.storage,
+                "invalid-manual-preprint",
+                "not-an-arxiv-id",
+            )
+
+    def test_latest_arxiv_download_becomes_primary_when_no_better_pdf_exists(self) -> None:
+        self.add_paper("latest-arxiv-version")
+        self.storage.add_library_item(paper_id="latest-arxiv-version", folder_id=1)
+        self.storage.update_paper_raw_json(
+            "latest-arxiv-version",
+            {"preprint": {"arxiv_id": "2501.12345"}},
+        )
+        record = {
+            "raw": {
+                "arxiv_id": "2501.12345",
+                "versioned_arxiv_id": "2501.12345v3",
+                "published": "2025-01-20T00:00:00Z",
+                "updated": "2025-03-20T00:00:00Z",
+            }
+        }
+        requested_urls: list[str] = []
+
+        def fake_download(url: str, path: Path, _messages: list[str], **_options: object) -> bool:
+            requested_urls.append(url)
+            path.write_bytes(b"%PDF-1.4\n" + b"latest" * 300 + b"\n%%EOF\n")
+            return True
+
+        with (
+            patch.object(ui_server, "fetch_arxiv_by_id", return_value=record),
+            patch.object(ui_server, "wait_for_arxiv_rate_limit"),
+            patch.object(ui_server, "try_download_pdf", side_effect=fake_download),
+        ):
+            result = ui_server.download_arxiv_preprint_versions(
+                self.storage,
+                "latest-arxiv-version",
+            )
+
+        self.assertEqual(result["downloaded_versions"], [3])
+        self.assertEqual(requested_urls, ["https://arxiv.org/pdf/2501.12345v3"])
+        resources = self.storage.list_paper_resources("latest-arxiv-version")
+        self.assertEqual(len(resources), 1)
+        self.assertTrue(resources[0]["is_primary"])
+        self.assertEqual(resources[0]["version_role"], "preprint")
+        self.assertEqual(resources[0]["version_number"], 3)
+        self.assertEqual(resources[0]["version_label"], "Preprint v3")
+        self.assertEqual(Path(resources[0]["stored_path"]).parent.resolve(), self.library_root.resolve())
+        self.assertEqual(Path(resources[0]["stored_path"]).name, "2501.12345v3 [Preprint v3].pdf")
+
+    def test_arxiv_history_sync_keeps_version_of_record_primary_and_skips_existing_versions(self) -> None:
+        self.add_paper("published-with-arxiv-history")
+        self.storage.add_library_item(paper_id="published-with-arxiv-history", folder_id=1)
+        self.storage.update_paper_raw_json(
+            "published-with-arxiv-history",
+            {
+                "manual_preprint_identifier_override": True,
+                "manual_preprint_identifier": "cond-mat/0604211",
+                "preprint": {"arxiv_id": "wrong/0000000"},
+            },
+        )
+        published = self.write_pdf("Published.pdf")
+        self.storage.update_download_status(
+            "published-with-arxiv-history",
+            status="success",
+            main_pdf_path=str(published),
+            merged_pdf_path=str(published),
+        )
+        primary = self.storage.ensure_primary_pdf_resource("published-with-arxiv-history")
+        self.storage.conn.execute(
+            "UPDATE resources SET file_role = 'publication_version', version_role = 'version_of_record' WHERE id = ?",
+            (int(primary["id"]),),
+        )
+        self.storage.conn.commit()
+        record = {
+            "raw": {
+                "arxiv_id": "cond-mat/0604211",
+                "versioned_arxiv_id": "cond-mat/0604211v3",
+                "published": "2006-04-21T00:00:00Z",
+                "updated": "2006-07-21T00:00:00Z",
+            }
+        }
+        requested_urls: list[str] = []
+
+        def fake_download(url: str, path: Path, _messages: list[str], **_options: object) -> bool:
+            requested_urls.append(url)
+            version = url.rsplit("v", 1)[-1].encode("ascii")
+            path.write_bytes(b"%PDF-1.4\n" + version * 2048 + b"\n%%EOF\n")
+            return True
+
+        with (
+            patch.object(ui_server, "fetch_arxiv_by_id", return_value=record) as fetch,
+            patch.object(ui_server, "wait_for_arxiv_rate_limit"),
+            patch.object(ui_server, "try_download_pdf", side_effect=fake_download),
+        ):
+            first = ui_server.download_arxiv_preprint_versions(
+                self.storage,
+                "published-with-arxiv-history",
+                include_history=True,
+            )
+            second = ui_server.download_arxiv_preprint_versions(
+                self.storage,
+                "published-with-arxiv-history",
+                include_history=True,
+            )
+
+        self.assertEqual(fetch.call_args.args[0], "cond-mat/0604211")
+        self.assertEqual(first["downloaded_versions"], [1, 2, 3])
+        self.assertEqual(second["downloaded_versions"], [])
+        self.assertEqual(second["existing_versions"], [1, 2, 3])
+        self.assertEqual(
+            requested_urls,
+            [
+                "https://arxiv.org/pdf/cond-mat/0604211v1",
+                "https://arxiv.org/pdf/cond-mat/0604211v2",
+                "https://arxiv.org/pdf/cond-mat/0604211v3",
+            ],
+        )
+        paper = self.storage.get_paper("published-with-arxiv-history")
+        self.assertEqual(int(paper["primary_resource_id"]), int(primary["id"]))
+        resources = self.storage.list_paper_resources("published-with-arxiv-history")
+        preprints = [resource for resource in resources if resource["version_role"] == "preprint"]
+        self.assertEqual([resource["version_number"] for resource in preprints], [1, 2, 3])
+        self.assertTrue(all("Associated Files/Library" in resource["stored_path"] for resource in preprints))
+        self.assertEqual(
+            [resource["version_label"] for resource in preprints],
+            ["Preprint v1", "Preprint v2", "Preprint v3"],
+        )
+
+    def test_arxiv_download_requires_a_library_or_my_publications_work(self) -> None:
+        self.add_paper("discovery-only-arxiv")
+        self.storage.update_paper_raw_json(
+            "discovery-only-arxiv",
+            {"preprint": {"arxiv_id": "2501.12345"}},
+        )
+        with self.assertRaisesRegex(ValueError, "Add this paper to Library"):
+            ui_server.download_arxiv_preprint_versions(self.storage, "discovery-only-arxiv")
+
+    def test_corrected_arxiv_identifier_does_not_reuse_or_prefer_old_synced_versions(self) -> None:
+        self.add_paper("corrected-arxiv-download")
+        self.storage.add_library_item(paper_id="corrected-arxiv-download", folder_id=1)
+
+        def fake_download(url: str, path: Path, _messages: list[str], **_options: object) -> bool:
+            payload = url.encode("utf-8")
+            path.write_bytes(b"%PDF-1.4\n" + payload * 80 + b"\n%%EOF\n")
+            return True
+
+        with (
+            patch.object(ui_server, "wait_for_arxiv_rate_limit"),
+            patch.object(ui_server, "try_download_pdf", side_effect=fake_download),
+        ):
+            ui_server.update_manual_preprint_identifier(
+                self.storage,
+                "corrected-arxiv-download",
+                "2501.12345",
+            )
+            with patch.object(
+                ui_server,
+                "fetch_arxiv_by_id",
+                return_value={"raw": {"arxiv_id": "2501.12345", "versioned_arxiv_id": "2501.12345v1"}},
+            ):
+                ui_server.download_arxiv_preprint_versions(self.storage, "corrected-arxiv-download")
+
+            ui_server.update_manual_preprint_identifier(
+                self.storage,
+                "corrected-arxiv-download",
+                "2502.54321",
+            )
+            with patch.object(
+                ui_server,
+                "fetch_arxiv_by_id",
+                return_value={"raw": {"arxiv_id": "2502.54321", "versioned_arxiv_id": "2502.54321v1"}},
+            ):
+                result = ui_server.download_arxiv_preprint_versions(self.storage, "corrected-arxiv-download")
+
+        self.assertEqual(result["downloaded_versions"], [1])
+        resources = self.storage.list_paper_resources("corrected-arxiv-download")
+        current = next(resource for resource in resources if resource["is_primary"])
+        previous = next(resource for resource in resources if not resource["is_primary"])
+        self.assertIn("2502.54321v1", current["source_url"])
+        self.assertEqual(current["version_role"], "preprint")
+        self.assertIn("2501.12345v1", previous["source_url"])
+        self.assertEqual(previous["version_role"], "other")
+        self.assertEqual(previous["version_label"], "Previous arXiv PDF")
+
     def test_schema_upgrade_registers_existing_pdf_without_moving_it(self) -> None:
         self.add_paper("legacy-paper")
         pdf = self.write_pdf("Legacy.pdf")
@@ -88,7 +316,40 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertTrue(resources[0]["is_primary"])
         self.assertEqual(resources[0]["local_path"], str(pdf))
         self.assertEqual(resources[0]["added_via"], "legacy_backfill")
+        self.assertEqual(resources[0]["version_role"], "other")
+        self.assertEqual(resources[0]["version_label"], "Imported PDF")
         self.assertTrue(pdf.exists())
+        self.assertEqual(pdf.read_bytes(), original_bytes)
+
+    def test_schema_upgrade_recognizes_exact_arxiv_filename_as_preprint(self) -> None:
+        self.add_paper("arxiv_1704.06287")
+        self.storage.update_paper_raw_json(
+            "arxiv_1704.06287",
+            {"arxiv_id": "1704.06287"},
+        )
+        pdf = self.write_pdf("3.Superconductivity/1704.06287.pdf")
+        original_bytes = pdf.read_bytes()
+        self.storage.conn.execute(
+            """
+            UPDATE papers
+            SET doi = ?, main_pdf_path = ?, merged_pdf_path = ?, primary_resource_id = NULL
+            WHERE paper_id = 'arxiv_1704.06287'
+            """,
+            ("10.1007/example", str(pdf), str(pdf)),
+        )
+        self.storage.conn.execute("DELETE FROM resources WHERE paper_id = 'arxiv_1704.06287'")
+        self.storage.conn.execute("PRAGMA user_version = 7")
+        self.storage.conn.commit()
+        self.storage.close()
+
+        self.storage = Storage(self.db_path)
+        resources = self.storage.list_paper_resources("arxiv_1704.06287")
+        self.assertEqual(len(resources), 1)
+        self.assertTrue(resources[0]["is_primary"])
+        self.assertEqual(resources[0]["version_role"], "preprint")
+        self.assertEqual(resources[0]["version_label"], "Preprint")
+        self.assertEqual(resources[0]["source_url"], "https://arxiv.org/pdf/1704.06287")
+        self.assertEqual(resources[0]["local_path"], str(pdf))
         self.assertEqual(pdf.read_bytes(), original_bytes)
 
     def test_manual_preference_overrides_automatic_version_rank(self) -> None:
@@ -121,6 +382,40 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.storage.set_preferred_paper_resource("versioned-paper", None)
         resolved = self.storage.resolve_primary_paper_resource("versioned-paper")
         self.assertEqual(int(resolved["id"]), int(published_resource["id"]))
+
+    def test_paper_version_role_can_be_reclassified_without_moving_file(self) -> None:
+        self.add_paper("manual-version-role")
+        pdf = self.write_pdf("Topic/Imported.pdf")
+        original_bytes = pdf.read_bytes()
+        self.storage.update_download_status(
+            "manual-version-role",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("manual-version-role")
+        resource_id = int(resource["id"])
+
+        expected_labels = {
+            "version_of_record": "Version of Record",
+            "first_published": "First Published",
+            "accepted_manuscript": "Accepted Manuscript",
+            "preprint": "Preprint",
+            "other": "Imported PDF",
+        }
+        for version_role, label in expected_labels.items():
+            updated = ui_server.update_paper_resource_version_role(
+                self.storage,
+                "manual-version-role",
+                resource_id,
+                version_role,
+            )
+            self.assertEqual(updated["version_role"], version_role)
+            self.assertEqual(updated["version_label"], label)
+            self.assertEqual(updated["stored_path"], str(pdf))
+            self.assertEqual(updated["display_name"], "Imported.pdf")
+
+        self.assertEqual(pdf.read_bytes(), original_bytes)
 
     def test_non_pdf_cannot_be_selected_as_preferred_pdf(self) -> None:
         self.add_paper("paper-with-note")
@@ -233,8 +528,8 @@ class PaperResourceStorageTests(unittest.TestCase):
         archived = next(resource for resource in resources if int(resource["id"]) != int(promoted["id"]))
         archived_path = Path(archived["stored_path"])
         self.assertIn("Associated Files/Library/Topic", str(archived_path))
-        self.assertEqual(archived_path.name, "Current [Previous Version].pdf")
-        self.assertEqual(archived["display_name"], "Current [Previous Version].pdf")
+        self.assertEqual(archived_path.name, "Current [Imported PDF].pdf")
+        self.assertEqual(archived["display_name"], "Current [Imported PDF].pdf")
         self.assertEqual(promoted["display_name"], "Published.pdf")
         self.assertEqual(archived_path.read_bytes(), old_bytes)
 
@@ -317,7 +612,10 @@ class PaperResourceStorageTests(unittest.TestCase):
         current = ui_server.register_downloaded_paper_resource(
             self.storage,
             "paper-download-history",
-            result={"status": "success"},
+            result={
+                "status": "success",
+                "main_pdf_url": "https://publisher.example/doi/pdf/10.1234/example",
+            },
             snapshot=snapshot,
         )
         ui_server.cleanup_download_resource_snapshot(snapshot)
@@ -331,6 +629,44 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertIn("Associated Files/Library/Topic", str(previous_path))
         self.assertEqual(previous_path.read_bytes(), old_bytes)
         self.assertEqual(primary.read_bytes(), b"%PDF-1.4\nrefreshed published file\n%%EOF\n")
+
+    def test_download_from_arxiv_is_preprint_even_when_paper_has_doi(self) -> None:
+        self.add_paper("paper-doi-with-arxiv-pdf")
+        primary = self.write_pdf("Topic/Existing.pdf")
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ? WHERE paper_id = ?",
+            ("10.1234/published", "paper-doi-with-arxiv-pdf"),
+        )
+        self.storage.update_paper_raw_json(
+            "paper-doi-with-arxiv-pdf",
+            {"arxiv_id": "1704.06287"},
+        )
+        self.storage.update_download_status(
+            "paper-doi-with-arxiv-pdf",
+            status="success",
+            main_pdf_path=str(primary),
+            merged_pdf_path=str(primary),
+        )
+        snapshot = ui_server.snapshot_primary_resource_before_download(
+            self.storage,
+            "paper-doi-with-arxiv-pdf",
+            force=True,
+        )
+        primary.write_bytes(b"%PDF-1.4\narxiv preprint\n%%EOF\n")
+
+        current = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "paper-doi-with-arxiv-pdf",
+            result={
+                "status": "success",
+                "main_pdf_url": "https://arxiv.org/pdf/1704.06287v2",
+            },
+            snapshot=snapshot,
+        )
+        ui_server.cleanup_download_resource_snapshot(snapshot)
+
+        self.assertEqual(current["version_role"], "preprint")
+        self.assertEqual(current["source_url"], "https://arxiv.org/pdf/1704.06287v2")
 
     def test_forced_download_refresh_does_not_duplicate_identical_pdf(self) -> None:
         self.add_paper("paper-download-identical")

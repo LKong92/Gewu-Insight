@@ -20,6 +20,37 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertNotIn("<dt>Title</dt>", metadata)
         self.assertGreaterEqual(INDEX_HTML.count("libraryDetailMetadataMarkup(paper"), 6)
 
+    def test_preprint_identifier_can_be_edited_inline_from_shared_paper_details(self) -> None:
+        metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
+            "function libraryDetailFolderOccurrencesMarkup", 1
+        )[0]
+        self.assertIn('class="library-preprint-identifier"', metadata)
+        self.assertIn('data-action="edit-preprint-identifier"', metadata)
+        self.assertIn('title="Click to edit the arXiv identifier"', metadata)
+        self.assertIn('class="preprint-identifier-input"', metadata)
+        self.assertIn('main.classList.add("is-editing")', metadata)
+        self.assertIn('fetch("/api/library/preprint-identifier"', metadata)
+        self.assertIn('if (event.key === "Enter"', metadata)
+        self.assertIn('if (event.key === "Escape"', metadata)
+        self.assertNotIn("showPreprintIdentifierContextMenu", metadata)
+        self.assertNotIn("openPreprintIdentifierEditor", metadata)
+        self.assertGreaterEqual(INDEX_HTML.count("wirePreprintIdentifierControls(root, paper)"), 5)
+
+    def test_managed_works_can_download_latest_or_sync_all_arxiv_versions(self) -> None:
+        metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
+            "function libraryDetailFolderOccurrencesMarkup", 1
+        )[0]
+        self.assertIn('data-action="download-arxiv-latest"', metadata)
+        self.assertIn("options.managePreprintFiles", metadata)
+        self.assertIn('data-action="sync-arxiv-versions"', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/arxiv"', INDEX_HTML)
+        self.assertIn('mode: syncAll ? "all" : "latest"', INDEX_HTML)
+        self.assertGreaterEqual(INDEX_HTML.count("managePreprintFiles: true"), 4)
+        author_detail = INDEX_HTML.split("function renderAuthorMonitorPaperDetail", 1)[1].split(
+            "async function downloadAuthorMonitorPdf", 1
+        )[0]
+        self.assertNotIn("managePreprintFiles: true", author_detail)
+
     def test_library_and_my_publications_share_the_files_panel(self) -> None:
         self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
         self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
@@ -39,6 +70,21 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('fetch("/api/paper-files", {method: "POST", body: form})', INDEX_HTML)
         self.assertIn('fetch("/api/paper-files/preferred", {', INDEX_HTML)
         self.assertIn('fetch("/api/paper-files/delete", {', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/arxiv", {', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/version-role", {', INDEX_HTML)
+
+    def test_paper_version_type_is_an_inline_compact_popup(self) -> None:
+        self.assertIn('class="paper-file-version-picker"', INDEX_HTML)
+        self.assertIn('class="paper-file-version-select"', INDEX_HTML)
+        self.assertIn('class="paper-file-version-arrows"', INDEX_HTML)
+        self.assertIn('data-action="set-paper-file-version-role"', INDEX_HTML)
+        self.assertIn('["other", "Imported PDF"]', INDEX_HTML)
+        self.assertIn('["version_of_record", "Version of Record"]', INDEX_HTML)
+        self.assertIn('["first_published", "First Published"]', INDEX_HTML)
+        self.assertIn('["accepted_manuscript", "Accepted Manuscript"]', INDEX_HTML)
+        self.assertIn('["preprint", "Preprint"]', INDEX_HTML)
+        self.assertIn("async function setPaperFileVersionRole", INDEX_HTML)
+        self.assertIn("font-size: 9px;", INDEX_HTML)
 
     def test_files_panel_can_collapse_and_non_primary_files_can_be_deleted(self) -> None:
         self.assertIn('data-action="toggle-paper-files"', INDEX_HTML)
@@ -52,6 +98,12 @@ class PaperFilesUiTests(unittest.TestCase):
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
         self.assertIn("runJavaScriptConfirmPanelWithMessage", launcher)
         self.assertIn('addButtonWithTitle:@"Delete"', launcher)
+
+    def test_unknown_legacy_pdf_is_not_presented_as_published_version(self) -> None:
+        self.assertIn(
+            'file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF"',
+            INDEX_HTML,
+        )
 
     def test_native_app_uses_a_real_file_chooser_for_add_file(self) -> None:
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")

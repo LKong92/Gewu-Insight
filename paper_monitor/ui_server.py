@@ -58,6 +58,7 @@ from .download import (
     normalize_doi,
     publisher_browser_candidate,
     science_supplement_pdf_candidates,
+    try_download_pdf,
 )
 from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
@@ -65,7 +66,7 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import merge_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version
+from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version, wait_for_arxiv_rate_limit
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import (
     OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES,
@@ -522,8 +523,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/paper-files/preferred":
                 self.handle_set_preferred_paper_file(payload)
                 return
+            if parsed.path == "/api/paper-files/version-role":
+                self.handle_set_paper_file_version_role(payload)
+                return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
+                return
+            if parsed.path == "/api/paper-files/arxiv":
+                self.handle_download_arxiv_versions(payload)
                 return
             if parsed.path == "/api/download":
                 self.handle_download(payload)
@@ -644,6 +651,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/refresh-metadata":
                 self.handle_refresh_library_metadata(payload)
+                return
+            if parsed.path == "/api/library/preprint-identifier":
+                self.handle_update_preprint_identifier(payload)
                 return
             if parsed.path == "/api/library/extract-identifier":
                 self.handle_extract_library_identifier(payload)
@@ -1239,6 +1249,37 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_download_arxiv_versions(self, payload: dict[str, Any]) -> None:
+        paper_id = clean_text(str(payload.get("paper_id") or ""))
+        mode = clean_text(str(payload.get("mode") or "latest")).lower()
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        if mode not in {"latest", "all"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "mode must be latest or all")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            result = download_arxiv_preprint_versions(
+                storage,
+                paper_id,
+                include_history=mode == "all",
+            )
+            response = paper_files_state_payload(storage, paper_id)
+            response["arxiv"] = result
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except (OSError, RuntimeError, requests.RequestException, ET.ParseError) as exc:
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(response)
+
     def handle_set_preferred_paper_file(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         if not paper_id:
@@ -1313,6 +1354,32 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "paper": paper_to_api(paper) if paper else None,
             }
         )
+
+    def handle_set_paper_file_version_role(self, payload: dict[str, Any]) -> None:
+        paper_id = clean_text(str(payload.get("paper_id") or ""))
+        resource_id = int(payload.get("resource_id") or 0)
+        version_role = clean_text(str(payload.get("version_role") or ""))
+        if not paper_id or resource_id <= 0:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id and resource_id are required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            update_paper_resource_version_role(
+                storage,
+                paper_id,
+                resource_id,
+                version_role,
+            )
+            response = paper_files_state_payload(storage, paper_id)
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper file was not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(response)
 
     def handle_manual_pdf_path(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -4029,6 +4096,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"paper": paper_to_api(paper), "publications": publications, **snapshot})
+
+    def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
+        paper_id = clean_text(str(payload.get("paper_id") or ""))
+        identifier = clean_text(str(payload.get("identifier") or ""))
+        if not paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            paper = update_manual_preprint_identifier(storage, paper_id, identifier)
+            publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json({"paper": paper_to_api(paper), "publications": publications})
 
     def handle_extract_library_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = str(payload.get("paper_id") or "")
@@ -14799,6 +14886,8 @@ def looks_like_arxiv_identifier(value: str) -> bool:
 
 def arxiv_identifier_for_paper(paper: dict[str, Any]) -> str:
     raw = parse_raw_json(paper)
+    if raw.get("manual_preprint_identifier_override") is True:
+        return normalize_arxiv_identifier(str(raw.get("manual_preprint_identifier") or ""))
     preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
     versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
     preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
@@ -15401,7 +15490,12 @@ def merge_refreshed_metadata(existing: dict[str, Any] | None, refreshed: dict[st
         merged["image_url"] = existing.get("image_url") or ""
     existing_raw = parse_raw_json(existing)
     refreshed_raw = merged.get("raw") if isinstance(merged.get("raw"), dict) else {}
-    for key in ["ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi", "citation_versions", "google_scholar", "crossref", "pubmed", "pmid", "pmcid"]:
+    for key in [
+        "ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi",
+        "citation_versions", "google_scholar", "crossref", "pubmed", "pmid", "pmcid",
+        "manual_preprint_identifier_override", "manual_preprint_identifier",
+        "manual_preprint_identifier_updated_at",
+    ]:
         if key not in refreshed_raw and key in existing_raw:
             refreshed_raw[key] = existing_raw[key]
     for key in ["volume", "issue", "page", "article-number", "biblio", "journal-issue"]:
@@ -17203,14 +17297,262 @@ def authors_from_google_scholar(raw: dict[str, Any]) -> list[str]:
 
 def preprint_identifier(paper: dict[str, Any], *, raw: dict[str, Any] | None = None) -> str:
     raw = raw if isinstance(raw, dict) else None
+    raw = raw if raw is not None else parse_raw_json(paper)
+    if raw.get("manual_preprint_identifier_override") is True:
+        return normalize_arxiv_identifier(str(raw.get("manual_preprint_identifier") or ""))
     if (paper.get("journal") or "").lower() != ARXIV_JOURNAL_NAME.lower():
-        raw = raw if raw is not None else parse_raw_json(paper)
         preprint = raw.get("preprint") if isinstance(raw.get("preprint"), dict) else {}
         versions = raw.get("citation_versions") if isinstance(raw.get("citation_versions"), dict) else {}
         preprint_version = versions.get("preprint") if isinstance(versions.get("preprint"), dict) else {}
         return clean_text(preprint.get("arxiv_id") or preprint_version.get("arxiv_id") or raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
-    raw = raw if raw is not None else parse_raw_json(paper)
     return clean_text(raw.get("arxiv_id") or raw.get("versioned_arxiv_id") or "")
+
+
+def update_manual_preprint_identifier(
+    storage: Storage,
+    paper_id: str,
+    identifier: str,
+) -> dict[str, Any]:
+    paper = storage.get_paper(str(paper_id))
+    if not paper:
+        raise KeyError(str(paper_id))
+    cleaned = clean_text(identifier)
+    normalized = normalize_arxiv_identifier(cleaned)
+    if cleaned and not normalized:
+        raise ValueError("Enter a valid arXiv identifier or arXiv URL")
+    raw = parse_raw_json(paper)
+    raw["manual_preprint_identifier_override"] = True
+    raw["manual_preprint_identifier"] = normalized
+    raw["manual_preprint_identifier_updated_at"] = now_iso()
+    updated = storage.update_paper_raw_json(str(paper_id), raw)
+    if not updated:
+        raise KeyError(str(paper_id))
+    return updated
+
+
+def arxiv_record_version_info(record: dict[str, Any], requested_identifier: str) -> tuple[str, int, str, str]:
+    raw = record.get("raw") if isinstance(record.get("raw"), dict) else {}
+    versioned = clean_text(raw.get("versioned_arxiv_id") or raw.get("arxiv_id") or requested_identifier)
+    identifier = normalize_arxiv_identifier(versioned)
+    requested = normalize_arxiv_identifier(requested_identifier)
+    if not identifier or identifier != requested:
+        raise RuntimeError("arXiv returned metadata for a different identifier")
+    match = re.search(r"v(\d+)$", versioned, flags=re.I)
+    latest_version = max(1, int(match.group(1))) if match else 1
+    return (
+        identifier,
+        latest_version,
+        clean_text(raw.get("published") or ""),
+        clean_text(raw.get("updated") or ""),
+    )
+
+
+def arxiv_version_filename(identifier: str, version_number: int) -> str:
+    safe_identifier = finder_safe_name(identifier.replace("/", "_"), "arXiv")
+    return finder_safe_name(
+        f"{safe_identifier}v{int(version_number)} [Preprint v{int(version_number)}].pdf",
+        f"arXiv v{int(version_number)} [Preprint v{int(version_number)}].pdf",
+    )
+
+
+def download_arxiv_preprint_versions(
+    storage: Storage,
+    paper_id: str,
+    *,
+    include_history: bool = False,
+) -> dict[str, Any]:
+    paper = storage.get_paper(str(paper_id))
+    if not paper:
+        raise KeyError(str(paper_id))
+    if preferred_local_pdf_dir_for_paper(storage, str(paper_id)) is None:
+        raise ValueError("Add this paper to Library or My Publications before downloading arXiv files")
+    requested_identifier = normalize_arxiv_identifier(preprint_identifier(paper))
+    if not requested_identifier:
+        raise ValueError("This paper does not have a valid arXiv identifier")
+    record = fetch_arxiv_by_id(requested_identifier)
+    if not record:
+        raise RuntimeError("arXiv metadata was not found for this identifier")
+    identifier, latest_version, published_at, updated_at = arxiv_record_version_info(
+        record,
+        requested_identifier,
+    )
+    target_versions = list(range(1, latest_version + 1)) if include_history else [latest_version]
+    resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
+    version_resources: dict[int, dict[str, Any]] = {}
+    stale_synced_resources: list[dict[str, Any]] = []
+    for resource in resources:
+        if (
+            clean_text(resource.get("file_role") or "") != "publication_version"
+            or clean_text(resource.get("version_role") or "") != "preprint"
+        ):
+            continue
+        source_identifier = normalize_arxiv_identifier(clean_text(resource.get("source_url") or ""))
+        if source_identifier != identifier:
+            if source_identifier and clean_text(resource.get("added_via") or "") == "arxiv_version_sync":
+                stale_synced_resources.append(resource)
+            continue
+        number = int(resource.get("version_number") or 0)
+        if number <= 0:
+            continue
+        current = version_resources.get(number)
+        if current is None or (not current.get("exists") and resource.get("exists")):
+            version_resources[number] = resource
+
+    versions_dir = associated_work_dir_for_paper(storage, str(paper_id)) / "Versions"
+    downloaded_versions: list[int] = []
+    existing_versions: list[int] = []
+    failed_versions: list[dict[str, Any]] = []
+    for version_number in target_versions:
+        existing = version_resources.get(version_number)
+        if existing and existing.get("exists"):
+            existing_versions.append(version_number)
+            continue
+        versioned_identifier = f"{identifier}v{version_number}"
+        source_url = f"https://arxiv.org/pdf/{quote(versioned_identifier, safe='/.-')}"
+        filename = arxiv_version_filename(identifier, version_number)
+        temporary_dir = Path(tempfile.mkdtemp(prefix="gewu-arxiv-version-"))
+        temporary = temporary_dir / filename
+        target: Path | None = None
+        messages: list[str] = []
+        try:
+            downloaded = False
+            for _attempt in range(2):
+                wait_for_arxiv_rate_limit()
+                if try_download_pdf(
+                    source_url,
+                    temporary,
+                    messages,
+                    request_max_retries=1,
+                ):
+                    downloaded = True
+                    break
+            if not downloaded:
+                raise RuntimeError(messages[-1] if messages else "arXiv did not return a valid PDF")
+            versions_dir.mkdir(parents=True, exist_ok=True)
+            target = unique_path_in_dir(versions_dir / filename)
+            shutil.move(str(temporary), str(target))
+            digest = sha256_for_file(target)
+            version_date = published_at if version_number == 1 else (updated_at if version_number == latest_version else "")
+            label = f"Preprint v{version_number}"
+            previous = max(
+                (
+                    resource
+                    for number, resource in version_resources.items()
+                    if number < version_number and int(resource.get("id") or 0)
+                ),
+                key=lambda resource: int(resource.get("version_number") or 0),
+                default=None,
+            )
+            if existing:
+                storage.conn.execute(
+                    """
+                    UPDATE resources
+                    SET stored_path = ?, original_filename = ?, display_name = ?,
+                        file_role = 'publication_version', version_role = 'preprint',
+                        version_label = ?, version_date = ?, version_number = ?,
+                        source_url = ?, storage_mode = 'managed', sha256 = ?,
+                        added_via = 'arxiv_version_sync', mime_type = 'application/pdf',
+                        kind = 'pdf', size_bytes = ?, modified_at = ?,
+                        supersedes_resource_id = ?, missing_status = '', status = 'imported',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(target),
+                        target.name,
+                        target.name,
+                        label,
+                        version_date or None,
+                        version_number,
+                        source_url,
+                        digest,
+                        int(target.stat().st_size),
+                        now_iso(),
+                        int(previous.get("id") or 0) if previous else None,
+                        now_iso(),
+                        int(existing.get("id") or 0),
+                    ),
+                )
+                storage.conn.commit()
+                resource = storage.get_paper_resource(int(existing.get("id") or 0)) or existing
+            else:
+                resource = storage.create_paper_resource(
+                    paper_id=str(paper_id),
+                    stored_path=str(target),
+                    display_name=target.name,
+                    file_role="publication_version",
+                    version_role="preprint",
+                    version_label=label,
+                    version_date=version_date,
+                    version_number=version_number,
+                    source_url=source_url,
+                    storage_mode="managed",
+                    sha256=digest,
+                    added_via="arxiv_version_sync",
+                    mime_type="application/pdf",
+                    kind="pdf",
+                    supersedes_resource_id=int(previous.get("id") or 0) if previous else None,
+                )
+            version_resources[version_number] = {**resource, "exists": True, "local_path": str(target)}
+            downloaded_versions.append(version_number)
+        except Exception as exc:
+            if target and target.exists() and not any(
+                clean_text(resource.get("stored_path") or "") == str(target)
+                for resource in version_resources.values()
+            ):
+                target.unlink(missing_ok=True)
+            failed_versions.append({"version": version_number, "error": str(exc)})
+        finally:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
+
+    available_targets = [
+        version_resources[number]
+        for number in target_versions
+        if number in version_resources and version_resources[number].get("exists")
+    ]
+    if not available_targets:
+        detail = failed_versions[-1]["error"] if failed_versions else "No arXiv PDF was downloaded"
+        raise RuntimeError(detail)
+    if stale_synced_resources:
+        timestamp = now_iso()
+        storage.conn.executemany(
+            """
+            UPDATE resources
+            SET version_role = 'other', version_label = 'Previous arXiv PDF', updated_at = ?
+            WHERE id = ?
+            """,
+            [
+                (timestamp, int(resource.get("id") or 0))
+                for resource in stale_synced_resources
+                if int(resource.get("id") or 0)
+            ],
+        )
+        storage.conn.commit()
+    best_preprint = max(
+        (resource for resource in version_resources.values() if resource.get("exists")),
+        key=lambda resource: int(resource.get("version_number") or 0),
+    )
+    if should_promote_new_paper_version(storage, str(paper_id), best_preprint):
+        promote_paper_resource(storage, str(paper_id), int(best_preprint.get("id") or 0))
+
+    updated = storage.get_paper(str(paper_id)) or paper
+    raw = parse_raw_json(updated)
+    raw["arxiv_version_sync"] = {
+        "identifier": identifier,
+        "latest_version": latest_version,
+        "checked_at": now_iso(),
+        "downloaded_versions": downloaded_versions,
+        "failed_versions": [int(item["version"]) for item in failed_versions],
+    }
+    storage.update_paper_raw_json(str(paper_id), raw)
+    return {
+        "identifier": identifier,
+        "latest_version": latest_version,
+        "requested_versions": target_versions,
+        "downloaded_versions": downloaded_versions,
+        "existing_versions": existing_versions,
+        "failed_versions": failed_versions,
+    }
 
 
 def preprint_categories(paper: dict[str, Any], *, raw: dict[str, Any] | None = None) -> list[str]:
@@ -19518,6 +19860,49 @@ def adopt_existing_paper_resource(
     return storage.get_paper_resource(int(resource_id)) or {}
 
 
+def update_paper_resource_version_role(
+    storage: Storage,
+    paper_id: str,
+    resource_id: int,
+    version_role: str,
+) -> dict[str, Any]:
+    paper = storage.get_paper(str(paper_id))
+    resource = storage.get_paper_resource(int(resource_id))
+    if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
+        raise KeyError(int(resource_id))
+    if clean_text(resource.get("file_role") or "") != "publication_version" or not storage.resource_is_pdf(resource):
+        raise ValueError("Only paper-version PDFs can be reclassified")
+    role = clean_text(version_role).lower().replace("-", "_")
+    labels = {
+        "version_of_record": "Version of Record",
+        "first_published": "First Published",
+        "accepted_manuscript": "Accepted Manuscript",
+        "preprint": "Preprint",
+        "other": "Imported PDF",
+    }
+    if role not in labels:
+        raise ValueError("Unknown paper version type")
+    version_number = int(resource.get("version_number") or 0) if role == "preprint" else 0
+    version_label = f"Preprint v{version_number}" if version_number else labels[role]
+    storage.conn.execute(
+        """
+        UPDATE resources
+        SET version_role = ?, version_label = ?, version_number = ?, updated_at = ?
+        WHERE id = ? AND paper_id = ?
+        """,
+        (
+            role,
+            version_label,
+            version_number or None,
+            now_iso(),
+            int(resource_id),
+            str(paper_id),
+        ),
+    )
+    storage.conn.commit()
+    return storage.get_paper_resource(int(resource_id)) or {}
+
+
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
@@ -19634,10 +20019,14 @@ def cleanup_download_resource_snapshot(snapshot: dict[str, Any] | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def downloaded_version_role(paper: dict[str, Any]) -> str:
-    if clean_text(paper.get("doi") or ""):
+def downloaded_version_role(paper: dict[str, Any], source_url: str = "") -> str:
+    resolved_url = clean_text(source_url or paper.get("pdf_url") or "")
+    host = urlparse(resolved_url).netloc.casefold()
+    if host == "arxiv.org" or host.endswith(".arxiv.org"):
+        return "preprint"
+    if resolved_url and clean_text(paper.get("doi") or ""):
         return "version_of_record"
-    if clean_text(paper.get("arxiv_id") or ""):
+    if resolved_url and clean_text(paper.get("arxiv_id") or ""):
         return "preprint"
     return "other"
 
@@ -19656,6 +20045,7 @@ def register_downloaded_paper_resource(
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
         return None
+    download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
     new_digest = sha256_for_file(canonical)
     if not snapshot:
         primary = storage.ensure_primary_pdf_resource(str(paper_id))
@@ -19704,8 +20094,8 @@ def register_downloaded_paper_resource(
             stored_path=str(canonical),
             display_name=canonical.name,
             file_role="publication_version",
-            version_role=downloaded_version_role(paper),
-            source_url=clean_text(paper.get("pdf_url") or ""),
+            version_role=downloaded_version_role(paper, download_source_url),
+            source_url=download_source_url,
             storage_mode="managed",
             sha256=new_digest,
             added_via="download_refresh",
@@ -19812,6 +20202,8 @@ def paper_resource_archive_name(resource: dict[str, Any], fallback_path: Path) -
     label = clean_text(labels.get(str(resource.get("version_role") or "other"), "Previous Version"))
     suffix = fallback_path.suffix or ".pdf"
     stem = fallback_path.stem or "Paper"
+    if stem.casefold().endswith(f" [{label}]".casefold()):
+        return finder_safe_name(f"{stem}{suffix}", f"Paper [{label}]{suffix}")
     return finder_safe_name(f"{stem} [{label}]{suffix}", f"Paper [{label}]{suffix}")
 
 
@@ -26994,6 +27386,83 @@ INDEX_HTML = """<!doctype html>
       font-size: 0.92em;
       user-select: text;
     }
+    .library-preprint-identifier {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+    }
+    .preprint-identifier-main {
+      position: relative;
+      min-width: 0;
+      min-height: 28px;
+    }
+    .preprint-identifier-value {
+      width: 100%;
+      min-height: 28px;
+      padding: 0 4px;
+      border: 0;
+      border-bottom: 1px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      line-height: inherit;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      cursor: text;
+      opacity: 1;
+      transition: opacity 150ms ease, border-color 150ms ease, background 150ms ease;
+    }
+    .preprint-identifier-value:hover,
+    .preprint-identifier-value:focus-visible {
+      outline: 0;
+      border-bottom-color: var(--accent);
+      background: rgba(31, 79, 122, 0.035);
+    }
+    .preprint-identifier-input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      min-width: 0;
+      min-height: 28px;
+      border: 0;
+      border-bottom: 1px solid var(--accent);
+      border-radius: 0;
+      outline: 0;
+      background: transparent;
+      color: inherit;
+      padding: 0 4px;
+      font: inherit;
+      line-height: inherit;
+      opacity: 0;
+      pointer-events: none;
+      transform: scaleX(0.985);
+      transform-origin: left center;
+      transition: opacity 150ms ease, transform 150ms ease;
+    }
+    .preprint-identifier-main.is-editing .preprint-identifier-value {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .preprint-identifier-main.is-editing .preprint-identifier-input {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scaleX(1);
+    }
+    .preprint-identifier-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .preprint-identifier-status {
+      grid-column: 1 / -1;
+      color: #b42318;
+      font-size: 11px;
+    }
+    .preprint-identifier-status:empty { display: none; }
     .library-detail-title {
       color: var(--ink);
       font-weight: 650;
@@ -27323,6 +27792,13 @@ INDEX_HTML = """<!doctype html>
     .paper-files-panel.is-collapsed .paper-files-current-summary { display: block; }
     .paper-files-empty,
     .paper-files-loading { padding: 7px 3px; color: var(--muted); font-size: 11px; }
+    .paper-files-sync-row {
+      display: flex;
+      justify-content: flex-end;
+      padding: 3px 3px 5px;
+      border-bottom: 1px solid #eceef1;
+    }
+    .paper-files-sync-row .action { min-height: 24px; padding: 3px 8px; font-size: 10px; }
     .paper-files-group-label {
       padding: 6px 3px 3px;
       color: #7b8491;
@@ -27360,7 +27836,49 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .paper-file-name:disabled { color: #9a6262; cursor: default; }
-    .paper-file-meta { margin-top: 1px; color: #7b8491; font-size: 9px; }
+    .paper-file-meta {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      margin-top: 1px;
+      color: #7b8491;
+      font-size: 9px;
+    }
+    .paper-file-version-picker {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #6f7a8a;
+      font-size: 9px;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+    .paper-file-version-picker:hover,
+    .paper-file-version-picker:focus-within {
+      color: #374151;
+    }
+    .paper-file-version-arrows {
+      display: inline-flex;
+      flex-direction: column;
+      justify-content: center;
+      color: currentColor;
+      font-size: 5px;
+      line-height: .62;
+      transform: translateY(-.2px);
+    }
+    .paper-file-version-select {
+      position: absolute;
+      inset: -2px -3px;
+      width: calc(100% + 6px);
+      height: calc(100% + 4px);
+      margin: 0;
+      border: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .paper-file-version-select:disabled { cursor: wait; }
     .paper-file-actions { display: flex; align-items: center; gap: 3px; }
     .paper-file-actions .action { min-height: 22px; padding: 2px 6px; font-size: 9px; }
     .paper-file-actions .delete-paper-file { color: #8a3f46; }
@@ -39711,7 +40229,7 @@ INDEX_HTML = """<!doctype html>
         first_published: "First Published",
         accepted_manuscript: "Accepted Manuscript",
         preprint: file.version_label || (file.version_number ? `arXiv v${file.version_number}` : "Preprint"),
-        other: file.version_label || "Publication Version"
+        other: file.version_label || (file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF")
       };
       if (file.file_role === "publication_version") return versionLabels[file.version_role || "other"] || "Publication Version";
       return {
@@ -39731,16 +40249,30 @@ INDEX_HTML = """<!doctype html>
       return "FILES";
     }
 
+    function paperFileVersionRoleOptions(file) {
+      const selected = String(file.version_role || "other");
+      return [
+        ["other", "Imported PDF"],
+        ["version_of_record", "Version of Record"],
+        ["first_published", "First Published"],
+        ["accepted_manuscript", "Accepted Manuscript"],
+        ["preprint", "Preprint"]
+      ].map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+    }
+
     function paperFileRowMarkup(file) {
       const name = file.display_name || file.local_path?.split("/").pop() || "Attached File";
-      const meta = [paperFileRoleLabel(file), fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean).join(" · ");
+      const roleControl = file.file_role === "publication_version"
+        ? `<span class="paper-file-version-picker" title="Change version type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-action="set-paper-file-version-role" data-paper-file-id="${Number(file.id || 0)}" aria-label="Version type for ${escapeAttr(name)}">${paperFileVersionRoleOptions(file)}</select></span>`
+        : `<span>${escapeHtml(paperFileRoleLabel(file))}</span>`;
+      const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean);
       const ext = String(file.extension || "").replace(/^\./, "") || "none";
       return `
         <div class="paper-file-row" data-paper-file-id="${Number(file.id || 0)}">
           <span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')"></span>
           <span class="paper-file-copy">
             <button class="paper-file-name" type="button" data-action="open-paper-file" data-file-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"} title="${escapeAttr(file.local_path || name)}">${escapeHtml(name)}${file.is_primary ? `<span class="paper-file-default">Default</span>` : ""}</button>
-            <span class="paper-file-meta">${escapeHtml(meta)}</span>
+            <span class="paper-file-meta">${roleControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
           </span>
           <span class="paper-file-actions">
             ${file.file_role === "publication_version" && file.exists && !file.is_primary ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}">Use</button>` : ""}
@@ -39796,7 +40328,7 @@ INDEX_HTML = """<!doctype html>
             </span>
             <span class="paper-files-current-summary" title="${escapeAttr(currentSummary)}">${escapeHtml(currentSummary)}</span>
           </div>
-          <div class="paper-files-body">${body}</div>
+          <div class="paper-files-body">${paper?.preprint_id ? `<div class="paper-files-sync-row"><button class="action" type="button" data-action="sync-arxiv-versions">Sync Versions</button></div>` : ""}${body}</div>
         </section>
       `;
     }
@@ -39910,6 +40442,19 @@ INDEX_HTML = """<!doctype html>
       return data;
     }
 
+    async function setPaperFileVersionRole(paperId, resourceId, versionRole) {
+      const res = await fetch("/api/paper-files/version-role", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, version_role: versionRole})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not change version type");
+      state.paperFilesByPaperId[String(paperId)] = data;
+      if (data.paper) updatePaperState(paperId, data.paper);
+      return data;
+    }
+
     function wirePaperFilesPanel(root, paper) {
       const panel = root?.querySelector("[data-paper-files-panel]");
       if (!panel || !paper?.paper_id) return;
@@ -39924,6 +40469,9 @@ INDEX_HTML = """<!doctype html>
         button.title = collapsed ? "Expand Files" : "Collapse Files";
         const icon = button.querySelector(".paper-files-toggle-icon");
         if (icon) icon.textContent = collapsed ? "›" : "⌄";
+      });
+      panel.querySelector('[data-action="sync-arxiv-versions"]')?.addEventListener("click", (event) => {
+        downloadArxivPreprintVersions(paper, "all", event.currentTarget);
       });
       panel.querySelector('[data-action="choose-paper-file"]')?.addEventListener("click", () => {
         const selection = String(panel.querySelector("[data-paper-file-role]")?.value || "other");
@@ -39962,6 +40510,23 @@ INDEX_HTML = """<!doctype html>
         }
       }));
       panel.querySelectorAll('[data-action="auto-paper-file"]').forEach((button) => button.addEventListener("click", () => setPreferredPaperFile(paper.paper_id, null).catch(() => {})));
+      panel.querySelectorAll('[data-action="set-paper-file-version-role"]').forEach((select) => select.addEventListener("change", async () => {
+        const resourceId = Number(select.dataset.paperFileId || 0);
+        select.disabled = true;
+        try {
+          await setPaperFileVersionRole(paper.paper_id, resourceId, select.value || "other");
+          if (state.libraryTab === "my-publications") renderPublicationDetail();
+          else renderLibrary();
+        } catch (error) {
+          select.disabled = false;
+          const status = root.querySelector("#libraryDetailStatus");
+          if (status) {
+            status.textContent = error.message || "Could not change version type";
+            status.className = "library-detail-status err";
+          }
+          loadPaperFiles(paper.paper_id, {force: true}).catch(() => {});
+        }
+      }));
       panel.querySelectorAll('[data-action="delete-paper-file"]').forEach((button) => button.addEventListener("click", async () => {
         const resourceId = Number(button.dataset.paperFileId || 0);
         const name = String(button.dataset.paperFileName || "Attached File");
@@ -40030,7 +40595,7 @@ INDEX_HTML = """<!doctype html>
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>Identifier</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
-          ${preprintId && paper.doi ? `<dt>Preprint</dt><dd><span>arXiv:${escapeHtml(preprintId)}</span> <button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button></dd>` : ""}
+          ${preprintId && paper.doi ? `<dt>Preprint</dt><dd class="library-preprint-identifier"><span class="preprint-identifier-main"><button class="preprint-identifier-value" type="button" data-action="edit-preprint-identifier" title="Click to edit the arXiv identifier">arXiv:${escapeHtml(preprintId)}</button><input class="preprint-identifier-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" value="${escapeAttr(preprintId)}" aria-label="arXiv identifier"></span><span class="preprint-identifier-actions"><button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button>${options.managePreprintFiles ? `<button class="action" type="button" data-action="download-arxiv-latest">Download</button>` : ""}</span><span class="preprint-identifier-status" aria-live="polite"></span></dd>` : ""}
           ${options.hideGewuKey ? "" : `<dt>Gewu Key</dt><dd><span class="gewu-storage-key" title="Gewu Insight internal storage key">${escapeHtml(paper.storage_key || "—")}</span></dd>`}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
@@ -40038,6 +40603,119 @@ INDEX_HTML = """<!doctype html>
           ${options.hideFiles ? "" : `<dt>Files</dt><dd>${libraryDetailFilesMarkup(paper, options)}</dd>`}
         </dl>
       `;
+    }
+
+    function wirePreprintIdentifierControls(root, paper) {
+      root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
+        const url = event.currentTarget?.dataset?.preprintUrl || "";
+        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
+      });
+      root?.querySelector('[data-action="download-arxiv-latest"]')?.addEventListener("click", (event) => {
+        downloadArxivPreprintVersions(paper, "latest", event.currentTarget);
+      });
+      const field = root?.querySelector(".library-preprint-identifier");
+      const main = field?.querySelector(".preprint-identifier-main");
+      const edit = field?.querySelector('[data-action="edit-preprint-identifier"]');
+      const input = field?.querySelector(".preprint-identifier-input");
+      const status = field?.querySelector(".preprint-identifier-status");
+      if (!field || !main || !edit || !input || !paper?.paper_id) return;
+      let busy = false;
+      const begin = () => {
+        if (busy) return;
+        if (status) status.textContent = "";
+        input.value = String(paper.preprint_id || "");
+        main.classList.add("is-editing");
+        input.focus({preventScroll: true});
+        input.select();
+      };
+      const cancel = () => {
+        if (busy) return;
+        input.value = String(paper.preprint_id || "");
+        main.classList.remove("is-editing");
+        if (status) status.textContent = "";
+      };
+      const save = async () => {
+        if (busy) return;
+        busy = true;
+        input.disabled = true;
+        if (status) status.textContent = "Saving...";
+        try {
+          const res = await fetch("/api/library/preprint-identifier", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paper.paper_id, identifier: String(input?.value || "").trim()})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not update preprint identifier");
+          if (Array.isArray(data.publications)) applyMyPublications(data);
+          updatePaperState(paper.paper_id, data.paper);
+          if (state.mode === "author") renderAuthorMonitorPaperDetail();
+          else if (state.libraryTab === "my-publications") renderPublicationDetail();
+          else renderLibrary();
+          const message = data.paper?.preprint_id ? "Preprint identifier updated." : "Preprint identifier removed.";
+          if (state.mode === "author") updateAuthorMonitorActivityStatus(message, {live: false});
+          else updateLibraryActivityStatus(message, {delay: 3000});
+        } catch (error) {
+          busy = false;
+          input.disabled = false;
+          if (status) status.textContent = error.message || "Could not update preprint identifier";
+          input?.focus({preventScroll: true});
+        }
+      };
+      edit.addEventListener("click", begin);
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !busy) {
+          event.preventDefault();
+          cancel();
+        }
+        if (event.key === "Enter" && !busy) {
+          event.preventDefault();
+          save();
+        }
+      });
+      input.addEventListener("blur", () => {
+        window.setTimeout(() => {
+          if (!busy && document.activeElement !== input) cancel();
+        }, 0);
+      });
+    }
+
+    async function downloadArxivPreprintVersions(paper, mode = "latest", button = null) {
+      if (!paper?.paper_id) return;
+      const syncAll = mode === "all";
+      const progress = syncAll ? "Syncing arXiv versions..." : "Downloading latest arXiv PDF...";
+      const activityId = `arxiv:${paper.paper_id}`;
+      if (button) button.disabled = true;
+      if (state.libraryTab === "my-publications") setMyPublicationActivity(activityId, progress);
+      updateLibraryActivityStatus(progress, {live: true, clear: false});
+      try {
+        const res = await fetch("/api/paper-files/arxiv", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id, mode: syncAll ? "all" : "latest"})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not download arXiv PDF");
+        state.paperFilesByPaperId[String(paper.paper_id)] = data;
+        if (data.paper) updatePaperState(paper.paper_id, data.paper);
+        const downloaded = Array.isArray(data.arxiv?.downloaded_versions) ? data.arxiv.downloaded_versions : [];
+        const existing = Array.isArray(data.arxiv?.existing_versions) ? data.arxiv.existing_versions : [];
+        const failed = Array.isArray(data.arxiv?.failed_versions) ? data.arxiv.failed_versions : [];
+        if (state.libraryTab === "my-publications") renderPublicationDetail();
+        else renderLibrary();
+        const versionLabel = downloaded.length
+          ? `Downloaded arXiv ${downloaded.map((value) => `v${value}`).join(", ")}.`
+          : existing.length
+            ? `arXiv ${existing.map((value) => `v${value}`).join(", ")} already downloaded.`
+            : "arXiv versions checked.";
+        const message = failed.length ? `${versionLabel} ${failed.length} version${failed.length === 1 ? "" : "s"} failed.` : versionLabel;
+        updateLibraryActivityStatus(message, {delay: failed.length ? 4800 : 3000});
+      } catch (error) {
+        updateLibraryActivityStatus(error.message || "arXiv download failed", {delay: 4800});
+        if (button && document.body.contains(button)) button.disabled = false;
+      } finally {
+        clearMyPublicationActivity(activityId);
+      }
     }
 
     function libraryDetailFolderOccurrencesMarkup(paper, selectedItemId = 0) {
@@ -40426,10 +41104,11 @@ INDEX_HTML = """<!doctype html>
         root.innerHTML = `
           <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
           <div class="library-detail-status">Loading details...</div>
-          ${libraryDetailMetadataMarkup(paper, [], null, {showLibraryFolders: true, selectedLibraryItemId: item?.id})}
+          ${libraryDetailMetadataMarkup(paper, [], null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, managePreprintFiles: true})}
         `;
         wireLibraryFolderOccurrenceControls(root);
         wireLibraryFileLocationLinks(root);
+        wirePreprintIdentifierControls(root, paper);
         loadLibraryItemPaperDetail(item);
         return;
       }
@@ -40457,7 +41136,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${paperFilesPanelMarkup(paper)}
-        ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, hideFiles: true})}
+        ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, hideFiles: true, managePreprintFiles: true})}
         ${citationMetricsMarkup(paper)}
         ${libraryDetailAbstractMarkup(paper)}
         ${pubmedMarkup(paper.pubmed || {})}
@@ -40485,10 +41164,7 @@ INDEX_HTML = """<!doctype html>
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
-      root.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
-        const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
-      });
+      wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
@@ -40626,11 +41302,12 @@ INDEX_HTML = """<!doctype html>
           <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
           ${libraryDetailFigureMarkup(paper)}
           <div class="library-detail-status" id="libraryDetailStatus">Loading details...</div>
-          ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true})}
+          ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true, managePreprintFiles: true})}
           ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
           ${publicationAuthorsSectionMarkup(publication, authors, paper)}
         `;
         wireLibraryFileLocationLinks(root);
+        wirePreprintIdentifierControls(root, paper);
         loadMyPublicationPaperDetail(publication);
         return;
       }
@@ -40652,7 +41329,7 @@ INDEX_HTML = """<!doctype html>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${paperFilesPanelMarkup(paper)}
         ${manualPublicationMetadataMarkup(publication, paper, authors)}
-        ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true, hideFiles: true})}
+        ${libraryDetailMetadataMarkup(paper, authors, publication, {hideAuthors: true, hideFiles: true, managePreprintFiles: true})}
         ${citationMetricsMarkup(paper, {commentsPublicationId: publication.id})}
         ${publicationAuthorsSectionMarkup(publication, authors, paper)}
         ${libraryDetailAbstractMarkup(paper)}
@@ -40678,10 +41355,7 @@ INDEX_HTML = """<!doctype html>
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
-      root.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
-        const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
-      });
+      wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireLibraryFileLocationLinks(root);
@@ -45854,6 +46528,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshAuthorMonitorMetadataFromIdentifier(paper);
       });
+      wirePreprintIdentifierControls(root, paper);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);

@@ -107,6 +107,7 @@ def download_paper(
             "status": status,
             "message": message,
             "main_pdf_path": str(preserved_main_pdf_path),
+            "main_pdf_url": "",
             "supplement_pdf_paths": [],
             "merged_pdf_path": str(preserved_main_pdf_path),
         }
@@ -159,6 +160,7 @@ def download_paper(
         "status": status,
         "message": message,
         "main_pdf_path": str(merged_path),
+        "main_pdf_url": main_pdf_url,
         "supplement_pdf_paths": [],
         "merged_pdf_path": str(merged_path),
     }
@@ -636,9 +638,21 @@ def normalize_doi(value: Any) -> str:
     return doi.strip().lower()
 
 
-def try_download_pdf(url: str, path: Path, messages: list[str]) -> bool:
+def try_download_pdf(
+    url: str,
+    path: Path,
+    messages: list[str],
+    *,
+    request_max_retries: int | None = None,
+) -> bool:
     try:
-        response = request_with_retries("GET", url, headers=pdf_request_headers(url), stream=True)
+        request_options: dict[str, Any] = {
+            "headers": pdf_request_headers(url),
+            "stream": True,
+        }
+        if request_max_retries is not None:
+            request_options["max_retries"] = max(1, int(request_max_retries))
+        response = request_with_retries("GET", url, **request_options)
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
