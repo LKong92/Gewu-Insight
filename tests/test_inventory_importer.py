@@ -560,6 +560,56 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         resource_count = self.storage.conn.execute("SELECT COUNT(*) AS c FROM resources WHERE kind = 'presentation'").fetchone()["c"]
         self.assertEqual(resource_count, 1)
 
+    def test_loader_match_never_replaces_an_existing_primary_pdf(self) -> None:
+        published = self.touch("library/Published.pdf", b"%PDF-1.4\npublished\n%%EOF\n")
+        preprint = self.touch("incoming/2401.01234v1.pdf", b"%PDF-1.4\npreprint\n%%EOF\n")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "doi_loader_preserve_primary",
+                "doi": "10.7777/preserve-primary",
+                "title": "Preserve Published Version",
+                "journal": "Fixture Journal",
+                "source": "test",
+                "raw": {},
+            }
+        )
+        self.storage.update_download_status(
+            "doi_loader_preserve_primary",
+            status="success",
+            main_pdf_path=str(published),
+            merged_pdf_path=str(published),
+        )
+        result = import_library_inventory(
+            self.write_inventory(
+                [
+                    self.pdf_record(
+                        preprint,
+                        doi="10.7777/preserve-primary",
+                        arxiv_id="2401.01234",
+                        title="Preserve Published Version",
+                    )
+                ]
+            ),
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "preserve-report.json",
+            target_root=self.root / "copied",
+        )
+
+        self.assertFalse(result["errors"])
+        paper = self.storage.get_paper("doi_loader_preserve_primary")
+        self.assertEqual(Path(paper["merged_pdf_path"]), published)
+        self.assertEqual(published.read_bytes(), b"%PDF-1.4\npublished\n%%EOF\n")
+        imported = self.storage.conn.execute(
+            "SELECT stored_path FROM resources WHERE paper_id = ? AND source_path = ?",
+            ("doi_loader_preserve_primary", str(preprint)),
+        ).fetchone()
+        self.assertIsNotNone(imported)
+        self.assertEqual(Path(imported["stored_path"]).read_bytes(), b"%PDF-1.4\npreprint\n%%EOF\n")
+
     def test_build_inventory_from_folder_scans_pdf_resource_and_metadata(self) -> None:
         scan_root = self.root / "scan"
         scan_root.mkdir()

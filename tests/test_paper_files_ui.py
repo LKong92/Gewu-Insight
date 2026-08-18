@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+from paper_monitor.ui_server import INDEX_HTML
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class PaperFilesUiTests(unittest.TestCase):
+    def test_shared_paper_details_show_gewu_key_without_repeating_title(self) -> None:
+        metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
+            "function libraryDetailFolderOccurrencesMarkup", 1
+        )[0]
+        self.assertIn("<dt>Gewu Key</dt>", metadata)
+        self.assertIn("paper.storage_key", metadata)
+        self.assertIn("gewu-storage-key", metadata)
+        self.assertNotIn("<dt>Title</dt>", metadata)
+        self.assertGreaterEqual(INDEX_HTML.count("libraryDetailMetadataMarkup(paper"), 6)
+
+    def test_library_and_my_publications_share_the_files_panel(self) -> None:
+        self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
+        self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
+        self.assertIn(">Add File</button>", INDEX_HTML)
+        self.assertIn("Version of Record", INDEX_HTML)
+        self.assertIn("Accepted Manuscript", INDEX_HTML)
+        self.assertIn("Preprint", INDEX_HTML)
+
+    def test_library_paper_row_opens_a_resource_column(self) -> None:
+        self.assertIn("function libraryPaperResourcesColumnMarkup(item)", INDEX_HTML)
+        self.assertIn("library-resource-column", INDEX_HTML)
+        self.assertIn("data-library-resource-path", INDEX_HTML)
+        self.assertIn('const meta = "›";', INDEX_HTML)
+
+    def test_resource_actions_use_explicit_file_endpoints(self) -> None:
+        self.assertIn('fetch(`/api/paper-files?paper_id=', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files", {method: "POST", body: form})', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/preferred", {', INDEX_HTML)
+        self.assertIn('fetch("/api/paper-files/delete", {', INDEX_HTML)
+
+    def test_files_panel_can_collapse_and_non_primary_files_can_be_deleted(self) -> None:
+        self.assertIn('data-action="toggle-paper-files"', INDEX_HTML)
+        self.assertIn('paper-files-panel.is-collapsed .paper-files-body', INDEX_HTML)
+        self.assertIn('expandedPaperFiles: new Set()', INDEX_HTML)
+        self.assertIn('const collapsed = !state.expandedPaperFiles.has(paperId);', INDEX_HTML)
+        self.assertIn('Current · ${paperFileRoleLabel(currentFile)}', INDEX_HTML)
+        self.assertIn('paper-files-current-summary', INDEX_HTML)
+        self.assertIn('data-action="delete-paper-file"', INDEX_HTML)
+        self.assertIn('!file.is_primary', INDEX_HTML)
+        launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
+        self.assertIn("runJavaScriptConfirmPanelWithMessage", launcher)
+        self.assertIn('addButtonWithTitle:@"Delete"', launcher)
+
+    def test_native_app_uses_a_real_file_chooser_for_add_file(self) -> None:
+        launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
+        self.assertIn('addScriptMessageHandler:self name:@"paperFileChooser"', launcher)
+        self.assertIn("showPaperFileChooserWithPayload", launcher)
+        self.assertIn("window.handleNativePaperFileSelection", launcher)
+        self.assertIn("window.webkit?.messageHandlers?.paperFileChooser", INDEX_HTML)
+
+    def test_finder_drop_on_a_paper_associates_instead_of_running_loader(self) -> None:
+        handler = INDEX_HTML.split("async function handleNativeFinderDrop", 1)[1].split(
+            "function libraryPdfDropTargetFromPoint", 1
+        )[0]
+        self.assertIn("libraryFileAssociationTargetFromPoint", handler)
+        self.assertIn("uploadPaperFilePaths", handler)
+        self.assertLess(handler.index("libraryFileAssociationTargetFromPoint"), handler.index("runLibraryDroppedPathsImport"))
+        self.assertIn('versionRole: "preprint"', INDEX_HTML)
+
+    def test_library_move_refreshes_associated_file_paths_before_render(self) -> None:
+        move_handler = INDEX_HTML.split("async function moveLibraryEntry", 1)[1].split(
+            "async function moveLibraryEntries", 1
+        )[0]
+        self.assertIn("applyPaperFilesPayloads(data.paper_files)", move_handler)
+        self.assertLess(
+            move_handler.index("applyPaperFilesPayloads(data.paper_files)"),
+            move_handler.index("renderLibrary()"),
+        )
+
+    def test_use_refreshes_both_resource_column_and_details(self) -> None:
+        use_handler = INDEX_HTML.split("async function setPreferredPaperFile", 1)[1].split(
+            "async function deletePaperFile", 1
+        )[0]
+        self.assertIn("state.paperFilesByPaperId[String(paperId)] = data", use_handler)
+        self.assertIn("else renderLibrary();", use_handler)
+        self.assertNotIn("else renderLibraryDetail();", use_handler)
+
+
+if __name__ == "__main__":
+    unittest.main()

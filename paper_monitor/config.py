@@ -16,6 +16,7 @@ DEFAULT_LIBRARY_IMPORT_DIR = ROOT / "data" / "library_imports"
 DEFAULT_LIBRARY_DIR = ROOT / "data" / "Library"
 DEFAULT_SPACES_DIR = ROOT / "data" / "Spaces"
 DEFAULT_MY_PUBLICATIONS_DIR = ROOT / "data" / "My Publications"
+DEFAULT_ASSOCIATED_FILES_DIR = ROOT / "data" / "Associated Files"
 DEFAULT_AUTHOR_PHOTO_DIR = ROOT / "data" / "author_photos"
 
 

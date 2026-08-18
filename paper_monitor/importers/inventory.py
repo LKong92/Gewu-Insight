@@ -1251,6 +1251,18 @@ def attach_imported_file_to_existing_paper(
     pdf_like: bool,
 ) -> None:
     paper = storage.get_paper(paper_id) or {}
+    if pdf_like:
+        existing_pdf = clean_text(paper.get("merged_pdf_path") or paper.get("main_pdf_path"))
+        if existing_pdf:
+            try:
+                if Path(existing_pdf).expanduser().is_file():
+                    # An ordinary Loader import preserves its copied folder structure, but
+                    # it must never replace an existing work's current PDF merely because
+                    # DOI/arXiv deduplication matched the same paper.  The caller still
+                    # records this imported file as a resource linked to the work.
+                    return
+            except OSError:
+                pass
     raw = parse_json(paper.get("raw_json"))
     raw["import"] = import_metadata(record, batch_id=clean_text(paper.get("import_batch_id")), stored_path=stored_path)
     if not pdf_like:

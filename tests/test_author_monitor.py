@@ -2489,7 +2489,12 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertNotIn("function scheduleCenteredAuthorMonitorSelection", html)
         self.assertNotIn("selectCenteredAuthorMonitorPaper(list)", html)
         self.assertIn('scrollIntoView({block: "nearest"})', html)
-        self.assertIn("hideTitle: true", html)
+        detail = html.split("function renderAuthorMonitorPaperDetail()", 1)[1].split(
+            "async function downloadAuthorMonitorPdf", 1
+        )[0]
+        self.assertNotIn("<dt>Title</dt>", detail)
+        self.assertIn("hideGewuKey: true", detail)
+        self.assertIn("hideFiles: !(paper.merged_pdf_path", detail)
         self.assertIn('id="authorMonitorActivityStatus"', html)
         self.assertIn("minmax(280px, 340px)", html)
 
@@ -2514,6 +2519,8 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "async function downloadAuthorMonitorPdf", 1
         )[0]
         self.assertIn('data-action="refresh-library-metadata"', detail)
+        self.assertNotIn("<dt>Gewu Key</dt>", detail)
+        self.assertIn("libraryDetailMetadataMarkup(paper", detail)
 
     def test_author_monitor_card_owns_compact_library_action(self):
         html = ui_server.INDEX_HTML

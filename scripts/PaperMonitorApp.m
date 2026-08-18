@@ -341,6 +341,7 @@
 - (void)toggleMainWindowFill;
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId;
+- (void)showPaperFileChooserWithPayload:(NSDictionary *)payload;
 @end
 
 @implementation PaperMonitorDelegate
@@ -432,6 +433,7 @@
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
     [userContentController addScriptMessageHandler:self name:@"authorPhotoChooser"];
+    [userContentController addScriptMessageHandler:self name:@"paperFileChooser"];
     [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
@@ -529,6 +531,11 @@
         [self showAuthorPhotoChooserForAuthorId:authorId];
         return;
     }
+    if ([message.name isEqualToString:@"paperFileChooser"]) {
+        if (![message.body isKindOfClass:[NSDictionary class]]) return;
+        [self showPaperFileChooserWithPayload:(NSDictionary *)message.body];
+        return;
+    }
     if (![message.name isEqualToString:@"windowDrag"] || ![message.body isKindOfClass:[NSDictionary class]]) {
         return;
     }
@@ -598,6 +605,62 @@
         ];
         [strongSelf.webView evaluateJavaScript:script completionHandler:nil];
     }];
+}
+
+- (void)showPaperFileChooserWithPayload:(NSDictionary *)payload {
+    NSString *paperId = [payload[@"paper_id"] isKindOfClass:[NSString class]] ? payload[@"paper_id"] : @"";
+    if (paperId.length == 0) return;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.title = @"Add Files to Paper";
+    panel.message = @"Choose one or more files to associate with this paper.";
+    panel.prompt = @"Add Files";
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = YES;
+    panel.resolvesAliases = YES;
+    __weak typeof(self) weakSelf = self;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
+        PaperMonitorDelegate *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
+        if (result == NSModalResponseOK) {
+            for (NSURL *url in panel.URLs) {
+                if (url.path.length > 0) [paths addObject:url.path];
+            }
+        }
+        NSMutableDictionary *response = [NSMutableDictionary dictionaryWithDictionary:payload];
+        response[@"paths"] = paths;
+        response[@"cancelled"] = @(result != NSModalResponseOK);
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];
+        NSString *json = jsonData
+            ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding]
+            : @"{}";
+        NSString *script = [NSString stringWithFormat:
+            @"window.handleNativePaperFileSelection && window.handleNativePaperFileSelection(%@);",
+            json
+        ];
+        [strongSelf.webView evaluateJavaScript:script completionHandler:nil];
+    }];
+}
+
+- (void)webView:(WKWebView *)webView
+    runJavaScriptConfirmPanelWithMessage:(NSString *)message
+                        initiatedByFrame:(WKFrameInfo *)frame
+                       completionHandler:(void (^)(BOOL result))completionHandler {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = @"Delete File";
+    alert.informativeText = message.length > 0 ? message : @"Delete this file?";
+    [alert addButtonWithTitle:@"Delete"];
+    [alert addButtonWithTitle:@"Cancel"];
+    NSWindow *parentWindow = webView.window ?: self.window;
+    if (parentWindow) {
+        [alert beginSheetModalForWindow:parentWindow completionHandler:^(NSModalResponse response) {
+            completionHandler(response == NSAlertFirstButtonReturn);
+        }];
+        return;
+    }
+    completionHandler([alert runModal] == NSAlertFirstButtonReturn);
 }
 
 - (NSString *)publisherNameForContext:(NSDictionary *)context {

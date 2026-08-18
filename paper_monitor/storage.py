@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 5
+STORAGE_SCHEMA_VERSION = 7
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS papers (
   size_bytes INTEGER,
   modified_at TEXT,
   page_count INTEGER,
+  storage_key TEXT,
+  primary_resource_id INTEGER,
+  preferred_resource_id INTEGER,
   analysis_status TEXT NOT NULL DEFAULT 'not_started',
   analysis_path TEXT,
   analyzed_at TEXT
@@ -366,6 +369,18 @@ CREATE TABLE IF NOT EXISTS resources (
   parse_status TEXT,
   parse_error TEXT,
   page_count INTEGER,
+  display_name TEXT,
+  file_role TEXT,
+  version_role TEXT,
+  version_label TEXT,
+  version_date TEXT,
+  version_number INTEGER,
+  source_url TEXT,
+  storage_mode TEXT,
+  sha256 TEXT,
+  added_via TEXT,
+  supersedes_resource_id INTEGER REFERENCES resources(id) ON DELETE SET NULL,
+  missing_status TEXT,
   status TEXT NOT NULL DEFAULT 'imported',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -404,13 +419,26 @@ class Storage:
             schema_version = int(
                 self.conn.execute("PRAGMA user_version").fetchone()[0] or 0
             )
-            if schema_version < STORAGE_SCHEMA_VERSION:
+            paper_columns = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()
+            }
+            resource_columns = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(resources)").fetchall()
+            }
+            required_paper_columns = {"storage_key", "primary_resource_id", "preferred_resource_id"}
+            required_resource_columns = {
+                "display_name", "file_role", "version_role", "version_label",
+                "version_date", "version_number", "source_url", "storage_mode",
+                "sha256", "added_via", "supersedes_resource_id", "missing_status",
+            }
+            schema_needs_repair = not required_paper_columns.issubset(paper_columns) or not required_resource_columns.issubset(resource_columns)
+            if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
                 self._ensure_schema_columns()
                 self._ensure_library_root()
                 self._seed_library_from_existing_papers()
                 self.conn.execute(
-                    f"PRAGMA user_version = {STORAGE_SCHEMA_VERSION}"
+                    f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
                 self.conn.commit()
             self._sync_arxiv_calendar_timezone()
@@ -439,12 +467,16 @@ class Storage:
             "size_bytes": "INTEGER",
             "modified_at": "TEXT",
             "page_count": "INTEGER",
+            "storage_key": "TEXT",
+            "primary_resource_id": "INTEGER",
+            "preferred_resource_id": "INTEGER",
         }.items():
             if column not in columns:
                 self.conn.execute(f"ALTER TABLE papers ADD COLUMN {column} {column_type}")
                 self.conn.commit()
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_source_path ON papers(source_path, size_bytes)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_import_batch ON papers(import_batch_id)")
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_storage_key ON papers(storage_key) WHERE storage_key IS NOT NULL AND storage_key != ''")
         self.conn.commit()
         paper_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
         if "semantic_scholar_json" not in paper_columns:
@@ -453,6 +485,32 @@ class Storage:
         if "semantic_scholar_enriched_at" not in paper_columns:
             self.conn.execute("ALTER TABLE papers ADD COLUMN semantic_scholar_enriched_at TEXT")
             self.conn.commit()
+        resource_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(resources)").fetchall()
+        }
+        for column, definition in {
+            "display_name": "TEXT",
+            "file_role": "TEXT",
+            "version_role": "TEXT",
+            "version_label": "TEXT",
+            "version_date": "TEXT",
+            "version_number": "INTEGER",
+            "source_url": "TEXT",
+            "storage_mode": "TEXT",
+            "sha256": "TEXT",
+            "added_via": "TEXT",
+            "supersedes_resource_id": "INTEGER",
+            "missing_status": "TEXT",
+        }.items():
+            if column not in resource_columns:
+                self.conn.execute(f"ALTER TABLE resources ADD COLUMN {column} {definition}")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resources_paper_role ON resources(paper_id, file_role, version_role)"
+        )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_sha256 ON resources(sha256)")
+        self._backfill_paper_storage_keys()
+        self._backfill_primary_pdf_resources()
+        self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
             self.conn.execute("ALTER TABLE library_items ADD COLUMN display_name TEXT")
@@ -596,6 +654,50 @@ class Storage:
             """
         )
         self.conn.commit()
+
+    @staticmethod
+    def storage_key_for_paper_id(paper_id: str) -> str:
+        digest = hashlib.sha1(str(paper_id).encode("utf-8")).hexdigest()[:10]
+        return f"gw_{digest}"
+
+    def _backfill_paper_storage_keys(self) -> None:
+        rows = self.conn.execute(
+            "SELECT paper_id FROM papers WHERE storage_key IS NULL OR storage_key = ''"
+        ).fetchall()
+        self.conn.executemany(
+            "UPDATE papers SET storage_key = ? WHERE paper_id = ?",
+            [
+                (self.storage_key_for_paper_id(str(row["paper_id"])), str(row["paper_id"]))
+                for row in rows
+            ],
+        )
+
+    def _resource_storage_mode(self, path_text: str) -> str:
+        if not path_text:
+            return "managed"
+        try:
+            Path(path_text).expanduser().resolve().relative_to(self.db_path.parent.resolve())
+            return "managed"
+        except (OSError, ValueError):
+            return "linked"
+
+    @staticmethod
+    def _resource_size(path_text: str) -> int | None:
+        try:
+            path = Path(path_text).expanduser()
+            return int(path.stat().st_size) if path.is_file() else None
+        except OSError:
+            return None
+
+    def _backfill_primary_pdf_resources(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM papers
+            WHERE COALESCE(merged_pdf_path, main_pdf_path, '') != ''
+            """
+        ).fetchall()
+        self._backfill_primary_pdf_resources_for_rows([dict(row) for row in rows])
 
     def _sync_arxiv_calendar_timezone(self) -> None:
         timezone_name = system_timezone_name()
@@ -774,6 +876,7 @@ class Storage:
 
         columns = [
             "paper_id",
+            "storage_key",
             "doi",
             "title",
             "journal",
@@ -793,6 +896,7 @@ class Storage:
             "raw_json",
             "image_url",
         ]
+        payload["storage_key"] = self.storage_key_for_paper_id(str(payload["paper_id"]))
         values = [payload.get(column) for column in columns]
         placeholders = ", ".join(["?"] * len(columns))
         self.conn.execute(
@@ -1409,6 +1513,268 @@ class Storage:
             (paper_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def get_paper_resource(self, resource_id: int) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM resources WHERE id = ?",
+            (int(resource_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def resource_local_path(resource: dict[str, Any] | sqlite3.Row | None) -> str:
+        if not resource:
+            return ""
+        return str(resource["stored_path"] or resource["source_path"] or "").strip()
+
+    @classmethod
+    def resource_is_pdf(cls, resource: dict[str, Any] | sqlite3.Row | None) -> bool:
+        if not resource:
+            return False
+        mime_type = str(resource["mime_type"] or "").lower()
+        kind = str(resource["kind"] or "").lower()
+        path_text = cls.resource_local_path(resource).lower()
+        return mime_type == "application/pdf" or kind == "pdf" or path_text.endswith(".pdf")
+
+    def ensure_primary_pdf_resource(self, paper_id: str) -> dict[str, Any] | None:
+        paper = self.get_paper(str(paper_id))
+        if not paper:
+            return None
+        path_text = str(paper.get("merged_pdf_path") or paper.get("main_pdf_path") or "").strip()
+        if not path_text:
+            return None
+        self._backfill_primary_pdf_resources_for_rows([paper])
+        self.conn.commit()
+        refreshed = self.get_paper(str(paper_id)) or paper
+        return self.get_paper_resource(int(refreshed.get("primary_resource_id") or 0))
+
+    def _backfill_primary_pdf_resources_for_rows(self, papers: list[dict[str, Any]]) -> None:
+        timestamp = now_iso()
+        for paper in papers:
+            paper_id = str(paper.get("paper_id") or "")
+            path_text = str(paper.get("merged_pdf_path") or paper.get("main_pdf_path") or "").strip()
+            if not paper_id or not path_text:
+                continue
+            primary_id = int(paper.get("primary_resource_id") or 0)
+            primary = self.conn.execute(
+                "SELECT * FROM resources WHERE id = ? AND paper_id = ?",
+                (primary_id, paper_id),
+            ).fetchone() if primary_id else None
+            if primary:
+                current_path = self.resource_local_path(primary)
+                if current_path != path_text:
+                    self.conn.execute(
+                        """
+                        UPDATE resources
+                        SET stored_path = ?, display_name = ?, storage_mode = ?,
+                            missing_status = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            path_text,
+                            Path(path_text).name,
+                            self._resource_storage_mode(path_text),
+                            "" if Path(path_text).expanduser().exists() else "missing",
+                            timestamp,
+                            primary_id,
+                        ),
+                    )
+                continue
+            existing = self.conn.execute(
+                """
+                SELECT id FROM resources
+                WHERE paper_id = ? AND (stored_path = ? OR source_path = ?)
+                ORDER BY id ASC LIMIT 1
+                """,
+                (paper_id, path_text, path_text),
+            ).fetchone()
+            if existing:
+                resource_id = int(existing["id"])
+                self.conn.execute(
+                    """
+                    UPDATE resources
+                    SET display_name = COALESCE(NULLIF(display_name, ''), ?),
+                        file_role = COALESCE(NULLIF(file_role, ''), 'publication_version'),
+                        version_role = COALESCE(NULLIF(version_role, ''), 'other'),
+                        storage_mode = COALESCE(NULLIF(storage_mode, ''), ?),
+                        added_via = COALESCE(NULLIF(added_via, ''), 'legacy_backfill'),
+                        missing_status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        Path(path_text).name,
+                        self._resource_storage_mode(path_text),
+                        "" if Path(path_text).expanduser().exists() else "missing",
+                        timestamp,
+                        resource_id,
+                    ),
+                )
+            else:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO resources (
+                      paper_id, stored_path, original_filename, kind, mime_type,
+                      import_as, size_bytes, display_name, file_role, version_role,
+                      storage_mode, added_via, missing_status, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'pdf', 'application/pdf', 'primary_pdf', ?, ?,
+                              'publication_version', 'other', ?, 'legacy_backfill', ?,
+                              'imported', ?, ?)
+                    """,
+                    (
+                        paper_id,
+                        path_text,
+                        Path(path_text).name,
+                        self._resource_size(path_text),
+                        Path(path_text).name,
+                        self._resource_storage_mode(path_text),
+                        "" if Path(path_text).expanduser().exists() else "missing",
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                resource_id = int(cursor.lastrowid)
+            self.conn.execute(
+                "UPDATE papers SET primary_resource_id = ? WHERE paper_id = ?",
+                (resource_id, paper_id),
+            )
+
+    def list_paper_resources(self, paper_id: str, *, ensure_primary: bool = True) -> list[dict[str, Any]]:
+        if ensure_primary:
+            self.ensure_primary_pdf_resource(str(paper_id))
+        paper = self.get_paper(str(paper_id)) or {}
+        rows = self.conn.execute(
+            """
+            SELECT * FROM resources
+            WHERE paper_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (str(paper_id),),
+        ).fetchall()
+        resources: list[dict[str, Any]] = []
+        primary_id = int(paper.get("primary_resource_id") or 0)
+        preferred_id = int(paper.get("preferred_resource_id") or 0)
+        for row in rows:
+            resource = dict(row)
+            path_text = self.resource_local_path(resource)
+            resource["local_path"] = path_text
+            resource["exists"] = bool(path_text and Path(path_text).expanduser().exists())
+            resource["is_primary"] = int(resource.get("id") or 0) == primary_id
+            resource["is_preferred"] = int(resource.get("id") or 0) == preferred_id
+            resources.append(resource)
+        return resources
+
+    def create_paper_resource(
+        self,
+        *,
+        paper_id: str,
+        stored_path: str,
+        display_name: str = "",
+        file_role: str = "other",
+        version_role: str = "",
+        version_label: str = "",
+        version_date: str = "",
+        version_number: int | None = None,
+        source_url: str = "",
+        source_path: str = "",
+        storage_mode: str = "managed",
+        sha256: str = "",
+        added_via: str = "manual",
+        mime_type: str = "",
+        kind: str = "",
+        supersedes_resource_id: int | None = None,
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        if not self.get_paper(str(paper_id)):
+            raise KeyError(str(paper_id))
+        path = Path(str(stored_path)).expanduser()
+        inferred_mime = mime_type or ("application/pdf" if path.suffix.lower() == ".pdf" else "")
+        inferred_kind = kind or (path.suffix.lower().lstrip(".") or "file")
+        timestamp = now_iso()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO resources (
+              paper_id, source_path, stored_path, original_filename, kind, mime_type,
+              import_as, size_bytes, modified_at, display_name, file_role, version_role,
+              version_label, version_date, version_number, source_url, storage_mode,
+              sha256, added_via, supersedes_resource_id, missing_status, status,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'resource', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      'imported', ?, ?)
+            """,
+            (
+                str(paper_id),
+                source_path or None,
+                str(path),
+                path.name,
+                inferred_kind,
+                inferred_mime,
+                self._resource_size(str(path)),
+                now_iso() if path.exists() else None,
+                display_name or path.name,
+                file_role or "other",
+                version_role or None,
+                version_label or None,
+                version_date or None,
+                version_number,
+                source_url or None,
+                storage_mode or "managed",
+                sha256 or None,
+                added_via or "manual",
+                supersedes_resource_id,
+                "" if path.exists() else "missing",
+                timestamp,
+                timestamp,
+            ),
+        )
+        resource_id = int(cursor.lastrowid)
+        if commit:
+            self.conn.commit()
+        return self.get_paper_resource(resource_id) or {}
+
+    def set_preferred_paper_resource(self, paper_id: str, resource_id: int | None) -> dict[str, Any] | None:
+        if resource_id is not None:
+            resource = self.get_paper_resource(int(resource_id))
+            if not resource or str(resource.get("paper_id") or "") != str(paper_id):
+                raise ValueError("File does not belong to this paper")
+            if not self.resource_is_pdf(resource):
+                raise ValueError("Preferred file must be a PDF")
+        self.conn.execute(
+            "UPDATE papers SET preferred_resource_id = ? WHERE paper_id = ?",
+            (int(resource_id) if resource_id is not None else None, str(paper_id)),
+        )
+        self.conn.commit()
+        return self.get_paper(str(paper_id))
+
+    def resolve_primary_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
+        paper = self.get_paper(str(paper_id))
+        if not paper:
+            return None
+        resources = [resource for resource in self.list_paper_resources(str(paper_id)) if self.resource_is_pdf(resource)]
+        by_id = {int(resource.get("id") or 0): resource for resource in resources}
+        preferred = by_id.get(int(paper.get("preferred_resource_id") or 0))
+        if preferred and preferred.get("exists"):
+            return preferred
+        primary = by_id.get(int(paper.get("primary_resource_id") or 0))
+        role_rank = {
+            "version_of_record": 500,
+            "first_published": 400,
+            "accepted_manuscript": 300,
+            "preprint": 200,
+            "other": 100,
+        }
+        available = [resource for resource in resources if resource.get("exists")]
+        available.sort(
+            key=lambda resource: (
+                role_rank.get(str(resource.get("version_role") or "other"), 0),
+                int(resource.get("version_number") or 0),
+                str(resource.get("version_date") or ""),
+                str(resource.get("created_at") or ""),
+                1 if int(resource.get("id") or 0) == int(paper.get("primary_resource_id") or 0) else 0,
+                int(resource.get("id") or 0),
+            ),
+            reverse=True,
+        )
+        return available[0] if available else (primary or (resources[0] if resources else None))
 
     def list_papers(
         self,

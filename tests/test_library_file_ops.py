@@ -21,11 +21,13 @@ class LibraryFileOperationTests(unittest.TestCase):
             "LIBRARY_LOCAL_COPY_ROOT": ui_server.LIBRARY_LOCAL_COPY_ROOT,
             "MY_PUBLICATIONS_LOCAL_COPY_ROOT": ui_server.MY_PUBLICATIONS_LOCAL_COPY_ROOT,
             "SPACES_LOCAL_COPY_ROOT": ui_server.SPACES_LOCAL_COPY_ROOT,
+            "ASSOCIATED_FILES_ROOT": ui_server.ASSOCIATED_FILES_ROOT,
             "DEFAULT_PDF_DIR": ui_server.DEFAULT_PDF_DIR,
         }
         ui_server.LIBRARY_LOCAL_COPY_ROOT = self.root / "Library"
         ui_server.MY_PUBLICATIONS_LOCAL_COPY_ROOT = self.root / "My Publications"
         ui_server.SPACES_LOCAL_COPY_ROOT = self.root / "Spaces"
+        ui_server.ASSOCIATED_FILES_ROOT = self.root / "Associated Files"
         ui_server.DEFAULT_PDF_DIR = self.root / "pdfs"
 
     def tearDown(self) -> None:
@@ -758,6 +760,65 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertFalse(exported.is_symlink())
         self.assertEqual(exported.read_bytes(), source_pdf.read_bytes())
         self.assertEqual(result["files_copied"], 1)
+        self.assertTrue((destination / "Tobit" / "Gewu Insight Manifest.json").is_file())
+
+    def test_folder_export_includes_associated_files_and_manifest(self) -> None:
+        folder = self.storage.create_library_folder(parent_id=1, name="Versions")
+        primary_dir = ui_server.LIBRARY_LOCAL_COPY_ROOT / "Versions"
+        primary_dir.mkdir(parents=True)
+        primary = primary_dir / "Paper.pdf"
+        primary.write_bytes(b"%PDF-1.4\ncurrent\n%%EOF\n")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "complete-export-paper",
+                "title": "Complete Export Paper",
+                "journal": "Fixture Journal",
+                "source": "test",
+                "raw": {},
+            }
+        )
+        self.storage.update_download_status(
+            "complete-export-paper",
+            status="success",
+            main_pdf_path=str(primary),
+            merged_pdf_path=str(primary),
+        )
+        self.storage.ensure_primary_pdf_resource("complete-export-paper")
+        self.storage.add_library_item(
+            paper_id="complete-export-paper",
+            folder_id=int(folder["id"]),
+        )
+        ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="complete-export-paper",
+            filename="Accepted.pdf",
+            content=b"%PDF-1.4\naccepted\n%%EOF\n",
+            file_role="publication_version",
+            version_role="accepted_manuscript",
+        )
+        ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="complete-export-paper",
+            filename="Notes.md",
+            content=b"# Notes\n",
+            file_role="note",
+        )
+
+        destination = self.root / "Export Complete"
+        result = ui_server.copy_library_folder_real_files(
+            self.storage,
+            int(folder["id"]),
+            destination,
+            unique_root=False,
+        )
+
+        exported_root = destination / "Versions"
+        self.assertTrue((exported_root / "Paper.pdf").is_file())
+        self.assertTrue((exported_root / "Gewu Insight Manifest.json").is_file())
+        associated = list((exported_root / "Associated Files").rglob("*"))
+        self.assertTrue(any(path.name == "Accepted.pdf" for path in associated))
+        self.assertTrue(any(path.name == "Notes.md" for path in associated))
+        self.assertEqual(result["associated_files_copied"], 2)
 
     def test_folder_export_appends_real_pdf_suffix_after_dotted_display_name(self) -> None:
         source = self.root / "source.pdf"
