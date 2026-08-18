@@ -196,6 +196,39 @@ class InventoryImporterDryRunTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(row["display_name"], "plain-name.pdf")
 
+    def test_loader_persists_exact_and_annotation_insensitive_fingerprints(self) -> None:
+        pdf = self.write_text_pdf("fingerprints/paper.pdf", "Loader fingerprint fixture")
+        inventory_path = self.write_inventory(
+            [self.pdf_record(pdf, doi="10.4242/loader-fingerprint", title="Fingerprint Paper")]
+        )
+
+        result = import_library_inventory(
+            inventory_path,
+            storage=self.storage,
+            dry_run=False,
+            copy_mode="copy",
+            preserve_folders=True,
+            dedupe_by=("doi", "arxiv", "path"),
+            report_path=self.root / "fingerprint-report.json",
+            target_root=self.root / "copied",
+            library_item_name="filename",
+        )
+
+        self.assertFalse(result["errors"])
+        resource = self.storage.conn.execute(
+            """
+            SELECT sha256, content_sha256, annotation_count, is_annotated
+            FROM resources
+            WHERE paper_id = (SELECT paper_id FROM papers WHERE doi = ?)
+            """,
+            ("10.4242/loader-fingerprint",),
+        ).fetchone()
+        self.assertIsNotNone(resource)
+        self.assertRegex(resource["sha256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(resource["content_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(int(resource["annotation_count"] or 0), 0)
+        self.assertEqual(int(resource["is_annotated"] or 0), 0)
+
     def test_placeholder_pdf_metadata_title_falls_back_to_filename(self) -> None:
         scan_root = self.root / "placeholder-metadata"
         pdf = scan_root / "topic" / "actual-paper-name.pdf"

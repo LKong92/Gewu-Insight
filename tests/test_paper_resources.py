@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pypdf import PdfReader, PdfWriter
+from pypdf.annotations import Text
+
 from paper_monitor import ui_server
 from paper_monitor.storage import STORAGE_SCHEMA_VERSION, Storage
 
@@ -153,6 +156,134 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(resources[0]["version_label"], "Preprint v3")
         self.assertEqual(Path(resources[0]["stored_path"]).parent.resolve(), self.library_root.resolve())
         self.assertEqual(Path(resources[0]["stored_path"]).name, "2501.12345v3 [Preprint v3].pdf")
+
+    def test_arxiv_download_reuses_identical_unversioned_preprint_by_sha256(self) -> None:
+        self.add_paper("existing-unversioned-preprint")
+        self.storage.add_library_item(paper_id="existing-unversioned-preprint", folder_id=1)
+        self.storage.update_paper_raw_json(
+            "existing-unversioned-preprint",
+            {"preprint": {"arxiv_id": "2208.03628"}},
+        )
+        existing_path = self.write_pdf("2208.03628.pdf")
+        self.storage.update_download_status(
+            "existing-unversioned-preprint",
+            status="success",
+            main_pdf_path=str(existing_path),
+            merged_pdf_path=str(existing_path),
+        )
+        existing = self.storage.ensure_primary_pdf_resource("existing-unversioned-preprint")
+        self.storage.conn.execute(
+            """
+            UPDATE resources
+            SET file_role = 'publication_version', version_role = 'preprint',
+                version_label = 'Preprint', version_number = NULL, source_url = NULL,
+                sha256 = NULL, content_sha256 = NULL
+            WHERE id = ?
+            """,
+            (int(existing["id"]),),
+        )
+        self.storage.conn.commit()
+        record = {
+            "raw": {
+                "arxiv_id": "2208.03628",
+                "versioned_arxiv_id": "2208.03628v1",
+                "published": "2022-08-07T03:43:33Z",
+                "updated": "2022-08-07T03:43:33Z",
+            }
+        }
+
+        def fake_download(_url: str, path: Path, _messages: list[str], **_options: object) -> bool:
+            path.write_bytes(existing_path.read_bytes())
+            return True
+
+        with (
+            patch.object(ui_server, "fetch_arxiv_by_id", return_value=record),
+            patch.object(ui_server, "wait_for_arxiv_rate_limit"),
+            patch.object(ui_server, "try_download_pdf", side_effect=fake_download),
+        ):
+            result = ui_server.download_arxiv_preprint_versions(
+                self.storage,
+                "existing-unversioned-preprint",
+            )
+
+        resources = self.storage.list_paper_resources("existing-unversioned-preprint")
+        self.assertEqual(result["downloaded_versions"], [])
+        self.assertEqual(result["existing_versions"], [1])
+        self.assertEqual(len(resources), 1)
+        self.assertEqual(int(resources[0]["id"]), int(existing["id"]))
+        self.assertEqual(resources[0]["stored_path"], str(existing_path))
+        self.assertEqual(resources[0]["version_number"], 1)
+        self.assertEqual(resources[0]["version_label"], "Preprint v1")
+        self.assertEqual(resources[0]["source_url"], "https://arxiv.org/pdf/2208.03628v1")
+        self.assertTrue(resources[0]["sha256"])
+
+    def test_arxiv_download_keeps_annotated_copy_and_links_it_by_content_fingerprint(self) -> None:
+        self.add_paper("annotated-preprint-copy")
+        self.storage.add_library_item(paper_id="annotated-preprint-copy", folder_id=1)
+        self.storage.update_paper_raw_json(
+            "annotated-preprint-copy",
+            {"preprint": {"arxiv_id": "2401.01234"}},
+        )
+        clean = self.root / "clean-arxiv.pdf"
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        with clean.open("wb") as handle:
+            writer.write(handle)
+        annotated = self.library_root / "2401.01234.pdf"
+        annotated.parent.mkdir(parents=True, exist_ok=True)
+        annotated_writer = PdfWriter()
+        annotated_writer.append_pages_from_reader(PdfReader(str(clean)))
+        annotated_writer.add_annotation(
+            page_number=0,
+            annotation=Text(rect=(72, 700, 96, 724), text="keep this annotation"),
+        )
+        with annotated.open("wb") as handle:
+            annotated_writer.write(handle)
+        self.storage.update_download_status(
+            "annotated-preprint-copy",
+            status="success",
+            main_pdf_path=str(annotated),
+            merged_pdf_path=str(annotated),
+        )
+        existing = self.storage.ensure_primary_pdf_resource("annotated-preprint-copy")
+        self.storage.conn.execute(
+            """
+            UPDATE resources
+            SET file_role = 'publication_version', version_role = 'preprint',
+                version_label = 'Preprint', version_number = NULL, source_url = NULL
+            WHERE id = ?
+            """,
+            (int(existing["id"]),),
+        )
+        self.storage.conn.commit()
+        record = {
+            "raw": {
+                "arxiv_id": "2401.01234",
+                "versioned_arxiv_id": "2401.01234v1",
+                "published": "2024-01-03T00:00:00Z",
+                "updated": "2024-01-03T00:00:00Z",
+            }
+        }
+
+        def fake_download(_url: str, path: Path, _messages: list[str], **_options: object) -> bool:
+            path.write_bytes(clean.read_bytes())
+            return True
+
+        with (
+            patch.object(ui_server, "fetch_arxiv_by_id", return_value=record),
+            patch.object(ui_server, "wait_for_arxiv_rate_limit"),
+            patch.object(ui_server, "try_download_pdf", side_effect=fake_download),
+        ):
+            ui_server.download_arxiv_preprint_versions(self.storage, "annotated-preprint-copy")
+
+        resources = self.storage.list_paper_resources("annotated-preprint-copy")
+        self.assertEqual(len(resources), 2)
+        annotated_resource = next(resource for resource in resources if int(resource.get("is_annotated") or 0))
+        clean_resource = next(resource for resource in resources if not int(resource.get("is_annotated") or 0))
+        self.assertNotEqual(annotated_resource["sha256"], clean_resource["sha256"])
+        self.assertEqual(annotated_resource["content_sha256"], clean_resource["content_sha256"])
+        self.assertGreater(int(annotated_resource["annotation_count"] or 0), 0)
+        self.assertEqual(clean_resource["version_label"], "Preprint v1")
 
     def test_arxiv_history_sync_keeps_version_of_record_primary_and_skips_existing_versions(self) -> None:
         self.add_paper("published-with-arxiv-history")
@@ -468,6 +599,31 @@ class PaperResourceStorageTests(unittest.TestCase):
                 "version_of_record",
             )
 
+    def test_paper_version_can_be_marked_as_annotated_without_changing_the_file(self) -> None:
+        self.add_paper("manual-annotated-version")
+        pdf = self.write_pdf("Annotated.pdf")
+        original_bytes = pdf.read_bytes()
+        self.storage.update_download_status(
+            "manual-annotated-version",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("manual-annotated-version")
+
+        updated = ui_server.update_paper_resource_role(
+            self.storage,
+            "manual-annotated-version",
+            int(resource["id"]),
+            "publication_version",
+            "version_of_record",
+            is_annotated=True,
+        )
+
+        self.assertEqual(updated["version_label"], "Published Version")
+        self.assertEqual(int(updated["is_annotated"] or 0), 1)
+        self.assertEqual(pdf.read_bytes(), original_bytes)
+
     def test_current_default_pdf_cannot_be_reclassified_as_an_attachment(self) -> None:
         self.add_paper("primary-role-guard")
         pdf = self.write_pdf("Primary.pdf")
@@ -555,6 +711,81 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertTrue(second["duplicate"])
         self.assertEqual(int(first["id"]), int(second["id"]))
         self.assertEqual(len(self.storage.list_paper_resources("paper-deduplicate")), 1)
+
+    def test_standalone_library_file_can_be_moved_into_another_paper_as_attachment(self) -> None:
+        self.add_paper("target-work")
+        self.add_paper("standalone-file")
+        target_item = self.storage.add_library_item(paper_id="target-work", folder_id=1)
+        source_folder = self.storage.create_library_folder(name="Data", parent_id=1)
+        source_item = self.storage.add_library_item(
+            paper_id="standalone-file",
+            folder_id=int(source_folder["id"]),
+        )
+        source = self.library_root / "Data" / "analysis.pxp"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"processed data")
+        source_resource = self.storage.create_paper_resource(
+            paper_id="standalone-file",
+            stored_path=str(source),
+            display_name=source.name,
+            file_role="other",
+            added_via="loader",
+            mime_type="application/octet-stream",
+            kind="pxp",
+        )
+
+        result = ui_server.convert_library_item_to_paper_attachment(
+            self.storage,
+            source_item_id=int(source_item["id"]),
+            target_paper_id="target-work",
+        )
+
+        self.assertEqual(result["attached_count"], 1)
+        self.assertFalse(source.exists())
+        self.assertIsNone(self.storage.get_library_item(int(source_item["id"])))
+        self.assertIsNone(self.storage.get_paper("standalone-file"))
+        self.assertIsNotNone(self.storage.get_library_item(int(target_item["id"])))
+        attached = self.storage.get_paper_resource(int(source_resource["id"]))
+        self.assertEqual(attached["paper_id"], "target-work")
+        self.assertEqual(attached["file_role"], "other")
+        self.assertEqual(attached["version_label"], "Other File")
+        attached_path = Path(attached["stored_path"])
+        self.assertTrue(attached_path.exists())
+        self.assertEqual(attached_path.read_bytes(), b"processed data")
+        self.assertIn("Associated Files/Library", str(attached_path))
+
+    def test_shared_library_work_is_not_destructively_converted_to_attachment(self) -> None:
+        self.add_paper("target-shared-guard")
+        self.add_paper("source-shared-guard")
+        first_folder = self.storage.create_library_folder(name="First", parent_id=1)
+        second_folder = self.storage.create_library_folder(name="Second", parent_id=1)
+        first_item = self.storage.add_library_item(
+            paper_id="source-shared-guard",
+            folder_id=int(first_folder["id"]),
+        )
+        self.storage.add_library_item(
+            paper_id="source-shared-guard",
+            folder_id=int(second_folder["id"]),
+        )
+        source = self.library_root / "First" / "shared.dat"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"shared")
+        self.storage.create_paper_resource(
+            paper_id="source-shared-guard",
+            stored_path=str(source),
+            display_name=source.name,
+            file_role="other",
+        )
+
+        with self.assertRaisesRegex(ValueError, "other Library locations"):
+            ui_server.convert_library_item_to_paper_attachment(
+                self.storage,
+                source_item_id=int(first_item["id"]),
+                target_paper_id="target-shared-guard",
+            )
+
+        self.assertTrue(source.exists())
+        self.assertIsNotNone(self.storage.get_paper("source-shared-guard"))
 
     def test_invalid_attached_pdf_creates_no_associated_folder(self) -> None:
         self.add_paper("paper-invalid-associated")

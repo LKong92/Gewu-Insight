@@ -36,6 +36,18 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertNotIn("openPreprintIdentifierEditor", metadata)
         self.assertGreaterEqual(INDEX_HTML.count("wirePreprintIdentifierControls(root, paper)"), 5)
 
+    def test_shared_paper_details_keep_an_empty_preprint_row_editable(self) -> None:
+        metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
+            "function libraryDetailFolderOccurrencesMarkup", 1
+        )[0]
+        self.assertIn("const showPreprintRow = options.hidePreprint !== true", metadata)
+        self.assertIn("const preprintDisplay = preprintId ? escapeHtml", metadata)
+        self.assertIn(': "—"', metadata)
+        self.assertIn("<dt>DOI</dt>", metadata)
+        self.assertIn("${showPreprintRow ? `<dt>arXiv</dt>", metadata)
+        self.assertIn('preprint-identifier-value${preprintId ? "" : " is-empty"}', metadata)
+        self.assertIn('${preprintId ? `<button class="action preprint-icon-action"', metadata)
+
     def test_managed_works_can_download_latest_or_sync_all_arxiv_versions(self) -> None:
         metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
             "function libraryDetailFolderOccurrencesMarkup", 1
@@ -51,6 +63,31 @@ class PaperFilesUiTests(unittest.TestCase):
         )[0]
         self.assertNotIn("managePreprintFiles: true", author_detail)
 
+    def test_paper_detail_actions_are_compact_and_preprint_actions_use_icons(self) -> None:
+        self.assertIn(".library-detail > .actions .action", INDEX_HTML)
+        self.assertIn("min-height: 26px;", INDEX_HTML)
+        self.assertIn(".preprint-identifier-actions .preprint-icon-action", INDEX_HTML)
+        metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
+            "function libraryDetailFolderOccurrencesMarkup", 1
+        )[0]
+        self.assertIn('aria-label="Open arXiv page"', metadata)
+        self.assertIn('aria-hidden="true">↗</span>', metadata)
+        self.assertIn('aria-label="Download latest arXiv PDF"', metadata)
+        self.assertIn('aria-hidden="true">↓</span>', metadata)
+        self.assertNotIn('data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button>', metadata)
+
+    def test_single_line_metadata_rows_and_identifier_controls_share_a_compact_height(self) -> None:
+        self.assertIn("gap: 6px 18px;", INDEX_HTML)
+        self.assertIn(".library-detail dt { min-height: 22px;", INDEX_HTML)
+        self.assertIn(".library-detail dd { min-height: 22px;", INDEX_HTML)
+        self.assertIn(".library-detail .library-detail-doi > .action", INDEX_HTML)
+        self.assertIn("height: 22px;", INDEX_HTML)
+        doi_markup = INDEX_HTML.split("function libraryDetailDoiMarkup", 1)[1].split(
+            "function libraryDetailFilesMarkup", 1
+        )[0]
+        self.assertIn('const value = paper?.doi || ""', doi_markup)
+        self.assertIn('placeholder="Enter DOI"', doi_markup)
+
     def test_library_and_my_publications_share_the_files_panel(self) -> None:
         self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
         self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
@@ -64,6 +101,137 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("library-resource-column", INDEX_HTML)
         self.assertIn("data-library-resource-path", INDEX_HTML)
         self.assertIn('const meta = "›";', INDEX_HTML)
+
+    def test_resource_column_uses_an_attachment_inspector_instead_of_folder_rows(self) -> None:
+        resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
+            "function libraryColumnFolderIds", 1
+        )[0]
+        self.assertIn("library-resource-inspector-head", resources)
+        self.assertIn(">Paper Files</strong>", resources)
+        self.assertIn("library-resource-section", resources)
+        self.assertIn("library-resource-card", resources)
+        self.assertIn('CURRENT: "Primary file"', resources)
+        self.assertIn('VERSIONS: "Other versions"', resources)
+        self.assertIn('FILES: "Attachments"', resources)
+        self.assertIn("library-resource-state", resources)
+        self.assertNotIn("library-resource-row", resources)
+
+    def test_resource_cards_select_on_click_and_open_only_on_double_click(self) -> None:
+        interactions = INDEX_HTML.split('shell.querySelectorAll(".library-resource-card[data-library-resource-id]")', 1)[1].split(
+            'shell.querySelectorAll("[data-library-resource-role]")', 1
+        )[0]
+        self.assertIn('card.addEventListener("click"', interactions)
+        self.assertIn("setLibraryPaperResourceSelection", interactions)
+        self.assertNotIn("openNativePaperFile", interactions.split('card.addEventListener("dblclick"', 1)[0])
+        self.assertIn('card.addEventListener("dblclick"', interactions)
+        self.assertIn("openLibraryPaperResource(file)", interactions)
+        self.assertIn('card.addEventListener("contextmenu"', interactions)
+        self.assertIn("showPaperResourceContextMenu", interactions)
+        self.assertIn("library-resource-card.is-selected", INDEX_HTML)
+
+    def test_current_file_identity_is_separate_from_paper_files_focus(self) -> None:
+        self.assertNotIn(".library-resource-card.is-primary {", INDEX_HTML)
+        self.assertNotIn(".library-resource-card.is-primary .library-resource-icon-tile", INDEX_HTML)
+        self.assertIn(".library-shell.paper-files-focus-active .library-row.active", INDEX_HTML)
+        selector = INDEX_HTML.split("function setLibraryPaperResourceSelection", 1)[1].split(
+            "function clearLibraryPaperResourceSelection", 1
+        )[0]
+        self.assertIn('classList.toggle("paper-files-focus-active"', selector)
+        clearer = INDEX_HTML.split("function clearLibraryPaperResourceSelection", 1)[1].split(
+            "function activateLibraryPaperFiles", 1
+        )[0]
+        self.assertIn('classList.remove("paper-files-focus-active")', clearer)
+        renderer = INDEX_HTML.split("function renderLibrary()", 1)[1].split(
+            "function renderLibrarySearchResults", 1
+        )[0]
+        self.assertIn('paperFilesFocusActive ? " paper-files-focus-active" : ""', renderer)
+
+    def test_resource_cards_have_direct_file_type_picker(self) -> None:
+        resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
+            "function libraryColumnFolderIds", 1
+        )[0]
+        self.assertIn("data-library-resource-role", resources)
+        self.assertIn("paperFileRoleOptions(file)", resources)
+        self.assertIn("paper-file-version-arrows", resources)
+        interactions = INDEX_HTML.split('shell.querySelectorAll("[data-library-resource-role]")', 1)[1].split(
+            'shell.querySelectorAll("[data-library-resource-paper]")', 1
+        )[0]
+        self.assertIn('select.addEventListener("change"', interactions)
+        self.assertIn("setPaperFileRole", interactions)
+        self.assertIn('event.stopPropagation()', interactions)
+
+    def test_paper_files_use_a_dedicated_context_menu(self) -> None:
+        self.assertIn('id="paperResourceContextMenu"', INDEX_HTML)
+        self.assertIn('data-action="open-paper-resource"', INDEX_HTML)
+        self.assertIn('data-action="quicklook-paper-resource"', INDEX_HTML)
+        self.assertIn('data-action="reveal-paper-resource"', INDEX_HTML)
+        self.assertIn('data-action="prefer-paper-resource"', INDEX_HTML)
+        self.assertIn('data-action="auto-paper-resource"', INDEX_HTML)
+        self.assertIn('data-paper-resource-role-select', INDEX_HTML)
+        self.assertIn('data-action="delete-paper-resource"', INDEX_HTML)
+        menu = INDEX_HTML.split("function showPaperResourceContextMenu", 1)[1].split(
+            "function wireLibraryInteractions", 1
+        )[0]
+        self.assertIn("event.stopPropagation()", menu)
+        self.assertIn("hideLibraryContextMenu()", menu)
+        self.assertIn('deleteButton.style.display = file && !file.is_primary', menu)
+        self.assertIn('addButton.style.display = file ? "none" : ""', menu)
+        self.assertIn('syncButton.style.display = !file && paper?.preprint_id', menu)
+
+    def test_paper_files_keyboard_navigation_is_continuous_with_library_columns(self) -> None:
+        keyboard = INDEX_HTML.split("function handleLibraryKeydown", 1)[1].split(
+            "function switchReportJournalTab", 1
+        )[0]
+        self.assertIn("handleLibraryPaperResourceKeydown(event, key)", keyboard)
+        self.assertIn('key === "ArrowRight"', keyboard)
+        self.assertIn("activateLibraryPaperFiles()", keyboard)
+        resource_keyboard = INDEX_HTML.split("function handleLibraryPaperResourceKeydown", 1)[1].split(
+            "function quickLookLibraryPaperResource", 1
+        )[0]
+        self.assertIn('["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape"]', resource_keyboard)
+        self.assertIn("moveLibraryPaperResourceSelection", resource_keyboard)
+        self.assertIn("quickLookLibraryPaperResource(selected", resource_keyboard)
+        self.assertIn("clearLibraryPaperResourceSelection({focusPaper: true})", resource_keyboard)
+        main_selection = INDEX_HTML.split("function setLibraryColumnSelection", 1)[1].split(
+            "function setLibraryRangeSelection", 1
+        )[0]
+        self.assertIn('libraryPaperResourceSelection = {paperId: "", resourceId: 0}', main_selection)
+
+    def test_open_quicklook_follows_paper_file_arrow_selection(self) -> None:
+        mover = INDEX_HTML.split("function moveLibraryPaperResourceSelection", 1)[1].split(
+            "function handleLibraryPaperResourceKeydown", 1
+        )[0]
+        self.assertIn("orderedLibraryPaperResources", mover)
+        self.assertIn("if (state.libraryQuickLookOpen) quickLookLibraryPaperResource(next", mover)
+        pdf_keys = INDEX_HTML.split("function handleLibraryQuickLookPdfKeydown", 1)[1].split(
+            "function reclaimLibraryQuickLookFocus", 1
+        )[0]
+        self.assertIn("handleLibraryPaperResourceKeydown(event, key)", pdf_keys)
+
+    def test_library_item_can_be_dragged_into_the_selected_paper_files(self) -> None:
+        self.assertIn('fetch("/api/library/items/attach"', INDEX_HTML)
+        self.assertIn("async function convertLibraryItemToAttachment", INDEX_HTML)
+        self.assertIn('shell.querySelectorAll("[data-library-resource-paper]")', INDEX_HTML)
+        self.assertIn('payload.type !== "item"', INDEX_HTML)
+        self.assertIn('target.classList.add("library-attachment-drop-target")', INDEX_HTML)
+        self.assertIn('event.dataTransfer.dropEffect = "move"', INDEX_HTML)
+        self.assertIn('content: "Move into Paper Files"', INDEX_HTML)
+        self.assertIn("let pendingAttachmentPayload = null", INDEX_HTML)
+        self.assertIn("libraryDragPayload(event) || cachedPayload", INDEX_HTML)
+        self.assertIn("pendingAttachmentPayload = {payload, updatedAt: Date.now()}", INDEX_HTML)
+        self.assertIn("Could not read the dropped Library item", INDEX_HTML)
+        self.assertIn("libraryAttachmentDropInFlight: new Set()", INDEX_HTML)
+        self.assertIn("function armNativeLibraryItemDrop", INDEX_HTML)
+        self.assertIn("async function handleNativeLibraryItemDrop", INDEX_HTML)
+        self.assertIn("document.elementFromPoint(x, y)", INDEX_HTML)
+        self.assertIn('element?.closest?.("[data-library-resource-paper]")', INDEX_HTML)
+        self.assertIn('element?.closest?.("[data-paper-files-panel]")', INDEX_HTML)
+        self.assertIn("window.handleNativeLibraryItemDrop = handleNativeLibraryItemDrop", INDEX_HTML)
+        launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")
+        self.assertIn('addScriptMessageHandler:self name:@"libraryItemDrag"', launcher)
+        self.assertIn("pendingLibraryItemDragId", launcher)
+        self.assertIn("handleNativeLibraryItemDrop", launcher)
+        self.assertIn("convertPointFromScreen", launcher)
 
     def test_resource_actions_use_explicit_file_endpoints(self) -> None:
         self.assertIn('fetch(`/api/paper-files?paper_id=', INDEX_HTML)
@@ -84,10 +252,14 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('class="paper-file-version-select"', INDEX_HTML)
         self.assertIn('class="paper-file-version-arrows"', INDEX_HTML)
         self.assertIn('data-action="set-paper-file-role"', INDEX_HTML)
-        self.assertIn('["publication_version:other", "Imported PDF"]', INDEX_HTML)
-        self.assertIn('["publication_version:version_of_record", "Published Version"]', INDEX_HTML)
-        self.assertIn('["publication_version:accepted_manuscript", "Accepted Manuscript"]', INDEX_HTML)
-        self.assertIn('["publication_version:preprint", "Preprint"]', INDEX_HTML)
+        self.assertIn('["publication_version:other:plain", "Imported PDF"]', INDEX_HTML)
+        self.assertIn('["publication_version:other:annotated", "Imported PDF · Annotated"]', INDEX_HTML)
+        self.assertIn('["publication_version:version_of_record:plain", "Published Version"]', INDEX_HTML)
+        self.assertIn('["publication_version:version_of_record:annotated", "Published Version · Annotated"]', INDEX_HTML)
+        self.assertIn('["publication_version:accepted_manuscript:plain", "Accepted Manuscript"]', INDEX_HTML)
+        self.assertIn('["publication_version:accepted_manuscript:annotated", "Accepted Manuscript · Annotated"]', INDEX_HTML)
+        self.assertIn('["publication_version:preprint:plain", "Preprint"]', INDEX_HTML)
+        self.assertIn('["publication_version:preprint:annotated", "Preprint · Annotated"]', INDEX_HTML)
         self.assertIn('["figure", "Image"]', INDEX_HTML)
         self.assertIn('["supplement", "Supplement"]', INDEX_HTML)
         self.assertIn('["note", "Note"]', INDEX_HTML)
@@ -97,6 +269,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('["other", "Other File"]', INDEX_HTML)
         self.assertNotIn('"First Published"', INDEX_HTML)
         self.assertIn("async function setPaperFileRole", INDEX_HTML)
+        self.assertIn("annotationChoice === \"annotated\"", INDEX_HTML)
         self.assertIn("font-size: 9px;", INDEX_HTML)
 
     def test_add_file_and_files_panel_drop_import_before_classification(self) -> None:

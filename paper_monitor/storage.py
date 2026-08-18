@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 8
+STORAGE_SCHEMA_VERSION = 9
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -378,6 +378,9 @@ CREATE TABLE IF NOT EXISTS resources (
   source_url TEXT,
   storage_mode TEXT,
   sha256 TEXT,
+  content_sha256 TEXT,
+  annotation_count INTEGER NOT NULL DEFAULT 0,
+  is_annotated INTEGER NOT NULL DEFAULT 0,
   added_via TEXT,
   supersedes_resource_id INTEGER REFERENCES resources(id) ON DELETE SET NULL,
   missing_status TEXT,
@@ -429,7 +432,8 @@ class Storage:
             required_resource_columns = {
                 "display_name", "file_role", "version_role", "version_label",
                 "version_date", "version_number", "source_url", "storage_mode",
-                "sha256", "added_via", "supersedes_resource_id", "missing_status",
+                "sha256", "content_sha256", "annotation_count", "is_annotated",
+                "added_via", "supersedes_resource_id", "missing_status",
             }
             schema_needs_repair = not required_paper_columns.issubset(paper_columns) or not required_resource_columns.issubset(resource_columns)
             if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
@@ -498,6 +502,9 @@ class Storage:
             "source_url": "TEXT",
             "storage_mode": "TEXT",
             "sha256": "TEXT",
+            "content_sha256": "TEXT",
+            "annotation_count": "INTEGER NOT NULL DEFAULT 0",
+            "is_annotated": "INTEGER NOT NULL DEFAULT 0",
             "added_via": "TEXT",
             "supersedes_resource_id": "INTEGER",
             "missing_status": "TEXT",
@@ -508,6 +515,7 @@ class Storage:
             "CREATE INDEX IF NOT EXISTS idx_resources_paper_role ON resources(paper_id, file_role, version_role)"
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_sha256 ON resources(sha256)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_content_sha256 ON resources(content_sha256)")
         self._backfill_paper_storage_keys()
         self._backfill_primary_pdf_resources()
         self._reclassify_legacy_pdf_versions()
@@ -1822,6 +1830,9 @@ class Storage:
         source_path: str = "",
         storage_mode: str = "managed",
         sha256: str = "",
+        content_sha256: str = "",
+        annotation_count: int = 0,
+        is_annotated: bool = False,
         added_via: str = "manual",
         mime_type: str = "",
         kind: str = "",
@@ -1840,9 +1851,9 @@ class Storage:
               paper_id, source_path, stored_path, original_filename, kind, mime_type,
               import_as, size_bytes, modified_at, display_name, file_role, version_role,
               version_label, version_date, version_number, source_url, storage_mode,
-              sha256, added_via, supersedes_resource_id, missing_status, status,
-              created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'resource', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              sha256, content_sha256, annotation_count, is_annotated, added_via,
+              supersedes_resource_id, missing_status, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'resource', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       'imported', ?, ?)
             """,
             (
@@ -1863,6 +1874,9 @@ class Storage:
                 source_url or None,
                 storage_mode or "managed",
                 sha256 or None,
+                content_sha256 or None,
+                max(0, int(annotation_count or 0)),
+                1 if is_annotated or int(annotation_count or 0) > 0 else 0,
                 added_via or "manual",
                 supersedes_resource_id,
                 "" if path.exists() else "missing",

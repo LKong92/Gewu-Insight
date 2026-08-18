@@ -8,6 +8,8 @@
 @property(nonatomic, copy) NSString *nativeDragCleanupPath;
 @property(nonatomic) BOOL pdfQuickLookActive;
 @property(nonatomic) CGFloat pdfMagnificationAccumulator;
+@property(nonatomic) NSInteger pendingLibraryItemDragId;
+@property(nonatomic, strong) NSDate *pendingLibraryItemDragStartedAt;
 @end
 
 @implementation GewuInsightWebView
@@ -42,6 +44,9 @@
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    if ([sender draggingSource] == self && self.pendingLibraryItemDragId > 0) {
+        return YES;
+    }
     NSArray<NSString *> *paths = [self finderDropPathsFromDraggingInfo:sender];
     if (paths.count == 0) {
         return [super performDragOperation:sender];
@@ -60,9 +65,29 @@
 
 - (NSPoint)browserClientPointForDraggingInfo:(id<NSDraggingInfo>)sender {
     NSPoint point = [self convertPoint:sender.draggingLocation fromView:nil];
+    return [self browserClientPointForViewPoint:point];
+}
+
+- (NSPoint)browserClientPointForViewPoint:(NSPoint)point {
     CGFloat clientX = point.x;
     CGFloat clientY = self.isFlipped ? point.y : self.bounds.size.height - point.y;
     return NSMakePoint(clientX, clientY);
+}
+
+- (void)dispatchPendingLibraryItemDropAtClientPoint:(NSPoint)point {
+    NSInteger libraryItemId = self.pendingLibraryItemDragId;
+    NSDate *startedAt = self.pendingLibraryItemDragStartedAt;
+    self.pendingLibraryItemDragId = 0;
+    self.pendingLibraryItemDragStartedAt = nil;
+    NSTimeInterval age = startedAt ? [[NSDate date] timeIntervalSinceDate:startedAt] : 999.0;
+    if (libraryItemId <= 0 || age < 0.0 || age >= 12.0) return;
+    NSString *script = [NSString stringWithFormat:
+        @"window.handleNativeLibraryItemDrop && window.handleNativeLibraryItemDrop(%ld, {x:%0.2f,y:%0.2f})",
+        (long)libraryItemId,
+        point.x,
+        point.y
+    ];
+    [self evaluateJavaScript:script completionHandler:nil];
 }
 
 - (void)updateFinderDropTargetForDraggingInfo:(id<NSDraggingInfo>)sender {
@@ -216,6 +241,8 @@
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    NSPoint viewPoint = [self convertPoint:event.locationInWindow fromView:nil];
+    NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
     if (self.nativeDragPath.length > 0 && self.nativeDragCleanupPath.length > 0) {
         [self scheduleNativeDragCleanup:self.nativeDragCleanupPath afterDelay:0.5];
     }
@@ -223,6 +250,7 @@
     self.nativeDragName = nil;
     self.nativeDragCleanupPath = nil;
     [super mouseUp:event];
+    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
@@ -236,9 +264,13 @@
 - (void)draggingSession:(NSDraggingSession *)session
            endedAtPoint:(NSPoint)screenPoint
               operation:(NSDragOperation)operation {
+    NSPoint windowPoint = [self.window convertPointFromScreen:screenPoint];
+    NSPoint viewPoint = [self convertPoint:windowPoint fromView:nil];
+    NSPoint clientPoint = [self browserClientPointForViewPoint:viewPoint];
     NSString *cleanupPath = self.nativeDragCleanupPath;
     self.nativeDragCleanupPath = nil;
     [self scheduleNativeDragCleanup:cleanupPath afterDelay:60.0];
+    [self dispatchPendingLibraryItemDropAtClientPoint:clientPoint];
 }
 
 - (NSArray<NSString *> *)finderDropPathsFromDraggingInfo:(id<NSDraggingInfo>)sender {
@@ -312,6 +344,7 @@
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) WKWebView *startupWebView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
@@ -342,6 +375,7 @@
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId;
 - (void)showPaperFileChooserWithPayload:(NSDictionary *)payload;
+- (void)dismissStartupOverlay;
 @end
 
 @implementation PaperMonitorDelegate
@@ -432,11 +466,13 @@
     WKUserContentController *userContentController = [[WKUserContentController alloc] init];
     [userContentController addScriptMessageHandler:self name:@"windowDrag"];
     [userContentController addScriptMessageHandler:self name:@"nativeFileDrag"];
+    [userContentController addScriptMessageHandler:self name:@"libraryItemDrag"];
     [userContentController addScriptMessageHandler:self name:@"authorPhotoChooser"];
     [userContentController addScriptMessageHandler:self name:@"paperFileChooser"];
     [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
+    [userContentController addScriptMessageHandler:self name:@"appReady"];
     configuration.userContentController = userContentController;
     self.webView = [[GewuInsightWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -463,7 +499,22 @@
         [self.window center];
         self.windowRestoreFrame = self.window.frame;
     }
-    self.window.contentView = self.webView;
+    NSView *contentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 860)];
+    contentView.wantsLayer = YES;
+    contentView.layer.backgroundColor = [NSColor colorWithRed:244.0/255.0
+                                                       green:242.0/255.0
+                                                        blue:237.0/255.0
+                                                       alpha:1.0].CGColor;
+    self.webView.frame = contentView.bounds;
+    self.webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    if (@available(macOS 12.0, *)) {
+        self.webView.underPageBackgroundColor = [NSColor colorWithRed:244.0/255.0
+                                                                green:242.0/255.0
+                                                                 blue:237.0/255.0
+                                                                alpha:1.0];
+    }
+    [contentView addSubview:self.webView];
+    self.window.contentView = contentView;
     __weak PaperMonitorDelegate *weakSelf = self;
     ((GewuInsightWindow *)self.window).titlebarDoubleClickHandler = ^{
         PaperMonitorDelegate *strongSelf = weakSelf;
@@ -481,6 +532,21 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"appReady"]) {
+        [self dismissStartupOverlay];
+        return;
+    }
+    if ([message.name isEqualToString:@"libraryItemDrag"]) {
+        if (![message.body isKindOfClass:[NSDictionary class]] || ![self.webView isKindOfClass:[GewuInsightWebView class]]) {
+            return;
+        }
+        id value = ((NSDictionary *)message.body)[@"item_id"];
+        NSInteger itemId = [value respondsToSelector:@selector(integerValue)] ? [value integerValue] : 0;
+        GewuInsightWebView *webView = (GewuInsightWebView *)self.webView;
+        webView.pendingLibraryItemDragId = itemId > 0 ? itemId : 0;
+        webView.pendingLibraryItemDragStartedAt = itemId > 0 ? [NSDate date] : nil;
+        return;
+    }
     if ([message.name isEqualToString:@"publisherPdfDownload"]) {
         if (![message.body isKindOfClass:[NSDictionary class]]) return;
         [self startHiddenPublisherDownload:(NSDictionary *)message.body];
@@ -1476,15 +1542,49 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)showLoadingPage {
+    [self.startupWebView removeFromSuperview];
+    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+    self.startupWebView = [[WKWebView alloc] initWithFrame:self.window.contentView.bounds
+                                             configuration:configuration];
+    self.startupWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.startupWebView.alphaValue = 1.0;
+    if (@available(macOS 12.0, *)) {
+        self.startupWebView.underPageBackgroundColor = [NSColor colorWithRed:244.0/255.0
+                                                                       green:242.0/255.0
+                                                                        blue:237.0/255.0
+                                                                       alpha:1.0];
+    }
+    [self.window.contentView addSubview:self.startupWebView
+                              positioned:NSWindowAbove
+                              relativeTo:self.webView];
     NSString *html = @"<!doctype html>"
         "<html><head><meta charset='utf-8'><style>"
-        "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f3ee;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
-        ".card{display:flex;align-items:center;gap:16px;width:430px;box-sizing:border-box;padding:28px 32px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.72);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
-        ".icon{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#0f6b6e,#d7b46a);color:white;font-size:22px;font-weight:800;box-shadow:0 10px 22px rgba(15,107,110,.22);}"
-        ".copy{min-width:0;flex:1;}.message{min-height:22px;}"
-        "strong{display:block;margin-bottom:8px;font-size:18px;}"
-        "</style></head><body><div class='card'><div class='icon'>G</div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
-    [self.webView loadHTMLString:html baseURL:nil];
+        "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f2ed;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
+        ".card{position:relative;isolation:isolate;display:flex;align-items:center;gap:18px;width:460px;box-sizing:border-box;overflow:hidden;padding:26px 30px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.78);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
+        ".brand-art{position:absolute;z-index:0;right:-28px;top:-66px;width:236px;height:236px;display:block;object-fit:contain;opacity:.075;filter:brightness(0) saturate(100%);transform:rotate(-2deg);pointer-events:none;}"
+        ".icon-shell{width:62px;height:62px;flex:0 0 62px;display:grid;place-items:center;border:1px solid rgba(35,31,26,.10);border-radius:17px;background:#fbfaf7;box-shadow:0 10px 24px rgba(35,31,26,.12);}"
+        ".icon{width:58px;height:58px;display:block;object-fit:contain;}"
+        ".copy{position:relative;z-index:1;min-width:0;flex:1;}"
+        "strong{display:block;margin:0 0 2px;font-size:19px;line-height:1.25;}"
+        ".message{min-height:19px;color:#5e5a54;font-size:13px;line-height:19px;white-space:nowrap;}"
+        "</style></head><body><div class='card'><img class='brand-art' src='GewuSealGlyphs.png' alt='' aria-hidden='true'><div class='icon-shell'><img class='icon' src='PaperMonitor.png' alt='Gewu Insight'></div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
+    [self.startupWebView loadHTMLString:html baseURL:[NSBundle mainBundle].resourceURL];
+}
+
+- (void)dismissStartupOverlay {
+    WKWebView *overlay = self.startupWebView;
+    if (!overlay) return;
+    self.startupWebView = nil;
+    __weak typeof(self) weakSelf = self;
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = 0.18;
+        overlay.animator.alphaValue = 0.0;
+    } completionHandler:^{
+        [overlay stopLoading];
+        [overlay removeFromSuperview];
+        PaperMonitorDelegate *strongSelf = weakSelf;
+        if (strongSelf) [strongSelf.window makeFirstResponder:strongSelf.webView];
+    }];
 }
 
 - (void)ensureServerThenLoad {

@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable
 from pypdf import PdfReader
 
 from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT
+from ..resource_fingerprint import fingerprint_file
 from ..storage import Storage
 from ..text import clean_text, is_placeholder_publication_title, make_paper_id, normalize_doi, safe_slug, sha1_short
 
@@ -1331,14 +1332,22 @@ def upsert_resource(
     stored_path: str,
 ) -> None:
     timestamp = now_text()
+    fingerprint_path = Path(stored_path).expanduser() if stored_path else Path(record.get("source_path") or "").expanduser()
+    fingerprint = None
+    if str(fingerprint_path) and fingerprint_path.is_file():
+        try:
+            fingerprint = fingerprint_file(fingerprint_path)
+        except OSError:
+            fingerprint = None
     storage.conn.execute(
         """
         INSERT INTO resources (
           paper_id, source_path, stored_path, original_relative_path,
           original_parent_relative_path, original_filename, kind, mime_type,
           import_as, import_batch_id, size_bytes, modified_at, parse_status,
-          parse_error, page_count, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          parse_error, page_count, sha256, content_sha256, annotation_count,
+          is_annotated, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_path, size_bytes, kind) DO UPDATE SET
           paper_id = COALESCE(excluded.paper_id, resources.paper_id),
           stored_path = COALESCE(NULLIF(excluded.stored_path, ''), resources.stored_path),
@@ -1352,6 +1361,10 @@ def upsert_resource(
           parse_status = excluded.parse_status,
           parse_error = excluded.parse_error,
           page_count = excluded.page_count,
+          sha256 = COALESCE(NULLIF(excluded.sha256, ''), resources.sha256),
+          content_sha256 = COALESCE(NULLIF(excluded.content_sha256, ''), resources.content_sha256),
+          annotation_count = MAX(COALESCE(resources.annotation_count, 0), COALESCE(excluded.annotation_count, 0)),
+          is_annotated = MAX(COALESCE(resources.is_annotated, 0), COALESCE(excluded.is_annotated, 0)),
           status = excluded.status,
           updated_at = excluded.updated_at
         """,
@@ -1371,6 +1384,10 @@ def upsert_resource(
             record["parse_status"],
             record["parse_error"],
             record["page_count"],
+            fingerprint.sha256 if fingerprint else None,
+            fingerprint.content_sha256 if fingerprint else None,
+            fingerprint.annotation_count if fingerprint else 0,
+            1 if fingerprint and fingerprint.is_annotated else 0,
             "imported" if stored_path else "missing_source",
             timestamp,
             timestamp,

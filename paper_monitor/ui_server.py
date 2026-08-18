@@ -52,6 +52,7 @@ from .config import (
     ROOT,
     load_config,
 )
+from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
 from .download import (
     convert_word_document_to_pdf,
     download_paper,
@@ -365,6 +366,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/health":
                 self.send_json({"ok": True})
                 return
+            if parsed.path == "/api/app-icon":
+                self.handle_app_icon()
+                return
+            if parsed.path == "/api/startup-brand-art":
+                self.handle_startup_brand_art()
+                return
             if parsed.path == "/":
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
                 return
@@ -600,6 +607,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/items":
                 self.handle_add_library_item(payload)
+                return
+            if parsed.path == "/api/library/items/attach":
+                self.handle_convert_library_item_to_attachment(payload)
                 return
             if parsed.path == "/api/settings/library-naming":
                 self.handle_set_library_naming_rule(payload)
@@ -1249,6 +1259,41 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def handle_convert_library_item_to_attachment(self, payload: dict[str, Any]) -> None:
+        source_item_id = int(payload.get("source_item_id") or 0)
+        target_paper_id = clean_text(str(payload.get("target_paper_id") or ""))
+        if not source_item_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "source_item_id is required")
+            return
+        if not target_paper_id:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "target_paper_id is required")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            result = convert_library_item_to_paper_attachment(
+                storage,
+                source_item_id=source_item_id,
+                target_paper_id=target_paper_id,
+            )
+            files = paper_files_state_payload(storage, target_paper_id)
+            paper = storage.get_paper(target_paper_id)
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Library item or target paper was not found")
+            return
+        except (OSError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        self.send_json(
+            {
+                "status": "attached",
+                "result": result,
+                "paper_files": [files] if files else [],
+                "paper": paper_to_api(paper) if paper else None,
+            }
+        )
+
     def handle_download_arxiv_versions(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         mode = clean_text(str(payload.get("mode") or "latest")).lower()
@@ -1360,6 +1405,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         resource_id = int(payload.get("resource_id") or 0)
         file_role = clean_text(str(payload.get("file_role") or "publication_version"))
         version_role = clean_text(str(payload.get("version_role") or ""))
+        is_annotated = bool(payload.get("is_annotated"))
         if not paper_id or resource_id <= 0:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id and resource_id are required")
             return
@@ -1371,6 +1417,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 resource_id,
                 file_role,
                 version_role,
+                is_annotated=is_annotated,
             )
             response = paper_files_state_payload(storage, paper_id)
         except KeyError:
@@ -4820,6 +4867,32 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/svg+xml; charset=utf-8")
         self.send_header("Cache-Control", "public, max-age=31536000")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_app_icon(self) -> None:
+        icon_path = ROOT / "Gewu Insight.app" / "Contents" / "Resources" / "PaperMonitor.png"
+        if not icon_path.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "App icon was not found")
+            return
+        data = icon_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_startup_brand_art(self) -> None:
+        art_path = ROOT / "assets" / "branding" / "GewuSealGlyphs.png"
+        if not art_path.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Startup brand art was not found")
+            return
+        data = art_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Cache-Control", "public, max-age=3600")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -8680,6 +8753,10 @@ def paper_resource_to_api(resource: dict[str, Any]) -> dict[str, Any]:
         "is_preferred": bool(resource.get("is_preferred")),
         "missing_status": resource.get("missing_status") or "",
         "added_via": resource.get("added_via") or "",
+        "sha256": resource.get("sha256") or "",
+        "content_sha256": resource.get("content_sha256") or "",
+        "annotation_count": int(resource.get("annotation_count") or 0),
+        "is_annotated": bool(resource.get("is_annotated")),
         "created_at": resource.get("created_at") or "",
         "updated_at": resource.get("updated_at") or "",
     }
@@ -17366,7 +17443,7 @@ def download_arxiv_preprint_versions(
         requested_identifier,
     )
     target_versions = list(range(1, latest_version + 1)) if include_history else [latest_version]
-    resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
+    resources = refresh_paper_resource_fingerprints(storage, str(paper_id))
     version_resources: dict[int, dict[str, Any]] = {}
     stale_synced_resources: list[dict[str, Any]] = []
     for resource in resources:
@@ -17417,12 +17494,57 @@ def download_arxiv_preprint_versions(
                     break
             if not downloaded:
                 raise RuntimeError(messages[-1] if messages else "arXiv did not return a valid PDF")
+            fingerprint = fingerprint_file(temporary)
+            exact_duplicate = next(
+                (
+                    resource
+                    for resource in resources
+                    if clean_text(resource.get("sha256") or "") == fingerprint.sha256
+                    and resource.get("exists")
+                ),
+                None,
+            )
+            version_date = published_at if version_number == 1 else (updated_at if version_number == latest_version else "")
+            label = f"Preprint v{version_number}"
+            if exact_duplicate:
+                duplicate_id = int(exact_duplicate.get("id") or 0)
+                duplicate_role = clean_text(exact_duplicate.get("version_role") or "other")
+                if storage.resource_is_pdf(exact_duplicate) and duplicate_role in {"", "other", "preprint"}:
+                    storage.conn.execute(
+                        """
+                        UPDATE resources
+                        SET file_role = 'publication_version', version_role = 'preprint',
+                            version_label = ?, version_date = ?, version_number = ?,
+                            source_url = ?, sha256 = ?, content_sha256 = ?,
+                            annotation_count = ?,
+                            is_annotated = CASE WHEN ? > 0 THEN 1 ELSE COALESCE(is_annotated, 0) END,
+                            missing_status = '', updated_at = ?
+                        WHERE id = ? AND paper_id = ?
+                        """,
+                        (
+                            label,
+                            version_date or None,
+                            version_number,
+                            source_url,
+                            fingerprint.sha256,
+                            fingerprint.content_sha256 or None,
+                            fingerprint.annotation_count,
+                            fingerprint.annotation_count,
+                            now_iso(),
+                            duplicate_id,
+                            str(paper_id),
+                        ),
+                    )
+                    storage.conn.commit()
+                resource = storage.get_paper_resource(duplicate_id) or exact_duplicate
+                resource = {**resource, "exists": True, "local_path": storage.resource_local_path(resource)}
+                version_resources[version_number] = resource
+                existing_versions.append(version_number)
+                continue
             versions_dir.mkdir(parents=True, exist_ok=True)
             target = unique_path_in_dir(versions_dir / filename)
             shutil.move(str(temporary), str(target))
-            digest = sha256_for_file(target)
-            version_date = published_at if version_number == 1 else (updated_at if version_number == latest_version else "")
-            label = f"Preprint v{version_number}"
+            digest = fingerprint.sha256
             previous = max(
                 (
                     resource
@@ -17439,7 +17561,8 @@ def download_arxiv_preprint_versions(
                     SET stored_path = ?, original_filename = ?, display_name = ?,
                         file_role = 'publication_version', version_role = 'preprint',
                         version_label = ?, version_date = ?, version_number = ?,
-                        source_url = ?, storage_mode = 'managed', sha256 = ?,
+                        source_url = ?, storage_mode = 'managed', sha256 = ?, content_sha256 = ?,
+                        annotation_count = ?, is_annotated = ?,
                         added_via = 'arxiv_version_sync', mime_type = 'application/pdf',
                         kind = 'pdf', size_bytes = ?, modified_at = ?,
                         supersedes_resource_id = ?, missing_status = '', status = 'imported',
@@ -17455,6 +17578,9 @@ def download_arxiv_preprint_versions(
                         version_number,
                         source_url,
                         digest,
+                        fingerprint.content_sha256 or None,
+                        fingerprint.annotation_count,
+                        1 if fingerprint.is_annotated else 0,
                         int(target.stat().st_size),
                         now_iso(),
                         int(previous.get("id") or 0) if previous else None,
@@ -17477,12 +17603,16 @@ def download_arxiv_preprint_versions(
                     source_url=source_url,
                     storage_mode="managed",
                     sha256=digest,
+                    content_sha256=fingerprint.content_sha256,
+                    annotation_count=fingerprint.annotation_count,
+                    is_annotated=fingerprint.is_annotated,
                     added_via="arxiv_version_sync",
                     mime_type="application/pdf",
                     kind="pdf",
                     supersedes_resource_id=int(previous.get("id") or 0) if previous else None,
                 )
             version_resources[version_number] = {**resource, "exists": True, "local_path": str(target)}
+            resources.append(version_resources[version_number])
             downloaded_versions.append(version_number)
         except Exception as exc:
             if target and target.exists() and not any(
@@ -19855,6 +19985,8 @@ def update_paper_resource_role(
     resource_id: int,
     file_role: str,
     version_role: str,
+    *,
+    is_annotated: bool = False,
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
@@ -19897,7 +20029,8 @@ def update_paper_resource_role(
     storage.conn.execute(
         """
         UPDATE resources
-        SET file_role = ?, version_role = ?, version_label = ?, version_number = ?, updated_at = ?
+        SET file_role = ?, version_role = ?, version_label = ?, version_number = ?,
+            is_annotated = ?, updated_at = ?
         WHERE id = ? AND paper_id = ?
         """,
         (
@@ -19905,6 +20038,7 @@ def update_paper_resource_role(
             version if role == "publication_version" else None,
             version_label,
             version_number or None,
+            1 if is_annotated else 0,
             now_iso(),
             int(resource_id),
             str(paper_id),
@@ -19985,11 +20119,47 @@ def associated_resource_subdir(file_role: str) -> str:
 
 
 def sha256_for_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return exact_sha256_for_file(path)
+
+
+def refresh_paper_resource_fingerprints(storage: Storage, paper_id: str) -> list[dict[str, Any]]:
+    """Refresh exact and annotation-insensitive fingerprints for one work on demand."""
+
+    resources = storage.list_paper_resources(str(paper_id))
+    changed = False
+    for resource in resources:
+        path_text = clean_text(resource.get("stored_path") or resource.get("source_path") or "")
+        path = Path(path_text).expanduser() if path_text else None
+        if not path or not path.is_file():
+            continue
+        try:
+            fingerprint = fingerprint_file(path)
+        except OSError:
+            continue
+        storage.conn.execute(
+            """
+            UPDATE resources
+            SET sha256 = ?, content_sha256 = ?, annotation_count = ?,
+                is_annotated = CASE WHEN ? > 0 THEN 1 ELSE COALESCE(is_annotated, 0) END,
+                size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
+            WHERE id = ? AND paper_id = ?
+            """,
+            (
+                fingerprint.sha256,
+                fingerprint.content_sha256 or None,
+                fingerprint.annotation_count,
+                fingerprint.annotation_count,
+                fingerprint.size_bytes,
+                fingerprint.modified_at,
+                now_iso(),
+                int(resource.get("id") or 0),
+                str(paper_id),
+            ),
+        )
+        changed = True
+    if changed:
+        storage.conn.commit()
+    return storage.list_paper_resources(str(paper_id), ensure_primary=False)
 
 
 def snapshot_primary_resource_before_download(
@@ -20015,7 +20185,7 @@ def snapshot_primary_resource_before_download(
         # The on-disk bytes are authoritative here.  A resource hash can be stale
         # after an older in-place refresh, which must not make a changed PDF look
         # identical and suppress version archiving.
-        digest = sha256_for_file(temporary)
+        fingerprint = fingerprint_file(temporary)
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -20023,7 +20193,10 @@ def snapshot_primary_resource_before_download(
         "temporary_path": temporary,
         "canonical_path": canonical,
         "resource": primary,
-        "sha256": digest,
+        "sha256": fingerprint.sha256,
+        "content_sha256": fingerprint.content_sha256,
+        "annotation_count": fingerprint.annotation_count,
+        "is_annotated": fingerprint.is_annotated,
     }
 
 
@@ -20090,13 +20263,28 @@ def register_downloaded_paper_resource(
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
     new_version_role = downloaded_version_role(paper, download_source_url)
     new_version_label = downloaded_version_label(new_version_role)
-    new_digest = sha256_for_file(canonical)
+    new_fingerprint = fingerprint_file(canonical)
+    new_digest = new_fingerprint.sha256
     if not snapshot:
         primary = storage.ensure_primary_pdf_resource(str(paper_id))
         if primary:
             storage.conn.execute(
-                "UPDATE resources SET sha256 = ?, missing_status = '', updated_at = ? WHERE id = ?",
-                (new_digest, now_iso(), int(primary.get("id") or 0)),
+                """
+                UPDATE resources
+                SET sha256 = ?, content_sha256 = ?, annotation_count = ?, is_annotated = ?,
+                    size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    new_digest,
+                    new_fingerprint.content_sha256 or None,
+                    new_fingerprint.annotation_count,
+                    1 if new_fingerprint.is_annotated else 0,
+                    new_fingerprint.size_bytes,
+                    new_fingerprint.modified_at,
+                    now_iso(),
+                    int(primary.get("id") or 0),
+                ),
             )
             storage.conn.commit()
             return storage.get_paper_resource(int(primary.get("id") or 0))
@@ -20105,6 +20293,9 @@ def register_downloaded_paper_resource(
     old_resource = dict(snapshot.get("resource") or {})
     old_id = int(old_resource.get("id") or 0)
     old_digest = clean_text(snapshot.get("sha256") or "")
+    old_content_digest = clean_text(snapshot.get("content_sha256") or "")
+    old_annotation_count = int(snapshot.get("annotation_count") or 0)
+    old_is_annotated = bool(snapshot.get("is_annotated"))
     if new_digest == old_digest:
         old_canonical = Path(snapshot.get("canonical_path") or canonical).expanduser().resolve()
         if canonical != old_canonical and old_canonical.exists() and old_canonical.is_file():
@@ -20126,6 +20317,8 @@ def register_downloaded_paper_resource(
                 UPDATE resources
                 SET sha256 = ?, stored_path = ?, display_name = ?, file_role = 'publication_version',
                     version_role = ?, version_label = ?, source_url = COALESCE(NULLIF(?, ''), source_url),
+                    content_sha256 = ?, annotation_count = ?, is_annotated = ?,
+                    size_bytes = ?, modified_at = ?,
                     missing_status = '', updated_at = ?
                 WHERE id = ?
                 """,
@@ -20136,6 +20329,11 @@ def register_downloaded_paper_resource(
                     new_version_role,
                     new_version_label,
                     download_source_url,
+                    new_fingerprint.content_sha256 or None,
+                    new_fingerprint.annotation_count,
+                    1 if new_fingerprint.is_annotated else 0,
+                    new_fingerprint.size_bytes,
+                    new_fingerprint.modified_at,
                     now_iso(),
                     old_id,
                 ),
@@ -20188,10 +20386,20 @@ def register_downloaded_paper_resource(
         storage.conn.execute(
             """
             UPDATE resources
-            SET stored_path = ?, display_name = ?, sha256 = ?, missing_status = '', updated_at = ?
+            SET stored_path = ?, display_name = ?, sha256 = ?, content_sha256 = ?,
+                annotation_count = ?, is_annotated = ?, missing_status = '', updated_at = ?
             WHERE id = ?
             """,
-            (str(archived_path), archived_path.name, old_digest, timestamp, old_id),
+            (
+                str(archived_path),
+                archived_path.name,
+                old_digest,
+                old_content_digest or None,
+                old_annotation_count,
+                1 if old_is_annotated else 0,
+                timestamp,
+                old_id,
+            ),
         )
         created = storage.create_paper_resource(
             paper_id=str(paper_id),
@@ -20203,6 +20411,9 @@ def register_downloaded_paper_resource(
             source_url=download_source_url,
             storage_mode="managed",
             sha256=new_digest,
+            content_sha256=new_fingerprint.content_sha256,
+            annotation_count=new_fingerprint.annotation_count,
+            is_annotated=new_fingerprint.is_annotated,
             added_via="download_refresh",
             mime_type="application/pdf",
             kind="pdf",
@@ -20268,6 +20479,7 @@ def attach_file_to_paper(
     if suffix == ".pdf" and b"%PDF-" not in content[:1024]:
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
+    refresh_paper_resource_fingerprints(storage, str(paper_id))
     duplicate = storage.conn.execute(
         "SELECT id FROM resources WHERE paper_id = ? AND sha256 = ? ORDER BY id ASC LIMIT 1",
         (str(paper_id), digest),
@@ -20283,6 +20495,7 @@ def attach_file_to_paper(
     temporary = target.with_name(f".{target.name}-{uuid.uuid4().hex[:8]}.upload")
     try:
         temporary.write_bytes(content)
+        fingerprint = fingerprint_file(temporary)
         temporary.replace(target)
         resource = storage.create_paper_resource(
             paper_id=str(paper_id),
@@ -20292,7 +20505,10 @@ def attach_file_to_paper(
             version_role=version,
             version_label=clean_text(version_label or ""),
             storage_mode="managed",
-            sha256=digest,
+            sha256=fingerprint.sha256,
+            content_sha256=fingerprint.content_sha256,
+            annotation_count=fingerprint.annotation_count,
+            is_annotated=fingerprint.is_annotated,
             added_via=added_via,
             mime_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
             kind=suffix.lstrip(".") or "file",
@@ -20305,6 +20521,155 @@ def attach_file_to_paper(
         raise
     resource["duplicate"] = False
     return resource
+
+
+def convert_library_item_to_paper_attachment(
+    storage: Storage,
+    *,
+    source_item_id: int,
+    target_paper_id: str,
+) -> dict[str, Any]:
+    """Turn one standalone Library work into managed files of another work."""
+    source_item = storage.get_library_item(int(source_item_id))
+    target_paper = storage.get_paper(str(target_paper_id))
+    if not source_item or not target_paper:
+        raise KeyError(int(source_item_id))
+    source_paper_id = clean_text(source_item.get("paper_id") or "")
+    if not source_paper_id or source_paper_id == str(target_paper_id):
+        raise ValueError("A paper cannot be attached to itself")
+    source_paper = storage.get_paper(source_paper_id)
+    if not source_paper:
+        raise KeyError(source_paper_id)
+
+    library_rows = storage.conn.execute(
+        "SELECT id FROM library_items WHERE paper_id = ? ORDER BY id ASC",
+        (source_paper_id,),
+    ).fetchall()
+    if len(library_rows) != 1:
+        raise ValueError("This work has other Library locations. Remove those copies before converting it to an attachment.")
+    if storage.conn.execute(
+        "SELECT 1 FROM my_publications WHERE paper_id = ? LIMIT 1",
+        (source_paper_id,),
+    ).fetchone():
+        raise ValueError("This work is also in My Publications and cannot be converted to an attachment.")
+
+    resources = refresh_paper_resource_fingerprints(storage, source_paper_id)
+    if not resources:
+        raise ValueError("The Library item has no managed file to attach")
+    source_entries: list[tuple[dict[str, Any], Path]] = []
+    seen_sources: set[str] = set()
+    for resource in resources:
+        stored_text = clean_text(resource.get("stored_path") or "")
+        if not stored_text:
+            raise ValueError("Every file in this work must have a managed local copy before it can be converted")
+        source = Path(stored_text).expanduser().absolute()
+        if not source.is_file():
+            raise ValueError(f"Managed file was not found: {source.name}")
+        source_key = str(source)
+        if source_key in seen_sources:
+            raise ValueError("This work contains duplicate local file records and cannot be converted safely")
+        seen_sources.add(source_key)
+        source_entries.append((resource, source))
+
+    destination_dir = associated_work_dir_for_paper(storage, str(target_paper_id)) / associated_resource_subdir("other")
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    managed_roots = [
+        LIBRARY_LOCAL_COPY_ROOT.absolute(),
+        SPACES_LOCAL_COPY_ROOT.absolute(),
+        MY_PUBLICATIONS_LOCAL_COPY_ROOT.absolute(),
+        ASSOCIATED_FILES_ROOT.absolute(),
+    ]
+
+    def belongs_to_managed_tree(path: Path) -> bool:
+        absolute = path.absolute()
+        for root in managed_roots:
+            try:
+                absolute.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    operations: list[dict[str, Any]] = []
+    try:
+        for resource, source in source_entries:
+            display_name = clean_text(resource.get("display_name") or resource.get("original_filename") or source.name)
+            destination = unique_path_in_dir(
+                destination_dir / finder_safe_name(Path(display_name).name or source.name, source.name)
+            )
+            managed_source = belongs_to_managed_tree(source)
+            if managed_source and not source.is_symlink():
+                shutil.move(str(source), str(destination))
+                mode = "move"
+            else:
+                shutil.copy2(str(source.resolve()), str(destination))
+                mode = "copy_symlink" if managed_source and source.is_symlink() else "copy_external"
+            operations.append(
+                {
+                    "resource_id": int(resource.get("id") or 0),
+                    "source": source,
+                    "destination": destination,
+                    "mode": mode,
+                }
+            )
+
+        storage.conn.execute("BEGIN IMMEDIATE")
+        timestamp = now_iso()
+        for operation in operations:
+            destination = Path(operation["destination"])
+            storage.conn.execute(
+                """
+                UPDATE resources
+                SET paper_id = ?, stored_path = ?, display_name = ?, file_role = 'other',
+                    version_role = NULL, version_label = 'Other File', version_number = NULL,
+                    storage_mode = 'managed', added_via = 'library_drag_attachment',
+                    missing_status = '', updated_at = ?
+                WHERE id = ? AND paper_id = ?
+                """,
+                (
+                    str(target_paper_id),
+                    str(destination),
+                    destination.name,
+                    timestamp,
+                    int(operation["resource_id"]),
+                    source_paper_id,
+                ),
+            )
+        storage.conn.execute("DELETE FROM library_items WHERE id = ?", (int(source_item_id),))
+        storage.conn.execute("DELETE FROM papers WHERE paper_id = ?", (source_paper_id,))
+        storage.conn.commit()
+    except Exception:
+        storage.conn.rollback()
+        for operation in reversed(operations):
+            source = Path(operation["source"])
+            destination = Path(operation["destination"])
+            if operation["mode"] == "move" and destination.exists() and not source.exists():
+                source.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(destination), str(source))
+            elif destination.exists():
+                destination.unlink()
+        cleanup_empty_parents(
+            [str(operation["destination"]) for operation in operations],
+            ASSOCIATED_FILES_ROOT.absolute(),
+        )
+        raise
+
+    removed_paths: list[str] = []
+    for operation in operations:
+        source = Path(operation["source"])
+        if operation["mode"] == "copy_symlink" and source.is_symlink():
+            source.unlink()
+            removed_paths.append(str(source))
+        elif operation["mode"] == "move":
+            removed_paths.append(str(source))
+    cleanup_local_copy_empty_parents(removed_paths)
+    return {
+        "source_item_id": int(source_item_id),
+        "source_paper_id": source_paper_id,
+        "target_paper_id": str(target_paper_id),
+        "attached_count": len(operations),
+        "files": [str(operation["destination"]) for operation in operations],
+    }
 
 
 def attach_downloaded_publisher_pdf_to_paper(
@@ -23373,7 +23738,7 @@ INDEX_HTML = """<!doctype html>
       z-index: 100000;
       display: grid;
       place-items: center;
-      background: #f6f3ee;
+      background: #f4f2ed;
       color: #231f1a;
       opacity: 1;
       transition: opacity 120ms ease;
@@ -23383,40 +23748,69 @@ INDEX_HTML = """<!doctype html>
       pointer-events: none;
     }
     .app-startup-card {
+      position: relative;
+      isolation: isolate;
       display: flex;
       align-items: center;
-      gap: 16px;
-      width: 430px;
+      gap: 18px;
+      width: 460px;
       box-sizing: border-box;
-      padding: 28px 32px;
+      overflow: hidden;
+      padding: 26px 30px;
       border: 1px solid rgba(35,31,26,.12);
       border-radius: 18px;
-      background: rgba(255,255,255,.72);
+      background: rgba(255,255,255,.78);
       box-shadow: 0 18px 50px rgba(35,31,26,.08);
     }
-    .app-startup-icon {
-      width: 48px;
-      height: 48px;
-      border-radius: 14px;
+    .app-startup-brand-art {
+      position: absolute;
+      z-index: 0;
+      right: -28px;
+      top: -66px;
+      width: 236px;
+      height: 236px;
+      display: block;
+      object-fit: contain;
+      opacity: .075;
+      filter: brightness(0) saturate(100%);
+      transform: rotate(-2deg);
+      pointer-events: none;
+    }
+    .app-startup-icon-shell {
+      width: 62px;
+      height: 62px;
+      flex: 0 0 62px;
       display: grid;
       place-items: center;
-      background: linear-gradient(135deg,#0f6b6e,#d7b46a);
-      color: #fff;
-      font-size: 22px;
-      font-weight: 800;
-      box-shadow: 0 10px 22px rgba(15,107,110,.22);
+      border: 1px solid rgba(35,31,26,.10);
+      border-radius: 17px;
+      background: #fbfaf7;
+      box-shadow: 0 10px 24px rgba(35,31,26,.12);
+    }
+    .app-startup-icon {
+      width: 58px;
+      height: 58px;
+      display: block;
+      object-fit: contain;
     }
     .app-startup-copy {
+      position: relative;
+      z-index: 1;
       min-width: 0;
       flex: 1;
     }
     .app-startup-title {
       display: block;
-      margin-bottom: 8px;
-      font-size: 18px;
+      margin: 0 0 2px;
+      font-size: 19px;
+      line-height: 1.25;
     }
     #appStartupMessage {
-      min-height: 22px;
+      min-height: 19px;
+      color: #5e5a54;
+      font-size: 13px;
+      line-height: 19px;
+      white-space: nowrap;
     }
     .app::before {
       content: "";
@@ -27184,6 +27578,10 @@ INDEX_HTML = """<!doctype html>
     .library-row.range-selected { background: #d9ebff; border-color: #b9d7fb; }
     .library-row.range-selected .library-meta { color: #45637f; }
     .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
+    .library-shell.paper-files-focus-active .library-row.active:not(.range-selected)[data-library-type="item"] {
+      background: #5f95ce;
+      border-color: #5f95ce;
+    }
     .library-row.path-parent { background: #dedede; border-color: #dedede; color: #1f2328; }
     .library-row.drag-over { border-color: var(--accent); background: #eef5fb; }
     .library-row.active:not(.range-selected) .library-meta { color: rgba(255, 255, 255, 0.86); }
@@ -27214,6 +27612,21 @@ INDEX_HTML = """<!doctype html>
       outline: 2px solid #0b67d8;
       outline-offset: -2px;
       background: #e8f2ff;
+    }
+    .library-resource-column.library-attachment-drop-target::after {
+      content: "Move into Paper Files";
+      position: absolute;
+      inset: 8px;
+      z-index: 5;
+      display: grid;
+      place-items: center;
+      border: 2px dashed #4d86bd;
+      border-radius: 10px;
+      background: rgba(232, 243, 255, 0.94);
+      color: #214f7a;
+      font-size: 12px;
+      font-weight: 760;
+      pointer-events: none;
     }
     .library-row.drag-reorder-before { border-top-color: var(--accent); border-top-width: 2px; }
     .library-row.drag-reorder-after { border-bottom-color: var(--accent); border-bottom-width: 2px; }
@@ -27594,12 +28007,12 @@ INDEX_HTML = """<!doctype html>
     .library-detail dl {
       display: grid;
       grid-template-columns: minmax(76px, 0.22fr) minmax(0, 1fr);
-      gap: 8px 18px;
+      gap: 6px 18px;
       margin: 14px 0;
       max-width: 100%;
     }
-    .library-detail dt { color: var(--muted); }
-    .library-detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    .library-detail dt { min-height: 22px; color: var(--muted); }
+    .library-detail dd { min-height: 22px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
     .gewu-storage-key {
       color: #445269;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -27615,11 +28028,11 @@ INDEX_HTML = """<!doctype html>
     .preprint-identifier-main {
       position: relative;
       min-width: 0;
-      min-height: 28px;
+      min-height: 22px;
     }
     .preprint-identifier-value {
       width: 100%;
-      min-height: 28px;
+      min-height: 22px;
       padding: 0 4px;
       border: 0;
       border-bottom: 1px solid transparent;
@@ -27647,7 +28060,7 @@ INDEX_HTML = """<!doctype html>
       inset: 0;
       width: 100%;
       min-width: 0;
-      min-height: 28px;
+      min-height: 22px;
       border: 0;
       border-bottom: 1px solid var(--accent);
       border-radius: 0;
@@ -27675,7 +28088,18 @@ INDEX_HTML = """<!doctype html>
     .preprint-identifier-actions {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
+    }
+    .preprint-identifier-actions .preprint-icon-action {
+      width: 22px;
+      min-width: 22px;
+      height: 22px;
+      min-height: 22px;
+      justify-content: center;
+      padding: 0;
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1;
     }
     .preprint-identifier-status {
       grid-column: 1 / -1;
@@ -27705,16 +28129,17 @@ INDEX_HTML = """<!doctype html>
     .library-detail-doi input {
       min-width: 0;
       flex: 1 1 auto;
-      min-height: 28px;
+      height: 22px;
+      min-height: 22px;
       border: 1px solid var(--line);
       border-radius: 6px;
-      padding: 0 8px;
+      padding: 0 4px;
       font-size: 12px;
       background: #fff;
     }
     .library-detail-doi button {
       flex: 0 0 auto;
-      min-height: 28px;
+      min-height: 22px;
     }
     .library-file-line {
       display: block;
@@ -28114,28 +28539,118 @@ INDEX_HTML = """<!doctype html>
       font-weight: 780;
       vertical-align: 1px;
     }
-    .library-resource-column .library-column-body { padding: 5px 4px 8px; }
-    .library-resource-column .paper-files-group-label { padding-left: 7px; }
-    .library-resource-row {
+    .library-resource-column {
+      grid-template-rows: auto minmax(0, 1fr);
+      border-left: 1px solid #dce3eb;
+      background: #f6f8fb;
+      box-shadow: inset 8px 0 18px rgba(45, 62, 80, 0.035);
+    }
+    .library-resource-column > .library-resource-inspector-head {
+      display: grid;
+      gap: 3px;
+      padding: 10px 11px 9px;
+      border-bottom: 1px solid #dfe5ec;
+      background: rgba(255, 255, 255, 0.78);
+    }
+    .library-resource-inspector-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .library-resource-inspector-title strong {
+      color: #25364a;
+      font-size: 13px;
+      font-weight: 780;
+    }
+    .library-resource-count {
+      color: #718096;
+      font-size: 9px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .library-resource-paper-title {
+      overflow: hidden;
+      color: #7a8594;
+      font-size: 9px;
+      font-weight: 550;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-resource-body {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 9px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .library-resource-section + .library-resource-section { margin-top: 10px; }
+    .library-resource-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 2px 5px;
+      color: #738095;
+      font-size: 9px;
+      font-weight: 760;
+      letter-spacing: .02em;
+    }
+    .library-resource-section-count {
+      min-width: 17px;
+      border-radius: 9px;
+      background: #e7ebf0;
+      color: #687588;
+      padding: 1px 5px;
+      text-align: center;
+      font-size: 8px;
+    }
+    .library-resource-card {
       width: 100%;
       min-width: 0;
       display: grid;
-      grid-template-columns: 22px minmax(0, 1fr);
+      grid-template-columns: 34px minmax(0, 1fr) auto;
       align-items: center;
-      gap: 7px;
-      border: 1px solid transparent;
-      border-radius: 5px;
-      background: transparent;
+      gap: 8px;
+      border: 1px solid #dfe5ec;
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.92);
       color: #273244;
-      padding: 5px 7px;
+      padding: 8px;
       font: inherit;
       text-align: left;
       cursor: pointer;
+      box-shadow: 0 1px 2px rgba(27, 39, 51, 0.035);
     }
-    .library-resource-row:hover { background: #eceff3; }
-    .library-resource-row:disabled { color: #9a6262; cursor: default; }
-    .library-resource-row .library-resource-copy { min-width: 0; }
-    .library-resource-row .library-resource-name {
+    .library-resource-card + .library-resource-card { margin-top: 5px; }
+    .library-resource-card:hover {
+      border-color: #b9c9da;
+      background: #fff;
+      box-shadow: 0 2px 6px rgba(27, 57, 86, 0.08);
+    }
+    .library-resource-card.is-selected {
+      border-color: #5f93c5;
+      background: #e5f0fb;
+      box-shadow: 0 0 0 1px rgba(69, 123, 177, 0.2), 0 3px 8px rgba(27, 57, 86, 0.1);
+    }
+    .library-resource-card:focus-visible {
+      outline: 2px solid rgba(61, 118, 174, 0.5);
+      outline-offset: 1px;
+    }
+    .library-resource-card:disabled { color: #9a6262; cursor: default; }
+    .library-resource-icon-tile {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: #edf1f5;
+    }
+    .library-resource-card .paper-file-icon { width: 21px; height: 21px; }
+    .library-resource-card .library-resource-copy { min-width: 0; }
+    .library-resource-card .library-resource-name {
       display: block;
       overflow: hidden;
       font-size: 11px;
@@ -28143,16 +28658,34 @@ INDEX_HTML = """<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .library-resource-row .library-resource-meta {
-      display: block;
+    .library-resource-card .library-resource-meta {
+      display: flex;
+      align-items: center;
+      gap: 3px;
       overflow: hidden;
-      margin-top: 1px;
+      margin-top: 3px;
       color: #7b8491;
       font-size: 9px;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .library-resource-row.is-primary { background: #e9f2fb; }
+    .library-resource-card .paper-file-version-picker { min-width: 0; }
+    .library-resource-card .paper-file-version-picker > span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .library-resource-state {
+      align-self: start;
+      border-radius: 8px;
+      background: #dce9f5;
+      color: #315c84;
+      padding: 2px 5px;
+      font-size: 7.5px;
+      font-weight: 800;
+      letter-spacing: .025em;
+      text-transform: uppercase;
+    }
     .nature-reference-box { white-space: normal; }
     .citation-panel {
       margin: 12px 0;
@@ -28463,6 +28996,32 @@ INDEX_HTML = """<!doctype html>
     .library-context-menu button[data-action="delete-my-publication"] { color: #1f2328; }
     .library-context-menu button[data-action="delete-entry"]:hover,
     .library-context-menu button[data-action="delete-my-publication"]:hover { background: rgba(0, 0, 0, 0.08); }
+    .paper-resource-context-menu { min-width: 170px; }
+    .paper-resource-context-role {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      min-height: 24px;
+      border-radius: 5px;
+      color: #1f2328;
+      padding: 2px 12px;
+      font-size: 12.5px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .paper-resource-context-role:hover { background: rgba(0, 0, 0, 0.08); }
+    .paper-resource-context-role select {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .paper-resource-context-role-arrow { color: #6b7280; font-size: 10px; }
     .my-publication-context-menu {
       min-width: 0;
     }
@@ -30991,6 +31550,19 @@ INDEX_HTML = """<!doctype html>
       box-shadow: none;
       color: #394555;
     }
+    .library-detail > .actions .action,
+    .my-publications-shell .library-detail > .actions .action,
+    .author-monitor-detail-body.library-detail > .actions .action {
+      min-height: 26px;
+      padding: 0 7px;
+      font-size: 11px;
+    }
+    .library-detail .library-detail-doi > .action {
+      height: 22px;
+      min-height: 22px;
+      padding: 0 6px;
+      font-size: 10px;
+    }
     .library-detail .action:hover,
     .my-publications-shell .library-detail .action:hover,
     .author-monitor-detail-body.library-detail .action:hover {
@@ -31088,7 +31660,8 @@ INDEX_HTML = """<!doctype html>
 <body>
   <div class="app-startup-cover" id="appStartupCover" role="status" aria-live="polite">
     <div class="app-startup-card">
-      <div class="app-startup-icon">D</div>
+      <img class="app-startup-brand-art" src="/api/startup-brand-art" alt="" aria-hidden="true">
+      <div class="app-startup-icon-shell"><img class="app-startup-icon" src="/api/app-icon" alt="Gewu Insight"></div>
       <div class="app-startup-copy">
         <strong class="app-startup-title" id="appStartupTitle">Starting Gewu Insight</strong>
         <div id="appStartupMessage">Loading Library.</div>
@@ -31426,6 +31999,9 @@ INDEX_HTML = """<!doctype html>
       if (startupCover) startupCover.classList.remove("hidden");
       const root = document.getElementById("papers") || document.body;
       root.innerHTML = `<div class="empty"><strong>Startup error</strong><pre style="white-space:pre-wrap;text-align:left;max-width:100%;overflow:auto;">${String(message).replace(/[&<>]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]))}</pre></div>`;
+      try {
+        window.webkit?.messageHandlers?.appReady?.postMessage({status: "error"});
+      } catch (_) {}
     }
     function hideAppStartupCover() {
       appBootCompleted = true;
@@ -31433,6 +32009,18 @@ INDEX_HTML = """<!doctype html>
       if (!cover) return;
       cover.classList.add("hidden");
       window.setTimeout(() => cover.remove(), 160);
+    }
+    function finishAppStartup() {
+      const nativeReady = window.webkit?.messageHandlers?.appReady;
+      if (!nativeReady) {
+        hideAppStartupCover();
+        return;
+      }
+      appBootCompleted = true;
+      document.getElementById("appStartupCover")?.remove();
+      try {
+        nativeReady.postMessage({status: "ready"});
+      } catch (_) {}
     }
     function handleGlobalUiError(error, source) {
       if (!appBootCompleted) {
@@ -31557,6 +32145,8 @@ INDEX_HTML = """<!doctype html>
       libraryPaperDetailRequests: {},
       paperFilesByPaperId: {},
       paperFileRequests: {},
+      libraryPaperResourceSelection: {paperId: "", resourceId: 0},
+      libraryAttachmentDropInFlight: new Set(),
       expandedPaperFiles: new Set(),
       libraryPaperLocationRequests: {},
       libraryPaperLocationsLoaded: new Set(),
@@ -32512,7 +33102,7 @@ INDEX_HTML = """<!doctype html>
       await state.libraryLoadingPromise;
       if (!options.root && !restoreLibraryLastLocation()) resetLibraryRootSelection();
       renderLibrary();
-      requestAnimationFrame(() => requestAnimationFrame(hideAppStartupCover));
+      requestAnimationFrame(() => requestAnimationFrame(finishAppStartup));
     }
 
     async function loadMyPublications() {
@@ -33577,6 +34167,8 @@ INDEX_HTML = """<!doctype html>
     function setLibraryColumnSelection(folderId, entry, options = {}) {
       const parentId = Number(folderId || libraryDisplayRootId());
       const selection = {type: entry.type, id: Number(entry.id)};
+      state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
+      $("libraryShell")?.classList.remove("paper-files-focus-active");
       state.libraryColumnSelections[parentId] = selection;
       state.libraryActiveFolderId = parentId;
       state.librarySelection = selection;
@@ -34319,6 +34911,65 @@ INDEX_HTML = """<!doctype html>
         clearLibraryRangeSelection();
         renderLibrary();
       });
+    }
+
+    async function convertLibraryItemToAttachment(sourceItemId, targetPaperId) {
+      const sourceId = Number(sourceItemId || 0);
+      const targetId = String(targetPaperId || "");
+      if (!sourceId || !targetId) return null;
+      const requestKey = `${sourceId}:${targetId}`;
+      if (state.libraryAttachmentDropInFlight.has(requestKey)) return null;
+      state.libraryAttachmentDropInFlight.add(requestKey);
+      try {
+        return await withLibraryActivityStatus("Moving into Paper Files...", "Added to Paper Files.", async () => {
+          const res = await fetch("/api/library/items/attach", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({source_item_id: sourceId, target_paper_id: targetId})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not turn this Library item into an attachment");
+          removeLibraryItemLocal(sourceId);
+          applyPaperFilesPayloads(data.paper_files);
+          if (data.paper) updatePaperState(targetId, data.paper);
+          state.libraryDragPayload = null;
+          renderLibrary();
+          refreshLibraryQuickLookForSelection();
+        });
+      } finally {
+        state.libraryAttachmentDropInFlight.delete(requestKey);
+      }
+    }
+
+    function armNativeLibraryItemDrop(itemId) {
+      const id = Number(itemId || 0);
+      if (!id || !window.webkit?.messageHandlers?.libraryItemDrag) return;
+      window.webkit.messageHandlers.libraryItemDrag.postMessage({item_id: id});
+    }
+
+    async function handleNativeLibraryItemDrop(sourceItemId, dropPoint = null) {
+      const x = Number(dropPoint?.x);
+      const y = Number(dropPoint?.y);
+      if (state.mode !== "library" || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+      const element = document.elementFromPoint(x, y);
+      const resourceColumn = element?.closest?.("[data-library-resource-paper]");
+      const detailsPanel = element?.closest?.("[data-paper-files-panel]");
+      const targetPaperId = String(
+        resourceColumn?.dataset.libraryResourcePaper
+        || detailsPanel?.dataset.paperId
+        || ""
+      );
+      document.querySelectorAll(".library-attachment-drop-target").forEach((node) => {
+        node.classList.remove("library-attachment-drop-target");
+      });
+      if (!Number(sourceItemId || 0) || !targetPaperId) return false;
+      try {
+        await convertLibraryItemToAttachment(Number(sourceItemId), targetPaperId);
+        return true;
+      } catch (_) {
+        // withLibraryActivityStatus already reports the server error.
+        return false;
+      }
     }
 
     async function reorderLibraryEntry(type, id, parentFolderId, targetId, position) {
@@ -36859,10 +37510,11 @@ INDEX_HTML = """<!doctype html>
       captureLibraryColumnScrollTops();
       captureLibraryNavigationScroll();
       const previousColumnsScrollLeft = $("libraryColumns")?.scrollLeft ?? state.libraryColumnsScrollLeft;
+      const paperFilesFocusActive = Boolean(selectedLibraryPaperResource());
       $("summary").textContent = "";
       root.classList.add("library-view");
       root.innerHTML = `
-        <div class="library-shell" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
+        <div class="library-shell${paperFilesFocusActive ? " paper-files-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
           <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
           <div class="library-main-area">
             ${workspaceToolsMarkup()}
@@ -36911,6 +37563,22 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="delete-recycle-all">Delete All</button>
           <button type="button" data-action="delete-entry">Delete</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
+        </div>
+        <div class="library-context-menu paper-resource-context-menu" id="paperResourceContextMenu">
+          <button type="button" data-action="open-paper-resource">Open</button>
+          <button type="button" data-action="quicklook-paper-resource">Quick Look</button>
+          <button type="button" data-action="reveal-paper-resource">Show in Finder</button>
+          <div class="library-menu-separator" role="separator"></div>
+          <button type="button" data-action="prefer-paper-resource">Use as Current</button>
+          <button type="button" data-action="auto-paper-resource">Use Automatic Selection</button>
+          <label class="paper-resource-context-role" data-paper-resource-role-row>
+            <span>Change File Type</span><span class="paper-resource-context-role-arrow" aria-hidden="true">›</span>
+            <select data-paper-resource-role-select aria-label="Change File Type"></select>
+          </label>
+          <div class="library-menu-separator" role="separator"></div>
+          <button type="button" data-action="add-paper-resource">Add File</button>
+          <button type="button" data-action="sync-paper-resources">Sync Versions</button>
+          <button type="button" data-action="delete-paper-resource">Delete from Paper Files</button>
         </div>
       `;
       renderLibraryShortcutTabs();
@@ -39915,33 +40583,52 @@ INDEX_HTML = """<!doctype html>
       if (!snapshot && paperId) loadPaperFiles(paperId).catch(() => {});
       const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
       const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
+      const groupLabels = {
+        CURRENT: "Primary file",
+        VERSIONS: "Other versions",
+        SUPPLEMENTS: "Supplements",
+        FILES: "Attachments"
+      };
       const rows = files.length
         ? groups.map((group) => {
             const matches = files.filter((file) => paperFileGroup(file) === group);
             if (!matches.length) return "";
-            return `<div class="paper-files-group-label">${group}</div>${matches.map((file) => {
+            return `<section class="library-resource-section">
+              <div class="library-resource-section-head"><span>${groupLabels[group]}</span><span class="library-resource-section-count">${matches.length}</span></div>
+              ${matches.map((file) => {
               const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
-              const meta = [paperFileRoleLabel(file), file.exists ? "" : "Missing File"].filter(Boolean).join(" · ");
+              const selected = String(state.libraryPaperResourceSelection?.paperId || "") === paperId
+                && Number(state.libraryPaperResourceSelection?.resourceId || 0) === Number(file.id || 0);
+              const roleControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-role data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
+              const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean);
               const ext = String(file.extension || "").replace(/^\./, "") || "none";
               return `
-                <button class="library-resource-row${file.is_primary ? " is-primary" : ""}" type="button"
-                  data-library-resource-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"}
+                <div class="library-resource-card${file.is_primary ? " is-primary" : ""}${selected ? " is-selected" : ""}"
+                  data-library-resource-id="${Number(file.id || 0)}" data-library-resource-paper-id="${escapeAttr(paperId)}"
+                  data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
+                  role="option" aria-selected="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
-                  <span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span>
+                  <span class="library-resource-icon-tile"><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
                   <span class="library-resource-copy">
-                    <span class="library-resource-name">${escapeHtml(name)}${file.is_primary ? `<span class="paper-file-default">Default</span>` : ""}</span>
-                    <span class="library-resource-meta">${escapeHtml(meta)}</span>
+                    <span class="library-resource-name">${escapeHtml(name)}</span>
+                    <span class="library-resource-meta">${roleControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
                   </span>
-                </button>
+                  ${file.is_primary ? `<span class="library-resource-state">Current</span>` : ""}
+                </div>
               `;
-            }).join("")}`;
+            }).join("")}
+            </section>`;
           }).join("")
         : `<div class="empty">${snapshot ? "No local files attached." : "Loading files..."}</div>`;
       const title = item.display_name || libraryPaperDisplayName(paper) || "Paper Files";
       return `
         <section class="library-column library-resource-column" data-library-resource-paper="${escapeAttr(paperId)}" style="--library-column-width:260px">
-          <div class="library-pane-header">${escapeHtml(title)}</div>
-          <div class="library-column-body">${rows}</div>
+          <header class="library-resource-inspector-head">
+            <div class="library-resource-inspector-title"><strong>Paper Files</strong><span class="library-resource-count">${snapshot ? `${files.length} item${files.length === 1 ? "" : "s"}` : "Loading"}</span></div>
+            <div class="library-resource-paper-title" title="${escapeAttr(title)}">${escapeHtml(title)}</div>
+          </header>
+          <div class="library-resource-body" role="listbox" aria-label="Paper Files">${rows}</div>
+          <input type="file" data-library-resource-file-input hidden multiple>
         </section>
       `;
     }
@@ -40411,11 +41098,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryDetailDoiMarkup(paper) {
-      const value = paper?.doi || paper?.preprint_id || "";
+      const value = paper?.doi || "";
       return `
         <div class="library-detail-doi">
-          <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI or arXiv ID">
-          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI or arXiv ID">Refresh</button>
+          <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI">
+          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI">Refresh</button>
         </div>
       `;
     }
@@ -40455,7 +41142,10 @@ INDEX_HTML = """<!doctype html>
         preprint: file.version_label || (file.version_number ? `arXiv v${file.version_number}` : "Preprint"),
         other: file.version_label || (file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF")
       };
-      if (file.file_role === "publication_version") return versionLabels[file.version_role || "other"] || "Publication Version";
+      if (file.file_role === "publication_version") {
+        const base = versionLabels[file.version_role || "other"] || "Publication Version";
+        return file.is_annotated ? `${base} · Annotated` : base;
+      }
       return {
         supplement: "Supplement",
         figure: "Image",
@@ -40475,20 +41165,28 @@ INDEX_HTML = """<!doctype html>
     }
 
     function paperFileRoleOptions(file) {
+      const annotationChoice = file.is_annotated ? "annotated" : "plain";
       const selected = file.file_role === "publication_version"
-        ? `publication_version:${file.version_role || "other"}`
+        ? `publication_version:${file.version_role || "other"}:${annotationChoice}`
         : String(file.file_role || "other");
       const pdfLike = String(file.extension || "").toLowerCase() === ".pdf"
         || String(file.mime_type || "").toLowerCase() === "application/pdf"
         || file.file_role === "publication_version";
       const options = pdfLike ? [
-        ["publication_version:other", "Imported PDF"],
-        ["publication_version:version_of_record", "Published Version"],
-        ["publication_version:accepted_manuscript", "Accepted Manuscript"],
-        ["publication_version:preprint", "Preprint"]
+        ["publication_version:other:plain", "Imported PDF"],
+        ["publication_version:other:annotated", "Imported PDF · Annotated"],
+        ["publication_version:version_of_record:plain", "Published Version"],
+        ["publication_version:version_of_record:annotated", "Published Version · Annotated"],
+        ["publication_version:accepted_manuscript:plain", "Accepted Manuscript"],
+        ["publication_version:accepted_manuscript:annotated", "Accepted Manuscript · Annotated"],
+        ["publication_version:preprint:plain", "Preprint"],
+        ["publication_version:preprint:annotated", "Preprint · Annotated"]
       ] : [];
-      if (selected === "publication_version:first_published") {
-        options.splice(2, 0, ["publication_version:first_published", "Published Version"]);
+      if (file.version_role === "first_published") {
+        options.splice(4, 0,
+          ["publication_version:first_published:plain", "Published Version"],
+          ["publication_version:first_published:annotated", "Published Version · Annotated"]
+        );
       }
       if (!file.is_primary) options.push(
         ["figure", "Image"],
@@ -40672,11 +41370,11 @@ INDEX_HTML = """<!doctype html>
       return data;
     }
 
-    async function setPaperFileRole(paperId, resourceId, fileRole, versionRole = "") {
+    async function setPaperFileRole(paperId, resourceId, fileRole, versionRole = "", isAnnotated = false) {
       const res = await fetch("/api/paper-files/role", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, file_role: fileRole, version_role: versionRole})
+        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, file_role: fileRole, version_role: versionRole, is_annotated: Boolean(isAnnotated)})
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not change file type");
@@ -40740,10 +41438,10 @@ INDEX_HTML = """<!doctype html>
       panel.querySelectorAll('[data-action="auto-paper-file"]').forEach((button) => button.addEventListener("click", () => setPreferredPaperFile(paper.paper_id, null).catch(() => {})));
       panel.querySelectorAll('[data-action="set-paper-file-role"]').forEach((select) => select.addEventListener("change", async () => {
         const resourceId = Number(select.dataset.paperFileId || 0);
-        const [fileRole, versionRole = ""] = String(select.value || "other").split(":", 2);
+        const [fileRole, versionRole = "", annotationChoice = "plain"] = String(select.value || "other").split(":", 3);
         select.disabled = true;
         try {
-          await setPaperFileRole(paper.paper_id, resourceId, fileRole, versionRole);
+          await setPaperFileRole(paper.paper_id, resourceId, fileRole, versionRole, annotationChoice === "annotated");
           if (state.libraryTab === "my-publications") renderPublicationDetail();
           else renderLibrary();
         } catch (error) {
@@ -40817,14 +41515,16 @@ INDEX_HTML = """<!doctype html>
     function libraryDetailMetadataMarkup(paper, authors, publication = null, options = {}) {
       const preprintId = paper.preprint_id || "";
       const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
+      const showPreprintRow = options.hidePreprint !== true;
+      const preprintDisplay = preprintId ? escapeHtml(preprintId.replace(/^arxiv:/i, "").trim()) : "—";
       const authorMarkup = publication ? publicationAuthorsMarkup(publication, authors, paper) : authorsMarkup(authors, paper);
       return `
         <dl>
           ${options.hideAuthors ? "" : `<dt>Authors</dt><dd>${authorMarkup}</dd>`}
           <dt>Journal</dt><dd>${escapeHtml(paper.journal || "")}</dd>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
-          <dt>Identifier</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
-          ${preprintId && paper.doi ? `<dt>Preprint</dt><dd class="library-preprint-identifier"><span class="preprint-identifier-main"><button class="preprint-identifier-value" type="button" data-action="edit-preprint-identifier" title="Click to edit the arXiv identifier">arXiv:${escapeHtml(preprintId)}</button><input class="preprint-identifier-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" value="${escapeAttr(preprintId)}" aria-label="arXiv identifier"></span><span class="preprint-identifier-actions"><button class="action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}">Open</button>${options.managePreprintFiles ? `<button class="action" type="button" data-action="download-arxiv-latest">Download</button>` : ""}</span><span class="preprint-identifier-status" aria-live="polite"></span></dd>` : ""}
+          <dt>DOI</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
+          ${showPreprintRow ? `<dt>arXiv</dt><dd class="library-preprint-identifier"><span class="preprint-identifier-main"><button class="preprint-identifier-value${preprintId ? "" : " is-empty"}" type="button" data-action="edit-preprint-identifier" title="Click to edit the arXiv identifier">${preprintDisplay}</button><input class="preprint-identifier-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" value="${escapeAttr(preprintId)}" aria-label="arXiv identifier"></span><span class="preprint-identifier-actions">${preprintId ? `<button class="action preprint-icon-action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}" aria-label="Open arXiv page" title="Open arXiv page"><span aria-hidden="true">↗</span></button>${options.managePreprintFiles ? `<button class="action preprint-icon-action" type="button" data-action="download-arxiv-latest" aria-label="Download latest arXiv PDF" title="Download latest arXiv PDF"><span aria-hidden="true">↓</span></button>` : ""}` : ""}</span><span class="preprint-identifier-status" aria-live="polite"></span></dd>` : ""}
           ${options.hideGewuKey ? "" : `<dt>Gewu Key</dt><dd><span class="gewu-storage-key" title="Gewu Insight internal storage key">${escapeHtml(paper.storage_key || "—")}</span></dd>`}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
@@ -43168,6 +43868,279 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    function libraryPaperResourceById(paperId, resourceId) {
+      const files = paperFilesSnapshot(paperId)?.files;
+      return (Array.isArray(files) ? files : []).find((file) => Number(file.id || 0) === Number(resourceId || 0)) || null;
+    }
+
+    function selectedLibraryPaperResource() {
+      const selection = state.libraryPaperResourceSelection || {};
+      if (!selection.paperId || !selection.resourceId) return null;
+      const selectedPaperId = String(selectedLibraryPaper()?.paper_id || "");
+      if (selectedPaperId !== String(selection.paperId)) return null;
+      return libraryPaperResourceById(selection.paperId, selection.resourceId);
+    }
+
+    function orderedLibraryPaperResources(paperId) {
+      const files = Array.isArray(paperFilesSnapshot(paperId)?.files) ? paperFilesSnapshot(paperId).files : [];
+      const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
+      return groups.flatMap((group) => files.filter((file) => paperFileGroup(file) === group));
+    }
+
+    function setLibraryPaperResourceSelection(paperId, resourceId, {focus = false} = {}) {
+      const normalizedPaperId = String(paperId || "");
+      const normalizedResourceId = Number(resourceId || 0);
+      state.libraryPaperResourceSelection = {paperId: normalizedPaperId, resourceId: normalizedResourceId};
+      $("libraryShell")?.classList.toggle("paper-files-focus-active", Boolean(normalizedPaperId && normalizedResourceId));
+      document.querySelectorAll(".library-resource-card[data-library-resource-id]").forEach((card) => {
+        const selected = String(card.dataset.libraryResourcePaperId || "") === normalizedPaperId
+          && Number(card.dataset.libraryResourceId || 0) === normalizedResourceId;
+        card.classList.toggle("is-selected", selected);
+        card.setAttribute("aria-selected", selected ? "true" : "false");
+        card.tabIndex = selected ? 0 : -1;
+        if (selected && focus) card.focus({preventScroll: true});
+      });
+    }
+
+    function clearLibraryPaperResourceSelection({focusPaper = false} = {}) {
+      state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
+      $("libraryShell")?.classList.remove("paper-files-focus-active");
+      document.querySelectorAll(".library-resource-card.is-selected").forEach((card) => {
+        card.classList.remove("is-selected");
+        card.setAttribute("aria-selected", "false");
+        card.tabIndex = -1;
+      });
+      if (!focusPaper) return;
+      const itemId = state.librarySelection?.type === "item" ? Number(state.librarySelection.id || 0) : 0;
+      const row = itemId
+        ? document.querySelector(`.library-row[data-library-type="item"][data-library-id="${itemId}"]`)
+        : null;
+      (row || $("libraryShell"))?.focus({preventScroll: true});
+      row?.scrollIntoView({block: "nearest"});
+    }
+
+    function activateLibraryPaperFiles({followQuickLook = true} = {}) {
+      const paper = selectedLibraryPaper();
+      const paperId = String(paper?.paper_id || "");
+      if (!paperId || state.librarySelection?.type !== "item") return false;
+      const activate = () => {
+        const files = orderedLibraryPaperResources(paperId);
+        if (!files.length) return false;
+        const current = files.find((file) => file.is_primary) || files[0];
+        setLibraryPaperResourceSelection(paperId, Number(current.id || 0), {focus: true});
+        document.querySelector(`.library-resource-card[data-library-resource-id="${Number(current.id || 0)}"]`)?.scrollIntoView({block: "nearest"});
+        if (followQuickLook && state.libraryQuickLookOpen) quickLookLibraryPaperResource(current, {toggle: false});
+        return true;
+      };
+      if (paperFilesSnapshot(paperId)) return activate();
+      loadPaperFiles(paperId).then(() => activate()).catch((error) => {
+        updateLibraryActivityStatus(error.message || "Could not load Paper Files", {live: false, clear: false});
+      });
+      return true;
+    }
+
+    function moveLibraryPaperResourceSelection(delta) {
+      const selected = selectedLibraryPaperResource();
+      if (!selected) return false;
+      const paperId = String(state.libraryPaperResourceSelection.paperId || "");
+      const files = orderedLibraryPaperResources(paperId);
+      const currentIndex = files.findIndex((file) => Number(file.id || 0) === Number(selected.id || 0));
+      const nextIndex = Math.max(0, Math.min(files.length - 1, currentIndex + Number(delta || 0)));
+      const next = files[nextIndex];
+      if (!next) return true;
+      setLibraryPaperResourceSelection(paperId, Number(next.id || 0), {focus: !state.libraryQuickLookOpen});
+      document.querySelector(`.library-resource-card[data-library-resource-id="${Number(next.id || 0)}"]`)?.scrollIntoView({block: "nearest"});
+      if (state.libraryQuickLookOpen) quickLookLibraryPaperResource(next, {toggle: false});
+      return true;
+    }
+
+    function handleLibraryPaperResourceKeydown(event, key) {
+      const selected = selectedLibraryPaperResource();
+      if (!selected || !["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape"].includes(key)) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation?.();
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        moveLibraryPaperResourceSelection(key === "ArrowDown" ? 1 : -1);
+        return true;
+      }
+      if (key === " ") {
+        quickLookLibraryPaperResource(selected, {toggle: true});
+        return true;
+      }
+      if (state.libraryQuickLookOpen) closeLibraryQuickLook({restoreFocus: false});
+      clearLibraryPaperResourceSelection({focusPaper: true});
+      return true;
+    }
+
+    function quickLookLibraryPaperResource(file, {toggle = true} = {}) {
+      const path = String(file?.local_path || "");
+      if (!path || !file?.exists) return;
+      const name = file.display_name || path.split("/").pop() || "Attached File";
+      const extension = String(file.extension || "").toLowerCase();
+      if (extension === ".pdf" || String(file.mime_type || "").toLowerCase() === "application/pdf") {
+        quickLookLibraryPdf({merged_pdf_path: path, original_filename: name}, {toggle});
+        return;
+      }
+      quickLookLibraryFile({native_file_path: path, original_filename: name}, {toggle});
+    }
+
+    function libraryPaperResourceIsPdf(file) {
+      return String(file?.extension || "").toLowerCase() === ".pdf"
+        || String(file?.mime_type || "").toLowerCase() === "application/pdf";
+    }
+
+    function openLibraryPaperResource(file) {
+      const path = String(file?.local_path || "");
+      if (!path || !file?.exists) return;
+      if (libraryPaperResourceIsPdf(file)) {
+        openLibraryPdfInPreview({merged_pdf_path: path});
+        return;
+      }
+      openNativePaperFile({native_file_path: path}, {missingMessage: "Attached file not found."});
+    }
+
+    function hidePaperResourceContextMenu() {
+      $("paperResourceContextMenu")?.classList.remove("open");
+    }
+
+    function choosePaperResourceFile(paperId) {
+      const nativeChooser = window.webkit?.messageHandlers?.paperFileChooser;
+      if (nativeChooser) {
+        nativeChooser.postMessage({paper_id: paperId});
+        return;
+      }
+      Array.from(document.querySelectorAll("[data-library-resource-paper]")).find(
+        (column) => String(column.dataset.libraryResourcePaper || "") === String(paperId || "")
+      )?.querySelector("[data-library-resource-file-input]")?.click();
+    }
+
+    function showPaperResourceContextMenu(event, paperId, resourceId = 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideLibraryContextMenu();
+      hideLibraryTabContextMenu();
+      hideMyPublicationContextMenu();
+      const menu = $("paperResourceContextMenu");
+      if (!menu) return;
+      const file = resourceId ? libraryPaperResourceById(paperId, resourceId) : null;
+      const paper = selectedLibraryPaper();
+      if (file) setLibraryPaperResourceSelection(paperId, resourceId, {focus: false});
+      menu.dataset.paperId = String(paperId || "");
+      menu.dataset.resourceId = String(resourceId || "");
+      menu.style.left = `${event.clientX}px`;
+      menu.style.top = `${event.clientY}px`;
+      menu.classList.add("open");
+      menu.onclick = (clickEvent) => clickEvent.stopPropagation();
+
+      const openButton = menu.querySelector('[data-action="open-paper-resource"]');
+      const quickLookButton = menu.querySelector('[data-action="quicklook-paper-resource"]');
+      const revealButton = menu.querySelector('[data-action="reveal-paper-resource"]');
+      const preferButton = menu.querySelector('[data-action="prefer-paper-resource"]');
+      const autoButton = menu.querySelector('[data-action="auto-paper-resource"]');
+      const roleRow = menu.querySelector("[data-paper-resource-role-row]");
+      const roleSelect = menu.querySelector("[data-paper-resource-role-select]");
+      const addButton = menu.querySelector('[data-action="add-paper-resource"]');
+      const syncButton = menu.querySelector('[data-action="sync-paper-resources"]');
+      const deleteButton = menu.querySelector('[data-action="delete-paper-resource"]');
+      const hasOpenableFile = Boolean(file?.exists && file?.local_path);
+
+      [openButton, quickLookButton, revealButton].forEach((button) => {
+        if (button) button.style.display = hasOpenableFile ? "" : "none";
+      });
+      if (openButton) openButton.onclick = () => {
+        hidePaperResourceContextMenu();
+        openLibraryPaperResource(file);
+      };
+      if (quickLookButton) quickLookButton.onclick = () => {
+        hidePaperResourceContextMenu();
+        quickLookLibraryPaperResource(file, {toggle: false});
+      };
+      if (revealButton) revealButton.onclick = () => {
+        hidePaperResourceContextMenu();
+        revealNativePaperFile({native_file_path: file.local_path}, {missingMessage: "Attached file not found."});
+      };
+      if (preferButton) {
+        const canPrefer = Boolean(file?.file_role === "publication_version" && !file?.is_primary);
+        preferButton.style.display = canPrefer ? "" : "none";
+        preferButton.onclick = async () => {
+          hidePaperResourceContextMenu();
+          try {
+            await setPreferredPaperFile(paperId, Number(file.id || 0));
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not select PDF", {live: false, clear: false});
+          }
+        };
+      }
+      if (autoButton) {
+        const canUseAutomatic = Boolean(file?.is_primary && file?.is_preferred);
+        autoButton.style.display = canUseAutomatic ? "" : "none";
+        autoButton.onclick = async () => {
+          hidePaperResourceContextMenu();
+          try {
+            await setPreferredPaperFile(paperId, null);
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not restore automatic selection", {live: false, clear: false});
+          }
+        };
+      }
+      if (roleRow && roleSelect) {
+        roleRow.style.display = file ? "" : "none";
+        roleSelect.innerHTML = file ? paperFileRoleOptions(file) : "";
+        roleSelect.onchange = async () => {
+          const [fileRole, versionRole = "", annotationChoice = "plain"] = String(roleSelect.value || "other").split(":", 3);
+          roleSelect.disabled = true;
+          try {
+            await setPaperFileRole(paperId, Number(file.id || 0), fileRole, versionRole, annotationChoice === "annotated");
+            hidePaperResourceContextMenu();
+            renderLibrary();
+          } catch (error) {
+            roleSelect.disabled = false;
+            updateLibraryActivityStatus(error.message || "Could not change file type", {live: false, clear: false});
+          }
+        };
+      }
+      if (addButton) {
+        addButton.style.display = file ? "none" : "";
+        addButton.onclick = () => {
+          hidePaperResourceContextMenu();
+          choosePaperResourceFile(paperId);
+        };
+      }
+      if (syncButton) {
+        syncButton.style.display = !file && paper?.preprint_id ? "" : "none";
+        syncButton.onclick = () => {
+          hidePaperResourceContextMenu();
+          downloadArxivPreprintVersions(paper, "all", syncButton);
+        };
+      }
+      if (deleteButton) {
+        deleteButton.style.display = file && !file.is_primary ? "" : "none";
+        deleteButton.onclick = async () => {
+          const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
+          hidePaperResourceContextMenu();
+          if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return;
+          try {
+            const data = await deletePaperFile(paperId, Number(file.id || 0));
+            state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
+            renderLibrary();
+            updateLibraryActivityStatus(
+              data.deleted?.trashed ? `${name} moved to Trash.` : `${name} removed from this paper.`,
+              {delay: 3000}
+            );
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not delete file", {live: false, clear: false});
+          }
+        };
+      }
+      refreshLibraryContextMenuSeparators(menu);
+      window.requestAnimationFrame(() => {
+        const rect = menu.getBoundingClientRect();
+        menu.style.left = `${Math.max(6, Math.min(event.clientX, window.innerWidth - rect.width - 6))}px`;
+        menu.style.top = `${Math.max(6, Math.min(event.clientY, window.innerHeight - rect.height - 6))}px`;
+      });
+    }
+
     function wireLibraryInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
@@ -43263,10 +44236,115 @@ INDEX_HTML = """<!doctype html>
           }
         });
       });
-      shell.querySelectorAll("[data-library-resource-path]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const path = button.dataset.libraryResourcePath || "";
-          if (path) openNativePaperFile({native_file_path: path}, {missingMessage: "Attached file not found."});
+      shell.querySelectorAll(".library-resource-card[data-library-resource-id]").forEach((card) => {
+        const paperId = String(card.dataset.libraryResourcePaperId || "");
+        const resourceId = Number(card.dataset.libraryResourceId || 0);
+        card.addEventListener("click", (event) => {
+          if (event.target.closest("[data-library-resource-role]")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
+        });
+        card.addEventListener("dblclick", (event) => {
+          if (event.target.closest("[data-library-resource-role]")) return;
+          event.preventDefault();
+          event.stopPropagation();
+          setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
+          const file = libraryPaperResourceById(paperId, resourceId);
+          openLibraryPaperResource(file);
+        });
+        card.addEventListener("contextmenu", (event) => showPaperResourceContextMenu(event, paperId, resourceId));
+      });
+      shell.querySelectorAll("[data-library-resource-role]").forEach((select) => {
+        ["pointerdown", "click", "dblclick", "contextmenu"].forEach((eventName) => {
+          select.addEventListener(eventName, (event) => event.stopPropagation());
+        });
+        select.addEventListener("focus", () => {
+          const card = select.closest(".library-resource-card");
+          if (card) setLibraryPaperResourceSelection(card.dataset.libraryResourcePaperId, Number(card.dataset.libraryResourceId || 0));
+        });
+        select.addEventListener("change", async () => {
+          const card = select.closest(".library-resource-card");
+          const paperId = String(card?.dataset.libraryResourcePaperId || "");
+          const resourceId = Number(select.dataset.paperFileId || 0);
+          const [fileRole, versionRole = "", annotationChoice = "plain"] = String(select.value || "other").split(":", 3);
+          select.disabled = true;
+          try {
+            await setPaperFileRole(paperId, resourceId, fileRole, versionRole, annotationChoice === "annotated");
+            renderLibrary();
+          } catch (error) {
+            select.disabled = false;
+            updateLibraryActivityStatus(error.message || "Could not change file type", {live: false, clear: false});
+            loadPaperFiles(paperId, {force: true}).catch(() => {});
+          }
+        });
+      });
+      shell.querySelectorAll("[data-library-resource-paper]").forEach((column) => {
+        const paperId = String(column.dataset.libraryResourcePaper || "");
+        const input = column.querySelector("[data-library-resource-file-input]");
+        input?.addEventListener("change", async () => {
+          const fileCount = input.files?.length || 0;
+          try {
+            await uploadPaperFiles(column, paperId, input.files);
+            renderLibrary();
+            updateLibraryActivityStatus(`${fileCount} file${fileCount === 1 ? "" : "s"} added.`, {delay: 2600});
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not add file", {live: false, clear: false});
+          } finally {
+            input.value = "";
+          }
+        });
+        column.addEventListener("contextmenu", (event) => {
+          if (event.target.closest(".library-resource-card")) return;
+          showPaperResourceContextMenu(event, paperId, 0);
+        });
+      });
+      shell.querySelectorAll("[data-library-resource-paper]").forEach((target) => {
+        let pendingAttachmentPayload = null;
+        const clearTarget = ({clearPayload = false} = {}) => {
+          target.classList.remove("library-attachment-drop-target");
+          if (clearPayload) pendingAttachmentPayload = null;
+        };
+        target.addEventListener("dragover", (event) => {
+          const payload = libraryDragPayload(event);
+          if (!payload || payload.type !== "item" || (Array.isArray(payload.entries) && payload.entries.length > 1)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          pendingAttachmentPayload = {payload, updatedAt: Date.now()};
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          target.classList.add("library-attachment-drop-target");
+        });
+        target.addEventListener("dragleave", (event) => {
+          if (!target.contains(event.relatedTarget)) clearTarget();
+        });
+        target.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const cachedPayload = pendingAttachmentPayload
+            && Date.now() - Number(pendingAttachmentPayload.updatedAt || 0) < 3000
+            ? pendingAttachmentPayload.payload
+            : null;
+          const payload = libraryDragPayload(event) || cachedPayload;
+          clearTarget({clearPayload: true});
+          if (!payload || payload.type !== "item") {
+            updateLibraryActivityStatus("Could not read the dropped Library item. Please drag it again.", {live: false, clear: false});
+            return;
+          }
+          if (Array.isArray(payload.entries) && payload.entries.length > 1) {
+            updateLibraryActivityStatus("Move one Library item into Paper Files at a time.", {live: false, clear: false});
+            return;
+          }
+          const sourceItemId = Number(payload.id || 0);
+          const targetPaperId = String(target.dataset.libraryResourcePaper || "");
+          if (!sourceItemId || !targetPaperId) {
+            updateLibraryActivityStatus("Could not identify the source file or target paper.", {live: false, clear: false});
+            return;
+          }
+          try {
+            await convertLibraryItemToAttachment(sourceItemId, targetPaperId);
+          } catch (_) {
+            // withLibraryActivityStatus already reports the server error.
+          }
         });
       });
       shell.querySelectorAll(".library-row").forEach((row) => {
@@ -43274,7 +44352,11 @@ INDEX_HTML = """<!doctype html>
           handle.addEventListener("mousedown", (event) => {
             event.stopPropagation();
             if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
-            else prepareNativeFileDrag(handle);
+            else {
+              const itemRow = handle.closest('.library-row[data-library-type="item"]');
+              if (itemRow) armNativeLibraryItemDrop(Number(itemRow.dataset.libraryId || 0));
+              prepareNativeFileDrag(handle);
+            }
           });
           handle.addEventListener("dragstart", (event) => {
             event.preventDefault();
@@ -43344,12 +44426,14 @@ INDEX_HTML = """<!doctype html>
             payload.entries = selectedEntries.map((entry) => ({type: entry.type, id: Number(entry.id)}));
           }
           state.libraryDragPayload = payload;
+          if (payload.type === "item") armNativeLibraryItemDrop(payload.id);
           event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify(payload));
           event.dataTransfer.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
           event.dataTransfer.effectAllowed = "copyMove";
         });
         row.addEventListener("dragend", () => {
           state.libraryDragPayload = null;
+          document.querySelectorAll(".library-attachment-drop-target").forEach((node) => node.classList.remove("library-attachment-drop-target"));
         });
         row.addEventListener("dragover", (event) => {
           const payload = libraryDragPayload(event);
@@ -44547,6 +45631,7 @@ INDEX_HTML = """<!doctype html>
     function handleLibraryQuickLookPdfKeydown(event) {
       if (handlePreviewCloseShortcut(event)) return;
       const key = event.key === "Spacebar" ? " " : event.key;
+      if (state.mode === "library" && state.libraryTab === "library" && handleLibraryPaperResourceKeydown(event, key)) return;
       if (key === " " && ["report", "theme"].includes(state.mode)) {
         event.preventDefault();
         event.stopPropagation();
@@ -44873,7 +45958,7 @@ INDEX_HTML = """<!doctype html>
 
     function refreshLibraryContextMenuSeparators(menu) {
       if (!menu) return;
-      const entries = Array.from(menu.children).filter((child) => child.matches?.("button, .library-menu-separator"));
+      const entries = Array.from(menu.children).filter((child) => child.matches?.("button, [data-paper-resource-role-row], .library-menu-separator"));
       entries.forEach((child) => {
         if (child.classList.contains("library-menu-separator")) child.style.display = "none";
       });
@@ -44884,7 +45969,7 @@ INDEX_HTML = """<!doctype html>
           if (hasVisibleGroup && !pendingSeparator) pendingSeparator = child;
           return;
         }
-        if (!child.matches("button") || child.style.display === "none") return;
+        if (!child.matches("button, [data-paper-resource-role-row]") || child.style.display === "none") return;
         if (pendingSeparator) {
           pendingSeparator.style.display = "";
           pendingSeparator = null;
@@ -44895,6 +45980,7 @@ INDEX_HTML = """<!doctype html>
 
     function showLibraryContextMenu(event, parentId, entryType = "", entryId = 0) {
       event.preventDefault();
+      hidePaperResourceContextMenu();
       hideMyPublicationContextMenu();
       hideLibraryTabContextMenu();
       const menu = $("libraryContextMenu");
@@ -45093,6 +46179,7 @@ INDEX_HTML = """<!doctype html>
 
     function showLibraryTabContextMenu(event, tabType, index) {
       hideLibraryContextMenu();
+      hidePaperResourceContextMenu();
       hideMyPublicationContextMenu();
       const menu = $("libraryTabContextMenu");
       if (!menu) return;
@@ -45136,6 +46223,19 @@ INDEX_HTML = """<!doctype html>
         return true;
       }
       if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
+      if (state.libraryTab === "library" && handleLibraryPaperResourceKeydown(event, key)) return true;
+      if (
+        state.libraryTab === "library"
+        && key === "ArrowRight"
+        && state.librarySelection?.type === "item"
+        && !selectedLibraryPaperResource()
+        && !librarySearchIsActive()
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        activateLibraryPaperFiles();
+        return true;
+      }
       if (state.libraryTab === "my-publications") {
         const handled = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Delete", "Backspace"].includes(key);
         if (!handled) return false;
@@ -46708,8 +47808,10 @@ INDEX_HTML = """<!doctype html>
             <dd>${escapeHtml(paper.journal || "Unknown journal")}</dd>
             <dt>Date</dt>
             <dd>${escapeHtml(paper.publication_date || "Unknown date")}</dd>
-            <dt>Identifier</dt>
-            <dd>${escapeHtml(paper.doi || paper.preprint_id || "Not identified")}</dd>
+            <dt>DOI</dt>
+            <dd>${escapeHtml(paper.doi || "—")}</dd>
+            <dt>arXiv</dt>
+            <dd>${escapeHtml(paper.preprint_id || "—")}</dd>
           </dl>
           <div class="library-detail-status">Loading paper details…</div>
         `;
@@ -51279,6 +52381,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       hideLibraryContextMenu();
+      hidePaperResourceContextMenu();
       hideLibraryTabContextMenu();
       hideMyPublicationContextMenu();
       closeAnalysis();
@@ -51323,6 +52426,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       hideLibraryContextMenu();
+      hidePaperResourceContextMenu();
       hideLibraryTabContextMenu();
       hideMyPublicationContextMenu();
       closeAuthorAffiliationTooltip();
@@ -51421,6 +52525,7 @@ INDEX_HTML = """<!doctype html>
     document.addEventListener("daiqo-open-library-loader", openLibraryLoader);
     window.addEventListener("storage", handleLibraryRefreshSignal);
     window.handleNativeFinderDrop = handleNativeFinderDrop;
+    window.handleNativeLibraryItemDrop = handleNativeLibraryItemDrop;
     window.handleNativePaperFileSelection = handleNativePaperFileSelection;
     window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;

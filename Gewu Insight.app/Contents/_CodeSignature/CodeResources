@@ -4,6 +4,10 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/GewuSealGlyphs.png</key>
+		<data>
+		1muWqMsp8cwSvqyJDGjb0IbEiIQ=
+		</data>
 		<key>Resources/PaperMonitor.icns</key>
 		<data>
 		M22PBhQP9IwxS5/KeKSH5AWkCYU=
@@ -63,6 +67,13 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
+		</dict>
+		<key>Resources/GewuSealGlyphs.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			dsmBXmoBP4mcrK5hUO2TQfuBfglkjmri+bdL38RMD90=
+			</data>
 		</dict>
 		<key>Resources/PaperMonitor.icns</key>
 		<dict>

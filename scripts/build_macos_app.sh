@@ -5,6 +5,8 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
 APP="$PROJECT_DIR/Gewu Insight.app"
 OUTPUT="$APP/Contents/MacOS/Gewu Insight"
+BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"
+BRAND_ART_DEST="$APP/Contents/Resources/GewuSealGlyphs.png"
 SIGN_WORKDIR="${TMPDIR:-/private/tmp}/paper-monitor-sign-$$"
 SIGN_APP="$SIGN_WORKDIR/Gewu Insight.app"
 BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
@@ -23,6 +25,8 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -o "$OUTPUT"
 
 chmod +x "$OUTPUT"
+mkdir -p "$(dirname "$BRAND_ART_DEST")"
+cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
 mkdir -p "$SIGN_WORKDIR"
 ditto "$APP" "$SIGN_APP"
 xattr -cr "$SIGN_APP" 2>/dev/null || true
