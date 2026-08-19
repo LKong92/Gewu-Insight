@@ -376,7 +376,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
                 return
             if parsed.path == "/user-guide":
-                self.send_text(USER_GUIDE_HTML, content_type="text/html; charset=utf-8")
+                self.send_text(load_user_guide_html(), content_type="text/html; charset=utf-8")
                 return
             if parsed.path == "/api/month":
                 self.handle_month(parse_qs(parsed.query))
@@ -23413,259 +23413,20 @@ def is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
-USER_GUIDE_HTML = """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gewu Insight User Guide</title>
-  <style>
-    :root {
-      color: #172033;
-      background: #f7f8fb;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.58;
-      scroll-behavior: smooth;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: #f7f8fb; }
-    .manual { display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
-    .toc {
-      position: sticky;
-      top: 0;
-      height: 100vh;
-      padding: 28px 22px;
-      border-right: 1px solid #dbe2ee;
-      background: #eef4fb;
-      overflow: auto;
-    }
-    .toc h1 { margin: 0 0 5px; font-size: 20px; letter-spacing: 0; }
-    .toc p { margin: 0 0 18px; color: #667085; font-size: 13px; }
-    .toc a {
-      display: block;
-      padding: 7px 9px;
-      border-radius: 6px;
-      color: #344054;
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: 650;
-    }
-    .toc a:hover { background: rgba(15, 107, 110, .10); color: #0f5558; }
-    .content { max-width: 1040px; padding: 36px 48px 72px; }
-    .hero { border-bottom: 1px solid #dbe2ee; padding-bottom: 24px; margin-bottom: 30px; }
-    .eyebrow { margin: 0 0 8px; color: #0f6b6e; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-    h2 { margin: 34px 0 12px; font-size: 25px; letter-spacing: 0; border-bottom: 1px solid #e1e7f0; padding-bottom: 9px; }
-    h3 { margin: 24px 0 8px; font-size: 18px; letter-spacing: 0; }
-    p, li { font-size: 15px; }
-    p { margin: 0 0 12px; }
-    ul, ol { padding-left: 23px; margin-top: 8px; }
-    li { margin: 6px 0; }
-    code { font-family: "SFMono-Regular", Consolas, monospace; background: #edf2f7; border: 1px solid #d9e2ec; border-radius: 5px; padding: 1px 5px; font-size: .93em; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dce4ef; border-radius: 8px; overflow: hidden; display: table; margin: 12px 0 18px; }
-    th, td { border-bottom: 1px solid #e6edf5; padding: 10px 12px; text-align: left; vertical-align: top; font-size: 14px; }
-    th { background: #eef4fb; color: #344054; font-weight: 800; }
-    tr:last-child td { border-bottom: 0; }
-    .note { background: #eef8f7; border: 1px solid #c8e6e2; border-left: 4px solid #0f6b6e; border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
-    .warning { background: #fff7ed; border-color: #fed7aa; border-left-color: #c46a00; }
-    .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0 20px; }
-    .flow div { background: #fff; border: 1px solid #dce4ef; border-radius: 8px; padding: 12px; min-height: 112px; }
-    .flow b { display: block; margin-bottom: 6px; color: #0f5558; }
-    .flow span { display: block; color: #475467; font-size: 13px; }
-    .mini { color: #667085; font-size: 13px; }
-    @media (max-width: 860px) {
-      .manual { grid-template-columns: 1fr; }
-      .toc { position: relative; height: auto; border-right: 0; border-bottom: 1px solid #dbe2ee; }
-      .content { padding: 28px 24px 56px; }
-      .flow { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-  <div class="manual">
-    <nav class="toc" aria-label="User Guide Sections">
-      <h1>Gewu Insight User Guide</h1>
-      <p>File system, Library, imports, metadata, and deletion rules.</p>
-      <a href="#overview">1. System Overview</a>
-      <a href="#objects">2. Objects You See</a>
-      <a href="#storage">3. Finder Storage</a>
-      <a href="#database">4. SQLite Records</a>
-      <a href="#import">5. Import Logic</a>
-      <a href="#organize">6. Move, Copy, Paste</a>
-      <a href="#delete">7. Delete and Recycle</a>
-      <a href="#contexts">8. Library, Spaces, My Publications</a>
-      <a href="#metadata">9. Metadata Refresh</a>
-      <a href="#finder">10. Finder Actions</a>
-    </nav>
+USER_GUIDE_PATH = Path(__file__).with_name("user_guide.html")
 
-    <main class="content">
-      <header class="hero">
-        <p class="eyebrow">Chapter 1</p>
-        <h2 id="overview">Gewu Insight Library File System</h2>
-        <p>Gewu Insight（格物洞见）is a literature library with a Finder-like UI, a SQLite database, and managed local copies in Finder. These three parts are intentionally separate. A row in the Library UI is usually a shortcut, not the paper file itself; the PDF or other file is a local copy managed by Gewu Insight; the title, DOI, authors, citations, source paths, and refresh history live in SQLite.</p>
-        <div class="flow">
-          <div><b>UI layer</b><span>Folders, paper shortcuts, Recycle, Spaces, and My Publications rows shown in Gewu Insight.</span></div>
-          <div><b>SQLite layer</b><span>The authoritative records for papers, shortcuts, folders, resources, imports, and metadata refreshes.</span></div>
-          <div><b>Local-copy layer</b><span>Files and aliases under Gewu Insight's own <code>data/</code> folder.</span></div>
-          <div><b>External source layer</b><span>Original folders or files selected during import. Gewu Insight records them but does not manage or delete them.</span></div>
-        </div>
-        <div class="note">The most important rule: Gewu Insight manages its own local copies. It should never delete, move, or overwrite the original files that existed outside Gewu Insight before import.</div>
-      </header>
 
-      <section id="objects">
-        <h2>2. Objects You See in the UI</h2>
-        <table>
-          <thead><tr><th>UI object</th><th>What it means</th><th>What it is not</th></tr></thead>
-          <tbody>
-            <tr><td>Folder</td><td>A Library container stored in <code>library_folders</code>. It can contain child folders and paper shortcuts.</td><td>It is not the paper metadata itself. It may have a matching Finder folder, but SQLite decides the UI tree.</td></tr>
-            <tr><td>Paper shortcut</td><td>A visible Library row stored in <code>library_items</code>. It points to one shared <code>papers</code> record.</td><td>It is not a duplicate PDF. Copying it creates another shortcut, not another paper record.</td></tr>
-            <tr><td>Paper record</td><td>The shared literature record in <code>papers</code>: title, DOI/arXiv, journal, authors, abstract, citation caches, PDF paths, source path, and import fields.</td><td>It is not tied to only one folder. Many shortcuts can point to it.</td></tr>
-            <tr><td>Resource</td><td>An imported attachment or non-primary file stored in <code>resources</code>, with <code>source_path</code>, <code>stored_path</code>, kind, MIME type, size, and import batch.</td><td>It is not the original external file; it tracks a Gewu Insight-managed local copy or attachment relationship.</td></tr>
-            <tr><td>Source path</td><td>The original external path Gewu Insight saw during import, stored on paper/resource/import records for dedupe and diagnosis.</td><td>It is not a path Gewu Insight is allowed to delete.</td></tr>
-            <tr><td>Local copy</td><td>The managed file under Gewu Insight's data folder, such as a PDF in <code>data/Library/...</code>.</td><td>It is not necessarily the only shortcut location. Finder aliases may point to it from other folders.</td></tr>
-          </tbody>
-        </table>
-        <h3>Example: one PDF imported into Library</h3>
-        <table>
-          <thead><tr><th>Piece</th><th>Where it lives</th><th>Example meaning</th></tr></thead>
-          <tbody>
-            <tr><td>Original source path</td><td><code>papers.source_path</code> and/or <code>resources.source_path</code></td><td>The external file path selected during import. It is kept for dedupe and diagnostics only.</td></tr>
-            <tr><td>Local copy</td><td><code>data/Library/.../paper.pdf</code>, referenced by paper/resource path fields</td><td>The Gewu Insight-managed copy that can be opened, previewed, moved, or sent to macOS Trash by Gewu Insight.</td></tr>
-            <tr><td>Paper metadata</td><td><code>papers</code></td><td>The shared record containing title, DOI/arXiv, authors, journal, abstract, PDF path, source path, and raw metadata.</td></tr>
-            <tr><td>Resource/attachment record</td><td><code>resources</code></td><td>The file-level record containing stored path, original filename, MIME type, size, batch, and parse status.</td></tr>
-            <tr><td>Visible shortcut</td><td><code>library_items</code></td><td>The row you click in the Library UI. Multiple shortcuts can point to the same paper metadata and local copy.</td></tr>
-            <tr><td>Folder path</td><td><code>library_folders</code></td><td>The UI folder tree that decides where the shortcut appears.</td></tr>
-            <tr><td>Refresh history</td><td><code>paper_metadata_refreshes</code></td><td>Records whether metadata refresh was skipped, quick, full, successful, or failed.</td></tr>
-          </tbody>
-        </table>
-      </section>
+def load_user_guide_html() -> str:
+    """Load the offline manual served by the native Help window."""
+    try:
+        return USER_GUIDE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gewu Insight User Guide</title><style>body{margin:48px;max-width:680px;font:15px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;color:#1d1d1f}h1{font-size:28px}</style></head>
+<body><h1>User Guide unavailable</h1><p>The offline manual is missing. Reinstall or copy the complete Gewu Insight project folder, including the <code>paper_monitor</code> directory.</p></body></html>"""
 
-      <section id="storage">
-        <h2>3. How the UI Maps to Finder</h2>
-        <p>The Library UI is the main organizing surface. Finder is used to store readable local copies and aliases that mirror the organization as much as possible.</p>
-        <table>
-          <thead><tr><th>Finder location</th><th>Role</th><th>Typical contents</th></tr></thead>
-          <tbody>
-            <tr><td><code>data/Library/</code></td><td>Main Library local-copy root</td><td>Folders matching the Library tree; canonical PDFs and other files; aliases for copied shortcuts.</td></tr>
-            <tr><td><code>data/Library/unsorted/</code></td><td>Default Library inbox</td><td>Papers added from Journal Monitor before the user organizes them.</td></tr>
-            <tr><td><code>data/Library/Recycle/</code></td><td>Recoverable delete area</td><td>Shortcuts or folders moved out of normal Library folders before final deletion.</td></tr>
-            <tr><td><code>data/Spaces/</code></td><td>Independent Space storage</td><td>Files downloaded or imported while working inside a green Space.</td></tr>
-            <tr><td><code>data/My Publications/</code></td><td>My Publications storage</td><td>PDFs added by DOI/title lookup or downloaded from a My Publications detail panel.</td></tr>
-            <tr><td><code>data/pdfs/</code></td><td>Journal Monitor staging and legacy storage</td><td>Downloaded monitor PDFs before they are moved into Library, plus older records that still point there.</td></tr>
-          </tbody>
-        </table>
-        <h3>Canonical file and aliases</h3>
-        <p>When a paper appears in only one Library folder, its local PDF normally lives in that folder's matching Finder directory. When the same paper appears in multiple UI folders, Gewu Insight keeps one canonical local file and can create macOS aliases in the other Finder folders. This avoids duplicating large PDFs while still making Finder folders useful.</p>
-        <p>If a shortcut has no PDF yet, there may be no Finder file for it. After the PDF is downloaded from Details, Gewu Insight assigns a local copy path and tries to synchronize aliases for other existing shortcuts.</p>
-      </section>
 
-      <section id="database">
-        <h2>4. SQLite Records: What Changes Behind the UI</h2>
-        <p>SQLite is the source of truth. JSON reports are diagnostic exports, not the authoritative state.</p>
-        <table>
-          <thead><tr><th>Table</th><th>What it stores</th><th>Why it matters</th></tr></thead>
-          <tbody>
-            <tr><td><code>papers</code></td><td>One shared literature or imported-file record: metadata, DOI/arXiv, title, journal, abstract, PDF paths, original source path, import fields, analysis status, raw metadata JSON.</td><td>Every Library shortcut and My Publications entry points here.</td></tr>
-            <tr><td><code>library_folders</code></td><td>Folder tree, sort order, color, Recycle state, and original parent for recovery.</td><td>This defines what folders you see in Library and Spaces.</td></tr>
-            <tr><td><code>library_items</code></td><td>Shortcut rows: folder, paper, display name, sort order, Recycle state, original folder for recovery.</td><td>Copying a paper creates a new row here, not a new PDF.</td></tr>
-            <tr><td><code>resources</code></td><td>Imported attachments and non-primary files with source path, stored path, MIME type, size, parse status, and batch ID.</td><td>This keeps related local files connected to the paper/import.</td></tr>
-            <tr><td><code>inventory_import_batches</code></td><td>Import job source root, copy mode, status, report path, counts, warnings, and errors.</td><td>This is how the Loader explains what happened in a run.</td></tr>
-            <tr><td><code>my_publications</code></td><td>Personal publication list flags: star, first/corresponding/review marks, export exclusion, author marks, and order.</td><td>It overlays personal publication state onto shared paper metadata.</td></tr>
-            <tr><td><code>paper_metadata_refreshes</code></td><td>Metadata refresh mode, status, timestamps, source summary, and errors.</td><td>This prevents unnecessary repeated refreshes and explains failures.</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section id="import">
-        <h2>5. Import Logic</h2>
-        <h3>Normal Loader import</h3>
-        <ol>
-          <li>The user chooses a source file or folder. That path is external source data.</li>
-          <li>The Loader scans readable files, preserves relative paths, extracts DOI/arXiv where possible, and records missing/skipped items in the report.</li>
-          <li>Gewu Insight copies readable files into the selected target under <code>data/Library/</code> or the active Space root. Link mode is not used.</li>
-          <li>It creates or reuses <code>papers</code> records, creates <code>resources</code> rows for attachments/local files, creates <code>library_folders</code> for folders, and creates <code>library_items</code> shortcuts for visible UI rows.</li>
-          <li>Depending on the selected mode, it may skip metadata refresh, run a quick refresh, or run a full refresh.</li>
-        </ol>
-        <h3>Repeated import from the same source</h3>
-        <p>If the same source root is imported again, Gewu Insight tries to reuse the previous target and merge by relative path. Existing local copies are not overwritten. Newly readable files that were missing before can be added. Existing user organization should not be reset just because the source is loaded again.</p>
-        <h3>Drag import from Finder</h3>
-        <p>Dragging a file or folder from Finder into the Library uses the same Loader pipeline. The difference is target selection: dropping on a folder imports inside that folder; dropping on blank space in a column imports into the current column's folder.</p>
-        <div class="note">The Loader report is part of the audit trail. It is useful for missing files, skipped macOS aliases, PDFs without DOI, duplicate DOI/arXiv merges, and metadata refresh failures.</div>
-      </section>
-
-      <section id="organize">
-        <h2>6. Move, Copy, Paste, and Drag</h2>
-        <h3>Moving a shortcut</h3>
-        <p>Moving a paper shortcut changes its <code>library_items.folder_id</code>. If that shortcut represents the canonical Finder location for the paper, Gewu Insight also tries to move the local copy to the matching Finder folder and update aliases. The paper metadata in <code>papers</code> stays the same.</p>
-        <h3>Copying a shortcut</h3>
-        <p>Copy/Paste creates another <code>library_items</code> shortcut pointing to the same <code>papers.paper_id</code>. It does not duplicate metadata and does not duplicate the PDF. Finder may receive an alias in the pasted folder so the Finder view still makes sense.</p>
-        <h3>Moving folders</h3>
-        <p>Moving a folder changes the <code>library_folders</code> tree and should keep its child folders and shortcuts together. Gewu Insight then attempts to keep the matching Finder folder structure, canonical local files, and aliases consistent with the new location.</p>
-        <h3>Dragging out to Finder</h3>
-        <p>Dragging the file icon from a Library row to Desktop or Finder copies the real local file to the external destination. This is an export action. It does not move the Gewu Insight-managed local copy, and it does not change SQLite records.</p>
-        <h3>Make Copy Desktop</h3>
-        <p>The folder context menu action <code>Make Copy Desktop</code> exports a complete real-file copy of that Library folder to Desktop. It follows Library folder hierarchy but writes actual files, not Library shortcuts and not Finder aliases.</p>
-      </section>
-
-      <section id="delete">
-        <h2>7. Delete and Recycle</h2>
-        <h3>Outside Recycle</h3>
-        <p>Delete is intentionally soft outside Recycle. Pressing Delete or choosing Delete from a normal folder moves the selected shortcut or folder into Recycle. It preserves recovery fields such as <code>original_folder_id</code>, <code>original_parent_id</code>, and <code>trashed_at</code>. It does not immediately delete the local file or metadata.</p>
-        <h3>Inside Recycle</h3>
-        <p>Delete inside Recycle is final, but it is reference-aware.</p>
-        <ul>
-          <li>If the same paper still has a shortcut outside Recycle, Gewu Insight removes only the Recycle shortcut. The paper metadata, resources, and local file remain.</li>
-          <li>If no shortcut outside Recycle still points to the paper, Gewu Insight can remove the remaining Library shortcuts, the shared paper metadata, related resources, and managed local copies.</li>
-          <li>Managed local copies are moved to macOS Trash. They are not silently unlinked.</li>
-          <li>Original source files from the pre-import source path are never deleted.</li>
-        </ul>
-        <div class="note warning">Delete All on the Recycle folder applies the same rule item by item. It is not a blind wipe. Each paper is checked for references outside Recycle before metadata or local copies are removed.</div>
-      </section>
-
-      <section id="contexts">
-        <h2>8. Library, Spaces, My Publications, and Journal Monitor</h2>
-        <h3>Main Library</h3>
-        <p>The main Library is the primary folder/shortcut workspace under <code>data/Library/</code>. Yellow shortcut tabs are only alternate entry points into this same tree; they do not create separate storage roots.</p>
-        <h3>Spaces</h3>
-        <p>Green Spaces are independent Library-style roots. A paper can still share the same <code>papers</code> metadata model, but files downloaded or imported while working inside a Space are stored under that Space's local-copy folder.</p>
-        <h3>My Publications</h3>
-        <p>My Publications is a personal publication list over shared paper records. Its entries live in <code>my_publications</code> and point to <code>papers</code>. PDFs added by DOI/title lookup or downloaded from My Publications are stored under <code>data/My Publications/</code>. Export order follows saved sort order, and export-excluded rows are skipped.</p>
-        <h3>Journal Monitor Add to Library</h3>
-        <p>Journal Monitor may first download PDFs into staging under <code>data/pdfs/</code>. When a monitored paper is added to Library, it enters <code>unsorted</code>. If a PDF exists, Gewu Insight moves the managed local copy into the Library local-copy folder and updates the paper path. If no PDF exists, the Library shows a shortcut first; downloading later assigns the local copy path.</p>
-      </section>
-
-      <section id="metadata">
-        <h2>9. Metadata Refresh and Identifiers</h2>
-        <p>Metadata refresh changes SQLite metadata, not the original source files. Depending on the action, Gewu Insight may use DOI, arXiv, title lookup, Crossref, OpenAlex, Semantic Scholar, PubMed, ADS, or PDF text extraction.</p>
-        <table>
-          <thead><tr><th>Action</th><th>What it does</th><th>When to use it</th></tr></thead>
-          <tbody>
-            <tr><td>Loader metadata mode: none</td><td>Imports files and shortcuts without refreshing literature metadata.</td><td>Use for very large imports when speed matters.</td></tr>
-            <tr><td>Loader metadata mode: quick</td><td>Refreshes core title, author, journal, date, DOI/arXiv, and basic fields.</td><td>Use for normal imports when you want usable metadata quickly.</td></tr>
-            <tr><td>Loader metadata mode: full</td><td>Runs deeper metadata and metrics enrichment, including slower sources where available.</td><td>Use when accuracy/completeness is worth the time.</td></tr>
-            <tr><td>Refresh in Details</td><td>Refreshes the selected paper's identifier metadata and citation/abstract sources.</td><td>Use for a single paper that looks incomplete.</td></tr>
-            <tr><td>Get Identifier from Files</td><td>Looks at the local PDF title page and title/database matches to recover DOI or arXiv ID.</td><td>Use when import failed to find an identifier.</td></tr>
-            <tr><td>Refresh All Metadata</td><td>Refreshes many papers but skips entries recently refreshed according to the recency rule.</td><td>Use for maintenance after a large import.</td></tr>
-            <tr><td>Find All Missing Identifiers</td><td>Checks active Library and Space papers without DOI/arXiv, using local PDFs and strict title matches through Crossref, OpenAlex, and Semantic Scholar.</td><td>Use as a resumable, rate-limited repair pass for older imports.</td></tr>
-          </tbody>
-        </table>
-        <p>Refresh history is recorded in <code>paper_metadata_refreshes</code>. This lets Gewu Insight avoid repeating expensive refreshes and makes failed refreshes easier to diagnose.</p>
-      </section>
-
-      <section id="finder">
-        <h2>10. Finder Actions and Practical Rules</h2>
-        <ul>
-          <li><strong>Open in Finder</strong> reveals the local copy or matching folder if Gewu Insight has one. It cannot reveal a file that has not been downloaded or imported yet.</li>
-          <li><strong>Open in Preview</strong> opens the managed local file, usually a PDF, in macOS Preview.</li>
-          <li><strong>QuickLook with Space</strong> uses Gewu Insight's internal previewer for PDFs and supported non-PDF file types.</li>
-          <li><strong>Do not manually reorganize <code>data/Library/</code> in Finder</strong> unless you know you are repairing local copies. The UI tree is controlled by SQLite, so manual Finder moves can desynchronize paths.</li>
-          <li><strong>Use the Library UI for organization</strong>: move/copy/delete in Gewu Insight, then use Open in Finder or Make Copy Desktop when you need real files outside Gewu Insight.</li>
-        </ul>
-      </section>
-    </main>
-  </div>
-</body>
-</html>
-"""
 
 
 INDEX_HTML = """<!doctype html>
@@ -30210,6 +29971,49 @@ INDEX_HTML = """<!doctype html>
       background: #fff;
       text-align: center;
     }
+    .runtime-branded-empty {
+      width: 100%;
+      min-height: 100%;
+      align-self: stretch;
+      position: relative;
+      display: grid;
+      place-content: center;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      pointer-events: none;
+    }
+    .runtime-empty-brand-crop {
+      position: absolute;
+      inset: 0;
+      display: block;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .runtime-empty-brand-art {
+      position: absolute;
+      right: var(--runtime-empty-brand-right, 0);
+      bottom: var(--runtime-empty-brand-bottom, -2px);
+      display: block;
+      width: clamp(150px, 16vw, 210px);
+      height: auto;
+      opacity: .04;
+      filter: brightness(0) saturate(100%) invert(31%) sepia(20%) saturate(920%) hue-rotate(169deg) brightness(88%) contrast(88%);
+      pointer-events: none;
+      -webkit-user-drag: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .runtime-empty-brand-message {
+      color: #8a94a5;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .library-detail {
+      --runtime-empty-brand-right: -23px;
+      --runtime-empty-brand-bottom: -15px;
+      position: relative;
+    }
     .analysis-backdrop {
       position: fixed;
       inset: 0;
@@ -32935,6 +32739,25 @@ INDEX_HTML = """<!doctype html>
     function clearMonitorStatusDisplay() {
       const root = $("monitorStatusHost");
       if (root) root.innerHTML = "";
+    }
+
+    function runtimeEmptyBrandArtMarkup(extraClass = "") {
+      const cropClassName = `runtime-empty-brand-crop${extraClass ? ` ${extraClass}` : ""}`;
+      return `<span class="${cropClassName}" aria-hidden="true"><img class="runtime-empty-brand-art" src="/api/startup-brand-art" alt=""></span>`;
+    }
+
+    function runtimeBrandedEmptyMarkup(message = "") {
+      return `
+        <div class="empty runtime-branded-empty">
+          ${runtimeEmptyBrandArtMarkup()}
+          ${message ? `<span class="runtime-empty-brand-message">${escapeHtml(message)}</span>` : ""}
+        </div>
+      `;
+    }
+
+    function showRuntimeEmptyBrand(root, message = "") {
+      if (!root) return;
+      root.innerHTML = runtimeBrandedEmptyMarkup(message);
     }
 
     function showMonitorStatusMessage(message) {
@@ -36053,6 +35876,7 @@ INDEX_HTML = """<!doctype html>
         } else {
           markNoMatchDate(state.selectedDate, true);
           appendMonitorStatusMessage("No matching papers for this date.");
+          showRuntimeEmptyBrand(root);
         }
         return;
       } else {
@@ -36073,6 +35897,7 @@ INDEX_HTML = """<!doctype html>
       markVisibleLateArrivalsSeen(activePapers);
       if (!activePapers.length) {
         appendMonitorStatusMessage("No papers in this source for this date.");
+        showRuntimeEmptyBrand(root);
       }
     }
 
@@ -42001,7 +41826,7 @@ INDEX_HTML = """<!doctype html>
       if (!root) return;
       const selection = state.librarySelection;
       if (!selection) {
-        root.innerHTML = `<div class="empty">Select a folder or paper.</div>`;
+        root.innerHTML = runtimeBrandedEmptyMarkup("Select a folder or paper.");
         return;
       }
       if (selection.type === "folder") {
@@ -42014,6 +41839,7 @@ INDEX_HTML = """<!doctype html>
             <dt>Type</dt><dd>Folder</dd>
             <dt>Contains</dt><dd>${folders} folders · ${items} items</dd>
           </dl>
+          ${runtimeEmptyBrandArtMarkup("library-folder-brand-art")}
           <div class="library-detail-status" id="libraryDetailStatus"></div>
         `;
         return;
@@ -42220,7 +42046,7 @@ INDEX_HTML = """<!doctype html>
       const publication = myPublicationById(state.myPublicationSelectionId);
       const paper = publication?.paper || null;
       if (!paper) {
-        root.innerHTML = `<div class="empty">Select a publication.</div>`;
+        root.innerHTML = runtimeBrandedEmptyMarkup("Select a publication.");
         return;
       }
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
@@ -47792,7 +47618,7 @@ INDEX_HTML = """<!doctype html>
       if (!root) return;
       const paper = selectedAuthorMonitorPaper();
       if (!paper) {
-        root.innerHTML = `<div class="author-monitor-empty">Select a paper to show its details.</div>`;
+        root.innerHTML = runtimeBrandedEmptyMarkup("Select a paper to show its details.");
         return;
       }
       const authors = Array.isArray(paper.full_authors) && paper.full_authors.length
@@ -51765,16 +51591,19 @@ INDEX_HTML = """<!doctype html>
       if (!state.themeSearched) {
         clearMonitorPaperSurface(root, "theme");
         showMonitorStatusMessage("Choose a date on the calendar.");
+        showRuntimeEmptyBrand(root);
         return;
       }
       if (!state.themePapers.length) {
         clearMonitorPaperSurface(root, "theme");
         showMonitorStatusMessage("No subject-matched papers for this window.");
+        showRuntimeEmptyBrand(root);
         return;
       }
       if (!activeGroup) {
         clearMonitorPaperSurface(root, "theme");
         showMonitorStatusMessage("Add a subject to start monitoring papers.");
+        showRuntimeEmptyBrand(root);
         return;
       }
       requestKatexForPapers(activePapers);
@@ -51786,6 +51615,7 @@ INDEX_HTML = """<!doctype html>
         if (!state.showThemeArxiv && groupPapers.some(themePaperIsArxiv)) hiddenSources.push("arXiv");
         const hiddenMessage = hiddenSources.length ? ` ${hiddenSources.join(" and ")} entries are hidden.` : "";
         showMonitorStatusMessage(`No visible papers in this subject for this date.${hiddenMessage}`);
+        showRuntimeEmptyBrand(root);
       }
     }
 

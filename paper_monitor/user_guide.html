@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gewu Insight User Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --sidebar: #f3f4f6;
+      --sidebar-line: #dfe2e7;
+      --canvas: #ffffff;
+      --text: #1d2430;
+      --muted: #667085;
+      --quiet: #667085;
+      --blue: #1769c2;
+      --blue-soft: #e8f2ff;
+      --line: #e5e7eb;
+      --note: #f6f8fb;
+      --important: #fff7e8;
+      --important-line: #e7a72d;
+      --code: #f4f5f7;
+      --sidebar-width: 278px;
+      --content-width: 760px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.52;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 2px solid #4a8bd0;
+      outline-offset: 2px;
+    }
+
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .help-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      background: var(--sidebar);
+      border-right: 1px solid var(--sidebar-line);
+      padding: 22px 14px 28px;
+    }
+
+    .product-mark { padding: 0 10px 16px; }
+    .product-name { margin: 0; font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+    .product-name-cn { margin-top: 2px; color: var(--muted); font-size: 13px; }
+
+    .search-wrap { position: relative; margin: 0 4px 18px; }
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #7c8594;
+      width: 15px;
+      height: 15px;
+      pointer-events: none;
+    }
+    #guideSearch {
+      width: 100%;
+      height: 34px;
+      padding: 0 30px 0 31px;
+      border: 1px solid #d4d7dc;
+      border-radius: 8px;
+      background: rgba(255,255,255,.92);
+      color: var(--text);
+      outline: none;
+      box-shadow: 0 1px 1px rgba(0,0,0,.02);
+    }
+    #guideSearch:focus { border-color: #6aa3de; box-shadow: 0 0 0 3px rgba(31,118,201,.12); }
+    .clear-search {
+      display: none;
+      position: absolute;
+      right: 6px;
+      top: 5px;
+      width: 24px;
+      height: 24px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: #7c8594;
+      cursor: pointer;
+    }
+    .clear-search:hover { background: #e6e8eb; }
+
+    .nav-group { margin: 0 0 17px; }
+    .nav-group[hidden] { display: none; }
+    .nav-heading {
+      margin: 0 10px 5px;
+      color: #667085;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .075em;
+      text-transform: uppercase;
+    }
+    .topic-link {
+      display: block;
+      width: 100%;
+      border: 0;
+      border-radius: 7px;
+      padding: 6px 10px;
+      background: transparent;
+      color: #303846;
+      text-align: left;
+      line-height: 1.28;
+      cursor: pointer;
+    }
+    .topic-link:hover { background: rgba(0,0,0,.045); }
+    .topic-link.active { background: #dceaf9; color: #124f8d; font-weight: 600; }
+    .topic-link[hidden] { display: none; }
+    .no-results { display: none; padding: 8px 10px; color: var(--muted); font-size: 13px; }
+
+    .content-area { min-width: 0; }
+    .toolbar {
+      position: sticky;
+      z-index: 5;
+      top: 0;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      border-bottom: 1px solid rgba(229,231,235,.92);
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .toolbar-path { min-width: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .toolbar-actions { display: flex; align-items: center; gap: 6px; }
+    .toolbar-button {
+      border: 0;
+      border-radius: 6px;
+      padding: 5px 8px;
+      background: transparent;
+      color: var(--blue);
+      cursor: pointer;
+    }
+    .toolbar-button:hover { background: var(--blue-soft); text-decoration: none; }
+
+    .article-wrap { width: min(calc(100% - 72px), var(--content-width)); margin: 0 auto; padding: 54px 0 76px; }
+    .help-topic { display: none; }
+    .help-topic.active { display: block; }
+    .topic-kicker { margin: 0 0 8px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .065em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 34px; line-height: 1.16; letter-spacing: -.025em; }
+    .lead { margin: 14px 0 36px; color: #4d5868; font-size: 18px; line-height: 1.5; }
+    h2 { margin: 38px 0 13px; font-size: 22px; line-height: 1.25; letter-spacing: -.012em; }
+    h3 { margin: 25px 0 8px; font-size: 17px; line-height: 1.3; }
+    p { margin: 0 0 15px; }
+    ul, ol { margin: 10px 0 18px; padding-left: 24px; }
+    li { margin: 5px 0; }
+
+    .interface-map {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 1px;
+      margin: 24px 0 28px;
+      overflow: hidden;
+      border: 1px solid #d9dde3;
+      border-radius: 10px;
+      background: #d9dde3;
+    }
+    .interface-map > div { min-height: 116px; padding: 14px 12px; background: #f8f9fb; }
+    .interface-map strong { display: block; margin-bottom: 7px; font-size: 13px; }
+    .interface-map span { display: block; color: var(--muted); font-size: 12px; line-height: 1.42; }
+
+    .steps { margin: 16px 0 25px; padding: 0; list-style: none; counter-reset: step; }
+    .steps > li {
+      position: relative;
+      min-height: 36px;
+      margin: 0 0 16px;
+      padding: 1px 0 0 44px;
+      counter-increment: step;
+    }
+    .steps > li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #eef1f5;
+      color: #354052;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .steps strong:first-child { display: block; margin-bottom: 2px; }
+    .result { margin-top: 8px; color: #526072; }
+    .result::before { content: "Result: "; color: #2f6c38; font-weight: 650; }
+
+    .ui { white-space: nowrap; font-weight: 650; color: #27364a; }
+    kbd {
+      display: inline-block;
+      min-width: 1.65em;
+      padding: 1px 5px;
+      border: 1px solid #cdd2d9;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: #fafafa;
+      color: #313b49;
+      font-family: inherit;
+      font-size: .88em;
+      line-height: 1.45;
+      text-align: center;
+      vertical-align: .05em;
+    }
+    code { padding: 1px 5px; border-radius: 5px; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+
+    .note, .important {
+      margin: 24px 0;
+      padding: 15px 17px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .note { border: 1px solid #e1e5ea; background: var(--note); }
+    .important { border-left: 4px solid var(--important-line); background: var(--important); }
+    .callout-title { display: block; margin-bottom: 4px; font-weight: 700; }
+
+    .plain-table { width: 100%; margin: 17px 0 24px; border-collapse: collapse; font-size: 14px; }
+    .plain-table th, .plain-table td { padding: 10px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .plain-table th { color: #4e596a; font-size: 12px; letter-spacing: .025em; }
+    .plain-table tr:first-child th { border-top: 1px solid var(--line); }
+
+    .path-list { margin: 17px 0 22px; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+    .path-list li { display: grid; grid-template-columns: minmax(170px, 250px) 1fr; gap: 18px; margin: 0; padding: 11px 0; border-bottom: 1px solid var(--line); }
+    .path-list code { align-self: start; overflow-wrap: anywhere; }
+    .path-list span { color: #566172; }
+
+    .see-also { margin-top: 42px; padding-top: 21px; border-top: 1px solid var(--line); }
+    .see-also h2 { margin: 0 0 9px; color: var(--muted); font-size: 13px; letter-spacing: .03em; text-transform: uppercase; }
+    .see-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+    .topic-pager {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      margin-top: 42px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+    .pager-link { max-width: 46%; color: var(--blue); cursor: pointer; }
+    .pager-link.next { margin-left: auto; text-align: right; }
+    .pager-label { display: block; color: var(--quiet); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+
+    @media (max-width: 900px) {
+      :root { --sidebar-width: 226px; }
+      .article-wrap { width: min(calc(100% - 42px), var(--content-width)); padding-top: 38px; }
+      .interface-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      h1 { font-size: 29px; }
+      .lead { font-size: 16px; }
+    }
+
+    @media (max-width: 620px) {
+      .interface-map { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; }
+    }
+
+    @media print {
+      .help-shell { display: block; }
+      .sidebar, .toolbar, .topic-pager { display: none !important; }
+      .article-wrap { width: auto; max-width: none; padding: 0; }
+      .help-topic { display: block !important; break-after: page; }
+      .help-topic:last-of-type { break-after: auto; }
+      .steps > li, .note, .important, .plain-table tr, .path-list li { break-inside: avoid; }
+      a { color: inherit; }
+      .see-also { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="help-shell">
+    <aside class="sidebar" aria-label="User Guide contents">
+      <div class="product-mark">
+        <p class="product-name">Gewu Insight</p>
+        <div class="product-name-cn">格物洞见 · User Guide</div>
+      </div>
+
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M13 13l4.2 4.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <input id="guideSearch" type="search" autocomplete="off" spellcheck="false" placeholder="Search the guide" aria-label="Search the guide">
+        <button class="clear-search" type="button" aria-label="Clear search">×</button>
+      </div>
+
+      <nav id="guide-nav">
+        <section class="nav-group">
+          <h2 class="nav-heading">Start Here</h2>
+          <button class="topic-link active" data-topic="welcome" aria-current="page">Welcome</button>
+          <button class="topic-link" data-topic="guided-tour">Guided Tour</button>
+          <button class="topic-link" data-topic="first-session">Your First Session</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Library</h2>
+          <button class="topic-link" data-topic="library-layout">Library Layout</button>
+          <button class="topic-link" data-topic="navigation">Navigate with Mouse and Keyboard</button>
+          <button class="topic-link" data-topic="organize">Folders, Shortcuts, and Spaces</button>
+          <button class="topic-link" data-topic="search-views">Search, List View, and Table View</button>
+          <button class="topic-link" data-topic="import-files">Add Papers and Files</button>
+          <button class="topic-link" data-topic="paper-details">Use Paper Details</button>
+          <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
+          <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
+          <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
+          <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
+          <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
+          <button class="topic-link" data-topic="drag-attach">Move a Standalone File into Paper Files</button>
+          <button class="topic-link" data-topic="recycle">Delete and Recover Items</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Import and Transfer</h2>
+          <button class="topic-link" data-topic="folder-loader">Use Folder Loader</button>
+          <button class="topic-link" data-topic="loader-maintenance">Refresh an Imported Library</button>
+          <button class="topic-link" data-topic="desktop-copy">Make a Portable Desktop Copy</button>
+          <button class="topic-link" data-topic="backup-migrate">Back Up or Move to Another Mac</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Publications and Monitors</h2>
+          <button class="topic-link" data-topic="my-publications">My Publications</button>
+          <button class="topic-link" data-topic="journal-monitor">Journal Monitor</button>
+          <button class="topic-link" data-topic="subject-monitor">Subject Monitor</button>
+          <button class="topic-link" data-topic="author-monitor">Author Monitor</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Settings and Safety</h2>
+          <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
+          <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
+          <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
+          <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Reference</h2>
+          <button class="topic-link" data-topic="keyboard">Keyboard Shortcuts</button>
+          <button class="topic-link" data-topic="network-access">Publisher and Network Access</button>
+          <button class="topic-link" data-topic="startup">Startup and Web Cache</button>
+          <button class="topic-link" data-topic="troubleshooting">Troubleshooting</button>
+          <button class="topic-link" data-topic="storage-reference">Storage Reference</button>
+        </section>
+        <p class="no-results" role="status" aria-live="polite">No matching topics.</p>
+      </nav>
+    </aside>
+
+    <main class="content-area">
+      <header class="toolbar">
+        <div class="toolbar-path"><span id="toolbar-group">Start Here</span> › <span id="toolbar-title">Welcome</span></div>
+        <div class="toolbar-actions">
+          <button class="toolbar-button" type="button" id="print-topic">Print Guide</button>
+        </div>
+      </header>
+
+      <div class="article-wrap">
+        <article class="help-topic guide-topic active" id="welcome" data-group="Start Here" data-title="Welcome" data-keywords="overview local research reading assistant getting started">
+          <p class="topic-kicker">Start Here</p>
+          <h1>Welcome to Gewu Insight</h1>
+          <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
+
+          <h2>What this guide covers</h2>
+          <p>This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.</p>
+
+          <h2>Five areas of the app</h2>
+          <ul>
+            <li><span class="ui">Library</span> — your managed papers, folders, spaces, versions, and related files.</li>
+            <li><span class="ui">My Publications</span> — your publication list, citation metrics, author roles, and export tools.</li>
+            <li><span class="ui">Journal Monitor</span> — papers published on a selected date, organized by journal and field.</li>
+            <li><span class="ui">Subject Monitor</span> — topic-based discovery from supported online sources and feeds.</li>
+            <li><span class="ui">Author Monitor</span> — monitored researchers, profile-linked discovery, and newly found work.</li>
+          </ul>
+
+          <div class="important">
+            <span class="callout-title">Important</span>
+            SQLite is the source of truth for Gewu Insight. Do not replace, rebuild, or edit the database by hand. Use the app to move, classify, or delete managed items.
+          </div>
+
+          <h2>Open this guide again</h2>
+          <p>Choose <span class="ui">Help &gt; User Guide</span>. The guide opens in its own window and works without an internet connection.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="guided-tour" data-group="Start Here" data-title="Guided Tour" data-keywords="tabs panes sidebar calendar filters details status bottom layout">
+          <p class="topic-kicker">Start Here</p>
+          <h1>Take a Guided Tour</h1>
+          <p class="lead">The app keeps navigation on the left, the active collection in the center, and details or actions on the right.</p>
+
+          <h2>The Library window</h2>
+          <div class="interface-map" aria-label="Library interface map">
+            <div><strong>1. Source tabs</strong><span>Library, shortcuts, and independent Spaces.</span></div>
+            <div><strong>2. Folder columns</strong><span>Move from broad folders to the selected item.</span></div>
+            <div><strong>3. Item column</strong><span>Papers, files, and child folders in the current location.</span></div>
+            <div><strong>4. Paper Files</strong><span>The current PDF, versions, supplements, and attachments for one paper.</span></div>
+            <div><strong>5. Details</strong><span>Metadata, identifiers, actions, citations, and folder membership.</span></div>
+          </div>
+
+          <h2>Tabs across the top</h2>
+          <p>Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.</p>
+
+          <h2>Resize a pane</h2>
+          <ol class="steps">
+            <li><strong>Point to a divider.</strong> Move the pointer to the vertical line between two panes.</li>
+            <li><strong>Drag the divider.</strong> Move it left or right until the useful content fits.</li>
+            <li><strong>Release.</strong> The app uses the new working width without changing the underlying files.</li>
+          </ol>
+
+          <div class="note"><span class="callout-title">Note</span>The right-side Paper Details area scrolls independently. A long author list or citation section does not move the Library columns.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="first-session" data-group="Start Here" data-title="Your First Session" data-keywords="launch add paper open preview initial steps quick start">
+          <p class="topic-kicker">Start Here</p>
+          <h1>Set Up Your First Session</h1>
+          <p class="lead">Start with one paper, confirm its metadata and file, then add structure only when you need it.</p>
+
+          <h2>Add and inspect a paper</h2>
+          <ol class="steps">
+            <li><strong>Open <span class="ui">Library</span>.</strong> Select an existing folder, or create one from the context menu.</li>
+            <li><strong>Add a paper.</strong> Drag a PDF into the folder, or open the target folder, Control-click blank space in its contents, choose <span class="ui">Add Paper</span>, and enter a DOI, arXiv identifier, supported URL, or title.</li>
+            <li><strong>Select the new item.</strong> Paper Details appears at the right. Gewu Insight attempts to identify the work and records the local file.</li>
+            <li><strong>Check <span class="ui">DOI</span> and <span class="ui">arXiv</span>.</strong> Enter a corrected DOI in its field and refresh it, or edit arXiv inline and press <kbd>Return</kbd>.</li>
+            <li><strong>Open the PDF.</strong> Choose <span class="ui">Open in Preview</span>, or enter Paper Files and press <kbd>Space</kbd> for Quick Look.</li>
+          </ol>
+
+          <p class="result">The paper has a managed record, a stable Gewu Key, and at least one file known to the database.</p>
+
+          <h2>Next useful actions</h2>
+          <ul>
+            <li>Use <span class="ui">Download</span> when a better publication version is available.</li>
+            <li>Open <span class="ui">Files</span> to classify imported PDFs or add notes, data, slides, and supplements.</li>
+            <li>Add the paper to another folder without creating a second independent work record.</li>
+            <li>Back up the project before a large import or migration.</li>
+          </ul>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#import-files">Add Papers and Files</a><a href="#paper-details">Use Paper Details</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="library-layout" data-group="Library" data-title="Library Layout" data-keywords="column view breadcrumb details paper files list table root">
+          <p class="topic-kicker">Library</p>
+          <h1>Understand the Library Layout</h1>
+          <p class="lead">The Library uses a Finder-style column view, but the database—not the visible folder alone—defines the paper and its relationships.</p>
+
+          <h2>Read the columns from left to right</h2>
+          <ol>
+            <li><strong>Source:</strong> the main Library, a shortcut, or a Space.</li>
+            <li><strong>Folders:</strong> each selection opens its children in the next column.</li>
+            <li><strong>Items:</strong> the papers and other files in the selected folder.</li>
+            <li><strong>Paper Files:</strong> shown only when a paper or managed file can expose related files.</li>
+            <li><strong>Paper Details:</strong> metadata and actions for the selected work.</li>
+          </ol>
+
+          <h2>Use the breadcrumb</h2>
+          <p>The breadcrumb at the bottom shows the active path. Select a segment to return to that location. The <span class="ui">List View / Table View</span> control at the lower right changes the representation of items without moving them.</p>
+
+          <h2>Folder Details</h2>
+          <p>When you select a folder, the right side shows its name, type, and the number of child folders and items. This is informational; it is not another folder level.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#organize">Folders, Shortcuts, and Spaces</a><a href="#search-views">Search, List View, and Table View</a><a href="#paper-files">Understand Paper Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="navigation" data-group="Library" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus space quick look double click selection">
+          <p class="topic-kicker">Library</p>
+          <h1>Navigate with Mouse and Keyboard</h1>
+          <p class="lead">Library columns and Paper Files form one keyboard path. Focus moves into Paper Files with the Right Arrow and returns to the paper with the Left Arrow.</p>
+
+          <h2>Move through folders and papers</h2>
+          <ul>
+            <li>Press <kbd>↑</kbd> or <kbd>↓</kbd> to change the selection in the focused column.</li>
+            <li>Press <kbd>→</kbd> on a folder to enter it.</li>
+            <li>Press <kbd>←</kbd> to return to its parent.</li>
+            <li>Double-click a normal file to open it with its macOS application.</li>
+          </ul>
+
+          <h2>Enter and leave Paper Files</h2>
+          <ol class="steps">
+            <li><strong>Select a paper in the main item column.</strong> Paper Files appears to its right. No Paper Files card is highlighted yet.</li>
+            <li><strong>Press <kbd>→</kbd>.</strong> Focus enters Paper Files and the active card gains a light-blue selection. The main paper remains visible with a quieter selection color.</li>
+            <li><strong>Press <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> Move among the current file, versions, supplements, and attachments.</li>
+            <li><strong>Press <kbd>←</kbd>.</strong> Focus returns to the main paper. Paper Files no longer shows an active card.</li>
+          </ol>
+
+          <h2>Preview while navigating</h2>
+          <p>In Paper Files, press <kbd>Space</kbd> to open Quick Look. While Quick Look is open, use <kbd>↑</kbd> and <kbd>↓</kbd> to follow adjacent files. Press <kbd>Space</kbd> again or close Quick Look to dismiss it.</p>
+
+          <h2>Use the Quick Look window</h2>
+          <ul>
+            <li>For a PDF, use the thumbnail strip to jump to a page and scroll the page area independently.</li>
+            <li>Drag the title bar to reposition the preview. Drag its resize corner when you need more reading space.</li>
+            <li>Choose <span class="ui">Open in Preview</span> when you want the full macOS Preview application.</li>
+            <li>When Quick Look is already open, changing the Paper Files selection updates the preview without requiring another open action.</li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>Single-click selects a Paper Files item. Double-click opens it. This prevents an accidental external app launch while you are classifying files.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="organize" data-group="Library" data-title="Folders, Shortcuts, and Spaces" data-keywords="move copy paste alias tabs reorder roots colors rename folder">
+          <p class="topic-kicker">Library</p>
+          <h1>Organize Folders, Shortcuts, and Spaces</h1>
+          <p class="lead">Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.</p>
+
+          <h2>Choose the right structure</h2>
+          <table class="plain-table">
+            <tr><th>Structure</th><th>Use it for</th><th>What it changes</th></tr>
+            <tr><td>Library folder</td><td>A durable topic hierarchy inside the main collection.</td><td>Creates or moves a managed path.</td></tr>
+            <tr><td>Shortcut tab</td><td>Fast access to a Library location you use often.</td><td>Adds another entry point; it does not duplicate the paper record.</td></tr>
+            <tr><td>Space</td><td>An independent project, course, collaboration, or temporary collection.</td><td>Uses its own managed root under <code>data/Spaces</code>.</td></tr>
+          </table>
+
+          <h2>Create, rename, or move</h2>
+          <ol class="steps">
+            <li><strong>Control-click the relevant folder area.</strong> Choose <span class="ui">New Folder</span>, <span class="ui">Rename</span>, <span class="ui">Copy</span>, or <span class="ui">Paste</span>.</li>
+            <li><strong>For a move, drag the item to its destination.</strong> Wait for the destination to indicate it can receive the item, then release.</li>
+            <li><strong>Check the breadcrumb and Paper Details.</strong> The visible path and folder membership update immediately.</li>
+          </ol>
+
+          <p>Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style.</p>
+
+          <h2>Work with several entries</h2>
+          <p>Command-click to add or remove individual entries from a selection. Shift-click, or hold Shift while using the arrow keys, to extend a range in the current folder. Copy the selected entries with <kbd>⌘</kbd><kbd>C</kbd>, paste into the active destination with <kbd>⌘</kbd><kbd>V</kbd>, or press <kbd>Delete</kbd> to apply the normal reference-aware deletion rules.</p>
+
+          <h2>Copy a paper to another folder</h2>
+          <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a Finder alias where appropriate. Paper versions and attachments remain associated with the work.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Move managed papers in Gewu Insight, not directly in Finder. The app updates the visible file, associated bundle, and live database paths together.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#storage-model">How Gewu Insight Stores Files</a><a href="#recycle">Delete and Recover Items</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="search-views" data-group="Library" data-title="Search, List View, and Table View" data-keywords="search library spaces list table sort columns selection">
+          <p class="topic-kicker">Library</p>
+          <h1>Search and Change Views</h1>
+          <p class="lead">Search locates items across the managed collection. List View emphasizes browsing; Table View emphasizes metadata comparison.</p>
+
+          <h2>Search the collection</h2>
+          <ol class="steps">
+            <li><strong>Select the search control in the top-right corner.</strong></li>
+            <li><strong>Enter a title, author, journal, identifier, or filename.</strong> Results may come from the Library and Spaces.</li>
+            <li><strong>Select a result.</strong> Its Paper Details and managed path become available.</li>
+            <li><strong>Clear the search.</strong> Return to the previous Library location.</li>
+          </ol>
+
+          <h2>Switch views</h2>
+          <p>Choose <span class="ui">View &gt; List View</span> or <span class="ui">View &gt; Table View</span>. You can also use <kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd>. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files.</p>
+
+          <h2>Sort a folder</h2>
+          <p>Control-click the folder contents and choose <span class="ui">Sort by Name</span> or <span class="ui">Sort by Modified Time</span>. Sorting changes presentation, not the paper identity.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="import-files" data-group="Library" data-title="Add Papers and Files" data-keywords="drag drop add paper PDF import external source original copy">
+          <p class="topic-kicker">Library</p>
+          <h1>Add Papers and Files</h1>
+          <p class="lead">A normal Library import creates a managed local copy and a database record. The original source file remains where it was.</p>
+
+          <h2>Drag a paper into a folder</h2>
+          <ol class="steps">
+            <li><strong>Open the destination folder in <span class="ui">Library</span>.</strong></li>
+            <li><strong>Drag a PDF from Finder into the item area.</strong> Drop it on the folder or in its contents.</li>
+            <li><strong>Wait for the item to appear.</strong> The app copies the file into managed storage and begins local identification.</li>
+            <li><strong>Review Paper Details.</strong> Confirm the title, DOI, arXiv identifier, and file classification.</li>
+          </ol>
+
+          <h2>Use Add Paper</h2>
+          <p>Open the destination folder, Control-click blank space in its contents, and choose <span class="ui">Add Paper</span>. Enter a DOI, arXiv identifier, supported URL, or title in the inline field, then choose <span class="ui">Add Paper</span> again. This lookup can create a managed record before a local PDF is available.</p>
+
+          <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Files</span> panel is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#folder-loader">Use Folder Loader</a><a href="#drag-attach">Move a Standalone File into Paper Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="paper-details" data-group="Library" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key">
+          <p class="topic-kicker">Library</p>
+          <h1>Use Paper Details</h1>
+          <p class="lead">Paper Details combines the actions, identifiers, file summary, metadata, citation counts, and folder membership for the selected work.</p>
+
+          <h2>Top actions</h2>
+          <table class="plain-table">
+            <tr><th>Action</th><th>What it does</th></tr>
+            <tr><td><span class="ui">Open in Preview</span></td><td>Opens the preferred local PDF in macOS Preview.</td></tr>
+            <tr><td><span class="ui">Download</span></td><td>Retrieves the best available paper file without overwriting a different preserved version.</td></tr>
+            <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page.</td></tr>
+            <tr><td><span class="ui">Google Scholar</span></td><td>Searches for the work in Google Scholar.</td></tr>
+            <tr><td><span class="ui">Get Identifier from Files</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
+          </table>
+
+          <h2>Files summary</h2>
+          <p>The <span class="ui">Files · n</span> row is collapsed by default. Its right side identifies the current file type. Expand it to add, classify, show, use, sync, or delete related files.</p>
+
+          <h2>Metadata rows</h2>
+          <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable internal key for a managed work.</p>
+
+          <h2>Compare citation sources</h2>
+          <p><span class="ui">Merged Citations</span> brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and PubMed when those services have a match. Select a source label to inspect that source’s count and evidence. The headline is a merged best estimate; counts from different services are not added together.</p>
+
+          <h2>Read and reuse the record</h2>
+          <ul>
+            <li>A representative first figure, when available, provides a visual checkpoint above the actions.</li>
+            <li><span class="ui">Abstract</span> keeps the paper summary in the independently scrolling details pane.</li>
+            <li><span class="ui">BibTeX</span> and <span class="ui">Copy Code</span> provide a citation record for reference software or LaTeX.</li>
+            <li><span class="ui">Nature Reference</span> and <span class="ui">Copy Reference</span> provide a formatted reference string.</li>
+            <li><span class="ui">Folders</span> lists every Library location for the shared work. Remove a location there only when you intend to remove that reference.</li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>A discovery-only Author Monitor result may have no Gewu Key or Files section. These appear when the work becomes managed in Library or My Publications, or when a file has been attached.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="identifiers" data-group="Library" data-title="Edit DOI and arXiv Identifiers" data-keywords="DOI arXiv preprint edit inline return refresh wrong identifier empty download open">
+          <p class="topic-kicker">Library</p>
+          <h1>Edit DOI and arXiv Identifiers</h1>
+          <p class="lead">DOI and arXiv can identify the same work across publication stages. Correct either value in Paper Details before downloading or synchronizing versions.</p>
+
+          <h2>Refresh or correct a DOI</h2>
+          <ol class="steps">
+            <li><strong>Select the paper.</strong> Find the <span class="ui">DOI</span> row in Paper Details.</li>
+            <li><strong>Select the DOI field.</strong> Enter or paste the correct DOI. You can omit a leading <code>https://doi.org/</code>.</li>
+            <li><strong>Choose <span class="ui">Refresh</span> or press <kbd>Return</kbd>.</strong> Gewu Insight saves the identifier, checks supported metadata services, and updates matching bibliographic fields.</li>
+            <li><strong>Inspect the result.</strong> Verify the title, journal, year, and authors before downloading a new file.</li>
+          </ol>
+
+          <h2>Edit an arXiv identifier</h2>
+          <ol class="steps">
+            <li><strong>Select the arXiv value.</strong> The value changes to an inline text field.</li>
+            <li><strong>Enter an identifier.</strong> Use forms such as <code>arXiv:2106.14849</code> or a valid legacy identifier.</li>
+            <li><strong>Press <kbd>Return</kbd>.</strong> The database saves the new value. Enter an empty value and press <kbd>Return</kbd> to clear it.</li>
+          </ol>
+
+          <p>The <span class="ui">arXiv</span> row remains visible when empty so you can add a corrected identifier later. Use the arrow icon to open arXiv and the download icon to retrieve the latest available arXiv PDF.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Confirm an identifier before running a version sync. A wrong identifier can attach files from a different work.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Citation Settings</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="paper-files" data-group="Library" data-title="Understand Paper Files" data-keywords="current versions supplements attachments files panel groups inspector">
+          <p class="topic-kicker">Library</p>
+          <h1>Understand Paper Files</h1>
+          <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
+
+          <h2>Two views of the same bundle</h2>
+          <p>The dedicated Paper Files column uses the headings <span class="ui">Primary file</span>, <span class="ui">Other versions</span>, <span class="ui">Supplements</span>, and <span class="ui">Attachments</span>. The compact Files panel inside Paper Details shows the same records with shorter headings:</p>
+          <table class="plain-table">
+            <tr><th>Paper Files column</th><th>Paper Details panel</th><th>Contents</th></tr>
+            <tr><td><span class="ui">Primary file</span></td><td><span class="ui">CURRENT</span></td><td>The PDF used by Open in Preview and normal Library preview.</td></tr>
+            <tr><td><span class="ui">Other versions</span></td><td><span class="ui">VERSIONS</span></td><td>Other publication, accepted-manuscript, preprint, or imported PDF versions.</td></tr>
+            <tr><td><span class="ui">Supplements</span></td><td><span class="ui">SUPPLEMENTS</span></td><td>Supporting information associated with the work.</td></tr>
+            <tr><td><span class="ui">Attachments</span></td><td><span class="ui">FILES</span></td><td>Notes, images, presentations, data, code, and other attachments.</td></tr>
+          </table>
+
+          <h2>Select, open, or act on a file</h2>
+          <ul>
+            <li>Single-click a card to select it.</li>
+            <li>Double-click a card to open it.</li>
+            <li>Press <kbd>Space</kbd> to use Quick Look.</li>
+            <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, current-file controls, type controls, add/sync actions, or deletion where allowed.</li>
+          </ul>
+
+          <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default rank published accepted manuscript preprint annotated classify">
+          <p class="topic-kicker">Library</p>
+          <h1>Choose Versions and the Current File</h1>
+          <p class="lead">The current file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
+
+          <h2>Automatic selection</h2>
+          <p>The automatic order favors a published version, then an accepted manuscript, then a preprint, then an imported or unclassified PDF. Within a role, a later recognized version normally wins. Availability and file validity are checked before a file becomes current.</p>
+
+          <h2>Choose a file manually</h2>
+          <ol class="steps">
+            <li><strong>Enter Paper Files or expand <span class="ui">Files</span>.</strong></li>
+            <li><strong>Select a PDF under <span class="ui">VERSIONS</span>.</strong></li>
+            <li><strong>Choose <span class="ui">Use</span> or <span class="ui">Use as Current</span>.</strong></li>
+          </ol>
+          <p class="result">The selected PDF becomes current. Its existing filename is preserved.</p>
+
+          <h2>Return to automatic selection</h2>
+          <p>Control-click a Paper Files card and choose <span class="ui">Use Automatic Selection</span>. Gewu Insight evaluates the known roles again.</p>
+
+          <h2>Classify PDF versions</h2>
+          <p>Use the small type control beside a PDF label. Available labels include:</p>
+          <ul>
+            <li><span class="ui">Published Version</span> and <span class="ui">Published Version · Annotated</span></li>
+            <li><span class="ui">Accepted Manuscript</span> and <span class="ui">Accepted Manuscript · Annotated</span></li>
+            <li><span class="ui">Preprint</span> and <span class="ui">Preprint · Annotated</span></li>
+            <li><span class="ui">Imported PDF</span> and <span class="ui">Imported PDF · Annotated</span></li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>Changing a type or choosing Use changes database metadata and preference. It does not rename the file merely to match the label.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#attachments">Add and Classify Attachments</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="attachments" data-group="Library" data-title="Add and Classify Attachments" data-keywords="add file image supplement note presentation data code other PDF type dropdown">
+          <p class="topic-kicker">Library</p>
+          <h1>Add and Classify Attachments</h1>
+          <p class="lead">Import first, classify afterward. This keeps the add operation simple and lets you decide the role after seeing the file in context.</p>
+
+          <h2>Add a file from Paper Details</h2>
+          <ol class="steps">
+            <li><strong>Expand <span class="ui">Files</span>.</strong></li>
+            <li><strong>Choose <span class="ui">Add File</span>.</strong> Select one or more local files.</li>
+            <li><strong>Wait for the new row.</strong> A new item begins as an unclassified or Other File attachment.</li>
+            <li><strong>Select its compact type control.</strong> Choose the correct PDF role or attachment type.</li>
+          </ol>
+
+          <h2>Attachment types</h2>
+          <p>Non-primary attachments can be labeled <span class="ui">Image</span>, <span class="ui">Supplement</span>, <span class="ui">Note</span>, <span class="ui">Presentation</span>, <span class="ui">Data</span>, <span class="ui">Code</span>, or <span class="ui">Other File</span>. PDF roles use the publication-version labels described in the previous topic.</p>
+
+          <h2>Add by drag and drop</h2>
+          <p>Drag a Finder file over the expanded Paper Files area, wait for the drop target to respond, then release. The file is copied into the selected paper’s associated bundle and appears in Paper Files.</p>
+
+          <div class="important"><span class="callout-title">Important</span>The current PDF cannot be deleted or reclassified as a non-PDF attachment. Choose another PDF as current first, or return to automatic selection.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#drag-attach">Move a Standalone File into Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="download-sync" data-group="Library" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite">
+          <p class="topic-kicker">Library</p>
+          <h1>Download and Sync Versions</h1>
+          <p class="lead">Downloads add a version to the paper bundle. They do not silently overwrite a different preserved PDF.</p>
+
+          <h2>Download the best available paper</h2>
+          <ol class="steps">
+            <li><strong>Verify DOI and arXiv.</strong> Make sure the identifiers belong to the selected work.</li>
+            <li><strong>Choose <span class="ui">Download</span> at the top of Paper Details.</strong> Gewu Insight first tries the best available published file, then supported alternatives.</li>
+            <li><strong>Wait for the status message.</strong> The existing current file is preserved if the incoming file is a different version.</li>
+            <li><strong>Inspect Paper Files.</strong> The best version becomes current according to manual or automatic selection; older versions appear under <span class="ui">VERSIONS</span>.</li>
+          </ol>
+
+          <h2>Download arXiv files</h2>
+          <ul>
+            <li>Use the download icon in the <span class="ui">arXiv</span> row to retrieve the latest arXiv PDF.</li>
+            <li>Choose <span class="ui">Sync Versions</span> to retrieve all available arXiv revisions such as v1, v2, and v3.</li>
+            <li>Each revision is labeled with its arXiv version when known.</li>
+          </ul>
+
+          <h2>Duplicate protection</h2>
+          <p>Gewu Insight compares SHA-256 hashes for exact duplicates. For PDFs, it can also compare a content fingerprint that ignores annotation-only changes. An exact duplicate is reused instead of stored twice. A genuinely annotated copy may be retained and labeled as annotated.</p>
+
+          <div class="note"><span class="callout-title">Note</span>Version downloads require a managed work in Library or My Publications. A discovery-only monitor result is not forced into managed storage.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="drag-attach" data-group="Library" data-title="Move a Standalone File into Paper Files" data-keywords="drag adopt convert standalone attachment move into paper files remove independent item">
+          <p class="topic-kicker">Library</p>
+          <h1>Move a Standalone File into Paper Files</h1>
+          <p class="lead">If a data, image, presentation, or other file was imported as its own Library item, drag it onto the correct paper’s Paper Files area to make it an attachment.</p>
+
+          <h2>Convert an independent item</h2>
+          <ol class="steps">
+            <li><strong>Select the destination paper.</strong> Keep its Paper Files inspector visible.</li>
+            <li><strong>Begin dragging the standalone item.</strong> The main paper remains the active destination while you drag.</li>
+            <li><strong>Move the pointer into the Paper Files drop zone.</strong> Wait for the drop feedback that identifies the target paper.</li>
+            <li><strong>Release the pointer.</strong> Gewu Insight validates the move, adopts the file into the paper bundle, and removes its independent Library position.</li>
+            <li><strong>Classify the attachment.</strong> Choose Image, Data, Code, Presentation, Note, Supplement, or another appropriate type.</li>
+          </ol>
+
+          <p class="result">The physical file and database link now belong to the destination paper; the former standalone entry is gone.</p>
+
+          <div class="important"><span class="callout-title">Important</span>If the source item is shared by another Library reference or protected relationship, Gewu Insight may refuse a destructive conversion. Add a copy with <span class="ui">Add File</span> instead.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="recycle" data-group="Library" data-title="Delete and Recover Items" data-keywords="delete recycle recover trash permanent shared references soft delete">
+          <p class="topic-kicker">Library</p>
+          <h1>Delete and Recover Items</h1>
+          <p class="lead">Deleting a paper reference either removes only that reference or moves the last Library reference to Recycle. Final deletion inside Recycle is reference-aware and uses the macOS Trash for managed files.</p>
+
+          <h2>Delete a Library reference</h2>
+          <ol class="steps">
+            <li><strong>Control-click the item.</strong></li>
+            <li><strong>Choose <span class="ui">Delete</span>.</strong></li>
+            <li><strong>Check the result.</strong> If another Library location or My Publications still refers to the same work, only the selected reference is removed. Otherwise the item moves to <span class="ui">Recycle</span> and remains recoverable.</li>
+          </ol>
+
+          <h2>Recover an item</h2>
+          <ol class="steps">
+            <li><strong>Open <span class="ui">Recycle</span>.</strong></li>
+            <li><strong>Control-click the item and choose <span class="ui">Recover</span>.</strong></li>
+            <li><strong>Confirm the restored location.</strong></li>
+          </ol>
+
+          <h2>Delete permanently</h2>
+          <p>Use final deletion only inside Recycle. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved. Files that are no longer referenced are moved to the macOS Trash where possible.</p>
+
+          <div class="important"><span class="callout-title">Important</span><span class="ui">Delete All</span> affects every eligible item in the selected Recycle context. Back up first if you are uncertain.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="folder-loader" data-group="Import and Transfer" data-title="Use Folder Loader" data-keywords="bulk import folder source metadata skip quick full log stop previous result guide">
+          <p class="topic-kicker">Import and Transfer</p>
+          <h1>Use Folder Loader</h1>
+          <p class="lead">Folder Loader imports an existing directory tree into managed Library storage while preserving relative paths.</p>
+
+          <h2>Import a folder</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Loader &gt; Open Loader</span>.</strong> You can also press <kbd>⌘</kbd><kbd>L</kbd>.</li>
+            <li><strong>Choose the source folder.</strong> Review the displayed path before starting.</li>
+            <li><strong>Select a metadata mode.</strong>
+              <ul>
+                <li><span class="ui">Skip metadata</span> — fastest; import files and structure only.</li>
+                <li><span class="ui">Quick refresh</span> — recommended for most migrations.</li>
+                <li><span class="ui">Full refresh</span> — more network work and a longer run.</li>
+              </ul>
+            </li>
+            <li><strong>Choose <span class="ui">Import</span>.</strong> Follow progress in the live log. Use <span class="ui">Stop Import</span> if necessary.</li>
+            <li><strong>Review the result.</strong> Open previous logs or the result guide when items need attention.</li>
+          </ol>
+
+          <h2>What Folder Loader preserves</h2>
+          <ul>
+            <li>The source folder’s relative hierarchy.</li>
+            <li>Existing managed targets and files on repeated imports.</li>
+            <li>An existing primary PDF rather than overwriting it.</li>
+            <li>A verified exported Paper Files relationship when a Gewu Insight manifest is present.</li>
+          </ul>
+
+          <p>Folder Loader copies into Gewu Insight’s managed storage. It does not move, rename, or delete the external source files and folders you selected.</p>
+
+          <h2>Delete an import batch</h2>
+          <p><span class="ui">Delete Import</span> is a rollback for the selected Loader batch, not a way to forget a log. Stop an active import first. The command removes database records created by that batch, eligible empty folders, its Loader reports, and managed local copies associated with the batch; eligible paths are sent to the macOS Trash. It never deletes the original external source directory.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Review the selected batch and make a backup before using Delete Import, especially if you have already reorganized or reused imported items.</div>
+
+          <div class="note"><span class="callout-title">Note</span>For an ordinary folder, Loader does not guess which files are “primary” versus “associated.” It imports the collection as supplied. Special reconstruction occurs only for a verified Gewu Insight export manifest.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#loader-maintenance">Refresh an Imported Library</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="loader-maintenance" data-group="Import and Transfer" data-title="Refresh an Imported Library" data-keywords="refresh all metadata missing identifiers DOI arXiv cooldown crossref openalex semantic scholar">
+          <p class="topic-kicker">Import and Transfer</p>
+          <h1>Refresh an Imported Library</h1>
+          <p class="lead">Loader maintenance commands fill metadata in batches after the files and folder structure are safely imported.</p>
+
+          <h2>Refresh known works</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Loader &gt; Refresh All Metadata</span>.</strong></li>
+            <li><strong>Let the queue run.</strong> Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.</li>
+            <li><strong>Review the log.</strong> Recently successful records may be skipped to avoid unnecessary requests.</li>
+          </ol>
+
+          <h2>Find missing identifiers</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Loader &gt; Find All Missing Identifiers</span>.</strong></li>
+            <li><strong>Wait for supported services.</strong> The app checks active Library and Space PDFs using Crossref, OpenAlex, and Semantic Scholar where available.</li>
+            <li><strong>Review uncertain matches.</strong> Refresh or recover DOI evidence as needed, and edit an incorrect arXiv identifier inline before downloading versions.</li>
+          </ol>
+
+          <p>Verified “not found” checks and transient failures use cooldowns so a repeated run does not immediately send the same requests. Bulk missing-identifier work does not use Google Scholar.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="desktop-copy" data-group="Import and Transfer" data-title="Make a Portable Desktop Copy" data-keywords="make copy desktop export alias real files manifest associated portable folder">
+          <p class="topic-kicker">Import and Transfer</p>
+          <h1>Make a Portable Desktop Copy</h1>
+          <p class="lead"><span class="ui">Make Copy Desktop</span> creates a self-contained copy for transfer, inspection, or re-import.</p>
+
+          <h2>Create a copy</h2>
+          <ol class="steps">
+            <li><strong>Control-click the non-root Library folder you want to export.</strong></li>
+            <li><strong>Choose <span class="ui">Make Copy Desktop</span>.</strong></li>
+            <li><strong>Wait for the completion message.</strong> Open the resulting Desktop folder in Finder.</li>
+            <li><strong>Confirm representative files.</strong> Check a paper with versions or attachments as well as a normal folder.</li>
+          </ol>
+
+          <h2>What is included</h2>
+          <p>The export replaces managed aliases with real files, includes relevant Associated Files, and writes a verified manifest describing paper-file relationships. This lets Folder Loader restore the bundle on another installation without guessing from filenames.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Do not edit or discard the export manifest before migration. Without it, Loader correctly treats the files as an ordinary folder and does not infer hidden associations.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#folder-loader">Use Folder Loader</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="backup-migrate" data-group="Import and Transfer" data-title="Back Up or Move to Another Mac" data-keywords="backup migration collaborator database sqlite data app update restore">
+          <p class="topic-kicker">Import and Transfer</p>
+          <h1>Back Up or Move to Another Mac</h1>
+          <p class="lead">A reliable transfer preserves both the SQLite database and the managed file roots. The app bundle alone is not your library.</p>
+
+          <h2>Create a full backup</h2>
+          <ol class="steps">
+            <li><strong>Quit Gewu Insight.</strong> Wait until background refresh or download work has stopped.</li>
+            <li><strong>Copy the complete project directory.</strong> This is the safest recovery unit because it keeps <code>data</code>, <code>reports</code>, <code>config</code>, the app source, and managed paths together.</li>
+            <li><strong>Preserve directory names and permissions.</strong> Do not separate SQLite from the managed file roots it describes.</li>
+            <li><strong>Store the backup separately.</strong> Use a second disk or a versioned backup location.</li>
+          </ol>
+
+          <h2>Back Up and Upgrade</h2>
+          <ol class="steps">
+            <li><strong>Quit the current version and make a full backup.</strong> Preserve SQLite and every managed file root together.</li>
+            <li><strong>Install or build the newer application.</strong> A normal software upgrade does not overwrite the existing <code>data</code> directory.</li>
+            <li><strong>Start the new version once.</strong> Required database schema changes run automatically against the existing SQLite database.</li>
+            <li><strong>Verify before deleting the backup.</strong> Open a current PDF, an older Paper Files version, an attachment, and a My Publications entry.</li>
+          </ol>
+
+          <div class="note"><span class="callout-title">Note</span>Schema migration updates database structure; it is not a reason to rebuild the database or re-import the Library. Keep the pre-upgrade backup until the new version has been checked.</div>
+
+          <h2>Move to another Mac</h2>
+          <ol class="steps">
+            <li><strong>Install or update Gewu Insight on the destination Mac.</strong></li>
+            <li><strong>Keep the destination app closed.</strong></li>
+            <li><strong>Restore the matching database and managed file roots together.</strong> Do not mix a new database with an unrelated old Associated Files tree.</li>
+            <li><strong>Start the app and test representative works.</strong> Open a paper, an older version, and an attachment; verify My Publications and one monitor.</li>
+          </ol>
+
+          <h2>Transfer only part of a Library</h2>
+          <p>Use <span class="ui">Make Copy Desktop</span> on the source Mac, move the complete exported folder, then use Folder Loader on the destination Mac. Keep its verified manifest intact.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Never migrate by copying only <code>paper_monitor.sqlite</code> or only the visible Library folder. Either choice leaves half of the managed state behind.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#storage-reference">Storage Reference</a><a href="#troubleshooting">Troubleshooting</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="my-publications" data-group="Publications and Monitors" data-title="My Publications" data-keywords="Google Scholar URL name affiliation profile metrics author role export latex overleaf word h index">
+          <p class="topic-kicker">Publications and Monitors</p>
+          <h1>Use My Publications</h1>
+          <p class="lead">My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.</p>
+
+          <h2>Choose your profile</h2>
+          <ol class="steps">
+            <li><strong>Enter a name, optional affiliations, or an exact Google Scholar profile URL.</strong> For a name search, use <code>Name; affiliation A; affiliation B</code>.</li>
+            <li><strong>Choose <span class="ui">Find by Name</span>.</strong> Review candidate profiles carefully.</li>
+            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile; use the remove control to forget it.</li>
+          </ol>
+
+          <h2>Add and update publications</h2>
+          <ul>
+            <li>Use the identifier/title field and <span class="ui">Add</span> to add a DOI, arXiv record, supported identifier, or title.</li>
+            <li>Choose <span class="ui">Refresh Metrics</span> to update citation services and PubMed data.</li>
+            <li>Use <span class="ui">Co-1st</span>, <span class="ui">Co-corr.</span>, and <span class="ui">Rev.</span> in Paper Details to mark co-first authorship, corresponding authorship, and review/perspective papers. Leave Co-1st unchecked for a solo first-author paper. These manual roles are preserved during metric refresh.</li>
+            <li>Use the star to highlight a paper. Star state is independent from citation refresh and export inclusion.</li>
+            <li>Drag rows into a manual order when a curated sequence matters more than date or citation sorting.</li>
+            <li>Choose <span class="ui">Comments</span> to build or open a citation-comments report from citing-paper metadata. This is not a personal note field.</li>
+            <li>Use <span class="ui">Hide</span> or <span class="ui">Show</span> in the context menu to control export inclusion. Use <span class="ui">Open in Finder</span> or <span class="ui">Delete</span> for the corresponding local action.</li>
+          </ul>
+
+          <h2>Work with files</h2>
+          <p>My Publications uses the same Paper Details and Paper Files model as Library. A publication can keep a current PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
+
+          <h2>Read the summary</h2>
+          <p>The lower summary includes publication counts, identifier coverage, h-index and i10 information, journal distribution, merged citation maxima, and major-paper role counts. Select a role statistic to filter the table where supported.</p>
+
+          <h2>Export a list</h2>
+          <p>Choose <span class="ui">Export List</span>, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="journal-monitor" data-group="Publications and Monitors" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image">
+          <p class="topic-kicker">Publications and Monitors</p>
+          <h1>Use Journal Monitor</h1>
+          <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
+
+          <h2>Refresh a date</h2>
+          <ol class="steps">
+            <li><strong>Select a day in the calendar.</strong> Small numbers below a day show stored result counts.</li>
+            <li><strong>Choose <span class="ui">Refresh</span>.</strong> The app requests all configured journal sources for that date.</li>
+            <li><strong>Use <span class="ui">Refresh This Journal</span> when only the active journal needs another attempt.</strong> This avoids re-requesting journals that are already complete.</li>
+            <li><strong>Choose <span class="ui">arXiv</span> separately if needed.</strong> This keeps journal and preprint work explicit.</li>
+            <li><strong>Watch the bottom status area.</strong> It reports the current source and completion without changing the page height.</li>
+          </ol>
+
+          <h2>Manage monitored journals</h2>
+          <p>Open <span class="ui">Journal Settings</span> to add or manage a journal by name, ISSN, or known publication history. When an ISSN is missing, the app can look up a matching journal record before saving it. Review the match rather than relying on a similar title alone.</p>
+
+          <h2>Daily scheduled updates</h2>
+          <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>
+
+          <h2>Filter and inspect</h2>
+          <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
+
+          <h2>Act on a result</h2>
+          <ul>
+            <li><span class="ui">Open Website</span> opens the publisher or best known record in the external browser.</li>
+            <li><span class="ui">Add to Library</span> creates a managed reference; after that, <span class="ui">Show in Library</span> returns to it.</li>
+            <li><span class="ui">Download</span> retrieves the paper file. <span class="ui">PDF</span> opens an existing local PDF in Preview, and <span class="ui">Delete PDF</span> removes that managed download and resets its status.</li>
+            <li>When a reading note exists, <span class="ui">Note</span> opens it in the right-side drawer. The list compresses but keeps its own scroll position. <span class="ui">Delete Note</span> removes the note and resets analysis status.</li>
+          </ul>
+
+          <p>Per-paper status text and the bottom progress area make completed downloads and background work visible, which helps avoid repeating the same action.</p>
+
+          <div class="note"><span class="callout-title">Note</span>“No matching papers” and “source fetch failed” are different outcomes. Check the source status before concluding that a date is empty.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#subject-monitor">Subject Monitor</a><a href="#network-access">Publisher and Network Access</a><a href="#import-files">Add Papers and Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="subject-monitor" data-group="Publications and Monitors" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar">
+          <p class="topic-kicker">Publications and Monitors</p>
+          <h1>Use Subject Monitor</h1>
+          <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
+
+          <h2>Create a subject</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Add Subject</span>.</strong></li>
+            <li><strong>Enter a clear name and discovery keywords.</strong> Describe the field broadly enough to find variants, but avoid unrelated general terms.</li>
+            <li><strong>Use <span class="ui">Copy Suggested Prompt</span> if you want Codex-assisted wording.</strong> Review the prompt before using it.</li>
+            <li><strong>Save and arrange the subject.</strong> Subjects can be edited, deleted, and reordered.</li>
+          </ol>
+
+          <p>Keywords use case-insensitive literal matching. Enter the words or phrases you expect to appear; they are not regular expressions and are not silently expanded into unrelated concepts.</p>
+
+          <h2>Refresh subjects</h2>
+          <ol class="steps">
+            <li><strong>Select a calendar date.</strong> Selecting a date only loads the result already stored for that day; it does not start a network request.</li>
+            <li><strong>Choose <span class="ui">Refresh</span>.</strong> The command refreshes every configured subject for the currently selected date. Enable the arXiv option when desired.</li>
+            <li><strong>Read source status.</strong> A source can be complete, partial, empty, or failed. Source-level retries are managed by the background scheduler.</li>
+            <li><strong>Cancel if necessary.</strong> Completed results remain distinguishable from unfinished work.</li>
+          </ol>
+
+          <h2>Refresh one subject</h2>
+          <p>Control-click a subject and choose <span class="ui">Refresh This Subject</span> when only that topic needs another pass. Use the main <span class="ui">Refresh</span> command when every configured subject should run for the selected date.</p>
+
+          <p>The current candidate layer can draw from local arXiv data, local APS RSS data, OpenAlex, Crossref, Semantic Scholar, and PubMed. It does not depend on a fixed number of feeds. Results still pass topic filtering and deduplication before display.</p>
+
+          <h2>Inspect and keep a result</h2>
+          <p>Select a paper to read its title, authors, abstract, source, date, identifier, topic score, and matched subject terms. Use <span class="ui">Open Website</span>, <span class="ui">Download</span>, <span class="ui">PDF</span>, and the note controls in the same way as Journal Monitor. Choose <span class="ui">Add to Library</span> to create a managed reference, or <span class="ui">Show in Library</span> when one already exists.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Subject Monitor rejects Zenodo records during ingestion and when cached results are displayed. There is no Zenodo show/hide option.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="author-monitor" data-group="Publications and Monitors" data-title="Author Monitor" data-keywords="researcher profile Google Scholar ResearchGate OpenAlex Semantic avatar photo homepage new unread baseline conference">
+          <p class="topic-kicker">Publications and Monitors</p>
+          <h1>Use Author Monitor</h1>
+          <p class="lead">Author Monitor follows researchers and separates a first-import baseline from newly discovered work.</p>
+
+          <h2>Add an author</h2>
+          <ol class="steps">
+            <li><strong>Choose the add-author control.</strong></li>
+            <li><strong>Enter a name and optional affiliations, or an exact profile URL.</strong> Google Scholar and ResearchGate profile URLs are supported where the profile can be resolved.</li>
+            <li><strong>Confirm the correct person.</strong> The initial result set becomes the baseline rather than a batch of unread “new” papers.</li>
+          </ol>
+
+          <h2>Review updates</h2>
+          <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.</p>
+
+          <h2>Update citation profiles</h2>
+          <p><span class="ui">Update All Citations</span> is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.</p>
+
+          <h2>Manage the profile image</h2>
+          <p>Control-click an author and choose <span class="ui">Edit Homepage</span> or <span class="ui">Change Photo</span>. A downloaded Google Scholar avatar is cached locally so the app does not fetch it on every launch. A manual photo takes precedence.</p>
+
+          <h2>Discovery entries and managed papers</h2>
+          <p>An Author Monitor result can remain discovery-only. It does not need a Gewu Key or Files bundle until you add it to Library or My Publications, or explicitly attach a local file.</p>
+
+          <h2>Remove a monitored author</h2>
+          <p>Deleting an author from Author Monitor removes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.</p>
+
+          <div class="note"><span class="callout-title">Note</span>Google Scholar requests are paced and protected by a cooldown. Repeated manual refreshes during a block do not improve the result.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#my-publications">My Publications</a><a href="#network-access">Publisher and Network Access</a><a href="#privacy">Local Data and Privacy</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Citation Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Configure Citation Settings</h1>
+          <p class="lead">Built-in sources work without setup. Optional credentials improve access or coverage for supported services.</p>
+
+          <h2>Open settings</h2>
+          <p>Choose <span class="ui">Setting &gt; Citation Settings</span>, or press <kbd>⌘</kbd><kbd>,</kbd>.</p>
+
+          <h2>Available services</h2>
+          <table class="plain-table">
+            <tr><th>Service</th><th>Configuration</th></tr>
+            <tr><td>Crossref, arXiv, DataCite</td><td>Built in; no key field is required.</td></tr>
+            <tr><td>OpenAlex</td><td>Optional OpenAlex API key.</td></tr>
+            <tr><td>Semantic Scholar</td><td>Optional API key. Anonymous access remains available.</td></tr>
+            <tr><td>NASA ADS</td><td>Optional API token for astronomy and physics coverage.</td></tr>
+          </table>
+
+          <h2>Save a credential</h2>
+          <ol class="steps">
+            <li><strong>Paste the credential into its service field.</strong></li>
+            <li><strong>Save the settings.</strong></li>
+            <li><strong>Run a small metadata refresh.</strong> Confirm the service appears in the citation panel.</li>
+          </ol>
+
+          <p>Semantic Scholar sends its key in the official <code>x-api-key</code> header. Requests share a low-rate queue and use exponential backoff after rate limits or temporary failures.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Credentials are local-only: store them in local SQLite or approved environment variables. Do not place keys in source files, logs, exported reports, tests, or Git.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#privacy">Local Data and Privacy</a><a href="#loader-maintenance">Refresh an Imported Library</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Set Naming and PDF Rename Rules</h1>
+          <p class="lead">Display naming and physical PDF renaming are separate choices. Review metadata before applying either one in bulk.</p>
+
+          <h2>Choose the Library naming rule</h2>
+          <p>Choose <span class="ui">Setting &gt; Naming Rule &gt; Use Title</span> or <span class="ui">Use Citation</span>. This changes the preferred managed display/name rule where applicable.</p>
+
+          <h2>Configure PDF renaming</h2>
+          <p>Open <span class="ui">Setting &gt; PDF Rename Settings</span>. A template can use tokens such as:</p>
+          <ul>
+            <li><code>{author}</code> or <code>{authors}</code></li>
+            <li><code>{year}</code></li>
+            <li><code>{title}</code></li>
+            <li><code>{journal}</code></li>
+            <li><code>{doi}</code></li>
+          </ul>
+
+          <h2>Rename one item from metadata</h2>
+          <ol class="steps">
+            <li><strong>Confirm its DOI, title, author, journal, and year.</strong></li>
+            <li><strong>Control-click the item.</strong></li>
+            <li><strong>Choose <span class="ui">Auto rename from Metadata</span>.</strong></li>
+            <li><strong>Verify the result in the Library and Finder.</strong></li>
+          </ol>
+
+          <div class="note"><span class="callout-title">Note</span>Changing a Paper Files role or choosing <span class="ui">Use</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="storage-model" data-group="Settings and Safety" data-title="How Gewu Insight Stores Files" data-keywords="SQLite source truth associated files canonical current physical path bundle mirror alias Gewu key">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Understand How Gewu Insight Stores Files</h1>
+          <p class="lead">The visible Library stays simple: its main tree contains the preferred current file. Other versions and attachments live in a mirrored Associated Files area.</p>
+
+          <h2>One work, several representations</h2>
+          <p>Each managed paper has one database identity and a stable <span class="ui">Gewu Key</span>. DOI and arXiv are external identifiers attached to that identity; neither is used as the sole storage identity.</p>
+
+          <h2>Where the files go</h2>
+          <ul>
+            <li>The best current PDF stays in the visible Library, Space, or My Publications tree.</li>
+            <li>Older PDF versions go to a mirrored <code>Versions</code> area.</li>
+            <li>Supporting information goes to <code>Supplements</code>.</li>
+            <li>Images, notes, presentations, data, code, and other attachments go to <code>Files</code>.</li>
+          </ul>
+
+          <p>The associated bundle mirrors the paper’s managed path under <code>data/Associated Files</code>. When you move the paper in the UI, Gewu Insight moves the associated bundle and refreshes live paths.</p>
+
+          <h2>Why the UI and Finder look different</h2>
+          <p>The UI presents a paper as one item with Paper Files inside it. Finder shows the current file in the normal tree and the related bundle in Associated Files. This keeps ordinary folder browsing uncluttered while preserving every version.</p>
+
+          <h2>Copies and aliases</h2>
+          <p>When the same work appears in more than one Library folder, those locations can share one database record and one canonical managed file. Finder aliases may represent secondary locations. <span class="ui">Make Copy Desktop</span> resolves aliases into real files for a portable export.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#storage-reference">Storage Reference</a><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#paper-files">Understand Paper Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="privacy" data-group="Settings and Safety" data-title="Local Data and Privacy" data-keywords="local server database secrets API keys logs JSON export privacy localhost">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Know What Stays Local</h1>
+          <p class="lead">Gewu Insight runs a local interface and keeps its authoritative library database on your Mac. Network requests occur only for the features that need external metadata, pages, profiles, or files.</p>
+
+          <h2>Local components</h2>
+          <ul>
+            <li>The UI server listens on the local loopback address, normally <code>127.0.0.1:8765</code>.</li>
+            <li>SQLite stores papers, identities, relationships, settings, and operational state.</li>
+            <li>Managed PDFs, attachments, photos, and generated reports stay in local project directories.</li>
+            <li>JSON files are exports or diagnostics; they are not the authoritative database.</li>
+          </ul>
+
+          <h2>External requests</h2>
+          <p>Metadata refresh, citation counts, journal/subject/author discovery, profile images, website opening, and downloads can contact their named services. The app paces services that require strict request limits.</p>
+
+          <h2>Protect credentials</h2>
+          <p>Optional service credentials belong only in Citation Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="keyboard" data-group="Reference" data-title="Keyboard Shortcuts" data-keywords="command keys arrows quick look view loader preferences help">
+          <p class="topic-kicker">Reference</p>
+          <h1>Keyboard Shortcuts</h1>
+          <p class="lead">Use standard macOS editing commands throughout the app. The shortcuts below are specific to navigation and Gewu Insight commands.</p>
+
+          <table class="plain-table">
+            <tr><th>Shortcut</th><th>Action</th></tr>
+            <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move through the focused Library or Paper Files list.</td></tr>
+            <tr><td><kbd>→</kbd></td><td>Enter a folder or move from a selected paper into Paper Files.</td></tr>
+            <tr><td><kbd>←</kbd></td><td>Leave Paper Files for the selected paper, or return to a parent folder.</td></tr>
+            <tr><td><kbd>Space</kbd></td><td>Open or close Quick Look for the selected Paper Files item.</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Dismiss an active transient control or return focus where supported.</td></tr>
+            <tr><td><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></td><td>Toggle List View and Table View.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>L</kbd></td><td>Open Folder Loader.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>,</kbd></td><td>Open Citation Settings.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>W</kbd></td><td>Close the current window.</td></tr>
+          </table>
+
+          <h2>Paper Files mouse behavior</h2>
+          <p>Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="network-access" data-group="Reference" data-title="Publisher and Network Access" data-keywords="blocked VPN Nature Science APS rate limit figures browser download anti bot cooldown">
+          <p class="topic-kicker">Reference</p>
+          <h1>Handle Publisher and Network Access</h1>
+          <p class="lead">Publishers can rate-limit shared VPN addresses or automated-looking traffic. Gewu Insight reduces overlap and request rate, but it cannot remove a publisher block.</p>
+
+          <h2>If a publisher page is blocked</h2>
+          <ol class="steps">
+            <li><strong>Stop repeated refreshes.</strong> Additional requests can extend a temporary block.</li>
+            <li><strong>Try your direct connection.</strong> If the page works with VPN off, the VPN exit IP is likely the blocked client.</li>
+            <li><strong>Use <span class="ui">Open Website</span> or an external browser.</strong> Complete any normal institutional login or publisher interaction yourself.</li>
+            <li><strong>Download only when authorized.</strong> Add a legitimately obtained PDF with <span class="ui">Add File</span>.</li>
+          </ol>
+
+          <h2>Why figures may arrive later</h2>
+          <p>Figure and article-page retrieval is queued behind discovery work and uses caching. This reduces simultaneous RSS, page, and image requests to the same publisher. A paper can appear before its representative image.</p>
+
+          <h2>Service rate limits</h2>
+          <p>Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, cooldowns, or exponential backoff. Let the bottom status area settle before starting the same action again.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access control. Use your authorized browser session or attach a file you obtained legitimately.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#download-sync">Download and Sync Versions</a><a href="#troubleshooting">Troubleshooting</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup and Web Cache" data-keywords="launch local server port 8765 could not start log clear web cache stale interface overlay">
+          <p class="topic-kicker">Reference</p>
+          <h1>Understand Startup and Web Cache</h1>
+          <p class="lead">The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.</p>
+
+          <h2>Normal startup</h2>
+          <p>The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.</p>
+
+          <h2>If the app cannot start</h2>
+          <ol class="steps">
+            <li><strong>Quit any old Gewu Insight window.</strong> An earlier local server may still own port 8765.</li>
+            <li><strong>Open the launcher log.</strong> Check <code>logs/paper_monitor_launcher.log</code> for the first error.</li>
+            <li><strong>Start the app again once.</strong> Avoid opening several copies while the first is still preparing.</li>
+            <li><strong>Preserve the database.</strong> Do not delete SQLite as a startup fix.</li>
+          </ol>
+
+          <h2>Clear a stale interface</h2>
+          <p>Choose <span class="ui">Setting &gt; Clear Web Cache</span> if the running window visibly uses old HTML, CSS, or JavaScript after an app update. This clears browser cache, not the SQLite database or managed PDFs.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#troubleshooting">Troubleshooting</a><a href="#privacy">Local Data and Privacy</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="troubleshooting" data-group="Reference" data-title="Troubleshooting" data-keywords="problems missing file duplicate version download loader monitor empty block repair">
+          <p class="topic-kicker">Reference</p>
+          <h1>Troubleshoot Common Problems</h1>
+          <p class="lead">Start with the visible status and the selected work. Avoid broad repair actions until you know whether the problem is network, metadata, database state, or a local path.</p>
+
+          <h2>A PDF cannot be found after a move</h2>
+          <ol>
+            <li>Reselect the paper and try <span class="ui">Show in Finder</span>.</li>
+            <li>If the move happened in Gewu Insight, close and reopen the item to refresh the view.</li>
+            <li>If the file was moved manually in Finder, return it if possible, then organize it through the app.</li>
+            <li>Check Recycle before importing another copy.</li>
+          </ol>
+
+          <h2>The wrong PDF is current</h2>
+          <ol>
+            <li>Open Paper Files and verify every file type.</li>
+            <li>Correct a mislabeled Published Version, Accepted Manuscript, Preprint, or annotated copy.</li>
+            <li>Choose <span class="ui">Use</span> for the desired PDF, or return to <span class="ui">Use Automatic Selection</span>.</li>
+          </ol>
+
+          <h2>A duplicate appears after download</h2>
+          <p>Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. If two rows are truly identical, keep the correct current file, then delete the non-current duplicate.</p>
+
+          <h2>A monitor shows no papers</h2>
+          <p>Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.</p>
+
+          <h2>Folder Loader looks incomplete</h2>
+          <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
+
+          <h2>A current file cannot be deleted</h2>
+          <p>This is expected. Choose another version with <span class="ui">Use</span> first, or enable automatic selection, then delete the former non-current file.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#startup">Startup and Web Cache</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="storage-reference" data-group="Reference" data-title="Storage Reference" data-keywords="paths data library spaces my publications associated files pdf sqlite reports JSON logs">
+          <p class="topic-kicker">Reference</p>
+          <h1>Storage Reference</h1>
+          <p class="lead">These paths describe the managed project layout. They are useful for backup and diagnosis, not for routine manual reorganization.</p>
+
+          <ul class="path-list">
+            <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, and operational state.</span></li>
+            <li><code>data/Library</code><span>Visible main Library root and preferred current files.</span></li>
+            <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
+            <li><code>data/My Publications</code><span>Managed local files for My Publications.</span></li>
+            <li><code>data/Associated Files</code><span>Mirrored bundles for versions, supplements, and attachments.</span></li>
+            <li><code>data/pdfs</code><span>Legacy managed PDF location retained for compatibility where needed.</span></li>
+            <li><code>reports</code><span>Generated reading notes and reports. These are artifacts, not the database.</span></li>
+            <li><code>logs/paper_monitor_launcher.log</code><span>macOS launcher diagnostics when the local UI cannot start.</span></li>
+          </ul>
+
+          <h2>Associated Files layout</h2>
+          <p>An associated bundle follows the managed scope and path, then a work-specific bundle. Its children separate <code>Versions</code>, <code>Supplements</code>, and <code>Files</code>. The exact physical name can change as the paper moves; the Gewu Key remains stable.</p>
+
+          <h2>Database and exports</h2>
+          <p>SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are exports, diagnostics, or reading artifacts. Editing one of them does not edit the Library record.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Do not delete, rebuild, or “clean” the database because a generated JSON file looks stale. Diagnose the selected record and local path first.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#storage-model">How Gewu Insight Stores Files</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#privacy">Local Data and Privacy</a></div></div>
+        </article>
+
+        <nav class="topic-pager" aria-label="Previous and next topics">
+          <a class="pager-link previous" href="#"><span class="pager-label">Previous</span><span class="pager-title"></span></a>
+          <a class="pager-link next" href="#"><span class="pager-label">Next</span><span class="pager-title"></span></a>
+        </nav>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const links = [...document.querySelectorAll('.topic-link')];
+      const topics = [...document.querySelectorAll('.help-topic')];
+      const topicById = new Map(topics.map(topic => [topic.id, topic]));
+      const search = document.getElementById('guideSearch');
+      const clearSearch = document.querySelector('.clear-search');
+      const noResults = document.querySelector('.no-results');
+      const previous = document.querySelector('.pager-link.previous');
+      const next = document.querySelector('.pager-link.next');
+      const toolbarGroup = document.getElementById('toolbar-group');
+      const toolbarTitle = document.getElementById('toolbar-title');
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      function normalized(value) {
+        return (value || '').toLocaleLowerCase().normalize('NFKD').replace(/\s+/g, ' ').trim();
+      }
+
+      function topicText(topic) {
+        return normalized([
+          topic.dataset.title,
+          topic.dataset.group,
+          topic.dataset.keywords,
+          topic.textContent
+        ].join(' '));
+      }
+
+      function currentId() {
+        try {
+          const id = decodeURIComponent(location.hash.replace(/^#/, ''));
+          return topicById.has(id) ? id : 'welcome';
+        } catch (_) {
+          return 'welcome';
+        }
+      }
+
+      function setPager(anchor, topic, direction) {
+        if (!topic) {
+          anchor.hidden = true;
+          return;
+        }
+        anchor.hidden = false;
+        anchor.href = `#${topic.id}`;
+        anchor.querySelector('.pager-label').textContent = direction;
+        anchor.querySelector('.pager-title').textContent = topic.dataset.title;
+      }
+
+      function showTopic(id, options = {}) {
+        const topic = topicById.get(id) || topicById.get('welcome');
+        topics.forEach(item => item.classList.toggle('active', item === topic));
+        links.forEach(link => {
+          const isActive = link.dataset.topic === topic.id;
+          link.classList.toggle('active', isActive);
+          if (isActive) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        });
+        toolbarGroup.textContent = topic.dataset.group;
+        toolbarTitle.textContent = topic.dataset.title;
+        document.title = `${topic.dataset.title} — Gewu Insight User Guide`;
+
+        const index = topics.indexOf(topic);
+        setPager(previous, topics[index - 1], 'Previous');
+        setPager(next, topics[index + 1], 'Next');
+
+        const activeLink = links.find(link => link.dataset.topic === topic.id);
+        if (activeLink) activeLink.scrollIntoView({ block: 'nearest' });
+        if (!options.keepScroll) {
+          window.scrollTo({
+            top: 0,
+            behavior: options.instant || prefersReducedMotion ? 'auto' : 'smooth'
+          });
+        }
+      }
+
+      function navigate(id) {
+        const targetLink = links.find(link => link.dataset.topic === id);
+        if (targetLink?.hidden) {
+          search.value = '';
+          runSearch();
+        }
+        if (location.hash === `#${id}`) showTopic(id);
+        else location.hash = id;
+      }
+
+      links.forEach(link => link.addEventListener('click', () => navigate(link.dataset.topic)));
+      document.querySelectorAll('.see-also a').forEach(link => {
+        link.addEventListener('click', event => {
+          const id = decodeURIComponent(link.hash.replace(/^#/, ''));
+          if (!topicById.has(id)) return;
+          event.preventDefault();
+          navigate(id);
+        });
+      });
+
+      function runSearch() {
+        const query = normalized(search.value.trim());
+        const terms = query ? query.split(' ').filter(Boolean) : [];
+        let visibleCount = 0;
+        links.forEach(link => {
+          const topic = topicById.get(link.dataset.topic);
+          const searchable = topicText(topic);
+          const matches = !terms.length || terms.every(term => searchable.includes(term));
+          link.hidden = !matches;
+          if (matches) visibleCount += 1;
+        });
+        document.querySelectorAll('.nav-group').forEach(group => {
+          group.hidden = ![...group.querySelectorAll('.topic-link')].some(link => !link.hidden);
+        });
+        noResults.style.display = visibleCount ? 'none' : 'block';
+        clearSearch.style.display = query ? 'block' : 'none';
+      }
+
+      search.addEventListener('input', runSearch);
+      clearSearch.addEventListener('click', () => {
+        search.value = '';
+        runSearch();
+        search.focus();
+      });
+
+      window.addEventListener('hashchange', () => showTopic(currentId()));
+      document.getElementById('print-topic').addEventListener('click', () => window.print());
+      document.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+          event.preventDefault();
+          search.focus();
+          search.select();
+        }
+        if (event.key === 'Escape' && document.activeElement === search && search.value) {
+          search.value = '';
+          runSearch();
+        }
+      });
+
+      showTopic(currentId(), { instant: true, keepScroll: true });
+      runSearch();
+    })();
+  </script>
+</body>
+</html>
