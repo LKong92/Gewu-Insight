@@ -160,7 +160,7 @@
     .toolbar-button:hover { background: var(--blue-soft); text-decoration: none; }
 
     .article-wrap { width: min(calc(100% - 72px), var(--content-width)); margin: 0 auto; padding: 54px 0 76px; }
-    .help-topic { display: none; }
+    .help-topic { display: none; scroll-margin-top: 64px; }
     .help-topic.active { display: block; }
     .topic-kicker { margin: 0 0 8px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .065em; text-transform: uppercase; }
     h1 { margin: 0; font-size: 34px; line-height: 1.16; letter-spacing: -.025em; }
@@ -250,6 +250,103 @@
     .path-list code { align-self: start; overflow-wrap: anywhere; }
     .path-list span { color: #566172; }
 
+    .architecture-map {
+      margin: 24px 0 30px;
+      padding: 18px;
+      border: 1px solid #dce2e9;
+      border-radius: 11px;
+      background: #f8fafc;
+    }
+    .architecture-map figcaption {
+      margin-top: 13px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .architecture-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+    .architecture-row.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .architecture-row.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .architecture-node {
+      min-width: 0;
+      padding: 13px 14px;
+      border: 1px solid #d9e0e8;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .architecture-node.core {
+      border-color: #9fc3e8;
+      background: #eaf4ff;
+    }
+    .architecture-node strong { display: block; margin-bottom: 4px; color: #26364a; font-size: 13px; }
+    .architecture-node span { display: block; color: #5d6878; font-size: 12px; line-height: 1.45; }
+    .architecture-arrow {
+      margin: 8px 0;
+      color: #738195;
+      font-size: 17px;
+      line-height: 1;
+      text-align: center;
+    }
+    .architecture-equation {
+      margin: 20px 0;
+      padding: 13px 16px;
+      border-left: 3px solid #5b94cf;
+      background: #f4f8fc;
+      color: #334155;
+      font-weight: 650;
+    }
+    .credo {
+      margin: 24px 0 30px;
+      padding: 20px 22px;
+      border-top: 1px solid #ccd9e7;
+      border-bottom: 1px solid #ccd9e7;
+      color: #24415f;
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 1.42;
+      letter-spacing: -.012em;
+      text-align: center;
+    }
+    .credo small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+    .name-term {
+      font-size: 21px !important;
+      letter-spacing: .025em;
+    }
+    .sequence-label {
+      display: inline-block;
+      margin-bottom: 4px;
+      color: var(--blue);
+      font-size: 10px;
+      font-weight: 750;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .invariant-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0 26px;
+    }
+    .invariant-list > div {
+      padding: 12px 14px;
+      border: 1px solid #e0e4e9;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .invariant-list strong { display: block; margin-bottom: 3px; font-size: 13px; }
+    .invariant-list span { display: block; color: var(--muted); font-size: 13px; }
+
     .see-also { margin-top: 42px; padding-top: 21px; border-top: 1px solid var(--line); }
     .see-also h2 { margin: 0 0 9px; color: var(--muted); font-size: 13px; letter-spacing: .03em; text-transform: uppercase; }
     .see-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
@@ -266,16 +363,20 @@
     .pager-link.next { margin-left: auto; text-align: right; }
     .pager-label { display: block; color: var(--quiet); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
 
+    @media (max-width: 1100px) {
+      .interface-map, .architecture-row.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
     @media (max-width: 900px) {
       :root { --sidebar-width: 226px; }
       .article-wrap { width: min(calc(100% - 42px), var(--content-width)); padding-top: 38px; }
-      .interface-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       h1 { font-size: 29px; }
       .lead { font-size: 16px; }
     }
 
     @media (max-width: 620px) {
       .interface-map { grid-template-columns: 1fr; }
+      .architecture-row, .architecture-row.two, .architecture-row.four, .invariant-list { grid-template-columns: 1fr; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -288,7 +389,7 @@
       .article-wrap { width: auto; max-width: none; padding: 0; }
       .help-topic { display: block !important; break-after: page; }
       .help-topic:last-of-type { break-after: auto; }
-      .steps > li, .note, .important, .plain-table tr, .path-list li { break-inside: avoid; }
+      .steps > li, .note, .important, .plain-table tr, .path-list li, .architecture-map, .interface-map, .credo, .invariant-list > div { break-inside: avoid; }
       a { color: inherit; }
       .see-also { display: none; }
     }
@@ -314,6 +415,16 @@
           <button class="topic-link active" data-topic="welcome" aria-current="page">Welcome</button>
           <button class="topic-link" data-topic="guided-tour">Guided Tour</button>
           <button class="topic-link" data-topic="first-session">Your First Session</button>
+        </section>
+        <section class="nav-group">
+          <h2 class="nav-heading">Understand the System</h2>
+          <button class="topic-link" data-topic="system-overview">System Architecture at a Glance</button>
+          <button class="topic-link" data-topic="persistent-paper-object">The Persistent Paper Object</button>
+          <button class="topic-link" data-topic="sqlite-core">Why SQLite Is the Core</button>
+          <button class="topic-link" data-topic="visible-research-files">Visible Research Files</button>
+          <button class="topic-link" data-topic="personal-research-workspace">The Personal Research Workspace</button>
+          <button class="topic-link" data-topic="research-loop">From Discovery to Durable Memory</button>
+          <button class="topic-link" data-topic="state-and-scope">State, Scope, and Safe Change</button>
         </section>
         <section class="nav-group">
           <h2 class="nav-heading">Library</h2>
@@ -366,20 +477,64 @@
 
     <main class="content-area">
       <header class="toolbar">
-        <div class="toolbar-path"><span id="toolbar-group">Start Here</span> › <span id="toolbar-title">Welcome</span></div>
+        <div class="toolbar-path" aria-live="polite"><span id="toolbar-group">Start Here</span> › <span id="toolbar-title">Welcome</span></div>
         <div class="toolbar-actions">
           <button class="toolbar-button" type="button" id="print-topic">Print Guide</button>
         </div>
       </header>
 
       <div class="article-wrap">
-        <article class="help-topic guide-topic active" id="welcome" data-group="Start Here" data-title="Welcome" data-keywords="overview local research reading assistant getting started">
+        <article class="help-topic guide-topic active" id="welcome" data-group="Start Here" data-title="Welcome" data-keywords="overview local research reading assistant getting started philosophy 格物 洞见 gewu insight local-first visible evidence provenance scientific memory researcher control">
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
 
+          <h2>Why this workspace exists</h2>
+          <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
+
+          <p>Gewu Insight is designed to keep those fragments connected. It treats discovery, identity, files, versions, organization, reading state, and provenance as parts of one continuing research process. The aim is not to accumulate the largest possible list. The aim is to preserve enough context that a useful paper remains understandable and usable months or years after it was first found.</p>
+
+          <h2>Why the name 格物洞见</h2>
+          <p>The name recalls the Chinese idea of <strong>格物致知</strong>: approaching things closely enough to understand their underlying order. In this practical research setting, <em>gewu</em>—the investigation of things—means continuously examining the research object, its sources, authors, versions, files, relationships, and changing state.</p>
+
+          <figure class="architecture-map" aria-label="Meaning of the name Gewu Insight">
+            <div class="architecture-row two">
+              <div class="architecture-node">
+                <strong class="name-term">格物 · Gewu</strong>
+                <span>Stay close to the research object. Keep the paper, identifiers, versions, sources, files, and relationships inspectable instead of reducing them to an untraceable card or summary.</span>
+              </div>
+              <div class="architecture-node core">
+                <strong class="name-term">洞见 · Insight</strong>
+                <span>Let understanding emerge from connected evidence, repeated reading, comparison, and the researcher's judgment. Insight is accumulated; it is not a conclusion the app claims to manufacture.</span>
+              </div>
+            </div>
+            <figcaption>The Chinese name is part of the product idea, not a decorative translation of the English name.</figcaption>
+          </figure>
+
+          <div class="credo">Keep research objects visible, evidence traceable, and insight cumulative.<small>让研究对象保持可见，让证据保持可追，让洞见能够积累。</small></div>
+
+          <h2>Five design commitments</h2>
+          <div class="invariant-list">
+            <div><strong>Local ownership</strong><span>Your live database and managed research files remain in the local project. Online services contribute evidence; they do not own the workspace.</span></div>
+            <div><strong>Visible evidence</strong><span>PDFs and attachments remain real files that Finder, Preview, and other applications can inspect.</span></div>
+            <div><strong>Continuity over time</strong><span>A preprint, later DOI, publication version, annotations, and personal contexts can accumulate around one persistent paper object.</span></div>
+            <div><strong>Explicit state and provenance</strong><span>Completed, empty, partial, failed, downloaded, imported, and retried are different states. Sources and operational outcomes should remain visible.</span></div>
+            <div><strong>Researcher control</strong><span>Automation assists discovery and maintenance, but classification, interpretation, organization, and scientific judgment remain yours.</span></div>
+          </div>
+
+          <div class="note"><span class="callout-title">Local-first does not mean offline-only</span>The durable workspace is local, while supported discovery, metadata, profile, and download features may require network access and remain subject to source, publisher, and institutional availability. Verify uncertain matches and versions; the app does not bypass access controls.</div>
+
           <h2>What this guide covers</h2>
           <p>This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.</p>
+
+          <h2>What Gewu Insight is—and is not</h2>
+          <table class="plain-table">
+            <tr><th>It is</th><th>It is not only</th></tr>
+            <tr><td>A local research workspace that connects discovery, identity, files, versions, organization, and durable state.</td><td>An RSS reader that forgets a result after it leaves the feed.</td></tr>
+            <tr><td>A visible file and resource system built around persistent paper identities.</td><td>A PDF folder whose filenames must carry every piece of meaning.</td></tr>
+            <tr><td>A personal research memory shared by Library, Spaces, publications, and monitors.</td><td>Five unrelated tools that happen to occupy the same window.</td></tr>
+            <tr><td>A system that records evidence and assists repeatable work.</td><td>A black-box ranking or summary engine that replaces scientific judgment.</td></tr>
+          </table>
 
           <h2>Five areas of the app</h2>
           <ul>
@@ -390,21 +545,54 @@
             <li><span class="ui">Author Monitor</span> — monitored researchers, profile-linked discovery, and newly found work.</li>
           </ul>
 
+          <h2>One continuous research loop</h2>
+          <figure class="architecture-map" aria-label="Research loop across the five areas of Gewu Insight">
+            <div class="architecture-row four">
+              <div class="architecture-node"><span class="sequence-label">Acquire</span><strong>Find</strong><span>Journal, Subject, and Author Monitor introduce relevant candidates.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Identify</span><strong>Recognize</strong><span>DOI, arXiv, title, authors, and source evidence are connected to a shared record.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Resolve</span><strong>Preserve</strong><span>Metadata, files, versions, roles, paths, and provenance are made explicit.</span></div>
+              <div class="architecture-node core"><span class="sequence-label">Remember</span><strong>Understand</strong><span>Library, Spaces, My Publications, reading state, and personal organization retain meaning.</span></div>
+            </div>
+            <figcaption>What you save, read, classify, and follow becomes context for the next cycle; the five areas are different views of this loop.</figcaption>
+          </figure>
+
           <div class="important">
             <span class="callout-title">Important</span>
             SQLite is the source of truth for Gewu Insight. Do not replace, rebuild, or edit the database by hand. Use the app to move, classify, or delete managed items.
           </div>
 
+          <h2>Choose a path through this guide</h2>
+          <table class="plain-table">
+            <tr><th>If you want to</th><th>Continue with</th></tr>
+            <tr><td>Start using the app now</td><td><a href="#guided-tour">Guided Tour</a>, then <a href="#first-session">Your First Session</a>.</td></tr>
+            <tr><td>Understand why the data and files are organized this way</td><td><a href="#system-overview">System Architecture at a Glance</a> and the rest of <strong>Understand the System</strong>.</td></tr>
+            <tr><td>Look up one operation</td><td>Use the topic list or press <kbd>⌘</kbd><kbd>F</kbd> to search this guide.</td></tr>
+            <tr><td>Prepare an upgrade or move to another Mac</td><td><a href="#backup-migrate">Back Up or Move to Another Mac</a> before changing the installation.</td></tr>
+          </table>
+
           <h2>Open this guide again</h2>
           <p>Choose <span class="ui">Help &gt; User Guide</span>. The guide opens in its own window and works without an internet connection.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#system-overview">System Architecture at a Glance</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="guided-tour" data-group="Start Here" data-title="Guided Tour" data-keywords="tabs panes sidebar calendar filters details status bottom layout">
+        <article class="help-topic guide-topic" id="guided-tour" data-group="Start Here" data-title="Guided Tour" data-keywords="tabs panes sidebar calendar filters details status bottom layout visual grammar context collection evidence action discovery memory">
           <p class="topic-kicker">Start Here</p>
           <h1>Take a Guided Tour</h1>
-          <p class="lead">The app keeps navigation on the left, the active collection in the center, and details or actions on the right.</p>
+          <p class="lead">The top chooses a work mode; the panes move from context on the left to the active object and its evidence; the bottom preserves navigation and progress without reshaping the workspace.</p>
+
+          <h2>Read the interface as a sentence</h2>
+          <p>Gewu Insight uses a consistent left-to-right grammar. The exact number of panes changes with the task, but their meaning remains stable: choose a research context, narrow it to an object, inspect its evidence, then act. This lets a dense workspace remain predictable without hiding the underlying files and relationships.</p>
+
+          <figure class="architecture-map" aria-label="Visual grammar of the Gewu Insight interface">
+            <div class="architecture-row four">
+              <div class="architecture-node"><span class="sequence-label">Top</span><strong>Choose a mode</strong><span>Library, My Publications, or one of the three discovery monitors.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Left</span><strong>Set the context</strong><span>A root, folder, date, journal, subject, author, or filter defines the working scope.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Center</span><strong>Select the object</strong><span>Browse folders, paper lists, search results, or the resources belonging to one paper.</span></div>
+              <div class="architecture-node core"><span class="sequence-label">Right</span><strong>Inspect and act</strong><span>Read metadata and evidence; open, download, classify, refresh, export, or reorganize.</span></div>
+            </div>
+            <figcaption>The bottom edge is reserved for progress, breadcrumbs, and view controls so background work does not repeatedly resize the main content.</figcaption>
+          </figure>
 
           <h2>The Library window</h2>
           <div class="interface-map" aria-label="Library interface map">
@@ -415,8 +603,39 @@
             <div><strong>5. Details</strong><span>Metadata, identifiers, actions, citations, and folder membership.</span></div>
           </div>
 
+          <h2>Follow selection from broad to specific</h2>
+          <p>A selected item does not always mean “open this file.” In a folder column, selection establishes the next level of context. In the item column, it identifies the active paper or standalone file. In Paper Files, it identifies one resource inside the active paper bundle. Paper Details then describes the shared work rather than merely repeating the selected filename.</p>
+
+          <table class="plain-table">
+            <tr><th>Selection</th><th>What becomes active</th><th>What remains shared</th></tr>
+            <tr><td>A Library folder</td><td>Its child folders and items.</td><td>The papers keep their identities, resources, and other placements.</td></tr>
+            <tr><td>A paper in the item column</td><td>Its Paper Files bundle and Paper Details.</td><td>The same work can still belong to other folders, monitors, or My Publications.</td></tr>
+            <tr><td>A resource in Paper Files</td><td>That version or attachment for preview, classification, or file action.</td><td>The parent paper remains the active scholarly object.</td></tr>
+            <tr><td>A Monitor result</td><td>Its discovery evidence, report, and available actions.</td><td>Adding it to Library reuses the cataloged paper record when identity has been resolved.</td></tr>
+          </table>
+
           <h2>Tabs across the top</h2>
           <p>Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.</p>
+
+          <table class="plain-table">
+            <tr><th>Area</th><th>Primary question</th><th>Typical next action</th></tr>
+            <tr><td><span class="ui">Library</span></td><td>What have I chosen to keep, and how is it organized?</td><td>Read, classify files, move, copy, attach, or recover.</td></tr>
+            <tr><td><span class="ui">My Publications</span></td><td>Which works are mine, and what authorship or citation context do they carry?</td><td>Verify roles and metrics, refresh, order, or export.</td></tr>
+            <tr><td><span class="ui">Journal Monitor</span></td><td>What appeared in selected journals on a given date?</td><td>Filter, inspect, download, or add to Library.</td></tr>
+            <tr><td><span class="ui">Subject Monitor</span></td><td>What matches a defined scientific topic across supported sources?</td><td>Review source evidence and preserve useful results.</td></tr>
+            <tr><td><span class="ui">Author Monitor</span></td><td>What is new in the work of a researcher I follow?</td><td>Inspect the author relationship, open the work, or add a Library placement.</td></tr>
+          </table>
+
+          <h2>Watch one paper move through the workspace</h2>
+          <figure class="architecture-map" aria-label="One paper across monitor and library views">
+            <div class="architecture-row four">
+              <div class="architecture-node"><strong>Discovered</strong><span>A Monitor records where and when the work was observed.</span></div>
+              <div class="architecture-node"><strong>Cataloged</strong><span>Identity evidence connects the observation to a persistent paper record.</span></div>
+              <div class="architecture-node"><strong>Organized</strong><span>A Library folder, Space, or My Publications adds personal context.</span></div>
+              <div class="architecture-node core"><strong>File-backed</strong><span>Downloaded or attached resources become available in Paper Files and Finder.</span></div>
+            </div>
+            <figcaption>These states can overlap. A cataloged Monitor result may have no local file, and a downloaded file does not have to belong to a Library folder immediately.</figcaption>
+          </figure>
 
           <h2>Resize a pane</h2>
           <ol class="steps">
@@ -427,24 +646,78 @@
 
           <div class="note"><span class="callout-title">Note</span>The right-side Paper Details area scrolls independently. A long author list or citation section does not move the Library columns.</div>
 
+          <h2>Recognize stable and temporary state</h2>
+          <p>Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource role, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.</p>
+
+          <div class="important"><span class="callout-title">Keep the active context visible</span>Before moving, deleting, or attaching an item, confirm which pane has focus and which paper is shown in Paper Details. The same file-like name can represent a paper placement, a resource inside Paper Files, or a standalone imported file.</div>
+
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="first-session" data-group="Start Here" data-title="Your First Session" data-keywords="launch add paper open preview initial steps quick start">
+        <article class="help-topic guide-topic" id="first-session" data-group="Start Here" data-title="Your First Session" data-keywords="launch add paper open preview initial steps quick start PDF DOI arXiv monitor cataloged organized file-backed Gewu Key resource backup">
           <p class="topic-kicker">Start Here</p>
           <h1>Set Up Your First Session</h1>
-          <p class="lead">Start with one paper, confirm its metadata and file, then add structure only when you need it.</p>
+          <p class="lead">Start with one paper, confirm its identity and context, then inspect or add a local file when the work is file-backed.</p>
+
+          <h2>Choose your starting route</h2>
+          <p>You do not need to prepare a perfect record before beginning. Start from the strongest evidence you already have, then let the paper object become richer over time.</p>
+
+          <table class="plain-table">
+            <tr><th>You already have</th><th>Start here</th><th>What Gewu Insight does first</th></tr>
+            <tr><td>A local PDF or another research file</td><td>Drag it into the target Library folder, or use the folder's add command.</td><td>Preserves a visible file, creates a catalog record, and attempts to extract or resolve identity evidence.</td></tr>
+            <tr><td>A DOI, arXiv identifier, supported URL, or title</td><td>Choose <span class="ui">Add Paper</span> in the target folder and enter the evidence.</td><td>Creates or reuses a paper record, resolves metadata, and offers a download when a supported file is available.</td></tr>
+            <tr><td>A useful result in Journal, Subject, or Author Monitor</td><td>Select the result and choose <span class="ui">Add to Library</span>.</td><td>Adds a Library placement for the cataloged paper while retaining its discovery provenance.</td></tr>
+          </table>
+
+          <div class="note"><span class="callout-title">External originals stay separate</span>Folder Loader and ordinary file import are designed to preserve the external source rather than silently reorganize it. The managed copy and the source path can both remain part of the provenance.</div>
 
           <h2>Add and inspect a paper</h2>
           <ol class="steps">
             <li><strong>Open <span class="ui">Library</span>.</strong> Select an existing folder, or create one from the context menu.</li>
             <li><strong>Add a paper.</strong> Drag a PDF into the folder, or open the target folder, Control-click blank space in its contents, choose <span class="ui">Add Paper</span>, and enter a DOI, arXiv identifier, supported URL, or title.</li>
-            <li><strong>Select the new item.</strong> Paper Details appears at the right. Gewu Insight attempts to identify the work and records the local file.</li>
+            <li><strong>Select the new item.</strong> Paper Details appears at the right. Gewu Insight attempts to identify the work. A local file is recorded only when you imported one or a supported download succeeded.</li>
             <li><strong>Check <span class="ui">DOI</span> and <span class="ui">arXiv</span>.</strong> Enter a corrected DOI in its field and refresh it, or edit arXiv inline and press <kbd>Return</kbd>.</li>
-            <li><strong>Open the PDF.</strong> Choose <span class="ui">Open in Preview</span>, or enter Paper Files and press <kbd>Space</kbd> for Quick Look.</li>
+            <li><strong>Inspect the available evidence.</strong> If a local PDF exists, choose <span class="ui">Open in Preview</span>, or enter Paper Files and press <kbd>Space</kbd> for Quick Look. If no file exists yet, use <span class="ui">Open Website</span> or download a supported version when one is available.</li>
           </ol>
 
-          <p class="result">The paper has a managed record, a stable Gewu Key, and at least one file known to the database.</p>
+          <p class="result">The paper now has a cataloged paper record, a stable Gewu Key, and a Library placement. It may have no local file; that cataloged-only state is valid. A file resource exists only after a file is imported, downloaded, or attached.</p>
+
+          <h2>Understand what may now exist</h2>
+          <figure class="architecture-map" aria-label="Objects created during a first Library import">
+            <div class="architecture-row four">
+              <div class="architecture-node"><span class="sequence-label">Always</span><strong>Catalog record</strong><span>Title, authors, identifiers, source evidence, and a stable internal paper identity.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Always</span><strong>Library placement</strong><span>A relationship that makes the paper visible in the folder you selected.</span></div>
+              <div class="architecture-node"><span class="sequence-label">When file-backed</span><strong>File record</strong><span>Role, version, source, stored path, fingerprints, and current/preferred status when known.</span></div>
+              <div class="architecture-node core"><span class="sequence-label">When file-backed</span><strong>Visible local file</strong><span>The actual PDF or attachment that Finder and Preview can open.</span></div>
+            </div>
+            <figcaption>A cataloged-only paper legitimately has the first two objects and no local file. A file-backed paper also has resource metadata and real bytes. These objects cooperate, but they are not interchangeable.</figcaption>
+          </figure>
+
+          <h2>Verify the identity before enriching it</h2>
+          <ol class="steps">
+            <li><strong>Compare the title and authors with the PDF.</strong> A similar title is useful evidence but not sufficient proof.</li>
+            <li><strong>Check the DOI and arXiv fields.</strong> A work can have both. Correct an inaccurate identifier before refreshing more metadata or downloading another version.</li>
+            <li><strong>Read the source and journal information.</strong> Confirm that a publication record belongs to this work rather than a cited paper or a similarly named article.</li>
+            <li><strong>Keep uncertainty visible.</strong> It is safer to leave a field empty than to confirm a plausible but wrong identifier.</li>
+          </ol>
+
+          <h2>Complete the first Paper Files bundle</h2>
+          <p>A cataloged-only paper may have no local file, and nothing is missing merely because Paper Files is empty. Continue with these steps after you import, download, or attach a file and the paper becomes file-backed.</p>
+          <ol class="steps">
+            <li><strong>Open the <span class="ui">Files</span> section.</strong> It starts collapsed in Paper Details so long file lists do not dominate the inspector.</li>
+            <li><strong>Classify the available PDF.</strong> Use its small role menu to choose Published Version, Accepted Manuscript, Preprint, or another accurate type. Do not infer the role from the filename alone.</li>
+            <li><strong>Add related material if you have it.</strong> Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.</li>
+            <li><strong>Check the current file.</strong> <span class="ui">Open in Preview</span> and the Library preview use the resolved current PDF. Selecting <span class="ui">Use</span> changes preference without renaming the resource.</li>
+            <li><strong>Reveal one file in Finder.</strong> Choose <span class="ui">Show in Finder</span> and confirm the real managed file exists where the database expects it.</li>
+          </ol>
+
+          <div class="invariant-list">
+            <div><strong>Cataloged and organized</strong><span>The shared paper record and Library placement are durable even when no local file has been added.</span></div>
+            <div><strong>File-backed</strong><span>After a file is added, its resource role and physical bytes can be inspected separately from paper identity and folder context.</span></div>
+          </div>
+
+          <h2>Optional: verify shared identity</h2>
+          <p>Copy the paper to a second Library folder, then select it there. The title, Gewu Key, Paper Files, and metadata should remain the same because the second folder contains another placement for the shared paper—not an unrelated duplicate. Delete only the extra placement when you are finished with the check.</p>
 
           <h2>Next useful actions</h2>
           <ul>
@@ -454,7 +727,327 @@
             <li>Back up the project before a large import or migration.</li>
           </ul>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#import-files">Add Papers and Files</a><a href="#paper-details">Use Paper Details</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+          <h2>Finish with a safe baseline</h2>
+          <p>Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is current, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.</p>
+
+          <div class="invariant-list">
+            <div><strong>Identity checked</strong><span>The title, authors, DOI, and arXiv evidence do not point to different works.</span></div>
+            <div><strong>Placement understood</strong><span>The Library folder expresses personal organization, not a second scholarly identity.</span></div>
+            <div><strong>Resource classified when present</strong><span>If the paper is file-backed, the current PDF and any attachments have roles that describe what they actually are.</span></div>
+            <div><strong>File visible when present</strong><span>If the paper is file-backed, the expected managed file opens from the app and can be revealed in Finder.</span></div>
+          </div>
+
+          <div class="important"><span class="callout-title">Create the backup habit early</span>Before a major import, upgrade, or migration, quit Gewu Insight and back up both the SQLite database and the managed file roots. A database-only copy lacks some bytes; a files-only copy lacks the relationships and state that make the workspace intelligible.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#import-files">Add Papers and Files</a><a href="#paper-details">Use Paper Details</a><a href="#paper-files">Understand Paper Files</a><a href="#backup-migrate">Back Up or Move to Another Mac</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="system-overview" data-group="Understand the System" data-title="System Architecture at a Glance" data-keywords="architecture local-first native shell local service localhost UI SQLite database filesystem layers visible workspace">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>See the System Architecture at a Glance</h1>
+          <p class="lead">Gewu Insight is a local research system that coordinates structured state, visible files, and a personal workspace. It is not simply a web page placed in front of a folder.</p>
+
+          <h2>How the parts cooperate</h2>
+          <figure class="architecture-map" aria-label="Gewu Insight local system architecture">
+            <div class="architecture-row">
+              <div class="architecture-node"><strong>Native macOS shell</strong><span>Starts the app, owns its windows, opens Help, Preview, Finder, and external websites.</span></div>
+              <div class="architecture-node"><strong>Personal Research Workspace</strong><span>Library, Spaces, My Publications, and the three Monitor views you see and operate.</span></div>
+              <div class="architecture-node"><strong>External research sources</strong><span>Publisher pages, feeds, metadata services, scholarly profiles, and preprint services.</span></div>
+            </div>
+            <div class="architecture-arrow" aria-hidden="true">↕</div>
+            <div class="architecture-row">
+              <div class="architecture-node core"><strong>Local application service</strong><span>Interprets your actions, resolves identities, schedules network work, and coordinates database and file changes.</span></div>
+              <div class="architecture-node core"><strong>SQLite state core</strong><span>Owns identity, relationships, resource descriptions, preferences, provenance, and durable workflow state.</span></div>
+              <div class="architecture-node core"><strong>Visible Research Files</strong><span>PDFs, versions, supplements, notes, data, and other files that remain inspectable in Finder and Preview.</span></div>
+            </div>
+            <figcaption>The interface sends an intention to the local service. The service validates it and coordinates SQLite with the relevant files; the UI does not directly treat a Finder folder as the database.</figcaption>
+          </figure>
+
+          <p>The macOS app window presents a local interface served from this project on your Mac. Network sources contribute evidence and downloadable material, but the durable workspace stays local. Closing a browser tab, losing a network connection, or restarting the app does not turn the online source into the owner of your research state.</p>
+
+          <h2>What each persistent layer answers</h2>
+          <table class="plain-table">
+            <tr><th>Layer</th><th>Questions it answers</th><th>What it does not decide alone</th></tr>
+            <tr><td>SQLite</td><td>What is this paper? Where is it referenced? Which resources belong to it? What happened in the last operation?</td><td>It does not contain the bytes of your PDFs and attachments.</td></tr>
+            <tr><td>Filesystem</td><td>Which real files can Finder, Preview, or another application open?</td><td>A filename or folder position alone does not define paper identity, version priority, or monitor membership.</td></tr>
+            <tr><td>Personal Research Workspace</td><td>How should the shared state be presented for discovery, reading, organization, and action?</td><td>It is a projection of saved state, not a separate copy of the collection.</td></tr>
+          </table>
+
+          <div class="architecture-equation">Persistent research workspace = structured SQLite state + visible research files, coordinated by the local application.</div>
+
+          <h2>Why this separation matters</h2>
+          <p>A paper can appear in a Monitor, the Library, a Space, and My Publications without becoming four unrelated papers. It can also acquire a DOI after first arriving as an arXiv preprint, or acquire a publication PDF while retaining earlier versions. The database preserves continuity across those changes; visible files preserve user ownership and inspectability.</p>
+
+          <div class="note"><span class="callout-title">Terminology</span>This guide uses <strong>Personal Research Workspace</strong> for the on-screen projection and <strong>Visible Research Files</strong> for the Finder-visible assets. These are explanatory terms, not menu names. Together they form the visible workspace, but they serve different roles.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#persistent-paper-object">The Persistent Paper Object</a><a href="#sqlite-core">Why SQLite Is the Core</a><a href="#visible-research-files">Visible Research Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="persistent-paper-object" data-group="Understand the System" data-title="The Persistent Paper Object" data-keywords="persistent paper object shared identity canonical record Gewu Key DOI arXiv evidence associations deduplication work resource placement">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Understand the Persistent Paper Object</h1>
+          <p class="lead">Gewu Insight treats a scholarly work as an object that persists through discovery, publication, file changes, and personal organization—not as a temporary search result or a single PDF.</p>
+
+          <h2>One identity can accumulate evidence</h2>
+          <figure class="architecture-map" aria-label="Information connected to one persistent paper object">
+            <div class="architecture-row four">
+              <div class="architecture-node"><strong>Identity evidence</strong><span>DOI, arXiv identifier, title, authors, journal, dates, and source identifiers.</span></div>
+              <div class="architecture-node"><strong>Resources</strong><span>Publication PDFs, preprints, accepted manuscripts, supplements, annotations, and attachments.</span></div>
+              <div class="architecture-node"><strong>Contexts</strong><span>Library folders, Spaces, My Publications, and Monitor relationships.</span></div>
+              <div class="architecture-node"><strong>Durable state</strong><span>Read status, metadata quality, provenance, download state, retries, and timestamps.</span></div>
+            </div>
+            <div class="architecture-arrow" aria-hidden="true">↓</div>
+            <div class="architecture-node core"><strong>One shared paper identity · one stable Gewu Key</strong><span>The internal identity stays stable when an external identifier, filename, folder location, or preferred PDF changes.</span></div>
+            <figcaption>Identifiers help resolve and enrich a paper, while the Gewu Key provides continuity inside Gewu Insight.</figcaption>
+          </figure>
+
+          <p>The central record uses an internal paper identity. A DOI or arXiv identifier is important evidence attached to that identity, but neither is a safe universal primary key: an early preprint may have no DOI, an imported PDF may initially have no reliable identifier, and an incorrect identifier may later be corrected.</p>
+
+          <h2>Do not collapse four different things</h2>
+          <table class="plain-table">
+            <tr><th>Object</th><th>Meaning</th><th>Example</th></tr>
+            <tr><td>Paper record</td><td>The shared scholarly identity and normalized metadata.</td><td>The work that later connects arXiv and a journal DOI.</td></tr>
+            <tr><td>Placement or relation</td><td>Why and where the paper appears in your workspace.</td><td>A Library folder entry, a shortcut, a My Publications role, or an Author Monitor association.</td></tr>
+            <tr><td>Resource record</td><td>A described file or retrievable version belonging to the paper.</td><td>Preprint v2, Version of Record, supplement, slide deck, or data file.</td></tr>
+            <tr><td>Physical file</td><td>The bytes stored at a real path on disk.</td><td>A PDF under <code>data/Library</code> or an associated attachment.</td></tr>
+          </table>
+
+          <div class="architecture-equation">Paper record ≠ workspace placement ≠ resource record ≠ physical file.</div>
+
+          <h2>What happens when the same paper is found again</h2>
+          <p>Journal, Subject, and Author Monitor can encounter the same work from different directions. Identity resolution is designed to reuse one shared paper record and add source or context relationships. Copying a paper to another Library folder likewise creates another placement rather than a second independent identity. Its metadata, Gewu Key, versions, and attachments remain shared.</p>
+
+          <p>When the available evidence is insufficient or contradictory, separate candidates can remain until their identifiers or metadata are corrected. The shared-object model is the resolution target; it does not justify merging uncertain works merely because their titles look similar.</p>
+
+          <p>A network observation can be transient while acquisition is running. Once a result is cataloged as a shared paper record, it has a Gewu Key even if a particular Monitor view does not display that key. A Monitor result may still have no local Paper Files because no file has been downloaded or attached; adding it to Library creates a visible placement rather than inventing a new scholarly identity.</p>
+
+          <p>Gewu Insight also uses the same catalog and resource infrastructure for an imported standalone file whose scholarly identity is not yet known. In that case, the catalog record preserves the file and its relationships while later identification can enrich it.</p>
+
+          <h2>Identity corrections should preserve continuity</h2>
+          <p>Editing a DOI or arXiv identifier changes evidence on the existing paper. It should not silently make an unrelated second paper, rename every file, or discard your folder placements and read history. When evidence conflicts, inspect the title, authors, venue, and files before confirming the correction.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Similar titles are not proof of identity, and matching filenames are not proof that two resources are the same. Use identifiers, metadata, file fingerprints, and provenance together.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#personal-research-workspace">The Personal Research Workspace</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="sqlite-core" data-group="Understand the System" data-title="Why SQLite Is the Core" data-keywords="SQLite database source of truth structured state WAL write ahead log transaction foreign key schema migration JSON export provenance settings secrets">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Understand Why SQLite Is the Core</h1>
+          <p class="lead">SQLite is the source of truth for Gewu Insight because it preserves the identity, relationships, resource registry, and operational memory that neither a filename nor an exported report can express.</p>
+
+          <h2>Four families of structured state</h2>
+          <figure class="architecture-map" aria-label="Four kinds of state centered on SQLite">
+            <div class="architecture-node core"><strong>SQLite state authority</strong><span>A local transactional database stored with the project.</span></div>
+            <div class="architecture-arrow" aria-hidden="true">↓</div>
+            <div class="architecture-row four">
+              <div class="architecture-node"><strong>Identity and metadata</strong><span>Shared papers, external identifiers, normalized title and authors, dates, fields, and Gewu Key.</span></div>
+              <div class="architecture-node"><strong>Relationships and context</strong><span>Library placements, folder tree, Spaces, My Publications, and Monitor associations.</span></div>
+              <div class="architecture-node"><strong>Resource registry</strong><span>Roles, versions, paths, source URLs, hashes, annotation state, current and preferred resources.</span></div>
+              <div class="architecture-node"><strong>Operational memory</strong><span>Fetch runs, import batches, source tasks, reads, settings, failures, retries, and completion timestamps.</span></div>
+            </div>
+            <figcaption>Table names and schema versions can evolve; these four responsibilities are the stable user-level model.</figcaption>
+          </figure>
+
+          <p>The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what role and version they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.</p>
+
+          <h2>Why a folder scan is not an equivalent database</h2>
+          <p>Finder can show that <code>paper.pdf</code> exists. It cannot reliably say whether it is a Version of Record or a preprint, whether the same work is also in My Publications, whether a Monitor refresh completed with zero results, which external source produced the metadata, or which attachment should survive deletion of one shortcut. Those facts live in SQLite.</p>
+
+          <h2>Transactions, relationships, and WAL</h2>
+          <table class="plain-table">
+            <tr><th>Database mechanism</th><th>User-facing purpose</th></tr>
+            <tr><td>Transactions</td><td>Keep a multi-step state change together so a partly applied edit is less likely to become the visible truth.</td></tr>
+            <tr><td>Foreign-key relationships</td><td>Connect a resource or placement to the correct shared paper instead of relying on a coincidentally similar filename.</td></tr>
+            <tr><td>WAL (write-ahead logging)</td><td>Lets foreground reading and background updates coexist more safely than repeated full-file rewrites.</td></tr>
+            <tr><td>Schema migration</td><td>Adds new structures and backfills required state during an upgrade rather than asking the user to rebuild the database.</td></tr>
+          </table>
+
+          <p>WAL improves normal concurrency; it is not a substitute for a coherent backup. Close Gewu Insight before copying its live database, and back up the managed files with it.</p>
+
+          <div class="note"><span class="callout-title">Cross-layer changes</span>SQLite transactions protect database state. A file move and its database update cannot be one native SQLite transaction, so the local service coordinates the steps and uses validation or compensating recovery when a filesystem operation fails.</div>
+
+          <h2>Exports and provenance</h2>
+          <p>JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are derived artifacts. They can be regenerated, shared, or inspected, but editing them does not alter the source records. Raw source evidence may also be retained inside SQLite for provenance; this does not turn an external JSON export into a second source of truth.</p>
+
+          <h2>What the app does during an upgrade</h2>
+          <p>On startup, the storage layer checks for required tables and fields, applies additive migrations, ensures required roots exist, and backfills stable keys or resource records where older data needs them. This is why a project upgrade should preserve the existing database and files rather than replace them with an empty database.</p>
+
+          <div class="important"><span class="callout-title">Do not edit the live database manually</span>A seemingly small manual change can violate a relationship that is not visible in one table. Use the app for normal work and make a closed, complete backup before any diagnostic intervention.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#privacy">Local Data and Privacy</a><a href="#storage-reference">Storage Reference</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="visible-research-files" data-group="Understand the System" data-title="Visible Research Files" data-keywords="visible research files managed filesystem Finder Preview current PDF Associated Files versions supplements attachments stored path source path hash fingerprint annotated">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Understand Visible Research Files</h1>
+          <p class="lead">Your PDFs and attachments remain real local files. Gewu Insight adds a resource model around them so several versions and related materials can belong to one paper without hiding them inside an opaque cloud library.</p>
+
+          <h2>One paper, one file bundle</h2>
+          <figure class="architecture-map" aria-label="Current paper file and associated file groups">
+            <div class="architecture-node core"><strong>Persistent Paper Object</strong><span>Owns the resource relationships and decides which usable file is current.</span></div>
+            <div class="architecture-arrow" aria-hidden="true">↓</div>
+            <div class="architecture-row two">
+              <div class="architecture-node"><strong>Current file</strong><span>The best available or explicitly preferred PDF used by Open in Preview and Library preview.</span></div>
+              <div class="architecture-node"><strong>Associated Files</strong><span>Earlier versions, supplements, annotated copies, presentations, notes, data, code, images, and other attachments.</span></div>
+            </div>
+            <div class="architecture-arrow" aria-hidden="true">↓</div>
+            <div class="architecture-row">
+              <div class="architecture-node"><strong>Versions</strong><span>Version of Record, First Published, Accepted Manuscript, and arXiv preprint versions.</span></div>
+              <div class="architecture-node"><strong>Supplements</strong><span>Publisher or author-provided supporting files.</span></div>
+              <div class="architecture-node"><strong>Files and figures</strong><span>User material such as notes, slides, data, code, and extracted or attached images.</span></div>
+            </div>
+            <figcaption>The Paper Files pane presents this as a compact bundle rather than another Finder hierarchy.</figcaption>
+          </figure>
+
+          <h2>Managed and linked resources</h2>
+          <table class="plain-table">
+            <tr><th>Storage mode</th><th>Meaning</th><th>Safe expectation</th></tr>
+            <tr><td>Managed</td><td>The active stored path is inside the Gewu Insight project data area.</td><td>Move, classify, replace, or delete it through the app so paths and relationships change together.</td></tr>
+            <tr><td>Linked</td><td>The active stored path remains outside the managed project data area.</td><td>Availability depends on that external path, and the app should not silently reorganize it.</td></tr>
+          </table>
+
+          <p>A resource can be managed while retaining a separate external source path as provenance. The existence of that source path does not by itself make the managed copy a linked resource, and the external original remains protected.</p>
+
+          <p>Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.</p>
+
+          <h2>How the current file is resolved</h2>
+          <p>An explicit preferred PDF takes precedence when it still exists. Otherwise, usable versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.</p>
+
+          <div class="note"><span class="callout-title">Published-version labels</span><strong>First Published</strong> means the publisher's initially released file; <strong>Version of Record</strong> means the current formal record. The compact UI can present either under the broader label <strong>Published Version</strong>, while the resource registry retains the more specific role when it is known.</div>
+
+          <h2>Fingerprints and annotations</h2>
+          <p>Resources can carry an exact SHA-256 fingerprint and a content-oriented PDF fingerprint. Exact SHA-256 answers “are these bytes identical?” Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.</p>
+
+          <h2>Why Finder and the UI do not look identical</h2>
+          <p>The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore appear as a current file in the visible topic folder while its previous versions and attachments live under a mirrored Associated Files path. Paper Files deliberately groups those resources by role instead of showing every physical directory level.</p>
+
+          <div class="important"><span class="callout-title">Important</span>Do not manually move or rename managed resources in Finder. The bytes may still exist, but the saved path and live workspace can disagree. Use an app-supported move, repair, or restore; do not assume a restart will rediscover an arbitrary manual move.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="personal-research-workspace" data-group="Understand the System" data-title="The Personal Research Workspace" data-keywords="personal research workspace visible workspace UI projection Library Spaces My Publications Journal Monitor Subject Monitor Author Monitor shared graph relations shortcuts">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Understand the Personal Research Workspace</h1>
+          <p class="lead">The five top-level areas are coordinated views over shared research objects. They are not five separate databases, and moving between them does not reset a paper's identity.</p>
+
+          <figure class="architecture-map" aria-label="Discovery and organization views connected through a shared paper identity">
+            <div class="architecture-row">
+              <div class="architecture-node"><strong>Journal Monitor</strong><span>Discovers work by publication venue and date.</span></div>
+              <div class="architecture-node"><strong>Subject Monitor</strong><span>Discovers work through topic definitions and supported feeds or searches.</span></div>
+              <div class="architecture-node"><strong>Author Monitor</strong><span>Discovers work through a researcher relationship.</span></div>
+            </div>
+            <div class="architecture-arrow" aria-hidden="true">↓ identify and relate</div>
+            <div class="architecture-node core"><strong>One shared paper identity</strong><span>Metadata, identifiers, resources, provenance, and state accumulate here.</span></div>
+            <div class="architecture-arrow" aria-hidden="true">↓ organize and remember</div>
+            <div class="architecture-row">
+              <div class="architecture-node"><strong>Library and shortcuts</strong><span>A durable managed collection with logical placements and fast entry points.</span></div>
+              <div class="architecture-node"><strong>Spaces</strong><span>Independent organizational roots for projects, courses, or collaborations.</span></div>
+              <div class="architecture-node"><strong>My Publications</strong><span>Your authorship, role, metrics, ordering, and export context on the same paper.</span></div>
+            </div>
+            <figcaption>The same paper can participate in several contexts. Each context adds meaning; it does not require an unrelated duplicate record.</figcaption>
+          </figure>
+
+          <h2>Views are relational projections</h2>
+          <p>A Library folder answers “where do I organize this?” My Publications answers “how does this relate to my authorship?” Author Monitor answers “how does this relate to this researcher?” These are different relationships to the same possible work. The interface queries those relationships and projects the relevant controls, status, and files for the current task.</p>
+
+          <h2>Library placements and shortcuts</h2>
+          <p>A paper can have more than one Library placement. Copying it to another folder reuses the shared identity and resources. A shortcut tab is another entry point to a Library location, not another paper collection. A Space is an independent organizational root, but papers placed there can still reuse the same identity model.</p>
+
+          <h2>Discovery does not require immediate file management</h2>
+          <p>A Monitor result may remain a discovery relationship with metadata and status but no local Paper Files. The UI can hide the internal Gewu Key in a discovery context even when a shared paper record already exists. Downloading or attaching a file creates a resource relationship; adding the paper to Library creates a managed placement. Neither action should manufacture a second work merely because the user entered from another tab.</p>
+
+          <h2>Why the same action can have different scope</h2>
+          <p>Removing an author from Author Monitor removes that monitored-author relationship. Removing a shortcut removes an entry point. Moving a Library placement changes organization. Deleting a managed resource changes the paper's file bundle. The selected view supplies scope, while SQLite preserves what remains shared.</p>
+
+          <div class="note"><span class="callout-title">A useful mental model</span>The UI shows a personal map of a shared object graph. It is “visible” because you can navigate and act on it, but SQLite—not pixels on the screen—preserves the graph.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#organize">Folders, Shortcuts, and Spaces</a><a href="#my-publications">My Publications</a><a href="#state-and-scope">State, Scope, and Safe Change</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="research-loop" data-group="Understand the System" data-title="From Discovery to Durable Memory" data-keywords="continuous discovery acquire identify resolve remember research loop provenance enrichment reading state background task cooldown retry empty partial failed">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Move from Discovery to Durable Memory</h1>
+          <p class="lead">Gewu Insight connects monitoring, identity resolution, version handling, and personal organization into one repeatable research loop.</p>
+
+          <figure class="architecture-map" aria-label="Acquire identify resolve and remember research loop">
+            <div class="architecture-row four">
+              <div class="architecture-node"><strong>1. Acquire</strong><span>Journal, Subject, Author, Folder Loader, or a direct identifier introduces a candidate.</span></div>
+              <div class="architecture-node"><strong>2. Identify</strong><span>DOI, arXiv, title, authors, source evidence, and existing records are reconciled.</span></div>
+              <div class="architecture-node"><strong>3. Resolve</strong><span>Metadata, available versions, file roles, paths, hashes, and a current resource are established.</span></div>
+              <div class="architecture-node"><strong>4. Remember</strong><span>Placements, authorship, reading state, provenance, completion, and failures persist.</span></div>
+            </div>
+            <div class="architecture-arrow" aria-hidden="true">↺ saved context informs the next acquisition cycle</div>
+            <figcaption>The loop is continuous because a work can acquire better evidence, a new publication version, or a new personal context later.</figcaption>
+          </figure>
+
+          <h2>A paper can change without losing its history</h2>
+          <ol class="steps">
+            <li><strong>Acquire an early work.</strong> Subject Monitor finds an arXiv preprint. Its source and discovery context are stored.</li>
+            <li><strong>Identify the work.</strong> The title, authors, and arXiv identifier connect it to one shared paper identity.</li>
+            <li><strong>Resolve its first resource.</strong> A preprint PDF becomes current because no higher-priority version is available.</li>
+            <li><strong>Remember your context.</strong> You add it to a Library folder, read it, and attach notes or data.</li>
+            <li><strong>Acquire new evidence later.</strong> Journal Monitor or a metadata refresh finds the published DOI and Version of Record.</li>
+            <li><strong>Resolve without erasing.</strong> The publication PDF becomes current; the preprint and its provenance remain in Versions.</li>
+          </ol>
+
+          <h2>Operational state is part of scientific memory</h2>
+          <p>A result count alone is ambiguous. The app distinguishes work that was never attempted from work that completed with no results, partially completed, failed, or entered a cooldown before retry. It also remembers imports, downloads, metadata refreshes, source tasks, and read state so the next action can be informed rather than blindly repeated.</p>
+
+          <table class="plain-table">
+            <tr><th>State</th><th>Meaning</th><th>Reason to preserve it</th></tr>
+            <tr><td>Empty and complete</td><td>The requested source or date was checked and returned no matching records.</td><td>Prevents “zero” from being mistaken for “not run.”</td></tr>
+            <tr><td>Partial</td><td>Some sources completed while another did not.</td><td>Allows a targeted retry instead of discarding useful completed work.</td></tr>
+            <tr><td>Failed</td><td>An operation produced a specific error.</td><td>Makes the failure visible and avoids pretending the result is authoritative.</td></tr>
+            <tr><td>Cooldown or retry scheduled</td><td>A remote service asked the app to wait or a transient error needs backoff.</td><td>Reduces repeated traffic and protects normal foreground use.</td></tr>
+          </table>
+
+          <h2>Background work should not seize the foreground</h2>
+          <p>Fetches, metadata refreshes, and imports report progress in reserved status areas and save their state. You should still be able to browse already stored material. Where callers share an online service, service-specific pacing, locks, cooldowns, and retry policies coordinate their requests. These controls reduce unnecessary traffic; they cannot guarantee that a publisher will never rate-limit or block a network address.</p>
+
+          <div class="note"><span class="callout-title">The loop is user-directed</span>Gewu Insight preserves the consequences of what you monitor, save, read, ignore, classify, and publish. It does not silently replace your research judgment with an invisible global keyword filter.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a><a href="#author-monitor">Author Monitor</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="state-and-scope" data-group="Understand the System" data-title="State, Scope, and Safe Change" data-keywords="state scope safe change scoped deletion shared resource move copy recycle recover backup invariant idempotent reference integrity external source">
+          <p class="topic-kicker">Understand the System</p>
+          <h1>Understand State, Scope, and Safe Change</h1>
+          <p class="lead">A safe local research workspace changes only the object and relationship you intended while preserving shared identity, resources, provenance, and recoverable state.</p>
+
+          <h2>Eight invariants behind normal operations</h2>
+          <div class="invariant-list">
+            <div><strong>One shared identity</strong><span>The same scholarly work should not fragment merely because several sources or folders found it.</span></div>
+            <div><strong>Many contexts, not blind copies</strong><span>Folders, Spaces, monitors, and My Publications add relationships around the shared paper.</span></div>
+            <div><strong>Deletion has scope</strong><span>Removing one relationship should not destroy unrelated relationships or shared resources.</span></div>
+            <div><strong>State survives restart</strong><span>Saved reading and workflow state, retries, failures, versions, and provenance are durable.</span></div>
+            <div><strong>Repeated operations converge</strong><span>Refreshing, importing, or downloading the same evidence should not create endless duplicates.</span></div>
+            <div><strong>Good metadata is protected</strong><span>A weak or empty response should not silently erase stronger saved evidence.</span></div>
+            <div><strong>Database and files agree</strong><span>Saved resource paths should point to the intended real files after an app-managed move.</span></div>
+            <div><strong>Failure remains inspectable</strong><span>Deletion, import, move, and network failure should preserve enough state to recover or retry.</span></div>
+          </div>
+
+          <h2>Read an action by its scope</h2>
+          <table class="plain-table">
+            <tr><th>Action</th><th>Intended scope</th><th>What should remain</th></tr>
+            <tr><td>Remove an Author Monitor profile</td><td>The monitored-author relation and its profile context.</td><td>Shared papers, Library placements, My Publications, and managed files.</td></tr>
+            <tr><td>Remove a shortcut</td><td>That fast entry point.</td><td>The underlying Library folder and its papers.</td></tr>
+            <tr><td>Copy a paper to another folder</td><td>Add another placement.</td><td>One shared paper identity and resource bundle.</td></tr>
+            <tr><td>Move a paper in the app</td><td>Change its managed placement and corresponding stored paths.</td><td>Gewu Key, metadata, versions, and associations.</td></tr>
+            <tr><td>Use another version</td><td>Change the preferred/current resource.</td><td>The file's original name and the other saved versions.</td></tr>
+            <tr><td>Delete an associated file</td><td>That resource relationship and its managed file, subject to confirmation.</td><td>The paper identity and unrelated resources.</td></tr>
+          </table>
+
+          <h2>Recovery is part of the design</h2>
+          <p>Recycle keeps ordinary removals recoverable. Import batches and operation status provide evidence about what ran. Resource paths, hashes, and provenance help diagnose missing or duplicate files. The app can migrate older storage structure forward, but migration is not a reason to discard the previous database or original files.</p>
+
+          <h2>Back up one coherent research asset</h2>
+          <p>A reliable backup contains the SQLite database and the managed file roots from the same closed application state. Copying only the database preserves descriptions without every artifact; copying only folders preserves bytes without all identities, relationships, classifications, and operation history. A portable desktop copy is useful for sharing visible folder material, but it is not automatically a complete live-workspace backup.</p>
+
+          <div class="important"><span class="callout-title">Before a major update or migration</span>Quit Gewu Insight, preserve the entire project data set, verify the backup can be read, then update the software in place. Do not create a fresh empty database and attempt to reconstruct the workspace from export files.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#recycle">Delete and Recover Items</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="library-layout" data-group="Library" data-title="Library Layout" data-keywords="column view breadcrumb details paper files list table root">
@@ -543,7 +1136,7 @@
           <p>Command-click to add or remove individual entries from a selection. Shift-click, or hold Shift while using the arrow keys, to extend a range in the current folder. Copy the selected entries with <kbd>⌘</kbd><kbd>C</kbd>, paste into the active destination with <kbd>⌘</kbd><kbd>V</kbd>, or press <kbd>Delete</kbd> to apply the normal reference-aware deletion rules.</p>
 
           <h2>Copy a paper to another folder</h2>
-          <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a Finder alias where appropriate. Paper versions and attachments remain associated with the work.</p>
+          <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a secondary symbolic link where appropriate. Paper versions and attachments remain associated with the work.</p>
 
           <div class="important"><span class="callout-title">Important</span>Move managed papers in Gewu Insight, not directly in Finder. The app updates the visible file, associated bundle, and live database paths together.</div>
 
@@ -612,7 +1205,7 @@
           <p>The <span class="ui">Files · n</span> row is collapsed by default. Its right side identifies the current file type. Expand it to add, classify, show, use, sync, or delete related files.</p>
 
           <h2>Metadata rows</h2>
-          <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable internal key for a managed work.</p>
+          <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable, human-visible storage handle for a cataloged work record. It is not a DOI, arXiv identifier, or the database's relational primary key.</p>
 
           <h2>Compare citation sources</h2>
           <p><span class="ui">Merged Citations</span> brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and PubMed when those services have a match. Select a source label to inspect that source’s count and evidence. The headline is a merged best estimate; counts from different services are not added together.</p>
@@ -626,7 +1219,7 @@
             <li><span class="ui">Folders</span> lists every Library location for the shared work. Remove a location there only when you intend to remove that reference.</li>
           </ul>
 
-          <div class="note"><span class="callout-title">Note</span>A discovery-only Author Monitor result may have no Gewu Key or Files section. These appear when the work becomes managed in Library or My Publications, or when a file has been attached.</div>
+          <div class="note"><span class="callout-title">Note</span>An Author Monitor result is already cataloged, but the compact Author Monitor details intentionally omit its Gewu Key. It may have no local Paper Files until a file is downloaded or attached. Adding it to Library creates a placement for the existing record rather than a second identity.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
@@ -766,7 +1359,7 @@
           <h2>Duplicate protection</h2>
           <p>Gewu Insight compares SHA-256 hashes for exact duplicates. For PDFs, it can also compare a content fingerprint that ignores annotation-only changes. An exact duplicate is reused instead of stored twice. A genuinely annotated copy may be retained and labeled as annotated.</p>
 
-          <div class="note"><span class="callout-title">Note</span>Version downloads require a managed work in Library or My Publications. A discovery-only monitor result is not forced into managed storage.</div>
+          <div class="note"><span class="callout-title">Note</span>A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
@@ -897,7 +1490,7 @@
           </ol>
 
           <h2>What is included</h2>
-          <p>The export replaces managed aliases with real files, includes relevant Associated Files, and writes a verified manifest describing paper-file relationships. This lets Folder Loader restore the bundle on another installation without guessing from filenames.</p>
+          <p>The export replaces managed filesystem shortcuts with real files, includes relevant Associated Files, and writes a verified manifest describing paper-file relationships. This lets Folder Loader restore the bundle on another installation without guessing from filenames.</p>
 
           <div class="important"><span class="callout-title">Important</span>Do not edit or discard the export manifest before migration. Without it, Loader correctly treats the files as an ordinary folder and does not infer hidden associations.</div>
 
@@ -1074,7 +1667,7 @@
           <p>Control-click an author and choose <span class="ui">Edit Homepage</span> or <span class="ui">Change Photo</span>. A downloaded Google Scholar avatar is cached locally so the app does not fetch it on every launch. A manual photo takes precedence.</p>
 
           <h2>Discovery entries and managed papers</h2>
-          <p>An Author Monitor result can remain discovery-only. It does not need a Gewu Key or Files bundle until you add it to Library or My Publications, or explicitly attach a local file.</p>
+          <p>An Author Monitor result is a cataloged shared record, while its Monitor relationship remains a discovery context. The compact view hides the Gewu Key, and the result does not need a local Files bundle. Adding it to Library creates another relationship to the existing record; downloading or attaching a file creates a resource relationship.</p>
 
           <h2>Remove a monitored author</h2>
           <p>Deleting an author from Author Monitor removes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.</p>
@@ -1167,8 +1760,8 @@
           <h2>Why the UI and Finder look different</h2>
           <p>The UI presents a paper as one item with Paper Files inside it. Finder shows the current file in the normal tree and the related bundle in Associated Files. This keeps ordinary folder browsing uncluttered while preserving every version.</p>
 
-          <h2>Copies and aliases</h2>
-          <p>When the same work appears in more than one Library folder, those locations can share one database record and one canonical managed file. Finder aliases may represent secondary locations. <span class="ui">Make Copy Desktop</span> resolves aliases into real files for a portable export.</p>
+          <h2>Copies and filesystem shortcuts</h2>
+          <p>When the same work appears in more than one Library folder, those locations can share one database record and one canonical managed file. Symbolic links can represent secondary filesystem locations. <span class="ui">Make Copy Desktop</span> resolves those shortcuts into real files for a portable export.</p>
 
           <div class="important"><span class="callout-title">Important</span>Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.</div>
 
@@ -1472,8 +2065,9 @@
         }
       });
 
-      showTopic(currentId(), { instant: true, keepScroll: true });
+      showTopic(currentId(), { instant: true });
       runSearch();
+      requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     })();
   </script>
 </body>

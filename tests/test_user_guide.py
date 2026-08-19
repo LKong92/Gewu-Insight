@@ -42,12 +42,13 @@ class UserGuideTests(unittest.TestCase):
         ids = [element.get("id") for element in soup.find_all(attrs={"id": True})]
         self.assertEqual(len(ids), len(set(ids)))
 
-        topic_ids = {article.get("id") for article in soup.select("article.guide-topic")}
-        self.assertGreaterEqual(len(topic_ids), 20)
-        navigation_ids = {
+        topic_order = [article.get("id") for article in soup.select("article.guide-topic")]
+        topic_ids = set(topic_order)
+        self.assertGreaterEqual(len(topic_ids), 40)
+        navigation_order = [
             button.get("data-topic") for button in soup.select("button.topic-link[data-topic]")
-        }
-        self.assertEqual(navigation_ids, topic_ids)
+        ]
+        self.assertEqual(navigation_order, topic_order)
         for link in soup.select('a[href^="#"]'):
             target = link.get("href", "")[1:]
             if target:
@@ -76,6 +77,223 @@ class UserGuideTests(unittest.TestCase):
 
         self.assertNotIn("Development History", visible_text)
         self.assertNotIn("benchmark", visible_text.lower())
+
+    def test_original_topics_are_preserved_around_the_new_architecture_section(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        topic_order = [article["id"] for article in soup.select("article.guide-topic")]
+        original_topic_ids = [
+            "welcome",
+            "guided-tour",
+            "first-session",
+            "library-layout",
+            "navigation",
+            "organize",
+            "search-views",
+            "import-files",
+            "paper-details",
+            "identifiers",
+            "paper-files",
+            "versions-current",
+            "attachments",
+            "download-sync",
+            "drag-attach",
+            "recycle",
+            "folder-loader",
+            "loader-maintenance",
+            "desktop-copy",
+            "backup-migrate",
+            "my-publications",
+            "journal-monitor",
+            "subject-monitor",
+            "author-monitor",
+            "citation-settings",
+            "naming",
+            "storage-model",
+            "privacy",
+            "keyboard",
+            "network-access",
+            "startup",
+            "troubleshooting",
+            "storage-reference",
+        ]
+        self.assertEqual(
+            [topic_id for topic_id in topic_order if topic_id in original_topic_ids],
+            original_topic_ids,
+        )
+
+        architecture_topic_ids = [
+            "system-overview",
+            "persistent-paper-object",
+            "sqlite-core",
+            "visible-research-files",
+            "personal-research-workspace",
+            "research-loop",
+            "state-and-scope",
+        ]
+        first_architecture_topic = topic_order.index("system-overview")
+        self.assertEqual(topic_order[first_architecture_topic - 1], "first-session")
+        self.assertEqual(
+            topic_order[first_architecture_topic : first_architecture_topic + 7],
+            architecture_topic_ids,
+        )
+        self.assertEqual(topic_order[first_architecture_topic + 7], "library-layout")
+
+    def test_start_here_builds_philosophy_orientation_and_a_complete_first_session(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        welcome = soup.find("article", id="welcome")
+        guided_tour = soup.find("article", id="guided-tour")
+        first_session = soup.find("article", id="first-session")
+
+        for article in [welcome, guided_tour, first_session]:
+            self.assertIsNotNone(article)
+            self.assertEqual(article.get("data-group"), "Start Here")
+            self.assertGreaterEqual(len(article.select("h2")), 6)
+            self.assertIsNotNone(article.select_one(".see-also"))
+
+        welcome_text = welcome.get_text(" ", strip=True)
+        for phrase in [
+            "格物致知",
+            "格物 · Gewu",
+            "洞见 · Insight",
+            "Keep research objects visible, evidence traceable, and insight cumulative.",
+            "Five design commitments",
+            "Local-first does not mean offline-only",
+            "What this guide covers",
+            "Five areas of the app",
+            "Open this guide again",
+        ]:
+            self.assertIn(phrase, welcome_text)
+        self.assertEqual(len(welcome.select("figure.architecture-map")), 2)
+        self.assertIsNotNone(welcome.select_one(".credo"))
+
+        guided_text = guided_tour.get_text(" ", strip=True)
+        for phrase in [
+            "Read the interface as a sentence",
+            "The Library window",
+            "Follow selection from broad to specific",
+            "Tabs across the top",
+            "Watch one paper move through the workspace",
+            "Resize a pane",
+            "Recognize stable and temporary state",
+        ]:
+            self.assertIn(phrase, guided_text)
+        self.assertGreaterEqual(len(guided_tour.select("figure.architecture-map")), 2)
+
+        first_session_text = first_session.get_text(" ", strip=True)
+        for phrase in [
+            "Choose your starting route",
+            "Add and inspect a paper",
+            "Understand what may now exist",
+            "Verify the identity before enriching it",
+            "Complete the first Paper Files bundle",
+            "It may have no local file",
+            "cataloged-only state is valid",
+            "Cataloged and organized",
+            "File-backed",
+            "Show in Finder",
+            "Optional: verify shared identity",
+            "Next useful actions",
+            "Finish with a safe baseline",
+            "Create the backup habit early",
+        ]:
+            self.assertIn(phrase, first_session_text)
+        self.assertIsNotNone(first_session.select_one("figure.architecture-map"))
+        self.assertIn(
+            "Show in Finder",
+            [element.get_text(" ", strip=True) for element in first_session.select(".ui")],
+        )
+
+        search_expectations = {
+            "格物 洞见": welcome,
+            "visual grammar": guided_tour,
+            "cataloged file-backed": first_session,
+        }
+        for query, article in search_expectations.items():
+            searchable = " ".join(
+                [
+                    article.get("data-title", ""),
+                    article.get("data-group", ""),
+                    article.get("data-keywords", ""),
+                    article.get_text(" ", strip=True),
+                ]
+            ).lower()
+            self.assertTrue(
+                all(term in searchable for term in query.lower().split()),
+                f"Expected search phrase {query!r} to find {article.get('id')}",
+            )
+
+    def test_architecture_topics_explain_the_state_and_file_model_in_depth(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        architecture_topic_ids = [
+            "system-overview",
+            "persistent-paper-object",
+            "sqlite-core",
+            "visible-research-files",
+            "personal-research-workspace",
+            "research-loop",
+            "state-and-scope",
+        ]
+        architecture_group = next(
+            group
+            for group in soup.select("section.nav-group")
+            if group.select_one(".nav-heading")
+            and group.select_one(".nav-heading").get_text(" ", strip=True)
+            == "Understand the System"
+        )
+        self.assertEqual(
+            [button["data-topic"] for button in architecture_group.select("button.topic-link")],
+            architecture_topic_ids,
+        )
+
+        for topic_id in architecture_topic_ids:
+            article = soup.find("article", id=topic_id)
+            self.assertIsNotNone(article)
+            self.assertEqual(article.get("data-group"), "Understand the System")
+            self.assertTrue(article.get("data-keywords"))
+            self.assertTrue(article.select_one("h1").get_text(" ", strip=True))
+            self.assertTrue(article.select_one(".lead").get_text(" ", strip=True))
+            self.assertIsNotNone(article.select_one(".see-also"))
+
+        architecture_text = " ".join(
+            soup.find("article", id=topic_id).get_text(" ", strip=True)
+            for topic_id in architecture_topic_ids
+        )
+        for phrase in [
+            "Persistent Paper Object",
+            "Personal Research Workspace",
+            "Visible Research Files",
+            "SQLite is the source of truth",
+            "WAL",
+            "JSON",
+            "one shared paper identity",
+        ]:
+            self.assertIn(phrase, architecture_text)
+
+        search_expectations = {
+            "wal": "sqlite-core",
+            "Gewu Key": "persistent-paper-object",
+            "visible research files": "visible-research-files",
+            "cooldown": "research-loop",
+            "scope deletion": "state-and-scope",
+        }
+        for query, topic_id in search_expectations.items():
+            article = soup.find("article", id=topic_id)
+            searchable = " ".join(
+                [
+                    article.get("data-title", ""),
+                    article.get("data-group", ""),
+                    article.get("data-keywords", ""),
+                    article.get_text(" ", strip=True),
+                ]
+            ).lower()
+            self.assertTrue(
+                all(term in searchable for term in query.lower().split()),
+                f"Expected search phrase {query!r} to find {topic_id}",
+            )
+
+        self.assertTrue(soup.select("figure.architecture-map"))
+        for figure in soup.select("figure.architecture-map"):
+            self.assertFalse(figure.select("img[src], video[src], audio[src], source[src]"))
 
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         html = ui_server.load_user_guide_html()
