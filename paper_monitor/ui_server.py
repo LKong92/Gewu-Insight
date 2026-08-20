@@ -6276,14 +6276,16 @@ def run_theme_monitor(
         candidate_rows: list[dict[str, str]] = []
         for merge_key, paper in candidates.items():
             sources = candidate_sources.get(merge_key, set())
-            if not sources.intersection({"local_arxiv", "local_aps_rss"}):
+            paper_id = str(paper.get("paper_id") or "")
+            has_local_source = bool(sources.intersection({"local_arxiv", "local_aps_rss"}))
+            if not has_local_source or storage.get_paper(paper_id) is None:
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
                 storage.upsert_paper(paper)
             for source_name in sources:
                 candidate_rows.append(
                     {
-                        "paper_id": str(paper.get("paper_id") or ""),
+                        "paper_id": paper_id,
                         "source": source_name,
                         "window_start": window_start,
                         "window_end": window_end,

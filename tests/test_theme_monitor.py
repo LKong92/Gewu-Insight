@@ -523,6 +523,174 @@ class ThemeMonitorTest(unittest.TestCase):
         finally:
             ui_server.theme_source_fetchers = original_fetchers
 
+    def test_remote_theme_winner_is_persisted_when_merged_with_local_arxiv(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        title = "Quantum transport in a shared candidate"
+        groups = {"quantum": {"name": "Quantum", "queries": ["quantum transport"]}}
+
+        def openalex_source(query, start_date, end_date):
+            return [
+                {
+                    "paper_id": "openalex_remote_winner",
+                    "doi": "",
+                    "title": title,
+                    "journal": "Remote Journal",
+                    "publication_date": selected.isoformat(),
+                    "abstract": "A detailed abstract makes the remote candidate preferable.",
+                    "url": "https://openalex.org/W123",
+                    "source": "openalex",
+                    "type": "journal-article",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                    "raw": {},
+                }
+            ]
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("openalex", openalex_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    storage.upsert_paper(
+                        {
+                            "paper_id": "arxiv_local_candidate",
+                            "doi": "",
+                            "title": title,
+                            "journal": "arXiv",
+                            "publication_date": selected.isoformat(),
+                            "abstract": "",
+                            "url": "https://arxiv.org/abs/2606.00001",
+                            "source": "arxiv",
+                            "type": "preprint",
+                            "section_allowed": True,
+                            "raw": {},
+                        }
+                    )
+
+                    result = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["quantum"],
+                        theme_groups=groups,
+                    )
+
+                    self.assertEqual(result["groups"]["quantum"]["saved"], 1)
+                    self.assertIsNotNone(storage.get_paper("openalex_remote_winner"))
+                    self.assertIsNotNone(storage.get_paper("arxiv_local_candidate"))
+                    rows = storage.conn.execute(
+                        """
+                        SELECT paper_id, source
+                        FROM theme_candidates
+                        WHERE window_start = ? AND window_end = ?
+                        ORDER BY source
+                        """,
+                        (selected.isoformat(), selected.isoformat()),
+                    ).fetchall()
+                    self.assertEqual(
+                        [(row["paper_id"], row["source"]) for row in rows],
+                        [
+                            ("openalex_remote_winner", "local_arxiv"),
+                            ("openalex_remote_winner", "openalex"),
+                        ],
+                    )
+                    orphan_count = storage.conn.execute(
+                        """
+                        SELECT COUNT(*) AS count
+                        FROM theme_candidates
+                        LEFT JOIN papers ON papers.paper_id = theme_candidates.paper_id
+                        WHERE papers.paper_id IS NULL
+                        """
+                    ).fetchone()["count"]
+                    self.assertEqual(orphan_count, 0)
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
+    def test_existing_local_theme_winner_does_not_add_a_duplicate_sighting(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        title = "Quantum transport with a complete local record"
+        groups = {"quantum": {"name": "Quantum", "queries": ["quantum transport"]}}
+
+        def openalex_source(query, start_date, end_date):
+            return [
+                {
+                    "paper_id": "openalex_lower_quality",
+                    "doi": "",
+                    "title": title,
+                    "journal": "Remote Journal",
+                    "publication_date": selected.isoformat(),
+                    "abstract": "",
+                    "url": "https://openalex.org/W456",
+                    "source": "openalex",
+                    "type": "journal-article",
+                    "type_crossref": "journal-article",
+                    "section_allowed": True,
+                    "raw": {},
+                }
+            ]
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("openalex", openalex_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    storage.upsert_paper(
+                        {
+                            "paper_id": "arxiv_local_winner",
+                            "doi": "",
+                            "title": title,
+                            "journal": "arXiv",
+                            "publication_date": selected.isoformat(),
+                            "abstract": "The complete local abstract keeps this candidate preferred.",
+                            "url": "https://arxiv.org/abs/2606.00002",
+                            "pdf_url": "https://arxiv.org/pdf/2606.00002",
+                            "source": "arxiv",
+                            "type": "preprint",
+                            "section_allowed": True,
+                            "raw": {},
+                        }
+                    )
+                    self.assertEqual(storage.get_paper("arxiv_local_winner")["source_count"], 1)
+
+                    run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["quantum"],
+                        theme_groups=groups,
+                    )
+
+                    self.assertEqual(storage.get_paper("arxiv_local_winner")["source_count"], 1)
+                    self.assertIsNone(storage.get_paper("openalex_lower_quality"))
+                    rows = storage.conn.execute(
+                        """
+                        SELECT DISTINCT paper_id, source
+                        FROM theme_candidates
+                        WHERE window_start = ? AND window_end = ?
+                        ORDER BY source
+                        """,
+                        (selected.isoformat(), selected.isoformat()),
+                    ).fetchall()
+                    self.assertEqual(
+                        [(row["paper_id"], row["source"]) for row in rows],
+                        [
+                            ("arxiv_local_winner", "local_arxiv"),
+                            ("arxiv_local_winner", "openalex"),
+                        ],
+                    )
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
     def test_local_aps_rss_augments_existing_online_subject_sources(self):
         import paper_monitor.ui_server as ui_server
 
