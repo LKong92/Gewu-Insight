@@ -295,6 +295,78 @@ class UserGuideTests(unittest.TestCase):
         for figure in soup.select("figure.architecture-map"):
             self.assertFalse(figure.select("img[src], video[src], audio[src], source[src]"))
 
+    def test_guide_documents_schema_ten_product_invariants_without_becoming_a_changelog(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+
+        sqlite_text = soup.find("article", id="sqlite-core").get_text(" ", strip=True)
+        for phrase in [
+            "Paper-level Monitor provenance",
+            "canonical paper",
+            "fetch run",
+            "Repeated observation",
+            "Discovery is not storage",
+        ]:
+            self.assertIn(phrase, sqlite_text)
+
+        visible_files_text = soup.find(
+            "article", id="visible-research-files"
+        ).get_text(" ", strip=True)
+        for phrase in [
+            "Supplements and other attachments are never eligible to become current",
+            "annotation count",
+            "computed as the resource is registered",
+            "same content fingerprint",
+        ]:
+            self.assertIn(phrase, visible_files_text)
+
+        versions_text = soup.find("article", id="versions-current").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "Only publication versions can be current",
+            "Other File attachments cannot become current",
+            "does not automatically displace it",
+        ]:
+            self.assertIn(phrase, versions_text)
+
+        download_text = soup.find("article", id="download-sync").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "Validation before replacement",
+            "Structural PDF validation",
+            "temporary file",
+            "existing valid file remains untouched",
+            "skipped operation does not relabel the existing file",
+        ]:
+            self.assertIn(phrase, download_text)
+
+        conversion_text = soup.find("article", id="drag-attach").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "If the conversion cannot finish",
+            "restores the original standalone files",
+            "fingerprint fields",
+        ]:
+            self.assertIn(phrase, conversion_text)
+
+        journal_text = soup.find("article", id="journal-monitor").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "How discovery provenance is preserved",
+            "canonical paper",
+            "fetch run",
+            "Later runs remain separately traceable",
+            "do not automatically add a Library placement",
+        ]:
+            self.assertIn(phrase, journal_text)
+
+        complete_text = soup.get_text(" ", strip=True)
+        self.assertNotIn("schema 10", complete_text.lower())
+        self.assertNotIn("ca63009", complete_text)
+
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         html = ui_server.load_user_guide_html()
         self.assertIn('id="guideSearch"', html)

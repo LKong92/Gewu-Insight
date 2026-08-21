@@ -831,7 +831,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#personal-research-workspace">The Personal Research Workspace</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="sqlite-core" data-group="Understand the System" data-title="Why SQLite Is the Core" data-keywords="SQLite database source of truth structured state WAL write ahead log transaction foreign key schema migration JSON export provenance settings secrets">
+        <article class="help-topic guide-topic" id="sqlite-core" data-group="Understand the System" data-title="Why SQLite Is the Core" data-keywords="SQLite database source of truth structured state WAL write ahead log transaction foreign key schema migration JSON export provenance journal fetch run canonical paper settings secrets">
           <p class="topic-kicker">Understand the System</p>
           <h1>Understand Why SQLite Is the Core</h1>
           <p class="lead">SQLite is the source of truth for Gewu Insight because it preserves the identity, relationships, resource registry, and operational memory that neither a filename nor an exported report can express.</p>
@@ -869,6 +869,13 @@
 
           <h2>Exports and provenance</h2>
           <p>JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are derived artifacts. They can be regenerated, shared, or inspected, but editing them does not alter the source records. Raw source evidence may also be retained inside SQLite for provenance; this does not turn an external JSON export into a second source of truth.</p>
+
+          <h2>Paper-level Monitor provenance</h2>
+          <p>Journal Monitor stores more than a run-level success or failure. For every paper observed during a journal fetch, a normalized provenance relationship connects the canonical paper to the fetch run and the reporting source. The run supplies the journal, date window, status, and timing; the paper-level relationship records that this source observed this particular work.</p>
+
+          <p>Repeated observation of the same paper and source within one run updates the existing relationship instead of creating a duplicate. A later run remains separately traceable. Subject and Author Monitor relationships can point to that same canonical paper, so three discovery routes add context without manufacturing three scholarly identities.</p>
+
+          <div class="note"><span class="callout-title">Discovery is not storage</span>A provenance relationship does not by itself create a Library placement or a local PDF. It records how the work entered view. Organization and file acquisition remain separate, explicit actions.</div>
 
           <h2>What the app does during an upgrade</h2>
           <p>On startup, the storage layer checks for required tables and fields, applies additive migrations, ensures required roots exist, and backfills stable keys or resource records where older data needs them. This is why a project upgrade should preserve the existing database and files rather than replace them with an empty database.</p>
@@ -912,12 +919,16 @@
           <p>Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.</p>
 
           <h2>How the current file is resolved</h2>
-          <p>An explicit preferred PDF takes precedence when it still exists. Otherwise, usable versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.</p>
+          <p>An explicit preferred publication-version PDF takes precedence when it still exists. Otherwise, usable publication versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified publication PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.</p>
+
+          <p>Supplements and other attachments are never eligible to become current, even when the attachment itself is a PDF. This separates “a file that belongs to the paper” from “a publication version that can represent the paper in Preview.”</p>
 
           <div class="note"><span class="callout-title">Published-version labels</span><strong>First Published</strong> means the publisher's initially released file; <strong>Version of Record</strong> means the current formal record. The compact UI can present either under the broader label <strong>Published Version</strong>, while the resource registry retains the more specific role when it is known.</div>
 
           <h2>Fingerprints and annotations</h2>
-          <p>Resources can carry an exact SHA-256 fingerprint and a content-oriented PDF fingerprint. Exact SHA-256 answers “are these bytes identical?” Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.</p>
+          <p>When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers “are these bytes identical?” Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.</p>
+
+          <p>An exact duplicate can be reused instead of stored twice. A clean PDF and an annotated copy may have different exact hashes but the same content fingerprint; both can be retained when the annotation state is meaningful.</p>
 
           <h2>Why Finder and the UI do not look identical</h2>
           <p>The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore appear as a current file in the visible topic folder while its previous versions and attachments live under a mirrored Associated Files path. Paper Files deliberately groups those resources by role instead of showing every physical directory level.</p>
@@ -1279,13 +1290,18 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default rank published accepted manuscript preprint annotated classify">
+        <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
           <p class="topic-kicker">Library</p>
           <h1>Choose Versions and the Current File</h1>
           <p class="lead">The current file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
 
           <h2>Automatic selection</h2>
           <p>The automatic order favors a published version, then an accepted manuscript, then a preprint, then an imported or unclassified PDF. Within a role, a later recognized version normally wins. Availability and file validity are checked before a file becomes current.</p>
+
+          <h2>Only publication versions can be current</h2>
+          <p>Only publication-version PDFs are eligible for automatic or manual current selection. Published versions, accepted manuscripts, preprints, and an imported PDF classified as a paper version can represent the paper. Supplements, notes, images, data, code, presentations, and Other File attachments cannot become current—even if one of those attachments uses the PDF format.</p>
+
+          <p>If a Version of Record is already current, a preprint or accepted manuscript that arrives later is preserved under Other versions and does not automatically displace it. Manual preference remains available between eligible publication versions.</p>
 
           <h2>Choose a file manually</h2>
           <ol class="steps">
@@ -1307,7 +1323,7 @@
             <li><span class="ui">Imported PDF</span> and <span class="ui">Imported PDF · Annotated</span></li>
           </ul>
 
-          <div class="note"><span class="callout-title">Note</span>Changing a type or choosing Use changes database metadata and preference. It does not rename the file merely to match the label.</div>
+          <div class="note"><span class="callout-title">Note</span>Changing a type or choosing Use changes database metadata and preference. It does not rename the file merely to match the label. A current or preferred publication version must be replaced or returned to automatic selection before it can be reclassified as an attachment.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#attachments">Add and Classify Attachments</a></div></div>
         </article>
@@ -1331,12 +1347,12 @@
           <h2>Add by drag and drop</h2>
           <p>Drag a Finder file over the expanded Paper Files area, wait for the drop target to respond, then release. The file is copied into the selected paper’s associated bundle and appears in Paper Files.</p>
 
-          <div class="important"><span class="callout-title">Important</span>The current PDF cannot be deleted or reclassified as a non-PDF attachment. Choose another PDF as current first, or return to automatic selection.</div>
+          <div class="important"><span class="callout-title">Important</span>The current PDF cannot be deleted or reclassified as an attachment. Choose another eligible publication-version PDF as current first, or return to automatic selection. A PDF supplement remains a supplement and cannot represent the paper as current.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#drag-attach">Move a Standalone File into Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="download-sync" data-group="Library" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite">
+        <article class="help-topic guide-topic" id="download-sync" data-group="Library" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite validation truncated HTML temporary atomic skipped role">
           <p class="topic-kicker">Library</p>
           <h1>Download and Sync Versions</h1>
           <p class="lead">Downloads add a version to the paper bundle. They do not silently overwrite a different preserved PDF.</p>
@@ -1357,7 +1373,15 @@
           </ul>
 
           <h2>Duplicate protection</h2>
-          <p>Gewu Insight compares SHA-256 hashes for exact duplicates. For PDFs, it can also compare a content fingerprint that ignores annotation-only changes. An exact duplicate is reused instead of stored twice. A genuinely annotated copy may be retained and labeled as annotated.</p>
+          <p>Gewu Insight computes exact SHA-256 and PDF content fingerprints as each new resource is registered. An exact duplicate is reused instead of stored twice. A clean PDF and a genuinely annotated copy can share a content fingerprint while retaining different exact hashes, annotation counts, and labels.</p>
+
+          <h2>Validation before replacement</h2>
+          <p>A response is not accepted merely because it begins with <code>%PDF-</code>. Structural PDF validation rejects empty files, HTML responses, truncated downloads, missing valid endings, and content that cannot be parsed as a PDF. A download is written to a temporary file and replaces the destination only after validation succeeds. If the request or stream fails, an existing valid file remains untouched and a partial file is not registered as a resource.</p>
+
+          <h2>Roles follow the file that actually arrived</h2>
+          <p>A publisher download is classified from the file and source actually returned. A Version of Record remains the automatic current file when a preprint or accepted manuscript arrives later. A publisher reference or accepted manuscript is preserved as an accepted manuscript rather than promoted merely because the paper also has a DOI.</p>
+
+          <p>If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved role itself is wrong.</p>
 
           <div class="note"><span class="callout-title">Note</span>A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.</div>
 
@@ -1379,6 +1403,9 @@
           </ol>
 
           <p class="result">The physical file and database link now belong to the destination paper; the former standalone entry is gone.</p>
+
+          <h2>If the conversion cannot finish</h2>
+          <p>The file moves and database changes are coordinated as one recoverable operation. If any step fails, Gewu Insight restores the original standalone files and rolls back the paper, Library item, resource relationships, and fingerprint fields. The source should remain usable rather than becoming a half-converted attachment.</p>
 
           <div class="important"><span class="callout-title">Important</span>If the source item is shared by another Library reference or protected relationship, Gewu Insight may refuse a destructive conversion. Add a copy with <span class="ui">Add File</span> instead.</div>
 
@@ -1571,7 +1598,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="journal-monitor" data-group="Publications and Monitors" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image">
+        <article class="help-topic guide-topic" id="journal-monitor" data-group="Publications and Monitors" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Journal Monitor</h1>
           <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
@@ -1590,6 +1617,11 @@
 
           <h2>Daily scheduled updates</h2>
           <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>
+
+          <h2>How discovery provenance is preserved</h2>
+          <p>Each stored Journal result is related to the canonical paper, the fetch run, and the source that reported it. The run preserves the journal, requested date window, status, and timing. Seeing the same paper from Crossref and OpenAlex records both source observations against the same paper identity; seeing it again within one run does not create a duplicate relationship. Later runs remain separately traceable.</p>
+
+          <p>The same canonical paper can also acquire Subject Monitor and Author Monitor relationships. These discovery paths explain why the work is visible; they do not automatically add a Library placement or create a local Paper Files resource.</p>
 
           <h2>Filter and inspect</h2>
           <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
