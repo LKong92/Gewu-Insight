@@ -173,12 +173,28 @@ def fetch_one_journal(
             if paper.get("section_allowed") is False:
                 blocked += 1
 
-            storage.upsert_paper(
-                paper,
-                replace_bibliographic_metadata=(
-                    is_aps_lifecycle_journal(paper.get("journal")) and paper.get("publisher_section") == "published"
-                ),
-            )
+            observations = [
+                {"paper_id": str(paper["paper_id"]), "source": source}
+                for source in journal_paper_sources(paper)
+            ]
+            try:
+                storage.upsert_paper(
+                    paper,
+                    replace_bibliographic_metadata=(
+                        is_aps_lifecycle_journal(paper.get("journal"))
+                        and paper.get("publisher_section") == "published"
+                    ),
+                    commit=False,
+                )
+                storage.record_journal_monitor_papers(
+                    fetch_run_id=fetch_run_id,
+                    observations=observations,
+                    commit=False,
+                )
+                storage.conn.commit()
+            except Exception:
+                storage.conn.rollback()
+                raise
             saved += 1
 
         status = journal_fetch_status(saved=saved, source_errors=source_errors, source_attempts=source_attempts)
@@ -236,7 +252,18 @@ def fetch_one_arxiv_preprint_source(
     for paper in dedup_by_id(arxiv_result["papers"]):
         paper["publisher_section"] = paper.get("publisher_section") or "preprint"
         paper["section_allowed"] = True
-        storage.upsert_paper(paper)
+        try:
+            storage.upsert_paper(paper, commit=False)
+            storage.record_journal_monitor_paper(
+                fetch_run_id=fetch_run_id,
+                paper_id=str(paper["paper_id"]),
+                source="arxiv",
+                commit=False,
+            )
+            storage.conn.commit()
+        except Exception:
+            storage.conn.rollback()
+            raise
         saved += 1
 
     storage.finish_fetch_run(
@@ -255,6 +282,15 @@ def fetch_one_arxiv_preprint_source(
         "blocked_by_section": 0,
         "message": arxiv_result.get("message") or "",
     }
+
+
+def journal_paper_sources(paper: dict[str, Any]) -> list[str]:
+    sources = {
+        clean_text(source)
+        for source in clean_text(paper.get("source") or "").split("+")
+        if clean_text(source)
+    }
+    return sorted(sources or {"journal"})
 
 
 def default_windows(today: date, lookback_days: int, report_days: int) -> tuple[date, date, date]:

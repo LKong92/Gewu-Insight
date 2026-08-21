@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
+from http import HTTPStatus
+from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from pypdf import PdfReader, PdfWriter
 from pypdf.annotations import Text
@@ -54,6 +57,36 @@ class PaperResourceStorageTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"%PDF-1.4\nfixture\n%%EOF\n")
         return path
+
+    def valid_pdf_bytes(self, marker: str) -> bytes:
+        output = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        writer.add_metadata({"/Subject": marker})
+        writer.write(output)
+        return output.getvalue()
+
+    def conversion_db_state(self) -> dict[str, list[dict[str, object]]]:
+        return {
+            "papers": [
+                dict(row)
+                for row in self.storage.conn.execute(
+                    "SELECT * FROM papers ORDER BY paper_id"
+                ).fetchall()
+            ],
+            "library_items": [
+                dict(row)
+                for row in self.storage.conn.execute(
+                    "SELECT * FROM library_items ORDER BY id"
+                ).fetchall()
+            ],
+            "resources": [
+                dict(row)
+                for row in self.storage.conn.execute(
+                    "SELECT * FROM resources ORDER BY id"
+                ).fetchall()
+            ],
+        }
 
     def test_new_paper_gets_stable_storage_key(self) -> None:
         self.add_paper("arxiv_2506.19903")
@@ -659,6 +692,179 @@ class PaperResourceStorageTests(unittest.TestCase):
                 "paper-with-note", int(resource["id"])
             )
 
+    def test_attachment_pdfs_cannot_be_preferred_or_promoted_but_paper_version_can(self) -> None:
+        self.add_paper("paper-current-role-guard")
+        current_path = self.write_pdf("Role Guard/Published.pdf")
+        self.storage.update_download_status(
+            "paper-current-role-guard",
+            status="success",
+            main_pdf_path=str(current_path),
+            merged_pdf_path=str(current_path),
+        )
+        current = self.storage.ensure_primary_pdf_resource("paper-current-role-guard")
+        self.storage.conn.execute(
+            "UPDATE resources SET file_role = 'publication_version', version_role = 'version_of_record' WHERE id = ?",
+            (int(current["id"]),),
+        )
+        supplement_path = self.write_pdf("Role Guard/Supplement.pdf")
+        other_path = self.write_pdf("Role Guard/Other.pdf")
+        preprint_path = self.write_pdf("Role Guard/Preprint.pdf")
+        supplement = self.storage.create_paper_resource(
+            paper_id="paper-current-role-guard",
+            stored_path=str(supplement_path),
+            file_role="supplement",
+            version_label="Supplement",
+        )
+        other = self.storage.create_paper_resource(
+            paper_id="paper-current-role-guard",
+            stored_path=str(other_path),
+            file_role="other",
+            version_label="Other File",
+        )
+        preprint = self.storage.create_paper_resource(
+            paper_id="paper-current-role-guard",
+            stored_path=str(preprint_path),
+            file_role="publication_version",
+            version_role="preprint",
+            version_label="Preprint",
+        )
+        before_paper = dict(self.storage.get_paper("paper-current-role-guard"))
+        before_resources = [
+            dict(resource)
+            for resource in self.storage.conn.execute(
+                "SELECT * FROM resources WHERE paper_id = ? ORDER BY id",
+                ("paper-current-role-guard",),
+            ).fetchall()
+        ]
+        before_bytes = {
+            path: path.read_bytes()
+            for path in (current_path, supplement_path, other_path, preprint_path)
+        }
+
+        for attachment in (supplement, other):
+            with self.assertRaisesRegex(ValueError, "paper-version PDFs"):
+                self.storage.set_preferred_paper_resource(
+                    "paper-current-role-guard", int(attachment["id"])
+                )
+            with self.assertRaisesRegex(ValueError, "paper-version PDFs"):
+                ui_server.promote_paper_resource(
+                    self.storage,
+                    "paper-current-role-guard",
+                    int(attachment["id"]),
+                    manual_preferred=True,
+                )
+
+        self.assertEqual(
+            dict(self.storage.get_paper("paper-current-role-guard")), before_paper
+        )
+        self.assertEqual(
+            [
+                dict(resource)
+                for resource in self.storage.conn.execute(
+                    "SELECT * FROM resources WHERE paper_id = ? ORDER BY id",
+                    ("paper-current-role-guard",),
+                ).fetchall()
+            ],
+            before_resources,
+        )
+        for path, content in before_bytes.items():
+            self.assertTrue(path.exists())
+            self.assertEqual(path.read_bytes(), content)
+
+        self.storage.set_preferred_paper_resource(
+            "paper-current-role-guard", int(preprint["id"])
+        )
+        self.assertEqual(
+            int(
+                self.storage.resolve_primary_paper_resource(
+                    "paper-current-role-guard"
+                )["id"]
+            ),
+            int(preprint["id"]),
+        )
+        promoted = ui_server.promote_paper_resource(
+            self.storage,
+            "paper-current-role-guard",
+            int(preprint["id"]),
+            manual_preferred=True,
+        )
+        paper = self.storage.get_paper("paper-current-role-guard")
+        self.assertEqual(int(paper["primary_resource_id"]), int(preprint["id"]))
+        self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
+        self.assertEqual(int(promoted["id"]), int(preprint["id"]))
+
+    def test_preferred_paper_file_http_handler_rejects_attachment_and_accepts_version(self) -> None:
+        self.add_paper("paper-http-current-role")
+        current_path = self.write_pdf("HTTP Role/Published.pdf")
+        self.storage.update_download_status(
+            "paper-http-current-role",
+            status="success",
+            main_pdf_path=str(current_path),
+            merged_pdf_path=str(current_path),
+        )
+        current = self.storage.ensure_primary_pdf_resource("paper-http-current-role")
+        self.storage.conn.execute(
+            "UPDATE resources SET file_role = 'publication_version', version_role = 'version_of_record' WHERE id = ?",
+            (int(current["id"]),),
+        )
+        attachment_path = self.write_pdf("HTTP Role/Supplement.pdf")
+        preprint_path = self.write_pdf("HTTP Role/Preprint.pdf")
+        attachment = self.storage.create_paper_resource(
+            paper_id="paper-http-current-role",
+            stored_path=str(attachment_path),
+            file_role="supplement",
+            version_label="Supplement",
+        )
+        preprint = self.storage.create_paper_resource(
+            paper_id="paper-http-current-role",
+            stored_path=str(preprint_path),
+            file_role="publication_version",
+            version_role="preprint",
+            version_label="Preprint",
+        )
+        before = self.conversion_db_state()
+        before_bytes = {
+            path: path.read_bytes()
+            for path in (current_path, attachment_path, preprint_path)
+        }
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.configured_db_path = self.db_path
+        handler.send_json = MagicMock()
+        handler.send_error_json = MagicMock()
+
+        handler.handle_set_preferred_paper_file(
+            {
+                "paper_id": "paper-http-current-role",
+                "resource_id": int(attachment["id"]),
+            }
+        )
+
+        handler.send_error_json.assert_called_once()
+        self.assertEqual(handler.send_error_json.call_args.args[0], HTTPStatus.BAD_REQUEST)
+        handler.send_json.assert_not_called()
+        self.assertEqual(self.conversion_db_state(), before)
+        for path, content in before_bytes.items():
+            self.assertTrue(path.exists())
+            self.assertEqual(path.read_bytes(), content)
+
+        handler.send_error_json.reset_mock()
+        handler.send_json.reset_mock()
+        handler.handle_set_preferred_paper_file(
+            {
+                "paper_id": "paper-http-current-role",
+                "resource_id": int(preprint["id"]),
+            }
+        )
+
+        handler.send_error_json.assert_not_called()
+        handler.send_json.assert_called_once()
+        response = handler.send_json.call_args.args[0]
+        self.assertEqual(response["preferred_resource_id"], int(preprint["id"]))
+        self.assertEqual(response["resolved_resource_id"], int(preprint["id"]))
+        paper = self.storage.get_paper("paper-http-current-role")
+        self.assertEqual(int(paper["primary_resource_id"]), int(preprint["id"]))
+        self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
+
     def test_explicit_attachment_is_copied_to_mirrored_associated_files(self) -> None:
         self.add_paper("paper-with-files")
         primary = self.write_pdf("Topic/Primary.pdf")
@@ -754,6 +960,143 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(attached_path.read_bytes(), b"processed data")
         self.assertIn("Associated Files/Library", str(attached_path))
 
+    def test_two_resource_conversion_second_move_failure_restores_database_and_files_exactly(self) -> None:
+        self.add_paper("conversion-rollback-target")
+        self.add_paper("conversion-rollback-source")
+        source_folder = self.storage.create_library_folder(
+            name="Rollback Source", parent_id=1
+        )
+        source_item = self.storage.add_library_item(
+            paper_id="conversion-rollback-source",
+            folder_id=int(source_folder["id"]),
+        )
+        first_path = self.library_root / "Rollback Source" / "first-result.dat"
+        second_path = self.library_root / "Rollback Source" / "second-result.dat"
+        first_path.parent.mkdir(parents=True, exist_ok=True)
+        first_path.write_bytes(b"first result")
+        second_path.write_bytes(b"second result")
+        first_resource = self.storage.create_paper_resource(
+            paper_id="conversion-rollback-source",
+            stored_path=str(first_path),
+            display_name=first_path.name,
+            file_role="other",
+            sha256="",
+            content_sha256="",
+            added_via="loader",
+        )
+        second_resource = self.storage.create_paper_resource(
+            paper_id="conversion-rollback-source",
+            stored_path=str(second_path),
+            display_name=second_path.name,
+            file_role="other",
+            sha256="",
+            content_sha256="",
+            added_via="loader",
+        )
+        before = self.conversion_db_state()
+        original_files = {
+            first_path: first_path.read_bytes(),
+            second_path: second_path.read_bytes(),
+        }
+        real_move = shutil.move
+        forward_move_count = 0
+
+        def fail_second_managed_move(source: str, destination: str, *args: object, **kwargs: object) -> str:
+            nonlocal forward_move_count
+            destination_path = Path(destination).absolute()
+            try:
+                destination_path.relative_to(self.associated_root.absolute())
+            except ValueError:
+                return str(real_move(source, destination, *args, **kwargs))
+            forward_move_count += 1
+            if forward_move_count == 2:
+                raise OSError("injected second managed move failure")
+            return str(real_move(source, destination, *args, **kwargs))
+
+        with (
+            patch.object(ui_server.shutil, "move", side_effect=fail_second_managed_move),
+            self.assertRaisesRegex(OSError, "second managed move failure"),
+        ):
+            ui_server.convert_library_item_to_paper_attachment(
+                self.storage,
+                source_item_id=int(source_item["id"]),
+                target_paper_id="conversion-rollback-target",
+            )
+
+        self.assertEqual(forward_move_count, 2)
+        self.assertEqual(self.conversion_db_state(), before)
+        self.assertIsNotNone(self.storage.get_paper("conversion-rollback-source"))
+        self.assertIsNotNone(self.storage.get_library_item(int(source_item["id"])))
+        self.assertIsNotNone(self.storage.get_paper_resource(int(first_resource["id"])))
+        self.assertIsNotNone(self.storage.get_paper_resource(int(second_resource["id"])))
+        for path, content in original_files.items():
+            self.assertTrue(path.exists())
+            self.assertEqual(path.read_bytes(), content)
+        if self.associated_root.exists():
+            self.assertFalse(any(path.is_file() for path in self.associated_root.rglob("*")))
+        self.assertEqual(self.storage.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_two_resource_conversion_moves_files_and_commits_fingerprints_atomically(self) -> None:
+        self.add_paper("conversion-success-target")
+        self.add_paper("conversion-success-source")
+        source_folder = self.storage.create_library_folder(
+            name="Success Source", parent_id=1
+        )
+        source_item = self.storage.add_library_item(
+            paper_id="conversion-success-source",
+            folder_id=int(source_folder["id"]),
+        )
+        first_path = self.library_root / "Success Source" / "first-result.dat"
+        second_path = self.library_root / "Success Source" / "second-result.dat"
+        first_path.parent.mkdir(parents=True, exist_ok=True)
+        first_path.write_bytes(b"first result")
+        second_path.write_bytes(b"second result")
+        originals = {
+            "first-result.dat": first_path.read_bytes(),
+            "second-result.dat": second_path.read_bytes(),
+        }
+        first_resource = self.storage.create_paper_resource(
+            paper_id="conversion-success-source",
+            stored_path=str(first_path),
+            display_name=first_path.name,
+            file_role="other",
+            sha256="",
+            content_sha256="",
+            added_via="loader",
+        )
+        second_resource = self.storage.create_paper_resource(
+            paper_id="conversion-success-source",
+            stored_path=str(second_path),
+            display_name=second_path.name,
+            file_role="other",
+            sha256="",
+            content_sha256="",
+            added_via="loader",
+        )
+
+        result = ui_server.convert_library_item_to_paper_attachment(
+            self.storage,
+            source_item_id=int(source_item["id"]),
+            target_paper_id="conversion-success-target",
+        )
+
+        self.assertEqual(result["attached_count"], 2)
+        self.assertFalse(first_path.exists())
+        self.assertFalse(second_path.exists())
+        self.assertIsNone(self.storage.get_library_item(int(source_item["id"])))
+        self.assertIsNone(self.storage.get_paper("conversion-success-source"))
+        for resource_id in (int(first_resource["id"]), int(second_resource["id"])):
+            attached = self.storage.get_paper_resource(resource_id)
+            self.assertEqual(attached["paper_id"], "conversion-success-target")
+            self.assertEqual(attached["file_role"], "other")
+            self.assertEqual(attached["version_label"], "Other File")
+            self.assertTrue(attached["sha256"])
+            attached_path = Path(attached["stored_path"])
+            self.assertTrue(attached_path.exists())
+            self.assertEqual(attached_path.read_bytes(), originals[attached_path.name])
+            self.assertIn("Associated Files/Library", str(attached_path))
+        self.assertEqual(self.storage.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
     def test_shared_library_work_is_not_destructively_converted_to_attachment(self) -> None:
         self.add_paper("target-shared-guard")
         self.add_paper("source-shared-guard")
@@ -810,12 +1153,13 @@ class PaperResourceStorageTests(unittest.TestCase):
         )
         self.storage.ensure_primary_pdf_resource("paper-promote")
         old_bytes = primary.read_bytes()
+        published_bytes = self.valid_pdf_bytes("published")
 
         promoted = ui_server.attach_file_to_paper(
             self.storage,
             paper_id="paper-promote",
             filename="Published.pdf",
-            content=b"%PDF-1.4\npublished\n%%EOF\n",
+            content=published_bytes,
             file_role="publication_version",
             version_role="version_of_record",
         )
@@ -823,7 +1167,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         paper = self.storage.get_paper("paper-promote")
         promoted_path = Path(paper["merged_pdf_path"])
         self.assertEqual(promoted_path.name, "Published.pdf")
-        self.assertEqual(promoted_path.read_bytes(), b"%PDF-1.4\npublished\n%%EOF\n")
+        self.assertEqual(promoted_path.read_bytes(), published_bytes)
         self.assertFalse(primary.exists())
         self.assertEqual(int(paper["primary_resource_id"]), int(promoted["id"]))
         resources = self.storage.list_paper_resources("paper-promote")
@@ -850,11 +1194,12 @@ class PaperResourceStorageTests(unittest.TestCase):
             (int(published["id"]),),
         )
         self.storage.conn.commit()
+        preprint_bytes = self.valid_pdf_bytes("preprint")
         preprint = ui_server.attach_file_to_paper(
             self.storage,
             paper_id="paper-manual-swap",
             filename="Preprint.pdf",
-            content=b"%PDF-1.4\npreprint\n%%EOF\n",
+            content=preprint_bytes,
             file_role="publication_version",
             version_role="preprint",
         )
@@ -869,7 +1214,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
         preprint_current = Path(paper["merged_pdf_path"])
         self.assertEqual(preprint_current.name, "Preprint.pdf")
-        self.assertEqual(preprint_current.read_bytes(), b"%PDF-1.4\npreprint\n%%EOF\n")
+        self.assertEqual(preprint_current.read_bytes(), preprint_bytes)
         self.assertFalse(primary.exists())
 
         self.storage.set_preferred_paper_resource("paper-manual-swap", None)
@@ -889,6 +1234,221 @@ class PaperResourceStorageTests(unittest.TestCase):
         refreshed_preprint = next(resource for resource in refreshed_resources if int(resource["id"]) == int(preprint["id"]))
         self.assertEqual(Path(refreshed_preprint["stored_path"]).name, "Preprint [Preprint].pdf")
         self.assertEqual(refreshed_preprint["display_name"], "Preprint [Preprint].pdf")
+
+    def test_initial_publisher_download_stays_current_when_preprint_arrives_later(self) -> None:
+        self.add_paper("publisher-first-late-preprint")
+        publisher = self.write_pdf("Topic/publisher-first.pdf")
+        publisher_bytes = self.valid_pdf_bytes("publisher version of record")
+        publisher.write_bytes(publisher_bytes)
+        publisher_url = "https://publisher.example/articles/10.1234/publisher-first.pdf"
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ?, pdf_url = ? WHERE paper_id = ?",
+            ("10.1234/publisher-first", publisher_url, "publisher-first-late-preprint"),
+        )
+        self.storage.conn.commit()
+        self.storage.update_download_status(
+            "publisher-first-late-preprint",
+            status="success",
+            main_pdf_path=str(publisher),
+            merged_pdf_path=str(publisher),
+        )
+
+        version_of_record = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "publisher-first-late-preprint",
+            result={"status": "success", "main_pdf_url": publisher_url},
+            snapshot=None,
+        )
+
+        self.assertIsNotNone(version_of_record)
+        self.assertEqual(version_of_record["file_role"], "publication_version")
+        self.assertEqual(version_of_record["version_role"], "version_of_record")
+        self.assertEqual(version_of_record["version_label"], "Published Version")
+        self.assertEqual(version_of_record["source_url"], publisher_url)
+        late_preprint = ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="publisher-first-late-preprint",
+            filename="publisher-first-preprint.pdf",
+            content=self.valid_pdf_bytes("late preprint"),
+            file_role="publication_version",
+            version_role="preprint",
+            version_label="Preprint",
+        )
+
+        paper = self.storage.get_paper("publisher-first-late-preprint")
+        self.assertEqual(
+            int(paper["primary_resource_id"]), int(version_of_record["id"])
+        )
+        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(Path(paper["merged_pdf_path"]), publisher)
+        self.assertEqual(publisher.read_bytes(), publisher_bytes)
+        self.assertEqual(late_preprint["version_role"], "preprint")
+        self.assertNotEqual(int(late_preprint["id"]), int(version_of_record["id"]))
+        self.assertIn("Associated Files/Library/Topic", late_preprint["stored_path"])
+        self.assertEqual(
+            len(
+                self.storage.list_paper_resources(
+                    "publisher-first-late-preprint",
+                    ensure_primary=False,
+                )
+            ),
+            2,
+        )
+
+    def test_initial_publisher_download_stays_current_when_accepted_manuscript_arrives_later(self) -> None:
+        self.add_paper("publisher-first-late-accepted")
+        publisher = self.write_pdf("Topic/publisher-first-accepted.pdf")
+        publisher_bytes = self.valid_pdf_bytes("publisher version of record")
+        publisher.write_bytes(publisher_bytes)
+        publisher_url = "https://publisher.example/articles/10.1234/publisher-accepted.pdf"
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ?, pdf_url = ? WHERE paper_id = ?",
+            ("10.1234/publisher-accepted", publisher_url, "publisher-first-late-accepted"),
+        )
+        self.storage.conn.commit()
+        self.storage.update_download_status(
+            "publisher-first-late-accepted",
+            status="success",
+            main_pdf_path=str(publisher),
+            merged_pdf_path=str(publisher),
+        )
+
+        version_of_record = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "publisher-first-late-accepted",
+            result={"status": "success", "main_pdf_url": publisher_url},
+            snapshot=None,
+        )
+        late_accepted = ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="publisher-first-late-accepted",
+            filename="accepted-manuscript.pdf",
+            content=self.valid_pdf_bytes("late accepted manuscript"),
+            file_role="publication_version",
+            version_role="accepted_manuscript",
+            version_label="Accepted Manuscript",
+        )
+
+        paper = self.storage.get_paper("publisher-first-late-accepted")
+        self.assertEqual(
+            int(paper["primary_resource_id"]), int(version_of_record["id"])
+        )
+        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(Path(paper["merged_pdf_path"]), publisher)
+        self.assertEqual(publisher.read_bytes(), publisher_bytes)
+        self.assertEqual(version_of_record["version_role"], "version_of_record")
+        self.assertEqual(version_of_record["version_label"], "Published Version")
+        self.assertEqual(version_of_record["source_url"], publisher_url)
+        self.assertEqual(late_accepted["version_role"], "accepted_manuscript")
+        self.assertNotEqual(int(late_accepted["id"]), int(version_of_record["id"]))
+        self.assertIn("Associated Files/Library/Topic", late_accepted["stored_path"])
+        self.assertEqual(
+            len(
+                self.storage.list_paper_resources(
+                    "publisher-first-late-accepted",
+                    ensure_primary=False,
+                )
+            ),
+            2,
+        )
+
+    def test_nature_reference_is_accepted_until_version_of_record_arrives(self) -> None:
+        self.add_paper("nature-accepted-first")
+        accepted_path = self.write_pdf("Topic/nature-reference.pdf")
+        accepted_bytes = self.valid_pdf_bytes("accepted manuscript")
+        accepted_path.write_bytes(accepted_bytes)
+        reference_url = (
+            "https://media.springernature.com/full/springer-static/image/"
+            "art%3A10.1038%2Fs41586-026-11037-x/MediaObjects/"
+            "41586_2026_11037_MOESM1_ESM_reference.pdf"
+        )
+        self.storage.conn.execute(
+            "UPDATE papers SET doi = ?, pdf_url = ? WHERE paper_id = ?",
+            ("10.1038/s41586-026-11037-x", reference_url, "nature-accepted-first"),
+        )
+        self.storage.conn.commit()
+        self.storage.update_download_status(
+            "nature-accepted-first",
+            status="success",
+            main_pdf_path=str(accepted_path),
+            merged_pdf_path=str(accepted_path),
+        )
+
+        accepted = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "nature-accepted-first",
+            result={"status": "success", "main_pdf_url": reference_url},
+            snapshot=None,
+        )
+
+        self.assertEqual(accepted["file_role"], "publication_version")
+        self.assertEqual(accepted["version_role"], "accepted_manuscript")
+        self.assertEqual(accepted["version_label"], "Accepted Manuscript")
+        self.assertEqual(accepted["source_url"], reference_url)
+        version_of_record = ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="nature-accepted-first",
+            filename="nature-published.pdf",
+            content=self.valid_pdf_bytes("version of record"),
+            file_role="publication_version",
+            version_role="version_of_record",
+            version_label="Published Version",
+        )
+
+        paper = self.storage.get_paper("nature-accepted-first")
+        self.assertEqual(int(paper["primary_resource_id"]), int(version_of_record["id"]))
+        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(Path(paper["merged_pdf_path"]).read_bytes(), self.valid_pdf_bytes("version of record"))
+        archived_accepted = self.storage.get_paper_resource(int(accepted["id"]))
+        self.assertEqual(archived_accepted["version_role"], "accepted_manuscript")
+        self.assertEqual(Path(archived_accepted["stored_path"]).read_bytes(), accepted_bytes)
+        self.assertEqual(
+            len(self.storage.list_paper_resources("nature-accepted-first", ensure_primary=False)),
+            2,
+        )
+
+    def test_skipped_download_does_not_relabel_existing_preprint_from_new_doi_metadata(self) -> None:
+        self.add_paper("skipped-preprint-role")
+        preprint_bytes = self.valid_pdf_bytes("preprint bytes")
+        preprint = ui_server.attach_file_to_paper(
+            self.storage,
+            paper_id="skipped-preprint-role",
+            filename="2608.12345v1.pdf",
+            content=preprint_bytes,
+            file_role="publication_version",
+            version_role="preprint",
+            version_label="Preprint v1",
+        )
+        before = self.storage.get_paper_resource(int(preprint["id"]))
+        self.storage.conn.execute(
+            """
+            UPDATE papers
+            SET doi = ?, pdf_url = ?, download_status = 'success'
+            WHERE paper_id = ?
+            """,
+            (
+                "10.1000/newly-discovered-doi",
+                "https://publisher.example/articles/newly-discovered-doi.pdf",
+                "skipped-preprint-role",
+            ),
+        )
+        self.storage.conn.commit()
+
+        refreshed = ui_server.register_downloaded_paper_resource(
+            self.storage,
+            "skipped-preprint-role",
+            result={"status": "skipped", "message": "already downloaded"},
+            snapshot=None,
+        )
+
+        paper = self.storage.get_paper("skipped-preprint-role")
+        self.assertEqual(int(refreshed["id"]), int(preprint["id"]))
+        self.assertEqual(refreshed["file_role"], "publication_version")
+        self.assertEqual(refreshed["version_role"], "preprint")
+        self.assertEqual(refreshed["version_label"], "Preprint v1")
+        self.assertEqual(refreshed["added_via"], before["added_via"])
+        self.assertEqual(int(paper["primary_resource_id"]), int(preprint["id"]))
+        self.assertEqual(Path(paper["merged_pdf_path"]).read_bytes(), preprint_bytes)
 
     def test_forced_download_refresh_preserves_changed_previous_pdf(self) -> None:
         self.add_paper("paper-download-history")
@@ -948,7 +1508,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         preprint = self.write_pdf("Topic/1602.05061.pdf")
         preprint_bytes = preprint.read_bytes()
         publisher = self.write_pdf("Downloads/PhysRevB.93.235142.pdf")
-        publisher.write_bytes(b"%PDF-1.4\npublished version\n%%EOF\n")
+        publisher.write_bytes(self.valid_pdf_bytes("published version"))
         self.storage.conn.execute(
             "UPDATE papers SET doi = ? WHERE paper_id = ?",
             ("10.1103/physrevb.93.235142", "paper-browser-publisher-upgrade"),

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from io import BytesIO
 import inspect
 import tempfile
 import unittest
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
+
+from pypdf import PdfWriter
 
 from paper_monitor import ui_server
 from paper_monitor.storage import Storage
@@ -788,11 +791,15 @@ class LibraryFileOperationTests(unittest.TestCase):
             paper_id="complete-export-paper",
             folder_id=int(folder["id"]),
         )
+        accepted_pdf = BytesIO()
+        accepted_writer = PdfWriter()
+        accepted_writer.add_blank_page(width=72, height=72)
+        accepted_writer.write(accepted_pdf)
         ui_server.attach_file_to_paper(
             self.storage,
             paper_id="complete-export-paper",
             filename="Accepted.pdf",
-            content=b"%PDF-1.4\naccepted\n%%EOF\n",
+            content=accepted_pdf.getvalue(),
             file_role="publication_version",
             version_role="accepted_manuscript",
         )

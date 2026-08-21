@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 9
+STORAGE_SCHEMA_VERSION = 10
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -89,6 +89,21 @@ CREATE TABLE IF NOT EXISTS fetch_runs (
   started_at TEXT NOT NULL,
   finished_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS journal_monitor_papers (
+  fetch_run_id INTEGER NOT NULL REFERENCES fetch_runs(id) ON DELETE CASCADE,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (fetch_run_id, paper_id, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_monitor_papers_paper
+ON journal_monitor_papers(paper_id, fetch_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_journal_monitor_papers_source
+ON journal_monitor_papers(source, fetch_run_id);
 
 CREATE TABLE IF NOT EXISTS library_folders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -435,7 +450,17 @@ class Storage:
                 "sha256", "content_sha256", "annotation_count", "is_annotated",
                 "added_via", "supersedes_resource_id", "missing_status",
             }
-            schema_needs_repair = not required_paper_columns.issubset(paper_columns) or not required_resource_columns.issubset(resource_columns)
+            existing_tables = {
+                row["name"]
+                for row in self.conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            schema_needs_repair = (
+                not required_paper_columns.issubset(paper_columns)
+                or not required_resource_columns.issubset(resource_columns)
+                or "journal_monitor_papers" not in existing_tables
+            )
             if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
                 self._ensure_schema_columns()
@@ -1289,6 +1314,101 @@ class Storage:
         )
         self.conn.commit()
 
+    def record_journal_monitor_paper(
+        self,
+        *,
+        fetch_run_id: int,
+        paper_id: str,
+        source: str,
+        commit: bool = True,
+    ) -> None:
+        self.record_journal_monitor_papers(
+            fetch_run_id=fetch_run_id,
+            observations=[{"paper_id": paper_id, "source": source}],
+            commit=commit,
+        )
+
+    def record_journal_monitor_papers(
+        self,
+        *,
+        fetch_run_id: int,
+        observations: Iterable[dict[str, Any]],
+        commit: bool = True,
+    ) -> None:
+        """Persist paper-level provenance for one Journal Monitor fetch run."""
+
+        run = self.conn.execute(
+            "SELECT monitor_type FROM fetch_runs WHERE id = ?",
+            (int(fetch_run_id),),
+        ).fetchone()
+        if not run:
+            raise KeyError(int(fetch_run_id))
+        if str(run["monitor_type"] or "") != "journal":
+            raise ValueError("Journal provenance requires a journal fetch run")
+        timestamp = now_iso()
+        rows = sorted(
+            {
+                (
+                    int(fetch_run_id),
+                    str(observation.get("paper_id") or "").strip(),
+                    str(observation.get("source") or "").strip(),
+                    timestamp,
+                    timestamp,
+                )
+                for observation in observations
+                if observation.get("paper_id") and observation.get("source")
+            }
+        )
+        if not rows:
+            return
+        try:
+            self.conn.executemany(
+                """
+                INSERT INTO journal_monitor_papers (
+                  fetch_run_id, paper_id, source, first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(fetch_run_id, paper_id, source) DO UPDATE SET
+                  last_seen_at = excluded.last_seen_at
+                """,
+                rows,
+            )
+            if commit:
+                self.conn.commit()
+        except Exception:
+            if commit:
+                self.conn.rollback()
+            raise
+
+    def list_journal_monitor_papers(
+        self,
+        *,
+        paper_id: str | None = None,
+        fetch_run_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if paper_id is not None:
+            clauses.append("provenance.paper_id = ?")
+            params.append(str(paper_id))
+        if fetch_run_id is not None:
+            clauses.append("provenance.fetch_run_id = ?")
+            params.append(int(fetch_run_id))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT provenance.*, runs.monitor_type, runs.source AS run_source, runs.journal,
+                   runs.window_start, runs.window_end, runs.status AS run_status,
+                   runs.started_at, runs.finished_at
+            FROM journal_monitor_papers AS provenance
+            JOIN fetch_runs AS runs ON runs.id = provenance.fetch_run_id
+            {where}
+            ORDER BY provenance.fetch_run_id ASC, provenance.paper_id ASC,
+                     provenance.source ASC
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def start_theme_source_run(
         self,
         *,
@@ -1672,7 +1792,12 @@ class Storage:
         path_text = cls.resource_local_path(resource).lower()
         return mime_type == "application/pdf" or kind == "pdf" or path_text.endswith(".pdf")
 
-    def ensure_primary_pdf_resource(self, paper_id: str) -> dict[str, Any] | None:
+    def ensure_primary_pdf_resource(
+        self,
+        paper_id: str,
+        *,
+        commit: bool = True,
+    ) -> dict[str, Any] | None:
         paper = self.get_paper(str(paper_id))
         if not paper:
             return None
@@ -1680,7 +1805,8 @@ class Storage:
         if not path_text:
             return None
         self._backfill_primary_pdf_resources_for_rows([paper])
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
         refreshed = self.get_paper(str(paper_id)) or paper
         return self.get_paper_resource(int(refreshed.get("primary_resource_id") or 0))
 
@@ -1896,6 +2022,8 @@ class Storage:
                 raise ValueError("File does not belong to this paper")
             if not self.resource_is_pdf(resource):
                 raise ValueError("Preferred file must be a PDF")
+            if str(resource.get("file_role") or "") != "publication_version":
+                raise ValueError("Only paper-version PDFs can be selected as current")
         self.conn.execute(
             "UPDATE papers SET preferred_resource_id = ? WHERE paper_id = ?",
             (int(resource_id) if resource_id is not None else None, str(paper_id)),
@@ -1907,7 +2035,12 @@ class Storage:
         paper = self.get_paper(str(paper_id))
         if not paper:
             return None
-        resources = [resource for resource in self.list_paper_resources(str(paper_id)) if self.resource_is_pdf(resource)]
+        resources = [
+            resource
+            for resource in self.list_paper_resources(str(paper_id))
+            if self.resource_is_pdf(resource)
+            and str(resource.get("file_role") or "") == "publication_version"
+        ]
         by_id = {int(resource.get("id") or 0): resource for resource in resources}
         preferred = by_id.get(int(paper.get("preferred_resource_id") or 0))
         if preferred and preferred.get("exists"):

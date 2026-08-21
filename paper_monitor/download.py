@@ -4,6 +4,7 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -13,7 +14,7 @@ from bs4 import BeautifulSoup
 from .aps import aps_journal_slug as canonical_aps_journal_slug
 from .config import DEFAULT_PDF_DIR
 from .http import request_with_retries
-from .pdf_utils import merge_pdfs
+from .pdf_utils import is_valid_pdf_file as structurally_valid_pdf_file, merge_pdfs
 from .sources.openalex import openalex_request
 from .sources.publisher import request_aps_page
 from .storage import Storage
@@ -128,6 +129,8 @@ def download_paper(
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
         merge_pdfs(merge_inputs, working_merged_path)
+        if not structurally_valid_pdf_file(working_merged_path):
+            raise ValueError("merged output is not a complete PDF")
         if working_merged_path != merged_path:
             working_merged_path.replace(merged_path)
         downloaded_pdf_replaced = True
@@ -181,11 +184,8 @@ def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:
             continue
         path = Path(raw).expanduser()
         try:
-            if not path.exists() or not path.is_file() or path.stat().st_size < 1024:
+            if not structurally_valid_pdf_file(path):
                 continue
-            with path.open("rb") as handle:
-                if b"%PDF-" not in handle.read(1024):
-                    continue
             return path.resolve()
         except OSError:
             continue
@@ -647,6 +647,7 @@ def try_download_pdf(
     *,
     request_max_retries: int | None = None,
 ) -> bool:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
     try:
         request_options: dict[str, Any] = {
             "headers": pdf_request_headers(url),
@@ -660,22 +661,18 @@ def try_download_pdf(
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
             messages.append(f"not a PDF: {url}")
             return False
-        with path.open("wb") as handle:
+        with temporary.open("wb") as handle:
             for chunk in response.iter_content(chunk_size=1024 * 128):
                 if chunk:
                     handle.write(chunk)
-        if path.stat().st_size < 1024:
-            messages.append(f"too small to be a valid PDF: {url}")
-            path.unlink(missing_ok=True)
+        if not structurally_valid_pdf_file(temporary):
+            messages.append(f"invalid or incomplete PDF payload: {url}")
+            temporary.unlink(missing_ok=True)
             return False
-        with path.open("rb") as handle:
-            header = handle.read(1024)
-        if b"%PDF-" not in header:
-            messages.append(f"not a PDF payload: {url}")
-            path.unlink(missing_ok=True)
-            return False
+        temporary.replace(path)
         return True
     except Exception as exc:
+        temporary.unlink(missing_ok=True)
         messages.append(f"{url}: {download_error_message(exc)}")
         return False
 
@@ -776,13 +773,9 @@ def convert_word_document_to_pdf(source_path: Path, target_path: Path) -> Path:
 
 
 def is_valid_pdf_file(path: Path) -> bool:
-    try:
-        if not path.exists() or path.stat().st_size < 1024:
-            return False
-        with path.open("rb") as handle:
-            return b"%PDF-" in handle.read(1024)
-    except OSError:
-        return False
+    """Compatibility wrapper for the centralized structural PDF validator."""
+
+    return structurally_valid_pdf_file(path)
 
 
 def download_error_message(exc: Exception) -> str:

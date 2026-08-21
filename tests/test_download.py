@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from pypdf import PdfWriter
+
 from paper_monitor import download
 from paper_monitor.storage import Storage
 
@@ -421,7 +423,9 @@ class DownloadCandidateTests(unittest.TestCase):
     def test_existing_unmerged_science_pdf_is_reused_for_supplement_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "main.pdf"
-            path.write_bytes(b"%PDF-1.4\n" + b"x" * 2048)
+            writer = PdfWriter()
+            writer.add_blank_page(width=72, height=72)
+            writer.write(str(path))
             paper = {
                 "doi": "10.1126/science.aao1797",
                 "download_message": "manual PDF replaced: old.pdf",

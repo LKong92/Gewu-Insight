@@ -56,6 +56,7 @@ from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha
 from .download import (
     convert_word_document_to_pdf,
     download_paper,
+    is_nature_reference_pdf_url,
     normalize_doi,
     publisher_browser_candidate,
     science_supplement_pdf_candidates,
@@ -64,7 +65,7 @@ from .download import (
 from .http import request_with_retries
 from .importers.inventory import ImportCancelled, build_inventory_from_folder, build_inventory_from_paths, import_library_inventory
 from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
-from .pdf_utils import merge_pdfs
+from .pdf_utils import is_valid_pdf_bytes, is_valid_pdf_file, merge_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
 from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version, wait_for_arxiv_rate_limit
@@ -20001,6 +20002,9 @@ def update_paper_resource_role(
     is_primary = int(paper.get("primary_resource_id") or 0) == int(resource_id)
     if is_primary and role != "publication_version":
         raise ValueError("The current default PDF must remain a paper version")
+    is_preferred = int(paper.get("preferred_resource_id") or 0) == int(resource_id)
+    if is_preferred and role != "publication_version":
+        raise ValueError("The preferred PDF must remain a paper version")
     version = clean_text(version_role or "other").lower().replace("-", "_")
     version_labels = {
         "version_of_record": "Published Version",
@@ -20124,10 +20128,16 @@ def sha256_for_file(path: Path) -> str:
     return exact_sha256_for_file(path)
 
 
-def refresh_paper_resource_fingerprints(storage: Storage, paper_id: str) -> list[dict[str, Any]]:
+def refresh_paper_resource_fingerprints(
+    storage: Storage,
+    paper_id: str,
+    *,
+    commit: bool = True,
+) -> list[dict[str, Any]]:
     """Refresh exact and annotation-insensitive fingerprints for one work on demand."""
 
-    resources = storage.list_paper_resources(str(paper_id))
+    storage.ensure_primary_pdf_resource(str(paper_id), commit=commit)
+    resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
     changed = False
     for resource in resources:
         path_text = clean_text(resource.get("stored_path") or resource.get("source_path") or "")
@@ -20159,7 +20169,7 @@ def refresh_paper_resource_fingerprints(storage: Storage, paper_id: str) -> list
             ),
         )
         changed = True
-    if changed:
+    if changed and commit:
         storage.conn.commit()
     return storage.list_paper_resources(str(paper_id), ensure_primary=False)
 
@@ -20215,6 +20225,8 @@ def downloaded_version_role(paper: dict[str, Any], source_url: str = "") -> str:
     host = urlparse(resolved_url).netloc.casefold()
     if host == "arxiv.org" or host.endswith(".arxiv.org"):
         return "preprint"
+    if is_nature_reference_pdf_url(resolved_url):
+        return "accepted_manuscript"
     if resolved_url and clean_text(paper.get("doi") or ""):
         return "version_of_record"
     if resolved_url and clean_text(paper.get("arxiv_id") or ""):
@@ -20262,11 +20274,37 @@ def register_downloaded_paper_resource(
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
         return None
+    new_fingerprint = fingerprint_file(canonical)
+    new_digest = new_fingerprint.sha256
+    if status == "skipped":
+        # No bytes were downloaded in this call.  Metadata such as a newly found
+        # DOI or publisher URL must not relabel an existing preprint as a VOR.
+        primary = storage.ensure_primary_pdf_resource(str(paper_id))
+        if not primary:
+            return None
+        storage.conn.execute(
+            """
+            UPDATE resources
+            SET sha256 = ?, content_sha256 = ?, annotation_count = ?, is_annotated = ?,
+                size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_digest,
+                new_fingerprint.content_sha256 or None,
+                new_fingerprint.annotation_count,
+                1 if new_fingerprint.is_annotated else 0,
+                new_fingerprint.size_bytes,
+                new_fingerprint.modified_at,
+                now_iso(),
+                int(primary.get("id") or 0),
+            ),
+        )
+        storage.conn.commit()
+        return storage.get_paper_resource(int(primary.get("id") or 0))
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
     new_version_role = downloaded_version_role(paper, download_source_url)
     new_version_label = downloaded_version_label(new_version_role)
-    new_fingerprint = fingerprint_file(canonical)
-    new_digest = new_fingerprint.sha256
     if not snapshot:
         primary = storage.ensure_primary_pdf_resource(str(paper_id))
         if primary:
@@ -20274,7 +20312,10 @@ def register_downloaded_paper_resource(
                 """
                 UPDATE resources
                 SET sha256 = ?, content_sha256 = ?, annotation_count = ?, is_annotated = ?,
-                    size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
+                    size_bytes = ?, modified_at = ?, file_role = 'publication_version',
+                    version_role = ?, version_label = ?,
+                    source_url = COALESCE(NULLIF(?, ''), source_url),
+                    added_via = 'download_initial', missing_status = '', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -20284,6 +20325,9 @@ def register_downloaded_paper_resource(
                     1 if new_fingerprint.is_annotated else 0,
                     new_fingerprint.size_bytes,
                     new_fingerprint.modified_at,
+                    new_version_role,
+                    new_version_label,
+                    download_source_url,
                     now_iso(),
                     int(primary.get("id") or 0),
                 ),
@@ -20478,7 +20522,7 @@ def attach_file_to_paper(
         version = ""
     safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File")
     suffix = Path(safe_name).suffix.lower()
-    if suffix == ".pdf" and b"%PDF-" not in content[:1024]:
+    if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
     refresh_paper_resource_fingerprints(storage, str(paper_id))
@@ -20494,7 +20538,9 @@ def attach_file_to_paper(
     target_dir = work_dir / associated_resource_subdir(role)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = unique_path_in_dir(target_dir / safe_name)
-    temporary = target.with_name(f".{target.name}-{uuid.uuid4().hex[:8]}.upload")
+    temporary = target.with_name(
+        f".{target.stem}-{uuid.uuid4().hex[:8]}.upload{target.suffix}"
+    )
     try:
         temporary.write_bytes(content)
         fingerprint = fingerprint_file(temporary)
@@ -20555,26 +20601,7 @@ def convert_library_item_to_paper_attachment(
     ).fetchone():
         raise ValueError("This work is also in My Publications and cannot be converted to an attachment.")
 
-    resources = refresh_paper_resource_fingerprints(storage, source_paper_id)
-    if not resources:
-        raise ValueError("The Library item has no managed file to attach")
-    source_entries: list[tuple[dict[str, Any], Path]] = []
-    seen_sources: set[str] = set()
-    for resource in resources:
-        stored_text = clean_text(resource.get("stored_path") or "")
-        if not stored_text:
-            raise ValueError("Every file in this work must have a managed local copy before it can be converted")
-        source = Path(stored_text).expanduser().absolute()
-        if not source.is_file():
-            raise ValueError(f"Managed file was not found: {source.name}")
-        source_key = str(source)
-        if source_key in seen_sources:
-            raise ValueError("This work contains duplicate local file records and cannot be converted safely")
-        seen_sources.add(source_key)
-        source_entries.append((resource, source))
-
     destination_dir = associated_work_dir_for_paper(storage, str(target_paper_id)) / associated_resource_subdir("other")
-    destination_dir.mkdir(parents=True, exist_ok=True)
     managed_roots = [
         LIBRARY_LOCAL_COPY_ROOT.absolute(),
         SPACES_LOCAL_COPY_ROOT.absolute(),
@@ -20594,28 +20621,53 @@ def convert_library_item_to_paper_attachment(
 
     operations: list[dict[str, Any]] = []
     try:
+        storage.conn.execute("BEGIN IMMEDIATE")
+        resources = refresh_paper_resource_fingerprints(
+            storage,
+            source_paper_id,
+            commit=False,
+        )
+        if not resources:
+            raise ValueError("The Library item has no managed file to attach")
+        source_entries: list[tuple[dict[str, Any], Path]] = []
+        seen_sources: set[str] = set()
+        for resource in resources:
+            stored_text = clean_text(resource.get("stored_path") or "")
+            if not stored_text:
+                raise ValueError("Every file in this work must have a managed local copy before it can be converted")
+            source = Path(stored_text).expanduser().absolute()
+            if not source.is_file():
+                raise ValueError(f"Managed file was not found: {source.name}")
+            source_key = str(source)
+            if source_key in seen_sources:
+                raise ValueError("This work contains duplicate local file records and cannot be converted safely")
+            seen_sources.add(source_key)
+            source_entries.append((resource, source))
+
+        destination_dir.mkdir(parents=True, exist_ok=True)
         for resource, source in source_entries:
             display_name = clean_text(resource.get("display_name") or resource.get("original_filename") or source.name)
             destination = unique_path_in_dir(
                 destination_dir / finder_safe_name(Path(display_name).name or source.name, source.name)
             )
             managed_source = belongs_to_managed_tree(source)
+            mode = (
+                "move"
+                if managed_source and not source.is_symlink()
+                else ("copy_symlink" if managed_source and source.is_symlink() else "copy_external")
+            )
+            operation = {
+                "resource_id": int(resource.get("id") or 0),
+                "source": source,
+                "destination": destination,
+                "mode": mode,
+            }
+            operations.append(operation)
             if managed_source and not source.is_symlink():
                 shutil.move(str(source), str(destination))
-                mode = "move"
             else:
                 shutil.copy2(str(source.resolve()), str(destination))
-                mode = "copy_symlink" if managed_source and source.is_symlink() else "copy_external"
-            operations.append(
-                {
-                    "resource_id": int(resource.get("id") or 0),
-                    "source": source,
-                    "destination": destination,
-                    "mode": mode,
-                }
-            )
 
-        storage.conn.execute("BEGIN IMMEDIATE")
         timestamp = now_iso()
         for operation in operations:
             destination = Path(operation["destination"])
@@ -20651,7 +20703,10 @@ def convert_library_item_to_paper_attachment(
             elif destination.exists():
                 destination.unlink()
         cleanup_empty_parents(
-            [str(operation["destination"]) for operation in operations],
+            [
+                *[str(operation["destination"]) for operation in operations],
+                str(destination_dir / ".cleanup"),
+            ],
             ASSOCIATED_FILES_ROOT.absolute(),
         )
         raise
@@ -20688,9 +20743,8 @@ def attach_downloaded_publisher_pdf_to_paper(
     source = source_path.expanduser().resolve()
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"PDF file was not found: {source_path}")
-    with source.open("rb") as handle:
-        if b"%PDF-" not in handle.read(1024):
-            raise ValueError("Publisher download must be a valid PDF")
+    if not is_valid_pdf_file(source):
+        raise ValueError("Publisher download must be a valid PDF")
 
     publisher_kind = clean_text(context.get("publisher_download_kind") or "")
     source_url = clean_text(
@@ -20827,6 +20881,8 @@ def promote_paper_resource(
         raise ValueError("File does not belong to this paper")
     if not storage.resource_is_pdf(candidate):
         raise ValueError("Primary file must be a PDF")
+    if clean_text(candidate.get("file_role") or "") != "publication_version":
+        raise ValueError("Only paper-version PDFs can be selected as current")
     candidate_path_text = storage.resource_local_path(candidate)
     candidate_path = Path(candidate_path_text).expanduser().resolve() if candidate_path_text else None
     if not candidate_path or not candidate_path.exists() or not candidate_path.is_file():
@@ -21156,11 +21212,10 @@ def attach_manual_pdf_to_paper(
         resolved_source = source_path.expanduser().resolve()
         if not resolved_source.exists() or not resolved_source.is_file():
             raise FileNotFoundError(f"PDF file was not found: {source_path}")
-        with resolved_source.open("rb") as handle:
-            header = handle.read(1024)
+        valid_pdf = is_valid_pdf_file(resolved_source)
     else:
-        header = bytes(content or b"")[:1024]
-    if b"%PDF-" not in header:
+        valid_pdf = is_valid_pdf_bytes(bytes(content or b""))
+    if not valid_pdf:
         raise ValueError("Dropped file must be a valid PDF")
 
     target_dir = local_copy_dir_for_download_context(storage, context) or (DEFAULT_PDF_DIR / str(paper_id))
@@ -21242,9 +21297,7 @@ def attach_publisher_supplement_pdf_to_paper(
         raise FileNotFoundError(f"PDF file was not found: {source_path}")
     converted_path: Path | None = None
     supplement_path = source_supplement_path
-    with supplement_path.open("rb") as handle:
-        supplement_header = handle.read(1024)
-    if b"%PDF-" in supplement_header:
+    if is_valid_pdf_file(supplement_path):
         pass
     elif supplement_path.suffix.lower() in {".doc", ".docx"}:
         converted_path = supplement_path.with_name(
