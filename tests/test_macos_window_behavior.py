@@ -32,6 +32,10 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.startupWebView loadHTMLString:html", loading_page)
         self.assertNotIn("[self.webView loadHTMLString:html", loading_page)
         self.assertNotIn("<div class='icon'>G</div>", loading_page)
+        self.assertIn('URLForResource:@"PaperMonitor"', source)
+        self.assertIn('withExtension:@"png"', source)
+        self.assertIn("applicationIcon.template = NO;", source)
+        self.assertIn("NSApp.applicationIconImage = applicationIcon;", source)
 
         self.assertIn('parsed.path == "/api/app-icon"', (ROOT / "paper_monitor" / "ui_server.py").read_text())
         self.assertIn('parsed.path == "/api/startup-brand-art"', (ROOT / "paper_monitor" / "ui_server.py").read_text())

@@ -9,9 +9,9 @@
   <key>CFBundleExecutable</key>
   <string>Gewu Insight</string>
   <key>CFBundleIdentifier</key>
-  <string>local.paper-monitor</string>
+  <string>com.zhengranwu.gewuinsight</string>
   <key>CFBundleIconFile</key>
-  <string>PaperMonitor</string>
+  <string>GewuInsightEyeV2</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>

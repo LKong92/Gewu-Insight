@@ -381,6 +381,16 @@
 @implementation PaperMonitorDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    NSURL *applicationIconURL = [[NSBundle mainBundle] URLForResource:@"PaperMonitor"
+                                                        withExtension:@"png"];
+    NSImage *applicationIcon = applicationIconURL
+        ? [[NSImage alloc] initWithContentsOfURL:applicationIconURL]
+        : nil;
+    if (applicationIcon) {
+        applicationIcon.template = NO;
+        NSApp.applicationIconImage = applicationIcon;
+    }
+
     NSDictionary *environment = [[NSProcessInfo processInfo] environment];
     NSString *host = environment[@"PAPER_MONITOR_HOST"] ?: @"127.0.0.1";
     NSString *port = environment[@"PAPER_MONITOR_PORT"] ?: @"8765";

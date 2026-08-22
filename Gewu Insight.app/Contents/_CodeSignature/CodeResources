@@ -4,57 +4,61 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/GewuInsightEyeV2.icns</key>
+		<data>
+		X+kO9VgfP9IdF6qlod1V9B5vr18=
+		</data>
 		<key>Resources/GewuSealGlyphs.png</key>
 		<data>
 		1muWqMsp8cwSvqyJDGjb0IbEiIQ=
 		</data>
 		<key>Resources/PaperMonitor.icns</key>
 		<data>
-		M22PBhQP9IwxS5/KeKSH5AWkCYU=
+		X+kO9VgfP9IdF6qlod1V9B5vr18=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_128x128.png</key>
 		<data>
-		2jtIHV+aXqPppXOcxpuxxuepspY=
+		xDfkWXICpoNkT1lJ85S26FhtJzg=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_128x128@2x.png</key>
 		<data>
-		RqtC1LT/P+aQT0RFAOaaHkKRjJo=
+		wV4M9rK7Zz4nhTqdfyaKfCv6mVY=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_16x16.png</key>
 		<data>
-		5bmOEgT0aRTJf4rUxgjxCO/n5lc=
+		2whIPbnDf6lNwEOHnQSpS514FJo=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_16x16@2x.png</key>
 		<data>
-		xEne5D7dEds8TzP7JZuxGAX8k/o=
+		SQ4YdJ2j0IfZ/IXFCtyn4I2XfbA=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_256x256.png</key>
 		<data>
-		RqtC1LT/P+aQT0RFAOaaHkKRjJo=
+		wV4M9rK7Zz4nhTqdfyaKfCv6mVY=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_256x256@2x.png</key>
 		<data>
-		h+zHfin2XIsyptQa1EAlAWhvxfE=
+		lnjXpHeuicv5sxwYEON6fdGTWOU=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_32x32.png</key>
 		<data>
-		xEne5D7dEds8TzP7JZuxGAX8k/o=
+		SQ4YdJ2j0IfZ/IXFCtyn4I2XfbA=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_32x32@2x.png</key>
 		<data>
-		ZQl5SUSfncLO8ZfcmFX2Cpdf0Q4=
+		yU+FM8p6PQnSZq1gfdl7vcectu0=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_512x512.png</key>
 		<data>
-		h+zHfin2XIsyptQa1EAlAWhvxfE=
+		lnjXpHeuicv5sxwYEON6fdGTWOU=
 		</data>
 		<key>Resources/PaperMonitor.iconset/icon_512x512@2x.png</key>
 		<data>
-		DSd+BtKYVWJYio42Mn6IC1Hi+ZY=
+		wYQ0LUbYm6PksrcrnEE+DvZCJck=
 		</data>
 		<key>Resources/PaperMonitor.png</key>
 		<data>
-		DSd+BtKYVWJYio42Mn6IC1Hi+ZY=
+		wYQ0LUbYm6PksrcrnEE+DvZCJck=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -68,6 +72,13 @@
 			<key>requirement</key>
 			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
 		</dict>
+		<key>Resources/GewuInsightEyeV2.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			ZOpkbLQfJ93x0tolSYBtXCqOtIjVtosE6uQH3HpSTcM=
+			</data>
+		</dict>
 		<key>Resources/GewuSealGlyphs.png</key>
 		<dict>
 			<key>hash2</key>
@@ -79,84 +90,84 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			wLipx8rJxN9Rh0U1qLDVLD/UkK8f1ZZhlZ0Z4Qx6v/8=
+			ZOpkbLQfJ93x0tolSYBtXCqOtIjVtosE6uQH3HpSTcM=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_128x128.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			+Yjzm5GEmKaX0b51suC/beUW9gKXhuRqCnjMU4+WsBY=
+			JjzyupaaOPz78dtVvu5Vu6LGCtoOHdrb88+P6IlLfKU=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_128x128@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			IZWydM6M7tjIQB0NgGtmx7jTh7/eawTkfSMYSpkvfC4=
+			Gs3CT+qZ3aF0/chBDERZ05bAphmiUXd2NhNqQhTZat8=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_16x16.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			OhiN3X/D0nAf3H0G7ao0YKK2Ui+xpJrVoSjp2B3zmCo=
+			LYI0dfOK9VcQj1tjbcUs035FhcAKubXCJDCzc4coS2Y=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_16x16@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ER44Q10HhPktw/+xubJdUG0b/Wzghx4nQwB9VhlehA0=
+			avF+i9pDL6M2B9se2xarbTn+ug0jsWaOh9pAxckSdj4=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_256x256.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			IZWydM6M7tjIQB0NgGtmx7jTh7/eawTkfSMYSpkvfC4=
+			Gs3CT+qZ3aF0/chBDERZ05bAphmiUXd2NhNqQhTZat8=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_256x256@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			WCMcJdUaNzcUI/VZZ/qqlWqBTLl3TLbwZwW5T4PtSu4=
+			SAY3MYz75+YviNIZB2f03QylB5hYvXxfoOL/O6D0uz0=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_32x32.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			ER44Q10HhPktw/+xubJdUG0b/Wzghx4nQwB9VhlehA0=
+			avF+i9pDL6M2B9se2xarbTn+ug0jsWaOh9pAxckSdj4=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_32x32@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			wx1djNsJBUPJtdcEai4RiuKA0ijeqgdPTgYBk44vZmE=
+			SYLVwIz/RNVXRhJXEGapCoZvxEnC0AOX3xlPqQScnVA=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_512x512.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			WCMcJdUaNzcUI/VZZ/qqlWqBTLl3TLbwZwW5T4PtSu4=
+			SAY3MYz75+YviNIZB2f03QylB5hYvXxfoOL/O6D0uz0=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.iconset/icon_512x512@2x.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			UJqZ+nIasp9h3gbZX4vPTJR5Qb5tATA+uTRgLAyDqQs=
+			LOh1LQ9z4/1RhtI1DIPi3RJDiBcoBhh26+gx5R4xPEY=
 			</data>
 		</dict>
 		<key>Resources/PaperMonitor.png</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			UJqZ+nIasp9h3gbZX4vPTJR5Qb5tATA+uTRgLAyDqQs=
+			LOh1LQ9z4/1RhtI1DIPi3RJDiBcoBhh26+gx5R4xPEY=
 			</data>
 		</dict>
 	</dict>
