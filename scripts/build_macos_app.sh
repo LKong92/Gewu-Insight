@@ -7,6 +7,10 @@ APP="$PROJECT_DIR/Gewu Insight.app"
 OUTPUT="$APP/Contents/MacOS/Gewu Insight"
 BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"
 BRAND_ART_DEST="$APP/Contents/Resources/GewuSealGlyphs.png"
+APP_ICON_SOURCE="$PROJECT_DIR/assets/gewu-insight-app-icon.png"
+APP_ICON_PNG_DEST="$APP/Contents/Resources/GewuInsightAppIconV3.png"
+APP_ICONSET="$APP/Contents/Resources/PaperMonitor.iconset"
+APP_ICON_ICNS_DEST="$APP/Contents/Resources/GewuInsightAppIconV3.icns"
 SIGN_WORKDIR="${TMPDIR:-/private/tmp}/paper-monitor-sign-$$"
 SIGN_APP="$SIGN_WORKDIR/Gewu Insight.app"
 BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
@@ -27,6 +31,26 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
 chmod +x "$OUTPUT"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
+cp "$APP_ICON_SOURCE" "$APP_ICON_PNG_DEST"
+mkdir -p "$APP_ICONSET"
+for icon_spec in \
+  "16 icon_16x16.png" \
+  "32 icon_16x16@2x.png" \
+  "32 icon_32x32.png" \
+  "64 icon_32x32@2x.png" \
+  "128 icon_128x128.png" \
+  "256 icon_128x128@2x.png" \
+  "256 icon_256x256.png" \
+  "512 icon_256x256@2x.png" \
+  "512 icon_512x512.png" \
+  "1024 icon_512x512@2x.png"; do
+  icon_size="${icon_spec%% *}"
+  icon_name="${icon_spec#* }"
+  sips -z "$icon_size" "$icon_size" "$APP_ICON_SOURCE" \
+    --out "$APP_ICONSET/$icon_name" >/dev/null
+done
+iconutil -c icns -o "$APP_ICON_ICNS_DEST" "$APP_ICONSET"
+cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
 mkdir -p "$SIGN_WORKDIR"
 ditto "$APP" "$SIGN_APP"
 xattr -cr "$SIGN_APP" 2>/dev/null || true

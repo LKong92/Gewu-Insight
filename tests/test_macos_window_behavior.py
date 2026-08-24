@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import plistlib
 import unittest
 from pathlib import Path
 
@@ -32,7 +33,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.startupWebView loadHTMLString:html", loading_page)
         self.assertNotIn("[self.webView loadHTMLString:html", loading_page)
         self.assertNotIn("<div class='icon'>G</div>", loading_page)
-        self.assertIn('URLForResource:@"PaperMonitor"', source)
+        self.assertIn('URLForResource:@"GewuInsightAppIconV3"', source)
         self.assertIn('withExtension:@"png"', source)
         self.assertIn("applicationIcon.template = NO;", source)
         self.assertIn("NSApp.applicationIconImage = applicationIcon;", source)
@@ -60,6 +61,24 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertNotIn('class="app-startup-chinese-name"', INDEX_HTML)
         self.assertNotIn('class="app-startup-brand-seal"', INDEX_HTML)
         self.assertNotIn('<div class="app-startup-icon">D</div>', INDEX_HTML)
+
+    def test_dock_icon_uses_one_versioned_packaged_asset(self) -> None:
+        app = ROOT / "Gewu Insight.app"
+        resources = app / "Contents" / "Resources"
+        with (app / "Contents" / "Info.plist").open("rb") as handle:
+            info = plistlib.load(handle)
+
+        self.assertEqual(info["CFBundleIconFile"], "GewuInsightAppIconV3")
+        self.assertEqual(info["CFBundleVersion"], "2")
+        self.assertTrue((resources / "GewuInsightAppIconV3.icns").is_file())
+        self.assertEqual(
+            (resources / "GewuInsightAppIconV3.png").read_bytes(),
+            (ROOT / "assets" / "gewu-insight-app-icon.png").read_bytes(),
+        )
+        self.assertNotEqual(
+            (resources / "GewuInsightAppIconV3.png").read_bytes(),
+            (resources / "PaperMonitor.png").read_bytes(),
+        )
 
     def test_native_startup_overlay_persists_until_library_is_ready(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()

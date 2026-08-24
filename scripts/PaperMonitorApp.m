@@ -381,7 +381,7 @@
 @implementation PaperMonitorDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    NSURL *applicationIconURL = [[NSBundle mainBundle] URLForResource:@"PaperMonitor"
+    NSURL *applicationIconURL = [[NSBundle mainBundle] URLForResource:@"GewuInsightAppIconV3"
                                                         withExtension:@"png"];
     NSImage *applicationIcon = applicationIconURL
         ? [[NSImage alloc] initWithContentsOfURL:applicationIconURL]
