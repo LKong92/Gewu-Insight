@@ -170,6 +170,10 @@ ACTIVE_AUTHOR_MONITOR_LOCK = threading.Lock()
 THEME_SOURCE_LOCKS: dict[str, threading.Lock] = {}
 THEME_SOURCE_LOCKS_LOCK = threading.Lock()
 JOURNAL_LOGO_CACHE: dict[str, str] = {}
+JOURNAL_LOGO_DOWNLOAD_LOCK = threading.Lock()
+JOURNAL_LOGO_FAILED: set[str] = set()
+JOURNAL_LOGO_MAX_BYTES = 5 * 1024 * 1024
+JOURNAL_LOGO_EXTENSIONS = {"svg", "png", "jpg", "gif", "webp"}
 PREPRINT_JOURNALS = [ARXIV_JOURNAL_NAME]
 LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
@@ -322,10 +326,13 @@ def run_ui_server(
     db_path: Path = DEFAULT_DB_PATH,
     open_browser: bool = False,
 ) -> None:
-    config = load_config()
-    journals = configured_source_names(config)
     credential_storage = Storage(db_path)
     try:
+        raw_config = read_config_json()
+        credential_storage.seed_journal_subscriptions(
+            raw_config.get("journals", []),
+            raw_config.get("journal_history", []),
+        )
         configure_openalex_api_key(
             credential_storage.get_setting(OPENALEX_API_KEY_SETTING, "")
         )
@@ -334,9 +341,12 @@ def run_ui_server(
         )
     finally:
         credential_storage.close()
+    config = load_config(db_path=db_path)
+    journals = configured_source_names(config)
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
     threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
+    threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
@@ -435,6 +445,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/journal-logo":
                 self.handle_journal_logo(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/journal-logo-image":
+                self.handle_journal_logo_image(parse_qs(parsed.query))
                 return
             if parsed.path == "/api/paper-figure":
                 self.handle_paper_figure(parse_qs(parsed.query))
@@ -590,6 +603,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/journals/remove":
                 self.handle_remove_journal(payload)
+                return
+            if parsed.path == "/api/journals/reorder":
+                self.handle_reorder_journals(payload)
                 return
             if parsed.path == "/api/library/folders":
                 self.handle_create_library_folder(payload)
@@ -880,7 +896,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 storage.close()
                 fetch_storage = None
                 try:
-                    config = load_config()
+                    config = load_config(db_path=self.configured_db_path)
                     fetch_storage = Storage(self.configured_db_path)
                     start_fetch_progress(selected, sources_to_fetch)
                     fetch_missing_sources_for_date(
@@ -4653,23 +4669,47 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.send_json(result)
 
     def handle_journals(self) -> None:
-        raw = read_config_json()
-        self.send_json({"journals": raw.get("journals", []), "history": journal_history(raw)})
+        raw = read_journal_config_json(self.configured_db_path)
+        self.send_json({"journals": journals_for_api(raw), "history": journal_history(raw)})
 
     def handle_journal_logo(self, query: dict[str, list[str]]) -> None:
         name = clean_journal_name(first(query, "name") or "")
         if not name:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
             return
-        cache_key = name.lower()
-        if cache_key not in JOURNAL_LOGO_CACHE:
-            raw = read_config_json()
-            configured = next((item for item in raw.get("journals", []) if item.get("name", "").lower() == cache_key), {})
-            configured_logo = str(configured.get("logo_url") or "")
-            if is_icon_logo_candidate(configured_logo, configured_logo):
-                configured_logo = ""
-            JOURNAL_LOGO_CACHE[cache_key] = resolve_journal_logo_url(name) or configured_logo
-        self.send_json({"name": name, "logo_url": JOURNAL_LOGO_CACHE.get(cache_key, "")})
+        configured = configured_journal_entry(
+            name,
+            read_journal_config_json(self.configured_db_path),
+        )
+        if not configured:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Journal is not configured")
+            return
+        self.send_json({"name": name, "logo_url": local_journal_logo_url(name)})
+
+    def handle_journal_logo_image(self, query: dict[str, list[str]]) -> None:
+        name = clean_journal_name(first(query, "name") or "")
+        if not name:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
+            return
+        configured = configured_journal_entry(
+            name,
+            read_journal_config_json(self.configured_db_path),
+        )
+        if not configured:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Journal is not configured")
+            return
+        logo_path = cache_journal_logo(self.configured_db_path, name, configured)
+        if not logo_path:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Journal logo is unavailable")
+            return
+        content_type = mimetypes.guess_type(str(logo_path))[0] or "application/octet-stream"
+        data = logo_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def handle_paper_figure(self, query: dict[str, list[str]]) -> None:
         paper_id = first(query, "paper_id")
@@ -4738,7 +4778,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             )
             return
 
-        raw = read_config_json()
+        raw = read_journal_config_json(self.configured_db_path)
         journals = raw.setdefault("journals", [])
         if any(item.get("name", "").lower() == name.lower() for item in journals):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
@@ -4747,32 +4787,59 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if resolved_name.lower() != name.lower() and any(item.get("name", "").lower() == resolved_name.lower() for item in journals):
             self.send_error_json(HTTPStatus.CONFLICT, "Journal already exists")
             return
-        journals.append(
-            journal_entry := {
-                "name": resolved_name,
-                "issns": issns,
-                "openalex_source_id": openalex_source_id,
-                "section_policy": str(payload.get("section_policy") or preset.get("section_policy") or "science"),
-                "skip_landing_enrichment": bool(payload.get("skip_landing_enrichment", preset.get("skip_landing_enrichment", True))),
-                "logo_url": preset.get("logo_url") or resolved.get("logo_url") or resolve_journal_logo_url(resolved_name),
-            }
-        )
-        remember_journal_history(raw, journal_entry)
-        write_config_json(raw)
+        journal_entry = {
+            "name": resolved_name,
+            "issns": issns,
+            "openalex_source_id": openalex_source_id,
+            "section_policy": str(payload.get("section_policy") or preset.get("section_policy") or "science"),
+            "skip_landing_enrichment": bool(payload.get("skip_landing_enrichment", preset.get("skip_landing_enrichment", True))),
+            "logo_url": preset.get("logo_url") or resolved.get("logo_url") or resolve_journal_logo_url(resolved_name),
+        }
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.upsert_journal_subscription(journal_entry)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.CONFLICT, str(exc))
+            return
+        finally:
+            storage.close()
+        raw = read_journal_config_json(self.configured_db_path)
         self.refresh_journals()
-        self.send_json({"journals": journals, "history": journal_history(raw)})
+        self.send_json({"journals": journals_for_api(raw), "history": journal_history(raw)})
 
     def handle_remove_journal(self, payload: dict[str, Any]) -> None:
         name = clean_journal_name(str(payload.get("name") or ""))
         if not name:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Journal name is required")
             return
-        raw = read_config_json()
-        journals = raw.setdefault("journals", [])
-        raw["journals"] = [item for item in journals if item.get("name", "").lower() != name.lower()]
-        write_config_json(raw)
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.disable_journal_subscription(name)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        finally:
+            storage.close()
+        raw = read_journal_config_json(self.configured_db_path)
         self.refresh_journals()
-        self.send_json({"journals": raw["journals"], "history": journal_history(raw)})
+        self.send_json({"journals": journals_for_api(raw), "history": journal_history(raw)})
+
+    def handle_reorder_journals(self, payload: dict[str, Any]) -> None:
+        ordered_names = payload.get("journals")
+        if not isinstance(ordered_names, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "journals must be an ordered list")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.reorder_journal_subscriptions(ordered_names)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        raw = read_journal_config_json(self.configured_db_path)
+        self.refresh_journals()
+        self.send_json({"journals": journals_for_api(raw), "history": journal_history(raw)})
 
     def handle_file(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -4978,7 +5045,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.send_json({"error": message}, status=status)
 
     def refresh_journals(self) -> None:
-        config = load_config()
+        config = load_config(db_path=self.configured_db_path)
         self.configured_journals = configured_source_names(config)
 
 
@@ -7795,7 +7862,7 @@ def json_setting(storage: Storage, key: str, default: Any) -> Any:
 
 
 def run_auto_journal_monitor_once(db_path: Path, run_date: date) -> None:
-    config = load_config()
+    config = load_config(db_path=db_path)
     journals = [name for name in configured_source_names(config) if name != ARXIV_JOURNAL_NAME]
     targets = [run_date - timedelta(days=1), run_date]
     results: list[dict[str, Any]] = []
@@ -7851,7 +7918,7 @@ def run_pending_auto_journal_monitor_once(db_path: Path) -> bool:
     if not isinstance(targets, list):
         return False
 
-    config = load_config()
+    config = load_config(db_path=db_path)
     journals = [name for name in configured_source_names(config) if name != ARXIV_JOURNAL_NAME]
     changed = False
     for target in targets:
@@ -19373,14 +19440,19 @@ def journal_fetch_errors_for_date(storage: Storage, selected: str, journals: lis
         """,
         (selected, selected, *journals),
     ).fetchall()
-    latest: dict[str, Any] = {}
+    latest_any: dict[str, Any] = {}
+    latest_summary: dict[str, Any] = {}
     for row in rows:
         journal = clean_text(row["journal"] or "")
-        if journal and journal not in latest:
-            latest[journal] = row
+        if not journal:
+            continue
+        if journal not in latest_any:
+            latest_any[journal] = row
+        if row["source"] in {"journal", "arxiv"} and journal not in latest_summary:
+            latest_summary[journal] = row
     errors: list[dict[str, str]] = []
     for journal in journals:
-        row = latest.get(journal)
+        row = latest_summary.get(journal) or latest_any.get(journal)
         if row is None or row["status"] != "error":
             continue
         raw_message = clean_text(row["message"] or "")
@@ -19489,8 +19561,192 @@ def read_config_json() -> dict[str, Any]:
     return json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
 
 
-def write_config_json(raw: dict[str, Any]) -> None:
-    DEFAULT_CONFIG_PATH.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def journal_subscription_config_entry(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(item.get("name") or ""),
+        "issns": list(item.get("issns") or []),
+        "openalex_source_id": item.get("openalex_source_id"),
+        "section_policy": str(item.get("section_policy") or "science"),
+        "skip_landing_enrichment": bool(item.get("skip_landing_enrichment", True)),
+        "logo_url": str(item.get("logo_url") or ""),
+    }
+
+
+def read_journal_config_json(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    raw = read_config_json()
+    storage = Storage(db_path)
+    try:
+        storage.seed_journal_subscriptions(
+            raw.get("journals", []),
+            raw.get("journal_history", []),
+        )
+        active = storage.list_journal_subscriptions(enabled=True)
+        inactive = storage.list_journal_subscriptions(enabled=False)
+    finally:
+        storage.close()
+    raw["journals"] = [journal_subscription_config_entry(item) for item in active]
+    raw["journal_history"] = [journal_subscription_config_entry(item) for item in inactive]
+    return raw
+
+
+def configured_journal_entry(name: str, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    key = clean_journal_name(name).casefold()
+    if not key:
+        return {}
+    config = raw if raw is not None else read_config_json()
+    return next(
+        (
+            dict(item)
+            for item in config.get("journals", [])
+            if clean_journal_name(str(item.get("name") or "")).casefold() == key
+        ),
+        {},
+    )
+
+
+def local_journal_logo_url(name: str) -> str:
+    cleaned = clean_journal_name(name)
+    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+        return ""
+    return f"/api/journal-logo-image?name={quote(cleaned)}"
+
+
+def journals_for_api(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    journals: list[dict[str, Any]] = []
+    for item in raw.get("journals", []):
+        journal = dict(item)
+        journal["logo_url"] = local_journal_logo_url(str(journal.get("name") or ""))
+        journals.append(journal)
+    return journals
+
+
+def journal_logo_cache_dir(db_path: Path = DEFAULT_DB_PATH) -> Path:
+    return Path(db_path).expanduser().resolve().parent / "cache" / "journal_logos"
+
+
+def journal_logo_cache_stem(name: str) -> str:
+    cleaned = clean_journal_name(name)
+    slug = safe_slug(cleaned).strip("._-") or "journal"
+    digest = hashlib.sha256(cleaned.casefold().encode("utf-8")).hexdigest()[:12]
+    return f"{slug[:64]}-{digest}"
+
+
+def journal_logo_cache_key(db_path: Path, name: str) -> str:
+    return f"{Path(db_path).expanduser().resolve()}::{clean_journal_name(name).casefold()}"
+
+
+def cached_journal_logo_path(db_path: Path, name: str) -> Path | None:
+    cache_key = journal_logo_cache_key(db_path, name)
+    memory_path = Path(JOURNAL_LOGO_CACHE.get(cache_key, "")) if JOURNAL_LOGO_CACHE.get(cache_key) else None
+    if memory_path and memory_path.exists() and memory_path.is_file():
+        return memory_path
+    cache_dir = journal_logo_cache_dir(db_path)
+    stem = journal_logo_cache_stem(name)
+    for extension in sorted(JOURNAL_LOGO_EXTENSIONS):
+        candidate = cache_dir / f"{stem}.{extension}"
+        if candidate.exists() and candidate.is_file():
+            JOURNAL_LOGO_CACHE[cache_key] = str(candidate)
+            return candidate
+    return None
+
+
+def journal_logo_file_type(content: bytes, content_type: str = "", source_url: str = "") -> tuple[str, str]:
+    if not content:
+        raise ValueError("Journal logo is empty")
+    if len(content) > JOURNAL_LOGO_MAX_BYTES:
+        raise ValueError("Journal logo is too large")
+    prefix = content[:8192].lstrip().lower()
+    if b"<svg" in prefix:
+        return "svg", "image/svg+xml"
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpg", "image/jpeg"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "gif", "image/gif"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    marker = f"{content_type} {urlparse(source_url).path}".casefold()
+    if "image/svg+xml" in marker and b"<svg" in content.lower():
+        return "svg", "image/svg+xml"
+    raise ValueError("Downloaded journal logo is not a supported image")
+
+
+def direct_journal_logo_source(name: str, configured: dict[str, Any] | None = None) -> str:
+    journal = dict(configured or {})
+    configured_url = clean_text(journal.get("logo_url") or "")
+    if configured_url and not is_icon_logo_candidate(configured_url, configured_url):
+        return configured_url
+    return KNOWN_JOURNAL_LOGOS.get(clean_journal_name(name).casefold(), "")
+
+
+def prewarm_configured_journal_logos(db_path: Path) -> None:
+    raw = read_journal_config_json(db_path)
+    for configured in raw.get("journals", []):
+        name = clean_journal_name(str(configured.get("name") or ""))
+        if not name or not direct_journal_logo_source(name, configured):
+            continue
+        cache_journal_logo(db_path, name, configured)
+
+
+def cache_journal_logo(
+    db_path: Path,
+    name: str,
+    configured: dict[str, Any] | None = None,
+) -> Path | None:
+    cleaned = clean_journal_name(name)
+    if not cleaned or cleaned.casefold() == ARXIV_JOURNAL_NAME.casefold():
+        return None
+    cache_key = journal_logo_cache_key(db_path, cleaned)
+    existing = cached_journal_logo_path(db_path, cleaned)
+    if existing:
+        return existing
+    if cache_key in JOURNAL_LOGO_FAILED:
+        return None
+    with JOURNAL_LOGO_DOWNLOAD_LOCK:
+        existing = cached_journal_logo_path(db_path, cleaned)
+        if existing:
+            return existing
+        if cache_key in JOURNAL_LOGO_FAILED:
+            return None
+        journal = dict(
+            configured
+            or configured_journal_entry(cleaned, read_journal_config_json(db_path))
+        )
+        source_url = direct_journal_logo_source(cleaned, journal) or resolve_journal_logo_url(cleaned)
+        if not source_url:
+            JOURNAL_LOGO_FAILED.add(cache_key)
+            return None
+        try:
+            response = request_with_retries(
+                "GET",
+                source_url,
+                headers={"Accept": "image/svg+xml,image/png,image/jpeg,image/webp,image/gif,*/*;q=0.5"},
+                timeout=20,
+                max_retries=1,
+                retry_on_429=False,
+            )
+            content = bytes(response.content or b"")
+            extension, _content_type = journal_logo_file_type(
+                content,
+                str(response.headers.get("Content-Type") or ""),
+                str(response.url or source_url),
+            )
+            cache_dir = journal_logo_cache_dir(db_path)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            target = cache_dir / f"{journal_logo_cache_stem(cleaned)}.{extension}"
+            temp_path = cache_dir / f".{target.name}-{uuid.uuid4().hex}.tmp"
+            try:
+                temp_path.write_bytes(content)
+                temp_path.replace(target)
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+            JOURNAL_LOGO_CACHE[cache_key] = str(target)
+            return target
+        except (OSError, ValueError, RuntimeError, requests.RequestException):
+            JOURNAL_LOGO_FAILED.add(cache_key)
+            return None
 
 
 def clean_journal_name(value: str) -> str:
@@ -19650,20 +19906,6 @@ def journal_history(raw: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return history
-
-
-def remember_journal_history(raw: dict[str, Any], journal: dict[str, Any]) -> None:
-    history = [item for item in raw.get("journal_history", []) if item.get("name", "").lower() != journal.get("name", "").lower()]
-    history.insert(
-        0,
-        {
-            "name": journal.get("name") or "",
-            "issns": list(journal.get("issns") or []),
-            "openalex_source_id": journal.get("openalex_source_id"),
-            "logo_url": journal.get("logo_url") or "",
-        },
-    )
-    raw["journal_history"] = history[:50]
 
 
 def clean_openalex_source_id(value: str) -> str:
@@ -24071,7 +24313,7 @@ INDEX_HTML = """<!doctype html>
     }
     .journal-setting-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: 12px minmax(0, 1fr) auto;
       gap: 6px;
       align-items: center;
       min-height: 38px;
@@ -24080,6 +24322,46 @@ INDEX_HTML = """<!doctype html>
       padding: 6px 7px 6px 13px;
       background: transparent;
       transition: background 110ms ease;
+    }
+    .journal-setting-row,
+    .journal-toggle.journal-sortable {
+      cursor: grab;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .journal-setting-row:active,
+    .journal-toggle.journal-sortable:active {
+      cursor: grabbing;
+    }
+    .journal-setting-row.dragging,
+    .journal-toggle.journal-sortable.dragging {
+      opacity: 0.42;
+    }
+    .journal-setting-row.drag-over-before,
+    .journal-toggle.journal-sortable.drag-over-before {
+      box-shadow: inset 0 2px 0 var(--accent);
+    }
+    .journal-setting-row.drag-over-after,
+    .journal-toggle.journal-sortable.drag-over-after {
+      box-shadow: inset 0 -2px 0 var(--accent);
+    }
+    .journal-drag-handle {
+      display: grid;
+      width: 10px;
+      height: 18px;
+      place-items: center;
+      color: #a7afbb;
+      cursor: grab;
+      font-size: 13px;
+      line-height: 1;
+      user-select: none;
+    }
+    .dragging .journal-drag-handle { cursor: grabbing; }
+    .journal-drag-handle::before {
+      content: "⠿";
+    }
+    .journal-toggle.journal-sortable {
+      grid-template-columns: 12px 18px minmax(0, 1fr) auto;
     }
     .journal-setting-row:hover {
       background: rgba(31, 41, 55, 0.035);
@@ -35456,8 +35738,9 @@ INDEX_HTML = """<!doctype html>
       state.journals.filter((journal) => !PREPRINT_JOURNALS.has(journal)).forEach((journal) => {
         const label = document.createElement("label");
         const selected = state.selectedJournals.has(journal);
-        label.className = `journal-toggle${selected ? " active" : ""}`;
-        label.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>
+        label.className = `journal-toggle journal-sortable${selected ? " active" : ""}`;
+        label.dataset.journalOrderName = journal;
+        label.innerHTML = `<span class="journal-drag-handle" aria-hidden="true"></span><input type="checkbox" ${selected ? "checked" : ""}>
           <span>${escapeHtml(journal)}</span><b>${counts[journal] || 0}</b>`;
         label.querySelector("input").addEventListener("change", (event) => {
           if (event.target.checked) state.selectedJournals.add(journal);
@@ -35466,6 +35749,7 @@ INDEX_HTML = """<!doctype html>
           state.noMatchDates = new Set();
           renderReport();
         });
+        enableJournalOrderDrag(label, journal, root);
         root.appendChild(label);
       });
       renderPreprintFilters();
@@ -35616,13 +35900,98 @@ INDEX_HTML = """<!doctype html>
       state.journalsConfig.forEach((journal) => {
         const row = document.createElement("div");
         row.className = "journal-setting-row";
-        row.innerHTML = `<span class="journal-setting-name">${escapeHtml(journal.name)}</span><button class="action" type="button">Remove</button>`;
+        row.dataset.journalOrderName = journal.name;
+        row.innerHTML = `<span class="journal-drag-handle" aria-hidden="true"></span><span class="journal-setting-name">${escapeHtml(journal.name)}</span><button class="action" type="button">Remove</button>`;
         row.querySelector("button").addEventListener("click", (event) => {
           event.stopPropagation();
           removeJournal(journal.name);
         });
+        enableJournalOrderDrag(row, journal.name, root);
         root.appendChild(row);
       });
+    }
+
+    let activeJournalPointerDrag = null;
+
+    function clearJournalDragIndicators() {
+      document.querySelectorAll(".journal-setting-row, .journal-toggle.journal-sortable").forEach((row) => {
+        row.classList.remove("dragging", "drag-over-before", "drag-over-after");
+      });
+    }
+
+    function enableJournalOrderDrag(row, journalName, container) {
+      const handle = row.querySelector(".journal-drag-handle");
+      if (!handle) return;
+      handle.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        clearJournalDragIndicators();
+        activeJournalPointerDrag = {
+          container,
+          journalName,
+          moved: false,
+          row,
+          startY: event.clientY
+        };
+        row.classList.add("dragging");
+        window.addEventListener("mousemove", moveJournalOrderWithPointer, true);
+        window.addEventListener("mouseup", finishJournalOrderPointerDrag, true);
+      });
+    }
+
+    function moveJournalOrderWithPointer(event) {
+      const drag = activeJournalPointerDrag;
+      if (!drag) return;
+      if (!drag.moved && Math.abs(event.clientY - drag.startY) < 3) return;
+      drag.moved = true;
+      event.preventDefault();
+      const target = document.elementFromPoint(event.clientX, event.clientY)
+        ?.closest?.("[data-journal-order-name]");
+      clearJournalDragIndicators();
+      drag.row.classList.add("dragging");
+      if (!target || target === drag.row || target.parentElement !== drag.container) return;
+      const bounds = target.getBoundingClientRect();
+      const before = event.clientY < bounds.top + bounds.height / 2;
+      target.classList.add(before ? "drag-over-before" : "drag-over-after");
+      drag.container.insertBefore(drag.row, before ? target : target.nextSibling);
+    }
+
+    function finishJournalOrderPointerDrag(event) {
+      const drag = activeJournalPointerDrag;
+      activeJournalPointerDrag = null;
+      window.removeEventListener("mousemove", moveJournalOrderWithPointer, true);
+      window.removeEventListener("mouseup", finishJournalOrderPointerDrag, true);
+      clearJournalDragIndicators();
+      if (!drag?.moved) return;
+      event.preventDefault();
+      const orderedNames = [...drag.container.querySelectorAll("[data-journal-order-name]")]
+        .map((candidate) => candidate.dataset.journalOrderName || "")
+        .filter(Boolean);
+      void saveJournalOrder(orderedNames);
+    }
+
+    async function saveJournalOrder(orderedNames) {
+      const res = await fetch("/api/journals/reorder", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({journals: orderedNames})
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showMonitorStatusMessage(data.error || "Could not save journal order.");
+        await loadJournalSettings();
+        renderFilters();
+        return;
+      }
+      state.journalsConfig = data.journals || state.journalsConfig;
+      state.journalHistory = data.history || state.journalHistory;
+      state.journals = withPreprintJournals(state.journalsConfig.map((journal) => journal.name));
+      syncSelectedJournals();
+      renderJournalSettings();
+      renderJournalHistory();
+      renderFilters();
+      renderReport();
     }
 
     function renderJournalHistory() {
@@ -35750,7 +36119,8 @@ INDEX_HTML = """<!doctype html>
         hash ^= payload.charCodeAt(index);
         hash = Math.imul(hash, 16777619);
       }
-      return `${mode}:${papers?.length || 0}:${state.showFigures ? 1 : 0}:${(hash >>> 0).toString(36)}`;
+      const latexRenderState = window.katex ? 1 : 0;
+      return `${mode}:${papers?.length || 0}:${state.showFigures ? 1 : 0}:${latexRenderState}:${(hash >>> 0).toString(36)}`;
     }
 
     function stashCurrentMonitorPaperSurface(root = $("papers")) {
@@ -52337,6 +52707,7 @@ INDEX_HTML = """<!doctype html>
     });
     window.addEventListener("katex-ready", () => {
       if (state.mode === "report") renderReport();
+      if (state.mode === "theme") renderThemeMonitor();
       if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
     });
     window.addEventListener("scroll", (event) => {

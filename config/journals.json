@@ -92,6 +92,38 @@
       "section_policy": "science",
       "skip_landing_enrichment": true,
       "logo_url": "https://media.springernature.com/full/nature-cms/uploads/product/nphoton/header-310d06b045328f70fcc40e14da42c0ca.svg"
+    },
+    {
+      "name": "Science Advances",
+      "issns": [
+        "2375-2548"
+      ],
+      "openalex_source_id": "S2737427234",
+      "section_policy": "science",
+      "skip_landing_enrichment": true,
+      "logo_url": ""
+    },
+    {
+      "name": "Nano Letters",
+      "issns": [
+        "1530-6984",
+        "1530-6992"
+      ],
+      "openalex_source_id": null,
+      "section_policy": "science",
+      "skip_landing_enrichment": true,
+      "logo_url": ""
+    },
+    {
+      "name": "Reviews of Modern Physics",
+      "issns": [
+        "0034-6861",
+        "1539-0756"
+      ],
+      "openalex_source_id": "S73260565",
+      "section_policy": "science",
+      "skip_landing_enrichment": true,
+      "logo_url": ""
     }
   ],
   "section_policies": {
@@ -143,6 +175,14 @@
     }
   },
   "journal_history": [
+    {
+      "name": "Science Advances",
+      "issns": [
+        "2375-2548"
+      ],
+      "openalex_source_id": "S2737427234",
+      "logo_url": ""
+    },
     {
       "name": "Nature Photonics",
       "issns": [

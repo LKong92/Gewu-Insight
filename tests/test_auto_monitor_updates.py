@@ -37,6 +37,42 @@ class AutoMonitorUpdateTest(unittest.TestCase):
         self.assertIn("local proxy", errors[0]["message"])
         self.assertNotIn("127.0.0.1", errors[0]["message"])
 
+    def test_report_fetch_errors_use_final_journal_result_over_failed_child_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.record_fetch_run(
+                    monitor_type="journal",
+                    source="crossref",
+                    journal="Nature Communications",
+                    window_start="2026-08-24",
+                    window_end="2026-08-24",
+                    status="error",
+                    records_found=0,
+                    started_at="2026-08-25T09:00:00+08:00",
+                    message="HTTP 400 from Crossref",
+                )
+                storage.record_fetch_run(
+                    monitor_type="journal",
+                    source="journal",
+                    journal="Nature Communications",
+                    window_start="2026-08-24",
+                    window_end="2026-08-24",
+                    status="success",
+                    records_found=3,
+                    started_at="2026-08-25T09:00:01+08:00",
+                    message="",
+                )
+                errors = ui_server.journal_fetch_errors_for_date(
+                    storage,
+                    "2026-08-24",
+                    ["Nature Communications"],
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(errors, [])
+
     def test_arxiv_automatic_import_runs_once_after_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "paper_monitor.sqlite"
@@ -129,7 +165,7 @@ class AutoMonitorUpdateTest(unittest.TestCase):
             original_missing = ui_server.missing_fetch_journals_for_date
             original_fetch = ui_server.fetch_missing_sources_for_date
             try:
-                ui_server.load_config = lambda: object()
+                ui_server.load_config = lambda **_kwargs: object()
                 ui_server.configured_source_names = lambda _config: ["Nature"]
                 ui_server.missing_fetch_journals_for_date = lambda *_args: next(missing_calls)
                 ui_server.fetch_missing_sources_for_date = lambda **_kwargs: None

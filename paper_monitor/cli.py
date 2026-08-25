@@ -7,7 +7,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from .analysis import mark_job_done, pending_analysis_jobs, queue_codex_analysis, read_job
-from .config import DEFAULT_DB_PATH, load_config
+from .config import DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, load_config
 from .download import download_paper
 from .importers.inventory import import_library_inventory
 from .monitor import apply_fast_section_hints, default_windows, run_journal_monitor
@@ -78,8 +78,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = load_config()
     storage = Storage(args.db)
+    raw_config = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    storage.seed_journal_subscriptions(
+        raw_config.get("journals", []),
+        raw_config.get("journal_history", []),
+    )
+    config = load_config(db_path=args.db)
     configure_openalex_api_key(
         storage.get_setting(OPENALEX_API_KEY_SETTING, "")
     )

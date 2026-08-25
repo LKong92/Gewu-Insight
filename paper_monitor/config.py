@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,58 @@ class AppConfig:
     section_policies: dict[str, dict[str, list[str]]]
 
 
-def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
+def journal_subscriptions_from_db(db_path: Path) -> list[dict[str, Any]] | None:
+    path = Path(db_path)
+    if not path.exists():
+        return None
+    connection = sqlite3.connect(str(path))
+    connection.row_factory = sqlite3.Row
+    try:
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'journal_subscriptions'"
+        ).fetchone()
+        if not table:
+            return None
+        total = int(connection.execute("SELECT COUNT(*) FROM journal_subscriptions").fetchone()[0])
+        if not total:
+            return None
+        rows = connection.execute(
+            """
+            SELECT name, issns_json, openalex_source_id, section_policy,
+                   skip_landing_enrichment
+            FROM journal_subscriptions
+            WHERE enabled = 1
+            ORDER BY display_order, name COLLATE NOCASE
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+    journals: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            issns = json.loads(row["issns_json"] or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            issns = []
+        journals.append(
+            {
+                "name": str(row["name"] or ""),
+                "issns": list(issns) if isinstance(issns, list) else [],
+                "openalex_source_id": row["openalex_source_id"],
+                "section_policy": str(row["section_policy"] or "science"),
+                "skip_landing_enrichment": bool(row["skip_landing_enrichment"]),
+            }
+        )
+    return journals
+
+
+def load_config(
+    path: Path = DEFAULT_CONFIG_PATH,
+    *,
+    db_path: Path | None = None,
+) -> AppConfig:
     raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    journal_rows = journal_subscriptions_from_db(db_path) if db_path is not None else None
+    configured_journals = journal_rows if journal_rows is not None else raw["journals"]
     journals = [
         JournalConfig(
             name=item["name"],
@@ -48,7 +99,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             section_policy=item.get("section_policy", "nature"),
             skip_landing_enrichment=bool(item.get("skip_landing_enrichment", False)),
         )
-        for item in raw["journals"]
+        for item in configured_journals
     ]
     return AppConfig(
         fetch_lookback_days=int(raw.get("fetch_lookback_days", 14)),

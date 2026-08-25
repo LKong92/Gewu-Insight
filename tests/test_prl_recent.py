@@ -13,7 +13,7 @@ from paper_monitor.aps import aps_journal_slug, is_aps_lifecycle_journal
 from paper_monitor.config import JournalConfig
 from paper_monitor.monitor import apply_fast_section_hints, dedup_by_id
 from paper_monitor.reporting import section_badge_background, section_color
-from paper_monitor.sources.crossref import fetch_crossref_journal, normalize_crossref_item
+from paper_monitor.sources.crossref import fetch_crossref_journal, fetch_crossref_topic, normalize_crossref_item
 from paper_monitor.sources.openalex import fetch_openalex_work_by_doi, normalize_openalex_item
 from paper_monitor.sources.publisher import (
     enrich_aps_abstract_from_rss,
@@ -142,6 +142,11 @@ class PrlRecentTests(unittest.TestCase):
 
         self.assertEqual([paper["doi"] for paper in papers], ["10.1103/first-page", "10.1103/second-page"])
         self.assertEqual(request.call_count, 3)
+        for call in request.call_args_list:
+            params = call.kwargs["params"]
+            self.assertIn("cursor", params)
+            self.assertNotIn("sort", params)
+            self.assertNotIn("order", params)
 
     def test_crossref_preserves_good_issn_results_when_an_alternate_issn_fails(self) -> None:
         class Response:
@@ -172,6 +177,24 @@ class PrlRecentTests(unittest.TestCase):
 
         self.assertEqual([paper["doi"] for paper in papers], ["10.1103/wd4f-q7kv"])
         self.assertTrue(papers[0]["section_allowed"])
+
+    def test_crossref_topic_cursor_does_not_request_incompatible_sorting(self) -> None:
+        class Response:
+            def json(self) -> dict:
+                return {"message": {"items": []}}
+
+        with patch("paper_monitor.sources.crossref.request_with_retries", return_value=Response()) as request:
+            papers = fetch_crossref_topic(
+                query="quantum materials",
+                start_date=date(2026, 8, 24),
+                end_date=date(2026, 8, 25),
+            )
+
+        self.assertEqual(papers, [])
+        params = request.call_args.kwargs["params"]
+        self.assertIn("cursor", params)
+        self.assertNotIn("sort", params)
+        self.assertNotIn("order", params)
 
     def test_crossref_raises_when_every_issn_request_fails(self) -> None:
         with patch(
@@ -487,7 +510,7 @@ class PrlRecentTests(unittest.TestCase):
                 self.assertEqual(request.call_count, 2)
                 self.assertEqual(first["created"], 0)
                 self.assertEqual(second["created"], 0)
-                self.assertEqual(saved["title"], "Trusted crossref title")
+                self.assertEqual(saved["title"], "Trusted Crossref title")
                 self.assertIn("APS RSS abstract", saved["abstract"])
                 self.assertEqual(saved["source_count"], 2)
             finally:

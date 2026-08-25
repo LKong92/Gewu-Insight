@@ -48,6 +48,7 @@ TITLE_PROPER_WORDS = {
     "bragg": "Bragg",
     "brillouin": "Brillouin",
     "casimir": "Casimir",
+    "carlo": "Carlo",
     "chern": "Chern",
     "coulomb": "Coulomb",
     "debye": "Debye",
@@ -58,6 +59,7 @@ TITLE_PROPER_WORDS = {
     "ferrell": "Ferrell",
     "feshbach": "Feshbach",
     "floquet": "Floquet",
+    "fock": "Fock",
     "fulde": "Fulde",
     "gennes": "Gennes",
     "ginzburg": "Ginzburg",
@@ -92,6 +94,7 @@ TITLE_PROPER_WORDS = {
     "maxwell": "Maxwell",
     "meissner": "Meissner",
     "mott": "Mott",
+    "monte": "Monte",
     "nambu": "Nambu",
     "neel": "Neel",
     "newton": "Newton",
@@ -104,7 +107,9 @@ TITLE_PROPER_WORDS = {
     "rashba": "Rashba",
     "rydberg": "Rydberg",
     "schottky": "Schottky",
+    "schrieffer": "Schrieffer",
     "stokes": "Stokes",
+    "su": "Su",
     "teller": "Teller",
     "thouless": "Thouless",
     "waals": "Waals",
@@ -113,6 +118,7 @@ TITLE_PROPER_WORDS = {
     "wigner": "Wigner",
     "zener": "Zener",
     "zeeman": "Zeeman",
+    "heeger": "Heeger",
 }
 
 
@@ -164,6 +170,25 @@ TITLE_AMBIGUOUS_CHEMICAL_WORDS = {"As", "At", "Be", "He", "In", "No"}
 TITLE_SINGLE_LETTER_SYMBOLS = {"K", "T", "X", "Y", "Z"}
 TITLE_SUBSCRIPT_CHARS = "₀₁₂₃₄₅₆₇₈₉₊₋₍₎ₓᵧ"
 TITLE_WORD_RE = re.compile(rf"[A-Za-z][A-Za-z0-9{TITLE_SUBSCRIPT_CHARS}]*")
+LATEX_MATH_SPAN_RE = re.compile(
+    r"(?<!\\)\$\$.*?(?<!\\)\$\$|(?<!\\)\$.*?(?<!\\)\$|\\\(.*?\\\)|\\\[.*?\\\]"
+)
+LATEX_COMMAND_RE = re.compile(r"\\([A-Za-z]+)")
+KNOWN_MISCASED_LATEX_COMMANDS = {
+    "Mathbf": "mathbf",
+    "Mathcal": "mathcal",
+    "Mathit": "mathit",
+    "Mathrm": "mathrm",
+    "Mathscr": "mathscr",
+    "Mathsf": "mathsf",
+    "Mathtt": "mathtt",
+    "Text": "text",
+    "Textbf": "textbf",
+    "Textit": "textit",
+    "Texttt": "texttt",
+}
+LATEX_PLACEHOLDER_OPEN = "\ue000"
+LATEX_PLACEHOLDER_CLOSE = "\ue001"
 TITLE_WAVE_SYMMETRY_RE = re.compile(r"\b([spdfgSPDFG]{1,4})\s*[-\u2010\u2011\u2012\u2013\u2014]\s*(waves?)\b")
 SUBSCRIPT_TRANS = str.maketrans("0123456789+-()", "₀₁₂₃₄₅₆₇₈₉₊₋₍₎")
 TITLE_VARIABLE_FORMULA_RE = re.compile(
@@ -197,9 +222,10 @@ def is_placeholder_publication_title(value: Any) -> bool:
 
 
 def normalize_publication_title(value: Any) -> str:
-    title = clean_markup_text(value)
+    title = canonicalize_known_latex_commands(clean_markup_text(value))
     if not title:
         return ""
+    title, latex_spans = _protect_latex_math_spans(title)
     title = normalize_variable_chemical_formulas(title)
     title = normalize_parenthesized_chemical_formula_counts(title)
     title = join_spaced_chemical_formula_tokens(title)
@@ -207,7 +233,12 @@ def normalize_publication_title(value: Any) -> str:
     uppercase = sum(1 for letter in letters if letter.isupper())
     lowercase = sum(1 for letter in letters if letter.islower())
     shouting = bool(letters) and uppercase / max(len(letters), 1) > 0.85 and lowercase <= 2
-    first_word = True
+    first_text_match = TITLE_WORD_RE.search(title)
+    first_latex_pos = title.find(LATEX_PLACEHOLDER_OPEN)
+    first_word = not (
+        first_latex_pos >= 0
+        and (first_text_match is None or first_latex_pos < first_text_match.start())
+    )
 
     def replace(match: re.Match[str]) -> str:
         nonlocal first_word
@@ -233,7 +264,42 @@ def normalize_publication_title(value: Any) -> str:
     normalized_title = normalize_variable_chemical_formulas(normalized_title)
     normalized_title = normalize_parenthesized_chemical_formula_counts(normalized_title)
     normalized_title = normalize_wave_symmetry_terms(normalized_title)
-    return clean_text(normalized_title)
+    return _restore_latex_math_spans(clean_text(normalized_title), latex_spans)
+
+
+def canonicalize_known_latex_commands(value: Any) -> str:
+    """Repair only known command names previously damaged by title casing.
+
+    TeX control sequences are case-sensitive, so broad lowercasing would be
+    unsafe (for example, ``\\Gamma`` and ``\\gamma`` are different symbols).
+    This deliberately small map contains only commands that an older Gewu
+    title normalizer was observed to capitalize.
+    """
+
+    text = clean_text(value)
+
+    def replace(match: re.Match[str]) -> str:
+        command = match.group(1)
+        return "\\" + KNOWN_MISCASED_LATEX_COMMANDS.get(command, command)
+
+    return LATEX_COMMAND_RE.sub(replace, text)
+
+
+def _protect_latex_math_spans(title: str) -> tuple[str, list[str]]:
+    spans: list[str] = []
+
+    def replace(match: re.Match[str]) -> str:
+        index = len(spans)
+        spans.append(match.group(0))
+        return f"{LATEX_PLACEHOLDER_OPEN}{index}{LATEX_PLACEHOLDER_CLOSE}"
+
+    return LATEX_MATH_SPAN_RE.sub(replace, title), spans
+
+
+def _restore_latex_math_spans(title: str, spans: list[str]) -> str:
+    for index, span in enumerate(spans):
+        title = title.replace(f"{LATEX_PLACEHOLDER_OPEN}{index}{LATEX_PLACEHOLDER_CLOSE}", span)
+    return title
 
 
 def normalize_wave_symmetry_terms(title: str) -> str:
@@ -559,6 +625,10 @@ def _subscript_text(value: str) -> str:
 
 
 def _preserve_title_token(title: str, token: str, start: int, end: int, *, shouting: bool) -> bool:
+    if start > 0 and title[start - 1] == "\\":
+        return True
+    if not shouting and token[:1].isupper():
+        return True
     if any(char.isdigit() for char in token):
         return True
     if start > 0 and title[start - 1].isdigit():

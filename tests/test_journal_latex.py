@@ -16,6 +16,17 @@ class JournalLatexRenderingTests(unittest.TestCase):
         self.assertIn('document.createElement("script")', INDEX_HTML)
         self.assertIn('window.dispatchEvent(new Event("katex-ready"))', INDEX_HTML)
         self.assertIn('window.addEventListener("katex-ready"', INDEX_HTML)
+        katex_ready = INDEX_HTML.split('window.addEventListener("katex-ready"', 1)[1].split(
+            "window.addEventListener(\"scroll\"", 1
+        )[0]
+        self.assertIn('if (state.mode === "report") renderReport()', katex_ready)
+        self.assertIn('if (state.mode === "theme") renderThemeMonitor()', katex_ready)
+        self.assertIn('if (state.mode === "author") renderAuthorMonitor', katex_ready)
+        signature = INDEX_HTML.split("function monitorPaperSignature", 1)[1].split(
+            "function stashCurrentMonitorPaperSurface", 1
+        )[0]
+        self.assertIn("const latexRenderState = window.katex ? 1 : 0", signature)
+        self.assertIn("${latexRenderState}", signature)
         self.assertIn(
             'inlineLatexMarkup(paper.title || "(Untitled)", publicationTitleMarkup)',
             INDEX_HTML,

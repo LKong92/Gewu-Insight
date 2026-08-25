@@ -49,7 +49,13 @@ for icon_spec in \
   sips -z "$icon_size" "$icon_size" "$APP_ICON_SOURCE" \
     --out "$APP_ICONSET/$icon_name" >/dev/null
 done
-iconutil -c icns -o "$APP_ICON_ICNS_DEST" "$APP_ICONSET"
+if ! iconutil -c icns -o "$APP_ICON_ICNS_DEST" "$APP_ICONSET"; then
+  if [[ ! -s "$APP_ICON_ICNS_DEST" ]]; then
+    echo "Unable to build the app icon and no existing ICNS fallback is available." >&2
+    exit 1
+  fi
+  echo "iconutil rejected the regenerated iconset; keeping the existing app icon." >&2
+fi
 cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
 mkdir -p "$SIGN_WORKDIR"
 ditto "$APP" "$SIGN_APP"

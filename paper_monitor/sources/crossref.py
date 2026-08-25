@@ -39,8 +39,6 @@ def fetch_crossref_journal(
                     ),
                     "rows": rows,
                     "cursor": cursor,
-                    "sort": "published",
-                    "order": "desc",
                     "select": ",".join(
                         [
                             "DOI",
@@ -119,8 +117,6 @@ def fetch_crossref_topic(
             ),
             "rows": max(1, min(100, int(rows or 50))),
             "cursor": cursor,
-            "sort": "published",
-            "order": "desc",
             "select": ",".join(
                 [
                     "DOI",

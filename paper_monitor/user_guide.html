@@ -865,6 +865,8 @@
 
           <p>WAL improves normal concurrency; it is not a substitute for a coherent backup. Close Gewu Insight before copying its live database, and back up the managed files with it.</p>
 
+          <p>Journal subscriptions are durable SQLite state as well. The database preserves which journals are enabled, their identifiers and source settings, and their display order. Replacing or updating the product source directory therefore does not reset a user's Journal Monitor list.</p>
+
           <div class="note"><span class="callout-title">Cross-layer changes</span>SQLite transactions protect database state. A file move and its database update cannot be one native SQLite transaction, so the local service coordinates the steps and uses validation or compensating recovery when a filesystem operation fails.</div>
 
           <h2>Exports and provenance</h2>
@@ -1614,6 +1616,7 @@
 
           <h2>Manage monitored journals</h2>
           <p>Open <span class="ui">Journal Settings</span> to add or manage a journal by name, ISSN, or known publication history. When an ISSN is missing, the app can look up a matching journal record before saving it. Review the match rather than relying on a similar title alone.</p>
+          <p>Drag journals vertically in <span class="ui">Journal Filter</span> or <span class="ui">Journal Settings</span> to set their order. The saved order controls the filter list and the journal groups in the report. Removing a journal disables the subscription without erasing its previously collected papers or its saved history.</p>
 
           <h2>Daily scheduled updates</h2>
           <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>

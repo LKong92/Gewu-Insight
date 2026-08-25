@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 10
+STORAGE_SCHEMA_VERSION = 11
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 
 
@@ -139,6 +139,23 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS journal_subscriptions (
+  journal_key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  issns_json TEXT NOT NULL DEFAULT '[]',
+  openalex_source_id TEXT,
+  section_policy TEXT NOT NULL DEFAULT 'science',
+  skip_landing_enrichment INTEGER NOT NULL DEFAULT 1,
+  logo_url TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_subscriptions_enabled_order
+ON journal_subscriptions(enabled, display_order, name);
 
 CREATE TABLE IF NOT EXISTS paper_reads (
   paper_id TEXT PRIMARY KEY REFERENCES papers(paper_id) ON DELETE CASCADE,
@@ -460,6 +477,7 @@ class Storage:
                 not required_paper_columns.issubset(paper_columns)
                 or not required_resource_columns.issubset(resource_columns)
                 or "journal_monitor_papers" not in existing_tables
+                or "journal_subscriptions" not in existing_tables
             )
             if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
@@ -2505,6 +2523,209 @@ class Storage:
     def remove_library_paper(self, *, paper_id: str) -> None:
         self.conn.execute("DELETE FROM library_items WHERE paper_id = ?", (str(paper_id),))
         self.conn.commit()
+
+    @staticmethod
+    def _journal_subscription_key(name: str) -> str:
+        return " ".join(str(name or "").strip().split()).casefold()
+
+    @staticmethod
+    def _journal_subscription_values(journal: dict[str, Any]) -> dict[str, Any]:
+        name = " ".join(str(journal.get("name") or "").strip().split())
+        if not name:
+            raise ValueError("Journal name is required")
+        issns = [
+            " ".join(str(value or "").strip().split())
+            for value in (journal.get("issns") or [])
+            if str(value or "").strip()
+        ]
+        return {
+            "journal_key": Storage._journal_subscription_key(name),
+            "name": name,
+            "issns_json": json.dumps(issns, ensure_ascii=False),
+            "openalex_source_id": str(journal.get("openalex_source_id") or "").strip() or None,
+            "section_policy": str(journal.get("section_policy") or "science").strip() or "science",
+            "skip_landing_enrichment": 1 if bool(journal.get("skip_landing_enrichment", True)) else 0,
+            "logo_url": str(journal.get("logo_url") or "").strip(),
+        }
+
+    def seed_journal_subscriptions(
+        self,
+        journals: Iterable[dict[str, Any]],
+        history: Iterable[dict[str, Any]] = (),
+    ) -> bool:
+        existing_count = int(
+            self.conn.execute("SELECT COUNT(*) FROM journal_subscriptions").fetchone()[0]
+        )
+        if existing_count:
+            return False
+        timestamp = now_iso()
+        seen: set[str] = set()
+        rows: list[tuple[Any, ...]] = []
+        active_order = 0
+        for enabled, entries in ((1, journals), (0, history)):
+            for journal in entries:
+                values = self._journal_subscription_values(dict(journal))
+                key = values["journal_key"]
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(
+                    (
+                        key,
+                        values["name"],
+                        values["issns_json"],
+                        values["openalex_source_id"],
+                        values["section_policy"],
+                        values["skip_landing_enrichment"],
+                        values["logo_url"],
+                        enabled,
+                        active_order,
+                        timestamp,
+                        timestamp,
+                    )
+                )
+                active_order += 1
+        if not rows:
+            return False
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT INTO journal_subscriptions (
+                  journal_key, name, issns_json, openalex_source_id,
+                  section_policy, skip_landing_enrichment, logo_url,
+                  enabled, display_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return True
+
+    def list_journal_subscriptions(self, *, enabled: bool | None = True) -> list[dict[str, Any]]:
+        params: tuple[Any, ...] = ()
+        where = ""
+        if enabled is not None:
+            where = "WHERE enabled = ?"
+            params = (1 if enabled else 0,)
+        rows = self.conn.execute(
+            f"""
+            SELECT *
+            FROM journal_subscriptions
+            {where}
+            ORDER BY enabled DESC, display_order, name COLLATE NOCASE
+            """,
+            params,
+        ).fetchall()
+        subscriptions: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                issns = json.loads(item.pop("issns_json") or "[]")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                issns = []
+            item["issns"] = list(issns) if isinstance(issns, list) else []
+            item["enabled"] = bool(item.get("enabled"))
+            item["skip_landing_enrichment"] = bool(item.get("skip_landing_enrichment"))
+            subscriptions.append(item)
+        return subscriptions
+
+    def upsert_journal_subscription(self, journal: dict[str, Any]) -> dict[str, Any]:
+        values = self._journal_subscription_values(journal)
+        existing = self.conn.execute(
+            "SELECT enabled, display_order FROM journal_subscriptions WHERE journal_key = ?",
+            (values["journal_key"],),
+        ).fetchone()
+        if existing and bool(existing["enabled"]):
+            raise ValueError("Journal already exists")
+        next_order = int(
+            self.conn.execute(
+                "SELECT COALESCE(MAX(display_order), -1) + 1 FROM journal_subscriptions WHERE enabled = 1"
+            ).fetchone()[0]
+        )
+        timestamp = now_iso()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO journal_subscriptions (
+                  journal_key, name, issns_json, openalex_source_id,
+                  section_policy, skip_landing_enrichment, logo_url,
+                  enabled, display_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(journal_key) DO UPDATE SET
+                  name = excluded.name,
+                  issns_json = excluded.issns_json,
+                  openalex_source_id = excluded.openalex_source_id,
+                  section_policy = excluded.section_policy,
+                  skip_landing_enrichment = excluded.skip_landing_enrichment,
+                  logo_url = excluded.logo_url,
+                  enabled = 1,
+                  display_order = excluded.display_order,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    values["journal_key"],
+                    values["name"],
+                    values["issns_json"],
+                    values["openalex_source_id"],
+                    values["section_policy"],
+                    values["skip_landing_enrichment"],
+                    values["logo_url"],
+                    next_order,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        return next(
+            item
+            for item in self.list_journal_subscriptions(enabled=True)
+            if item["journal_key"] == values["journal_key"]
+        )
+
+    def disable_journal_subscription(self, name: str) -> None:
+        key = self._journal_subscription_key(name)
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                UPDATE journal_subscriptions
+                SET enabled = 0, updated_at = ?
+                WHERE journal_key = ? AND enabled = 1
+                """,
+                (now_iso(), key),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Journal is not configured")
+            self._resequence_journal_subscriptions(commit=False)
+
+    def _resequence_journal_subscriptions(self, *, commit: bool = True) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT journal_key
+            FROM journal_subscriptions
+            WHERE enabled = 1
+            ORDER BY display_order, name COLLATE NOCASE
+            """
+        ).fetchall()
+        timestamp = now_iso()
+        self.conn.executemany(
+            "UPDATE journal_subscriptions SET display_order = ?, updated_at = ? WHERE journal_key = ?",
+            [(index, timestamp, str(row["journal_key"])) for index, row in enumerate(rows)],
+        )
+        if commit:
+            self.conn.commit()
+
+    def reorder_journal_subscriptions(self, ordered_names: Iterable[str]) -> list[dict[str, Any]]:
+        names = [" ".join(str(name or "").strip().split()) for name in ordered_names]
+        keys = [self._journal_subscription_key(name) for name in names if name]
+        current = self.list_journal_subscriptions(enabled=True)
+        current_keys = [str(item["journal_key"]) for item in current]
+        if len(keys) != len(current_keys) or len(set(keys)) != len(keys) or set(keys) != set(current_keys):
+            raise ValueError("Journal order must contain every configured journal exactly once")
+        timestamp = now_iso()
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE journal_subscriptions SET display_order = ?, updated_at = ? WHERE journal_key = ?",
+                [(index, timestamp, key) for index, key in enumerate(keys)],
+            )
+        return self.list_journal_subscriptions(enabled=True)
 
     def get_setting(self, key: str, default: str = "") -> str:
         row = self.conn.execute("SELECT value FROM app_settings WHERE key = ?", (str(key),)).fetchone()
