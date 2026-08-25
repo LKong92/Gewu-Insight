@@ -35731,7 +35731,7 @@ INDEX_HTML = """<!doctype html>
     function renderFilters() {
       const counts = {};
       state.papers
-        .filter((paper) => !isPreprintPaper(paper) && subjectMatches(paper))
+        .filter((paper) => !isPreprintPaper(paper))
         .forEach((paper) => counts[paper.journal] = (counts[paper.journal] || 0) + 1);
       const root = $("journalFilters");
       root.innerHTML = "";

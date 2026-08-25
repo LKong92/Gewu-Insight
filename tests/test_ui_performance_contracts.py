@@ -265,6 +265,12 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('option.querySelector("input").addEventListener("change", () => {', subject_filters)
         self.assertIn("grid-template-columns: 18px minmax(0, 1fr) auto;", ui_server.INDEX_HTML)
 
+    def test_journal_filter_counts_ignore_the_field_filter(self) -> None:
+        journal_filters = self.js_function("renderFilters")
+
+        self.assertIn(".filter((paper) => !isPreprintPaper(paper))", journal_filters)
+        self.assertNotIn("subjectMatches(paper)", journal_filters)
+
     def test_report_sidebar_filter_and_settings_rows_are_compact(self) -> None:
         report_sidebar_css = ui_server.INDEX_HTML.split(
             ".app.report-mode .journal-sidebar-filter .journal-toggle,", 1
