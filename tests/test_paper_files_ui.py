@@ -182,6 +182,12 @@ class PaperFilesUiTests(unittest.TestCase):
         keyboard = INDEX_HTML.split("function handleLibraryKeydown", 1)[1].split(
             "function switchReportJournalTab", 1
         )[0]
+        availability = INDEX_HTML.split("function libraryPaperFilesNavigationEnabled", 1)[1].split(
+            "function setLibraryPaperResourceSelection", 1
+        )[0]
+        self.assertIn('state.mode === "library"', availability)
+        self.assertIn('["my-publications", "loader"]', availability)
+        self.assertIn("libraryPaperFilesNavigationEnabled()", keyboard)
         self.assertIn("handleLibraryPaperResourceKeydown(event, key)", keyboard)
         self.assertIn('key === "ArrowRight"', keyboard)
         self.assertIn("activateLibraryPaperFiles()", keyboard)
@@ -192,6 +198,11 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("moveLibraryPaperResourceSelection", resource_keyboard)
         self.assertIn("quickLookLibraryPaperResource(selected", resource_keyboard)
         self.assertIn("clearLibraryPaperResourceSelection({focusPaper: true})", resource_keyboard)
+
+        pdf_keys = INDEX_HTML.split("function handleLibraryQuickLookPdfKeydown", 1)[1].split(
+            "function reclaimLibraryQuickLookFocus", 1
+        )[0]
+        self.assertIn("libraryPaperFilesNavigationEnabled()", pdf_keys)
         main_selection = INDEX_HTML.split("function setLibraryColumnSelection", 1)[1].split(
             "function setLibraryRangeSelection", 1
         )[0]

@@ -44138,6 +44138,11 @@ INDEX_HTML = """<!doctype html>
       return groups.flatMap((group) => files.filter((file) => paperFileGroup(file) === group));
     }
 
+    function libraryPaperFilesNavigationEnabled() {
+      const tab = String(state.libraryTab || "library");
+      return state.mode === "library" && !["my-publications", "loader"].includes(tab);
+    }
+
     function setLibraryPaperResourceSelection(paperId, resourceId, {focus = false} = {}) {
       const normalizedPaperId = String(paperId || "");
       const normalizedResourceId = Number(resourceId || 0);
@@ -45882,7 +45887,7 @@ INDEX_HTML = """<!doctype html>
     function handleLibraryQuickLookPdfKeydown(event) {
       if (handlePreviewCloseShortcut(event)) return;
       const key = event.key === "Spacebar" ? " " : event.key;
-      if (state.mode === "library" && state.libraryTab === "library" && handleLibraryPaperResourceKeydown(event, key)) return;
+      if (libraryPaperFilesNavigationEnabled() && handleLibraryPaperResourceKeydown(event, key)) return;
       if (key === " " && ["report", "theme"].includes(state.mode)) {
         event.preventDefault();
         event.stopPropagation();
@@ -46474,9 +46479,9 @@ INDEX_HTML = """<!doctype html>
         return true;
       }
       if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
-      if (state.libraryTab === "library" && handleLibraryPaperResourceKeydown(event, key)) return true;
+      if (libraryPaperFilesNavigationEnabled() && handleLibraryPaperResourceKeydown(event, key)) return true;
       if (
-        state.libraryTab === "library"
+        libraryPaperFilesNavigationEnabled()
         && key === "ArrowRight"
         && state.librarySelection?.type === "item"
         && !selectedLibraryPaperResource()
