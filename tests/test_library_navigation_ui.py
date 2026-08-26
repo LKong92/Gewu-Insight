@@ -71,9 +71,9 @@ class LibraryNavigationUiTests(unittest.TestCase):
         root_css = INDEX_HTML.split(".library-tab.root-tab {", 1)[1].split("}", 1)[0]
         shortcut_css = INDEX_HTML.split(".library-tab.shortcut-tab {", 1)[1].split("}", 1)[0]
         workspace_css = INDEX_HTML.split(".library-tab.workspace-tab {", 1)[1].split("}", 1)[0]
-        self.assertIn("--library-tab-active-bg: #78a6d3;", root_css)
-        self.assertIn("--library-tab-active-bg: #a8c8e6;", shortcut_css)
-        self.assertIn("--library-tab-active-bg: #d3e6f6;", workspace_css)
+        self.assertIn("--library-tab-active-bg: rgba(101, 164, 248, 0.5);", root_css)
+        self.assertIn("--library-tab-active-bg: rgba(82, 179, 209, 0.5);", shortcut_css)
+        self.assertIn("--library-tab-active-bg: rgba(140, 174, 243, 0.5);", workspace_css)
         self.assertIn("--library-tab-idle-opacity: 0.38;", root_css)
         self.assertIn("--library-tab-idle-opacity: 0.44;", shortcut_css)
         self.assertIn("--library-tab-idle-opacity: 0.5;", workspace_css)

@@ -5,9 +5,12 @@ __pycache__/
 data/
 config/subjects.json
 logs/
-reports/analysis_jobs/
-reports/imports/
-reports/citation_comments/
-reports/publication_exports/
+output/
+tmp/
+reports/
 backups/
 deep_survey/plugins/
+
+# Local-only development history and generated evaluation/design artifacts.
+benchmarks/
+scripts/bench_local.py

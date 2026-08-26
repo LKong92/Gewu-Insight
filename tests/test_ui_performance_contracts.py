@@ -226,7 +226,7 @@ class UiPerformanceContractTests(unittest.TestCase):
     def test_monitor_sidebar_reserves_the_same_scrollbar_width(self) -> None:
         self.assertIn("scrollbar-gutter: stable;", ui_server.INDEX_HTML)
         self.assertIn("overflow-x: hidden;", ui_server.INDEX_HTML)
-        self.assertIn("--monitor-calendar-width: 280px;", ui_server.INDEX_HTML)
+        self.assertIn("--monitor-calendar-width: 254px;", ui_server.INDEX_HTML)
         self.assertIn("width: var(--monitor-calendar-width);", ui_server.INDEX_HTML)
         self.assertNotIn("--monitor-calendar-width: 100%;", ui_server.INDEX_HTML)
 
@@ -258,9 +258,9 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn(".journal-sidebar-filter .journal-toggle.active", ui_server.INDEX_HTML)
         self.assertIn("#subjectFilters .subject-option.active", ui_server.INDEX_HTML)
         self.assertIn('class="journal-add-panel"', ui_server.INDEX_HTML)
-        self.assertIn(".journal-setting-row + .journal-setting-row", ui_server.INDEX_HTML)
+        self.assertNotIn(".journal-setting-row + .journal-setting-row", ui_server.INDEX_HTML)
         self.assertIn(".journal-add-panel .search", ui_server.INDEX_HTML)
-        self.assertIn('label.className = `journal-toggle${selected ? " active" : ""}`', journal_filters)
+        self.assertIn('label.className = `journal-toggle journal-sortable${selected ? " active" : ""}`', journal_filters)
         self.assertIn('option.innerHTML = `<input type="checkbox" ${selected ? "checked" : ""}>', subject_filters)
         self.assertIn('option.querySelector("input").addEventListener("change", () => {', subject_filters)
         self.assertIn("grid-template-columns: 18px minmax(0, 1fr) auto;", ui_server.INDEX_HTML)
