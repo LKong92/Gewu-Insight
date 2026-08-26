@@ -4,6 +4,10 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/GewuAboutCalligraphy.png</key>
+		<data>
+		NB+m+kLcgT5HIohIHjxt627aRz0=
+		</data>
 		<key>Resources/GewuInsightAppIcon-673606679.icns</key>
 		<data>
 		QMkzsH8woB/u5GbjADF5mGttUTM=
@@ -91,6 +95,13 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
+		</dict>
+		<key>Resources/GewuAboutCalligraphy.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			+2d60L3YWZaDd0aNtt+gIRLoFAbsZFnWj0G1L3/gwFk=
+			</data>
 		</dict>
 		<key>Resources/GewuInsightAppIcon-673606679.icns</key>
 		<dict>

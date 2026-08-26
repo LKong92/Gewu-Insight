@@ -34,6 +34,18 @@ class UserGuideTests(unittest.TestCase):
             "<html>guide</html>", content_type="text/html; charset=utf-8"
         )
 
+    def test_user_guide_calligraphy_route_uses_the_packaged_brand_asset(self) -> None:
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.path = "/api/about-calligraphy"
+        handler.handle_about_calligraphy = MagicMock()
+
+        handler.do_GET()
+
+        handler.handle_about_calligraphy.assert_called_once_with()
+        self.assertTrue(
+            (ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png").is_file()
+        )
+
     def test_guide_has_valid_internal_navigation_and_complete_product_coverage(self) -> None:
         html = ui_server.load_user_guide_html()
         soup = BeautifulSoup(html, "html.parser")
@@ -67,6 +79,7 @@ class UserGuideTests(unittest.TestCase):
             "Subject Monitor",
             "Author Monitor",
             "Citation Settings",
+            "Visual Identity and Cultural Elements",
             "Keyboard Shortcuts",
             "Back Up and Upgrade",
             "Troubleshooting",
@@ -77,6 +90,45 @@ class UserGuideTests(unittest.TestCase):
 
         self.assertNotIn("Development History", visible_text)
         self.assertNotIn("benchmark", visible_text.lower())
+
+    def test_visual_identity_chapter_documents_assets_sources_and_usage(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        article = soup.find("article", id="visual-identity")
+        self.assertIsNotNone(article)
+        self.assertEqual(article.get("data-group"), "About Gewu Insight")
+
+        images = {image.get("src"): image for image in article.select("img[src]")}
+        self.assertIn("/api/about-calligraphy", images)
+        self.assertIn("/api/app-icon", images)
+        self.assertIn("/api/startup-brand-art", images)
+
+        source_links = {
+            link.get_text(" ", strip=True): link.get("href")
+            for link in article.select("table.glyph-provenance a[href]")
+        }
+        self.assertEqual(
+            source_links,
+            {
+                "格": "https://www.shufa5.com/images/shufa/zi/5/35045.gif",
+                "物": "https://www.shufa5.com/images/shufa/zi/6/165906.gif",
+                "洞": "https://www.shufa5.com/images/shufa/zi/2/162202.gif",
+                "見": "https://www.shufa5.com/images/shufa/zi/2/179662.gif",
+            },
+        )
+
+        text = article.get_text(" ", strip=True)
+        for phrase in [
+            "祝枝山行草集字",
+            "a title written by Zhu Zhishan",
+            "traditional direction from right to left",
+            "汉仪篆书繁",
+            "The icon's two blue-violet fields",
+            "Provenance and reuse",
+            "Icon · recognition",
+            "Calligraphy · signature",
+            "Seal script · atmosphere",
+        ]:
+            self.assertIn(phrase, text)
 
     def test_original_topics_are_preserved_around_the_new_architecture_section(self) -> None:
         soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
@@ -158,6 +210,10 @@ class UserGuideTests(unittest.TestCase):
             "Keep research objects visible, evidence traceable, and insight cumulative.",
             "Five design commitments",
             "Local-first does not mean offline-only",
+            "Cross-platform core, platform-specific integration",
+            "macOS native release",
+            "Planned Windows release",
+            "supported Windows package is available today",
             "What this guide covers",
             "Five areas of the app",
             "Open this guide again",
@@ -416,11 +472,17 @@ class UserGuideTests(unittest.TestCase):
         self.assertIn("hashchange", html)
         self.assertIn("showTopic", html)
         self.assertIn("window.print()", html)
+        self.assertIn("messageHandlers?.printUserGuide", html)
+        self.assertIn("nativePrint.postMessage", html)
         self.assertIn("@media print", html)
         soup = BeautifulSoup(html, "html.parser")
         self.assertFalse(soup.select("script[src]"))
         self.assertFalse(soup.select("link[href]"))
-        self.assertFalse(soup.select("img[src], video[src], audio[src], source[src]"))
+        self.assertFalse(soup.select("video[src], audio[src], source[src]"))
+        self.assertEqual(
+            {image.get("src") for image in soup.select("img[src]")},
+            {"/api/about-calligraphy", "/api/app-icon", "/api/startup-brand-art"},
+        )
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:
         release_script = (ROOT / "scripts" / "make_release.sh").read_text(encoding="utf-8")

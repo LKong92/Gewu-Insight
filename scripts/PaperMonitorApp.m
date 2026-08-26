@@ -544,6 +544,10 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"printUserGuide"]) {
+        [self printUserGuide];
+        return;
+    }
     if ([message.name isEqualToString:@"appReady"]) {
         [self dismissStartupOverlay];
         return;
@@ -1761,6 +1765,18 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     return label;
 }
 
+- (NSButton *)aboutLinkButtonWithTitle:(NSString *)title
+                                 frame:(NSRect)frame
+                                action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
+    button.frame = frame;
+    button.bordered = NO;
+    button.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium];
+    button.contentTintColor = NSColor.linkColor;
+    button.focusRingType = NSFocusRingTypeNone;
+    return button;
+}
+
 - (void)openAboutProjectWebsite:(id)sender {
     NSURL *url = [NSURL URLWithString:@"https://github.com/LKong92/Gewu-Insight"];
     if (url) [[NSWorkspace sharedWorkspace] openURL:url];
@@ -1768,8 +1784,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)showAboutWindow {
     if (!self.aboutWindow) {
-        const CGFloat width = 420.0;
-        const CGFloat height = 448.0;
+        const CGFloat width = 392.0;
+        const CGFloat height = 414.0;
         self.aboutWindow = [[NSWindow alloc]
             initWithContentRect:NSMakeRect(0, 0, width, height)
                       styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
@@ -1795,19 +1811,26 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             [content addSubview:sealView];
         }
 
-        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(162, 326, 96, 96)];
+        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(154, 310, 84, 84)];
         iconView.image = NSApp.applicationIconImage;
         iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
         [content addSubview:iconView];
 
         [content addSubview:[self aboutLabelWithString:@"Gewu Insight"
                                                    font:[NSFont systemFontOfSize:27 weight:NSFontWeightSemibold]
-                                                  frame:NSMakeRect(30, 286, 360, 34)
+                                                  frame:NSMakeRect(24, 266, 344, 34)
                                                   color:NSColor.labelColor]];
-        [content addSubview:[self aboutLabelWithString:@"格物洞见"
-                                                   font:[NSFont systemFontOfSize:15 weight:NSFontWeightMedium]
-                                                  frame:NSMakeRect(30, 260, 360, 23)
-                                                  color:NSColor.secondaryLabelColor]];
+        NSURL *calligraphyURL = [[NSBundle mainBundle] URLForResource:@"GewuAboutCalligraphy" withExtension:@"png"];
+        NSImage *calligraphyImage = calligraphyURL ? [[NSImage alloc] initWithContentsOfURL:calligraphyURL] : nil;
+        if (calligraphyImage) {
+            calligraphyImage.template = YES;
+            NSImageView *calligraphyView = [[NSImageView alloc] initWithFrame:NSMakeRect(132, 231, 128, 27)];
+            calligraphyView.image = calligraphyImage;
+            calligraphyView.imageScaling = NSImageScaleProportionallyUpOrDown;
+            calligraphyView.contentTintColor = NSColor.secondaryLabelColor;
+            calligraphyView.accessibilityLabel = @"格物洞见";
+            [content addSubview:calligraphyView];
+        }
 
         NSBundle *bundle = NSBundle.mainBundle;
         NSString *version = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
@@ -1817,36 +1840,38 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             : [NSString stringWithFormat:@"Version %@", version];
         [content addSubview:[self aboutLabelWithString:versionText
                                                    font:[NSFont systemFontOfSize:12]
-                                                  frame:NSMakeRect(30, 237, 360, 18)
+                                                  frame:NSMakeRect(24, 207, 344, 18)
                                                   color:NSColor.tertiaryLabelColor]];
 
-        [content addSubview:[self aboutLabelWithString:@"A local-first workspace for discovering, organizing, reading, and preserving scholarly work."
+        [content addSubview:[self aboutLabelWithString:@"Your personal research workspace where papers, evidence, and files stay connected over time."
                                                    font:[NSFont systemFontOfSize:13]
-                                                  frame:NSMakeRect(48, 184, 324, 42)
+                                                  frame:NSMakeRect(32, 159, 328, 36)
                                                   color:NSColor.labelColor]];
-        [content addSubview:[self aboutLabelWithString:@"SQLite is the source of truth.\nYour research files remain visible and locally controlled."
-                                                   font:[NSFont systemFontOfSize:12]
-                                                  frame:NSMakeRect(48, 142, 324, 36)
-                                                  color:NSColor.secondaryLabelColor]];
 
-        NSButton *guideButton = [NSButton buttonWithTitle:@"User Guide" target:self action:@selector(openUserGuide:)];
-        guideButton.frame = NSMakeRect(105, 99, 96, 32);
-        guideButton.bezelStyle = NSBezelStyleRounded;
+        NSButton *guideButton = [self aboutLinkButtonWithTitle:@"User Guide"
+                                                        frame:NSMakeRect(111, 116, 82, 24)
+                                                       action:@selector(openUserGuide:)];
         [content addSubview:guideButton];
-        NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub" target:self action:@selector(openAboutProjectWebsite:)];
-        githubButton.frame = NSMakeRect(219, 99, 96, 32);
-        githubButton.bezelStyle = NSBezelStyleRounded;
+        [content addSubview:[self aboutLabelWithString:@"·"
+                                                   font:[NSFont systemFontOfSize:12]
+                                                  frame:NSMakeRect(190, 118, 12, 20)
+                                                  color:NSColor.tertiaryLabelColor]];
+        NSButton *githubButton = [self aboutLinkButtonWithTitle:@"GitHub"
+                                                         frame:NSMakeRect(199, 116, 82, 24)
+                                                        action:@selector(openAboutProjectWebsite:)];
         [content addSubview:githubButton];
 
-        [content addSubview:[self aboutLabelWithString:@"Designed and developed by Lingyuan Kong and Zhengran Wu.\nDeveloped with coding assistance from OpenAI Codex."
+        [content addSubview:[self aboutLabelWithString:@"Designed and developed by Lingyuan Kong and Zhengran Wu,\nwith coding assistance from OpenAI Codex."
                                                    font:[NSFont systemFontOfSize:10.5]
-                                                  frame:NSMakeRect(36, 54, 348, 34)
+                                                  frame:NSMakeRect(24, 71, 344, 27)
                                                   color:NSColor.secondaryLabelColor]];
         NSString *copyright = [bundle objectForInfoDictionaryKey:@"NSHumanReadableCopyright"]
             ?: @"Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.";
-        [content addSubview:[self aboutLabelWithString:copyright
+        NSString *copyrightDisplay = [copyright stringByReplacingOccurrencesOfString:@". All rights reserved."
+                                                                          withString:@".\nAll rights reserved."];
+        [content addSubview:[self aboutLabelWithString:copyrightDisplay
                                                    font:[NSFont systemFontOfSize:10]
-                                                  frame:NSMakeRect(24, 20, 372, 28)
+                                                  frame:NSMakeRect(18, 27, 356, 28)
                                                   color:NSColor.tertiaryLabelColor]];
         [self.aboutWindow center];
     }
@@ -1854,9 +1879,32 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (void)printUserGuide {
+    if (!self.userGuideWebView || !self.userGuideWindow) return;
+    NSPrintInfo *printInfo = [[NSPrintInfo sharedPrintInfo] copy];
+    NSPrintOperation *operation = [self.userGuideWebView printOperationWithPrintInfo:printInfo];
+    operation.showsPrintPanel = YES;
+    operation.showsProgressPanel = YES;
+    [operation runOperationModalForWindow:self.userGuideWindow
+                                  delegate:self
+                            didRunSelector:@selector(userGuidePrintOperationDidRun:success:contextInfo:)
+                               contextInfo:NULL];
+}
+
+- (void)userGuidePrintOperationDidRun:(NSPrintOperation *)operation
+                               success:(BOOL)success
+                           contextInfo:(void *)contextInfo {
+    (void)operation;
+    (void)success;
+    (void)contextInfo;
+}
+
 - (void)showUserGuideWindow {
     if (!self.userGuideWindow) {
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        WKUserContentController *userContentController = [[WKUserContentController alloc] init];
+        [userContentController addScriptMessageHandler:self name:@"printUserGuide"];
+        configuration.userContentController = userContentController;
         self.userGuideWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
         self.userGuideWebView.UIDelegate = self;
 

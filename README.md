@@ -1,23 +1,32 @@
-# Gewu Insight · 格物洞见
+# Gewu Insight
 
-**Keep research objects visible, evidence traceable, and insight cumulative.**<br>
-**让研究对象保持可见，让证据保持可追，让洞见能够积累。**
+**Keep research objects visible, evidence traceable, and insight cumulative.**
 
-Gewu Insight is a local-first macOS workspace for discovering, organizing,
+Gewu Insight is a local-first desktop workspace for discovering, organizing,
 reading, and preserving scholarly work. It connects a research library,
 versioned paper files, personal publications, and three complementary discovery
 monitors around one persistent paper identity.
 
-The name expresses the product idea:
-
-- **格物 · Gewu** — stay close to the research object: the paper, identifiers,
-  versions, sources, files, and relationships remain inspectable.
-- **洞见 · Insight** — understanding grows through connected evidence,
-  repeated reading, comparison, and the researcher's judgment.
-
 Gewu Insight is not only an RSS reader, a PDF folder, or five unrelated pages.
 It is a personal research information infrastructure in which discovery becomes
 durable, file-backed, and auditable.
+
+## Platform support
+
+Gewu Insight separates a portable Python, SQLite, and web-interface core from
+platform-specific desktop integration.
+
+- **macOS** — the current native desktop release. It is the primary development
+  and validation platform and includes Finder, Preview, Quick Look, Dock, and
+  native drag-and-drop integration.
+- **Windows** — planned as an experimental desktop release. A Windows package is
+  not yet a supported distribution, and its Explorer, PDF-viewer, Recycle Bin,
+  native drag-and-drop, installer, and update behavior still require dedicated
+  implementation and validation.
+
+Instructions that name Finder, Preview, Quick Look, or the Dock describe the
+current macOS integration rather than a limitation of the underlying research
+data model.
 
 ## Core design commitments
 
@@ -100,6 +109,17 @@ and attachments without pretending they are another Finder folder level.
   before they become registered resources.
 - Coordinated database and filesystem operations use rollback or compensating
   recovery instead of leaving half-completed moves.
+
+## Name and Chinese origin
+
+Gewu Insight is known in Chinese as **格物洞见**.
+
+- **格物 · Gewu** — stay close to the research object: the paper, identifiers,
+  versions, sources, files, and relationships remain inspectable.
+- **洞见 · Insight** — let understanding grow through connected evidence,
+  repeated reading, comparison, and the researcher's judgment.
+
+The corresponding credo is: **让研究对象保持可见，让证据保持可追，让洞见能够积累。**
 
 ## Five connected work areas
 

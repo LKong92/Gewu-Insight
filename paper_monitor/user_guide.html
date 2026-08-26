@@ -347,6 +347,87 @@
     .invariant-list strong { display: block; margin-bottom: 3px; font-size: 13px; }
     .invariant-list span { display: block; color: var(--muted); font-size: 13px; }
 
+    .identity-intro {
+      margin: 24px 0 30px;
+      padding: 22px 24px;
+      border-top: 1px solid #cfd9e5;
+      border-bottom: 1px solid #cfd9e5;
+      background: linear-gradient(90deg, rgba(232,242,255,.7), rgba(255,255,255,0));
+      color: #29445f;
+      font-size: 17px;
+      line-height: 1.55;
+    }
+    .wordmark-figure {
+      margin: 22px 0 28px;
+      padding: 24px 18px 18px;
+      border-bottom: 1px solid var(--line);
+      text-align: center;
+    }
+    .wordmark-figure img {
+      display: block;
+      width: min(100%, 680px);
+      height: auto;
+      margin: 0 auto;
+    }
+    .wordmark-figure figcaption,
+    .identity-symbol figcaption {
+      margin-top: 13px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .glyph-provenance a {
+      display: inline-block;
+      min-width: 1.3em;
+      font-family: "Songti SC", "STSong", serif;
+      font-size: 22px;
+      line-height: 1;
+      text-align: center;
+    }
+    .identity-symbols {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin: 22px 0 28px;
+    }
+    .identity-symbol {
+      min-width: 0;
+      margin: 0;
+      padding: 22px;
+      border: 1px solid #dfe4ea;
+      border-radius: 12px;
+      background: #fafbfc;
+    }
+    .identity-symbol .symbol-stage {
+      min-height: 184px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: #fff;
+    }
+    .identity-symbol .app-icon-art { width: 158px; height: 158px; object-fit: contain; }
+    .identity-symbol .seal-art {
+      width: 172px;
+      height: 172px;
+      object-fit: contain;
+      filter: brightness(0) saturate(100%);
+      opacity: .17;
+    }
+    .identity-symbol h3 { margin-top: 18px; }
+    .identity-rules {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0 26px;
+    }
+    .identity-rules > div {
+      padding: 13px 14px;
+      border-top: 2px solid #b7cce3;
+      background: #f8fafc;
+    }
+    .identity-rules strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .identity-rules span { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
     .see-also { margin-top: 42px; padding-top: 21px; border-top: 1px solid var(--line); }
     .see-also h2 { margin: 0 0 9px; color: var(--muted); font-size: 13px; letter-spacing: .03em; text-transform: uppercase; }
     .see-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
@@ -376,7 +457,7 @@
 
     @media (max-width: 620px) {
       .interface-map { grid-template-columns: 1fr; }
-      .architecture-row, .architecture-row.two, .architecture-row.four, .invariant-list { grid-template-columns: 1fr; }
+      .architecture-row, .architecture-row.two, .architecture-row.four, .invariant-list, .identity-symbols, .identity-rules { grid-template-columns: 1fr; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -464,6 +545,10 @@
           <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
         </section>
         <section class="nav-group">
+          <h2 class="nav-heading">About Gewu Insight</h2>
+          <button class="topic-link" data-topic="visual-identity">Visual Identity and Cultural Elements</button>
+        </section>
+        <section class="nav-group">
           <h2 class="nav-heading">Reference</h2>
           <button class="topic-link" data-topic="keyboard">Keyboard Shortcuts</button>
           <button class="topic-link" data-topic="network-access">Publisher and Network Access</button>
@@ -523,6 +608,18 @@
           </div>
 
           <div class="note"><span class="callout-title">Local-first does not mean offline-only</span>The durable workspace is local, while supported discovery, metadata, profile, and download features may require network access and remain subject to source, publisher, and institutional availability. Verify uncertain matches and versions; the app does not bypass access controls.</div>
+
+          <h2>Cross-platform core, platform-specific integration</h2>
+          <p>Gewu Insight separates its portable Python, SQLite, and web-interface core from the native desktop layer. Paper identity, database migrations, monitor state, resource relationships, and most interface logic are designed without making macOS the definition of the product.</p>
+
+          <table class="plain-table">
+            <tr><th>Platform layer</th><th>Current status</th></tr>
+            <tr><td>Portable core</td><td>Python, SQLite, the local application service, and the web-based workspace form the shared architectural foundation.</td></tr>
+            <tr><td>macOS native release</td><td>This is the current primary release and the platform on which the complete desktop workflow is developed and tested, including Finder, Preview, Quick Look, Dock, Trash, and native drag and drop.</td></tr>
+            <tr><td>Planned Windows release</td><td>Windows support is planned to begin as an experimental build. Explorer, the default PDF viewer, Recycle Bin, native drag and drop, packaging, and updates require their own implementation and validation.</td></tr>
+          </table>
+
+          <div class="important"><span class="callout-title">Current distribution status</span>This guide does not claim that a supported Windows package is available today. Instructions that name Finder, Preview, Quick Look, the Dock, or macOS Trash describe the currently tested macOS integration. Equivalent Windows instructions should be added when the experimental Windows package exists and has been verified.</div>
 
           <h2>What this guide covers</h2>
           <p>This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.</p>
@@ -750,7 +847,7 @@
           <h2>How the parts cooperate</h2>
           <figure class="architecture-map" aria-label="Gewu Insight local system architecture">
             <div class="architecture-row">
-              <div class="architecture-node"><strong>Native macOS shell</strong><span>Starts the app, owns its windows, opens Help, Preview, Finder, and external websites.</span></div>
+              <div class="architecture-node"><strong>Native desktop shell</strong><span>The current macOS shell starts the app, owns its windows, and connects Help, Preview, Finder, and external websites to the portable core.</span></div>
               <div class="architecture-node"><strong>Personal Research Workspace</strong><span>Library, Spaces, My Publications, and the three Monitor views you see and operate.</span></div>
               <div class="architecture-node"><strong>External research sources</strong><span>Publisher pages, feeds, metadata services, scholarly profiles, and preprint services.</span></div>
             </div>
@@ -758,18 +855,18 @@
             <div class="architecture-row">
               <div class="architecture-node core"><strong>Local application service</strong><span>Interprets your actions, resolves identities, schedules network work, and coordinates database and file changes.</span></div>
               <div class="architecture-node core"><strong>SQLite state core</strong><span>Owns identity, relationships, resource descriptions, preferences, provenance, and durable workflow state.</span></div>
-              <div class="architecture-node core"><strong>Visible Research Files</strong><span>PDFs, versions, supplements, notes, data, and other files that remain inspectable in Finder and Preview.</span></div>
+              <div class="architecture-node core"><strong>Visible Research Files</strong><span>PDFs, versions, supplements, notes, data, and other files that remain inspectable in the native file manager and document applications.</span></div>
             </div>
             <figcaption>The interface sends an intention to the local service. The service validates it and coordinates SQLite with the relevant files; the UI does not directly treat a Finder folder as the database.</figcaption>
           </figure>
 
-          <p>The macOS app window presents a local interface served from this project on your Mac. Network sources contribute evidence and downloadable material, but the durable workspace stays local. Closing a browser tab, losing a network connection, or restarting the app does not turn the online source into the owner of your research state.</p>
+          <p>The desktop window presents a local interface served from the project on the current computer. In today's primary release, a macOS shell supplies Finder, Preview, Quick Look, Dock, and native drag-and-drop integration. The Python, SQLite, and web-interface core is designed to support other desktop shells without changing the meaning of the research data. Network sources contribute evidence and downloadable material, but the durable workspace stays local.</p>
 
           <h2>What each persistent layer answers</h2>
           <table class="plain-table">
             <tr><th>Layer</th><th>Questions it answers</th><th>What it does not decide alone</th></tr>
             <tr><td>SQLite</td><td>What is this paper? Where is it referenced? Which resources belong to it? What happened in the last operation?</td><td>It does not contain the bytes of your PDFs and attachments.</td></tr>
-            <tr><td>Filesystem</td><td>Which real files can Finder, Preview, or another application open?</td><td>A filename or folder position alone does not define paper identity, version priority, or monitor membership.</td></tr>
+            <tr><td>Filesystem</td><td>Which real files can the native file manager, PDF reader, or another application open?</td><td>A filename or folder position alone does not define paper identity, version priority, or monitor membership.</td></tr>
             <tr><td>Personal Research Workspace</td><td>How should the shared state be presented for discovery, reading, organization, and action?</td><td>It is a projection of saved state, not a separate copy of the collection.</td></tr>
           </table>
 
@@ -778,7 +875,7 @@
           <h2>Why this separation matters</h2>
           <p>A paper can appear in a Monitor, the Library, a Space, and My Publications without becoming four unrelated papers. It can also acquire a DOI after first arriving as an arXiv preprint, or acquire a publication PDF while retaining earlier versions. The database preserves continuity across those changes; visible files preserve user ownership and inspectability.</p>
 
-          <div class="note"><span class="callout-title">Terminology</span>This guide uses <strong>Personal Research Workspace</strong> for the on-screen projection and <strong>Visible Research Files</strong> for the Finder-visible assets. These are explanatory terms, not menu names. Together they form the visible workspace, but they serve different roles.</div>
+          <div class="note"><span class="callout-title">Terminology</span>This guide uses <strong>Personal Research Workspace</strong> for the on-screen projection and <strong>Visible Research Files</strong> for assets visible to the native filesystem. These are explanatory terms, not menu names. Together they form the visible workspace, but they serve different roles.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#persistent-paper-object">The Persistent Paper Object</a><a href="#sqlite-core">Why SQLite Is the Core</a><a href="#visible-research-files">Visible Research Files</a></div></div>
         </article>
@@ -1842,6 +1939,62 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
+        <article class="help-topic guide-topic" id="visual-identity" data-group="About Gewu Insight" data-title="Visual Identity and Cultural Elements" data-keywords="visual identity cultural elements brand symbols logo icon calligraphy 书法 祝枝山 集字 seal script 篆书 watermark 格物洞见 見 汉仪">
+          <p class="topic-kicker">About Gewu Insight</p>
+          <h1>Visual Identity and Cultural Elements</h1>
+          <p class="lead">Gewu Insight uses three related marks—the calligraphic Chinese name, the app icon, and a seal-script watermark—to connect a contemporary research workspace with the longer Chinese tradition of examining things in order to form insight.</p>
+
+          <div class="identity-intro">The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.</div>
+
+          <h2>The calligraphic name</h2>
+          <figure class="wordmark-figure">
+            <img src="/api/about-calligraphy" alt="Calligraphic composition of 格物洞見, arranged for traditional right-to-left reading">
+            <figcaption>The transparent production artwork used in the About panel. From left to right the picture contains 見、洞、物、格; read in the traditional direction from right to left, it says 格物洞見.</figcaption>
+          </figure>
+
+          <p>This is a <strong>祝枝山行草集字</strong> composition: four separately documented historical character forms were assembled into one wordmark. It is therefore accurate to call it “a collection of characters in the calligraphic style of Zhu Zhishan,” but not “a title written by Zhu Zhishan.” No surviving single inscription titled <span lang="zh-Hant">格物洞見</span> is being claimed.</p>
+
+          <h3>How the four characters were assembled</h3>
+          <table class="plain-table glyph-provenance">
+            <tr><th>Reading order</th><th>Reference character</th><th>Recorded hand and script</th><th>Role in the product artwork</th></tr>
+            <tr><td>1</td><td><a href="https://www.shufa5.com/images/shufa/zi/5/35045.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 格">格</a></td><td>祝枝山 · 行书</td><td>Begins the product name when read from the right.</td></tr>
+            <tr><td>2</td><td><a href="https://www.shufa5.com/images/shufa/zi/6/165906.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 物">物</a></td><td>祝枝山 · 草书</td><td>Completes the classical term 格物.</td></tr>
+            <tr><td>3</td><td><a href="https://www.shufa5.com/images/shufa/zi/2/162202.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 洞">洞</a></td><td>祝枝山 · 草书</td><td>Introduces 洞見, insight gained by seeing through a subject.</td></tr>
+            <tr><td>4</td><td><a href="https://www.shufa5.com/images/shufa/zi/2/179662.gif" target="_blank" rel="noopener noreferrer" aria-label="Open the source reference for 見">見</a></td><td>祝枝山 · 草书</td><td>Closes the traditional form of the name.</td></tr>
+          </table>
+
+          <p>The selected glyphs were optically balanced into a common line: scale, spacing, ink tone, edge cleanup, and transparent alpha were normalized while the characteristic strokes were retained. The production preparation used a Codex-assisted image workflow. The interface and accessibility text use the contemporary simplified product name <strong>格物洞见</strong>; the artwork deliberately preserves the traditional character <strong>見</strong> and traditional right-to-left composition.</p>
+
+          <div class="note"><span class="callout-title">Provenance and reuse</span>The character links above are retained as provenance for the design process. The source thumbnails do not state a clear open-reuse licence. They should not be treated as public-domain assets merely because they are viewable online. The assembled Gewu Insight product artwork is distributed under the repository's all-rights-reserved notice.</div>
+
+          <h2>The app icon and the seal-script watermark</h2>
+          <div class="identity-symbols">
+            <figure class="identity-symbol">
+              <div class="symbol-stage"><img class="app-icon-art" src="/api/app-icon" alt="Gewu Insight app icon"></div>
+              <h3>The app icon</h3>
+              <p>The icon's two blue-violet fields read simultaneously as an open book and two sides of a field of view. The white eye and central point suggest observation and focus; the tapered center also recalls a pen nib or the spine of a book.</p>
+              <figcaption>This description is the product's visual reading of the finished mark, not a claim that every interpretation was specified in an original design brief.</figcaption>
+            </figure>
+            <figure class="identity-symbol">
+              <div class="symbol-stage"><img class="seal-art" src="/api/startup-brand-art" alt="Seal-script arrangement of 格物洞见"></div>
+              <h3>The seal-script watermark</h3>
+              <p>The 2×2 motif is a digital rendering in <a href="https://www.hanyi.com.cn/productdetail?id=450&amp;type=0" target="_blank" rel="noopener noreferrer">汉仪篆书繁</a>. Read down the right column and then down the left, its four characters are 格、物、洞、见. It uses simplified 见 because that is the supported glyph in the selected digital typeface.</p>
+              <figcaption>The mark is a light-line screen motif inspired by seal composition, not a photograph or facsimile of a historical carved seal. Typeface licensing remains separate from the product artwork.</figcaption>
+            </figure>
+          </div>
+
+          <h2>Why the three marks are used differently</h2>
+          <div class="identity-rules">
+            <div><strong>Icon · recognition</strong><span>Use at application scale: Dock, startup identity, About, and platform packaging.</span></div>
+            <div><strong>Calligraphy · signature</strong><span>Use where the Chinese name can be read deliberately, especially the About panel and identity materials.</span></div>
+            <div><strong>Seal script · atmosphere</strong><span>Use at very low opacity in startup transitions or quiet lower-right space, never where it competes with paper details.</span></div>
+          </div>
+
+          <p>Together the three registers establish the product's visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#welcome">Welcome</a><a href="#personal-research-workspace">The Personal Research Workspace</a><a href="#startup">Startup and Web Cache</a></div></div>
+        </article>
+
         <article class="help-topic guide-topic" id="keyboard" data-group="Reference" data-title="Keyboard Shortcuts" data-keywords="command keys arrows quick look view loader preferences help">
           <p class="topic-kicker">Reference</p>
           <h1>Keyboard Shortcuts</h1>
@@ -2118,7 +2271,14 @@
       });
 
       window.addEventListener('hashchange', () => showTopic(currentId()));
-      document.getElementById('print-topic').addEventListener('click', () => window.print());
+      document.getElementById('print-topic').addEventListener('click', () => {
+        const nativePrint = window.webkit?.messageHandlers?.printUserGuide;
+        if (nativePrint) {
+          nativePrint.postMessage({ scope: 'guide' });
+          return;
+        }
+        window.print();
+      });
       document.addEventListener('keydown', event => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
           event.preventDefault();

@@ -101,6 +101,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
 
     def test_native_about_panel_uses_bundle_identity_and_explicit_credits(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
         app = ROOT / "Gewu Insight.app"
         with (app / "Contents" / "Info.plist").open("rb") as handle:
             info = plistlib.load(handle)
@@ -111,18 +112,42 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('objectForInfoDictionaryKey:@"CFBundleShortVersionString"', source)
         self.assertIn('objectForInfoDictionaryKey:@"CFBundleVersion"', source)
         self.assertIn('objectForInfoDictionaryKey:@"NSHumanReadableCopyright"', source)
+        self.assertIn('withString:@".\\nAll rights reserved."', source)
+        self.assertIn("copyrightDisplay", source)
         self.assertIn('@"格物洞见"', source)
-        self.assertIn("SQLite is the source of truth.", source)
-        self.assertIn("Designed and developed by Lingyuan Kong and Zhengran Wu.", source)
-        self.assertIn("Developed with coding assistance from OpenAI Codex.", source)
-        self.assertIn('buttonWithTitle:@"User Guide"', source)
-        self.assertIn('buttonWithTitle:@"GitHub"', source)
+        self.assertNotIn('aboutLabelWithString:@"格物洞见"', source)
+        self.assertIn('URLForResource:@"GewuAboutCalligraphy"', source)
+        self.assertIn("calligraphyImage.template = YES", source)
+        self.assertIn("calligraphyView.contentTintColor = NSColor.secondaryLabelColor", source)
+        self.assertIn('ABOUT_CALLIGRAPHY_SOURCE="$PROJECT_DIR/assets/branding/GewuAboutCalligraphy.png"', build_script)
+        self.assertIn('cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"', build_script)
+        self.assertIn(
+            "Your personal research workspace where papers, evidence, and files stay connected over time.",
+            source,
+        )
+        self.assertIn("const CGFloat width = 392.0", source)
+        self.assertIn("const CGFloat height = 414.0", source)
+        self.assertIn("aboutLinkButtonWithTitle", source)
+        self.assertIn("button.bordered = NO", source)
+        self.assertIn("button.contentTintColor = NSColor.linkColor", source)
+        self.assertNotIn(
+            'aboutLabelWithString:@"SQLite is the source of truth.', source
+        )
+        self.assertIn("Designed and developed by Lingyuan Kong and Zhengran Wu,", source)
+        self.assertIn("with coding assistance from OpenAI Codex.", source)
+        self.assertNotIn("Developed with coding assistance from OpenAI Codex.", source)
+        self.assertIn('aboutLinkButtonWithTitle:@"User Guide"', source)
+        self.assertIn('aboutLinkButtonWithTitle:@"GitHub"', source)
+        self.assertIn('addScriptMessageHandler:self name:@"printUserGuide"', source)
+        self.assertIn('message.name isEqualToString:@"printUserGuide"', source)
+        self.assertIn("printOperationWithPrintInfo", source)
+        self.assertIn("runOperationModalForWindow:self.userGuideWindow", source)
+        self.assertIn("userGuidePrintOperationDidRun:success:contextInfo:", source)
         self.assertEqual(
             info["NSHumanReadableCopyright"],
             "Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.",
         )
 
-        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
         self.assertIn("NSHumanReadableCopyright", build_script)
 
     def test_repository_license_and_readme_match_about_attribution(self) -> None:
@@ -137,6 +162,14 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("Developed with coding assistance from **OpenAI Codex**", readme)
         self.assertIn("[LICENSE](LICENSE)", readme)
         self.assertNotIn("Licensed under the MIT License", readme)
+
+        self.assertTrue(readme.startswith("# Gewu Insight\n\n**Keep research objects visible"))
+        self.assertIn("## Platform support", readme)
+        self.assertIn("the current native desktop release", readme)
+        self.assertIn("planned as an experimental desktop release", readme)
+        self.assertIn("not yet a supported distribution", readme)
+        self.assertIn("## Name and Chinese origin", readme)
+        self.assertGreater(readme.index("格物洞见"), readme.index("## Name and Chinese origin"))
 
     def test_native_startup_overlay_persists_until_library_is_ready(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()

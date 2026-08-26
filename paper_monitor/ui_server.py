@@ -383,6 +383,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/startup-brand-art":
                 self.handle_startup_brand_art()
                 return
+            if parsed.path == "/api/about-calligraphy":
+                self.handle_about_calligraphy()
+                return
             if parsed.path == "/":
                 self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
                 return
@@ -4956,6 +4959,19 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         art_path = ROOT / "assets" / "branding" / "GewuSealGlyphs.png"
         if not art_path.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "Startup brand art was not found")
+            return
+        data = art_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def handle_about_calligraphy(self) -> None:
+        art_path = ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png"
+        if not art_path.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "About calligraphy was not found")
             return
         data = art_path.read_bytes()
         self.send_response(HTTPStatus.OK)
