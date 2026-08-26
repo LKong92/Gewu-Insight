@@ -295,7 +295,7 @@ class UserGuideTests(unittest.TestCase):
         for figure in soup.select("figure.architecture-map"):
             self.assertFalse(figure.select("img[src], video[src], audio[src], source[src]"))
 
-    def test_guide_documents_schema_ten_product_invariants_without_becoming_a_changelog(self) -> None:
+    def test_guide_documents_resource_and_provenance_invariants_without_becoming_a_changelog(self) -> None:
         soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
 
         sqlite_text = soup.find("article", id="sqlite-core").get_text(" ", strip=True)
@@ -366,6 +366,49 @@ class UserGuideTests(unittest.TestCase):
         complete_text = soup.get_text(" ", strip=True)
         self.assertNotIn("schema 10", complete_text.lower())
         self.assertNotIn("ca63009", complete_text)
+
+    def test_guide_documents_current_persistence_navigation_and_rendering_behavior(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+
+        sqlite_text = soup.find("article", id="sqlite-core").get_text(" ", strip=True)
+        for phrase in [
+            "Durable preferences and shipped defaults",
+            "one-time seed",
+            "does not silently re-enable a journal",
+            "reads the database schema version",
+        ]:
+            self.assertIn(phrase, sqlite_text)
+
+        navigation_text = soup.find("article", id="navigation").get_text(" ", strip=True)
+        for phrase in [
+            "Library and Space columns",
+            "main Library, a shortcut, and every Space",
+            "returns to the same paper",
+        ]:
+            self.assertIn(phrase, navigation_text)
+
+        journal_text = soup.find("article", id="journal-monitor").get_text(" ", strip=True)
+        for phrase in [
+            "enabled list, disabled history",
+            "independent of Field Filter",
+            "downloaded into a local cache",
+            "changing to another date and back should not be necessary",
+            "Su–Schrieffer–Heeger",
+            "Monte Carlo",
+        ]:
+            self.assertIn(phrase, journal_text)
+
+        startup_text = soup.find("article", id="startup").get_text(" ", strip=True)
+        for phrase in [
+            "Dock tile, native startup panel, and in-window loading state",
+            "Web cache and macOS app identity are separate",
+        ]:
+            self.assertIn(phrase, startup_text)
+
+        storage_text = soup.find("article", id="storage-reference").get_text(
+            " ", strip=True
+        )
+        self.assertIn("data/cache/journal_logos", storage_text)
 
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         html = ui_server.load_user_guide_html()

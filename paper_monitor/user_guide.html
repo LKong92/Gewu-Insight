@@ -865,7 +865,10 @@
 
           <p>WAL improves normal concurrency; it is not a substitute for a coherent backup. Close Gewu Insight before copying its live database, and back up the managed files with it.</p>
 
-          <p>Journal subscriptions are durable SQLite state as well. The database preserves which journals are enabled, their identifiers and source settings, and their display order. Replacing or updating the product source directory therefore does not reset a user's Journal Monitor list.</p>
+          <h2>Durable preferences and shipped defaults</h2>
+          <p>Journal subscriptions are durable SQLite state as well. The database preserves which journals are enabled, their identifiers and source settings, and their display order. The journal catalog shipped with a newer app version is a set of defaults, not an instruction to overwrite your personal list.</p>
+
+          <p>On the first upgrade that introduces durable subscriptions, Gewu Insight seeds the database from the existing journal configuration and history. After that one-time seed, adding, disabling, restoring, or reordering a journal changes the database record. Replacing source code or rebuilding the app does not silently re-enable a journal you removed or discard journals you added.</p>
 
           <div class="note"><span class="callout-title">Cross-layer changes</span>SQLite transactions protect database state. A file move and its database update cannot be one native SQLite transaction, so the local service coordinates the steps and uses validation or compensating recovery when a filesystem operation fails.</div>
 
@@ -880,7 +883,7 @@
           <div class="note"><span class="callout-title">Discovery is not storage</span>A provenance relationship does not by itself create a Library placement or a local PDF. It records how the work entered view. Organization and file acquisition remain separate, explicit actions.</div>
 
           <h2>What the app does during an upgrade</h2>
-          <p>On startup, the storage layer checks for required tables and fields, applies additive migrations, ensures required roots exist, and backfills stable keys or resource records where older data needs them. This is why a project upgrade should preserve the existing database and files rather than replace them with an empty database.</p>
+          <p>On startup, the storage layer reads the database schema version, checks for required tables and fields, applies additive migrations in order, ensures required roots exist, and backfills stable keys or resource records where older data needs them. A normal migration preserves paper identities, folder placements, monitored-journal choices, fetch provenance, and file paths. This is why a project upgrade should preserve the existing database and files rather than replace them with an empty database.</p>
 
           <div class="important"><span class="callout-title">Do not edit the live database manually</span>A seemingly small manual change can violate a relationship that is not visible in one table. Use the app for normal work and make a closed, complete backup before any diagnostic intervention.</div>
 
@@ -1089,7 +1092,7 @@
         <article class="help-topic guide-topic" id="navigation" data-group="Library" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus space quick look double click selection">
           <p class="topic-kicker">Library</p>
           <h1>Navigate with Mouse and Keyboard</h1>
-          <p class="lead">Library columns and Paper Files form one keyboard path. Focus moves into Paper Files with the Right Arrow and returns to the paper with the Left Arrow.</p>
+          <p class="lead">Library and Space columns form one keyboard path with Paper Files. Focus moves into Paper Files with the Right Arrow and returns to the selected paper with the Left Arrow.</p>
 
           <h2>Move through folders and papers</h2>
           <ul>
@@ -1106,6 +1109,8 @@
             <li><strong>Press <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> Move among the current file, versions, supplements, and attachments.</li>
             <li><strong>Press <kbd>←</kbd>.</strong> Focus returns to the main paper. Paper Files no longer shows an active card.</li>
           </ol>
+
+          <p>The same focus rules apply in the main Library, a shortcut, and every Space. Paper Files is a database-backed view of the selected work rather than a physical child folder, but the keyboard transition is intentionally continuous: <kbd>→</kbd> enters the bundle, <kbd>←</kbd> returns to the same paper, and the next <kbd>↑</kbd> or <kbd>↓</kbd> moves in the main item column.</p>
 
           <h2>Preview while navigating</h2>
           <p>In Paper Files, press <kbd>Space</kbd> to open Quick Look. While Quick Look is open, use <kbd>↑</kbd> and <kbd>↓</kbd> to follow adjacent files. Press <kbd>Space</kbd> again or close Quick Look to dismiss it.</p>
@@ -1618,8 +1623,20 @@
           <p>Open <span class="ui">Journal Settings</span> to add or manage a journal by name, ISSN, or known publication history. When an ISSN is missing, the app can look up a matching journal record before saving it. Review the match rather than relying on a similar title alone.</p>
           <p>Drag journals vertically in <span class="ui">Journal Filter</span> or <span class="ui">Journal Settings</span> to set their order. The saved order controls the filter list and the journal groups in the report. Removing a journal disables the subscription without erasing its previously collected papers or its saved history.</p>
 
+          <p>Your enabled list, disabled history, ISSNs, source identifier, section policy, logo source, and display order are saved in SQLite. Product updates can add better built-in source definitions, but those defaults do not replace this personal state. Adding a previously removed journal restores it at the end of the active order.</p>
+
+          <h2>Understand counts and filters</h2>
+          <p>The number beside each journal is the total stored count for that journal on the selected day. It is deliberately independent of <span class="ui">Field Filter</span>. The field checkboxes narrow the paper cards you can see; they do not rewrite the journal totals. A journal can therefore show a nonzero count while the current field selection hides every one of its papers.</p>
+
+          <p>Calendar counts summarize stored day results. A zero count is meaningful only after the relevant source completed successfully. Read the source status before interpreting zero as “the journal published nothing.”</p>
+
           <h2>Daily scheduled updates</h2>
           <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>
+
+          <h2>Journal logos and mathematical text</h2>
+          <p>Configured journal logos are downloaded into a local cache and reused from disk. The first successful request may require network access; changing dates and later launches should not repeatedly download the same logo. The cache is presentation data and can be rebuilt without changing subscriptions or papers.</p>
+
+          <p>Supported inline LaTeX in titles and abstracts is typeset after the math renderer becomes ready. On a cold launch, raw source may be visible briefly, then the current day is rendered again automatically; changing to another date and back should not be necessary. Title normalization also preserves recognized proper names and source capitalization such as <em>Su–Schrieffer–Heeger</em> and <em>Monte Carlo</em> while still cleaning all-uppercase metadata and formula spacing.</p>
 
           <h2>How discovery provenance is preserved</h2>
           <p>Each stored Journal result is related to the canonical paper, the fetch run, and the source that reported it. The run preserves the journal, requested date window, status, and timing. Seeing the same paper from Crossref and OpenAlex records both source observations against the same paper identity; seeing it again within one run does not create a duplicate relationship. Later runs remain separately traceable.</p>
@@ -1627,7 +1644,7 @@
           <p>The same canonical paper can also acquire Subject Monitor and Author Monitor relationships. These discovery paths explain why the work is visible; they do not automatically add a Library placement or create a local Paper Files resource.</p>
 
           <h2>Filter and inspect</h2>
-          <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
+          <p>Use <span class="ui">Journal Filter</span>, <span class="ui">Preprint Filter</span>, and <span class="ui">Field Filter</span>. Journal and field choices combine to determine the visible cards, while the journal counts continue to describe the full selected day. Enable <span class="ui">Figures</span> to show a representative image when available. Selecting a result opens its report and actions.</p>
 
           <h2>Act on a result</h2>
           <ul>
@@ -1881,6 +1898,8 @@
           <h2>Normal startup</h2>
           <p>The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.</p>
 
+          <p>The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.</p>
+
           <h2>If the app cannot start</h2>
           <ol class="steps">
             <li><strong>Quit any old Gewu Insight window.</strong> An earlier local server may still own port 8765.</li>
@@ -1891,6 +1910,8 @@
 
           <h2>Clear a stale interface</h2>
           <p>Choose <span class="ui">Setting &gt; Clear Web Cache</span> if the running window visibly uses old HTML, CSS, or JavaScript after an app update. This clears browser cache, not the SQLite database or managed PDFs.</p>
+
+          <p>Web cache and macOS app identity are separate. Clearing Web Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt <span class="ui">Gewu Insight.app</span>. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#troubleshooting">Troubleshooting</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
@@ -1921,6 +1942,15 @@
           <h2>A monitor shows no papers</h2>
           <p>Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.</p>
 
+          <h2>A journal count and the visible cards disagree</h2>
+          <p>This is usually expected when <span class="ui">Field Filter</span> is active. Journal counts describe all stored papers for the selected journal and day; field choices narrow the visible cards. Clear or broaden the field selection before diagnosing a missing fetch.</p>
+
+          <h2>A journal disappeared from the configured list</h2>
+          <p>Open <span class="ui">Journal Settings</span> and inspect the disabled history before editing configuration files. Removing a journal disables its subscription but preserves previously collected papers and history. Add it again to restore monitoring. Because the subscription list is SQLite state, replacing source files should not be used as a journal-list repair.</p>
+
+          <h2>LaTeX remains visible as source text</h2>
+          <p>On a cold launch, allow the math renderer a moment to become ready. The active day should re-render automatically. If raw <code>$...$</code> text remains, check network availability for the renderer, then reload the same view once; switching calendar dates should not be required.</p>
+
           <h2>Folder Loader looks incomplete</h2>
           <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
 
@@ -1939,6 +1969,7 @@
 
           <ul class="path-list">
             <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, and operational state.</span></li>
+            <li><code>data/cache/journal_logos</code><span>Rebuildable local image cache for configured Journal Monitor logos.</span></li>
             <li><code>data/Library</code><span>Visible main Library root and preferred current files.</span></li>
             <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
             <li><code>data/My Publications</code><span>Managed local files for My Publications.</span></li>

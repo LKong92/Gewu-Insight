@@ -349,6 +349,7 @@
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
 @property(nonatomic, strong) WKWebView *userGuideWebView;
+@property(nonatomic, strong) NSWindow *aboutWindow;
 @property(nonatomic, strong) WKWebView *hiddenPublisherWebView;
 @property(nonatomic, strong) WKDownload *hiddenPublisherDownload;
 @property(nonatomic, copy) NSDictionary *hiddenPublisherContext;
@@ -381,7 +382,8 @@
 @implementation PaperMonitorDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    NSURL *applicationIconURL = [[NSBundle mainBundle] URLForResource:@"GewuInsightAppIconV3"
+    NSString *applicationIconName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleIconFile"];
+    NSURL *applicationIconURL = [[NSBundle mainBundle] URLForResource:applicationIconName
                                                         withExtension:@"png"];
     NSImage *applicationIcon = applicationIconURL
         ? [[NSImage alloc] initWithContentsOfURL:applicationIconURL]
@@ -1471,6 +1473,9 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenuItem *appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
     NSMenu *appMenu = [[NSMenu alloc] initWithTitle:@"Gewu Insight"];
+    NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Gewu Insight" action:@selector(openAbout:) keyEquivalent:@""];
+    aboutItem.target = self;
+    [appMenu addItem:[NSMenuItem separatorItem]];
     NSString *quitTitle = [NSString stringWithFormat:@"Quit %@", @"Gewu Insight"];
     [appMenu addItemWithTitle:quitTitle action:@selector(terminate:) keyEquivalent:@"q"];
     appMenuItem.submenu = appMenu;
@@ -1572,12 +1577,12 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f2ed;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
         ".card{position:relative;isolation:isolate;display:flex;align-items:center;gap:18px;width:460px;box-sizing:border-box;overflow:hidden;padding:26px 30px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.78);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
         ".brand-art{position:absolute;z-index:0;right:-28px;top:-66px;width:236px;height:236px;display:block;object-fit:contain;opacity:.075;filter:brightness(0) saturate(100%);transform:rotate(-2deg);pointer-events:none;}"
-        ".icon-shell{width:62px;height:62px;flex:0 0 62px;display:grid;place-items:center;border:1px solid rgba(35,31,26,.10);border-radius:17px;background:#fbfaf7;box-shadow:0 10px 24px rgba(35,31,26,.12);}"
+        ".icon-shell{width:62px;height:62px;flex:0 0 62px;display:grid;place-items:center;}"
         ".icon{width:58px;height:58px;display:block;object-fit:contain;}"
         ".copy{position:relative;z-index:1;min-width:0;flex:1;}"
         "strong{display:block;margin:0 0 2px;font-size:19px;line-height:1.25;}"
         ".message{min-height:19px;color:#5e5a54;font-size:13px;line-height:19px;white-space:nowrap;}"
-        "</style></head><body><div class='card'><img class='brand-art' src='GewuSealGlyphs.png' alt='' aria-hidden='true'><div class='icon-shell'><img class='icon' src='PaperMonitor.png' alt='Gewu Insight'></div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
+        "</style></head><body><div class='card'><img class='brand-art' src='GewuSealGlyphs.png' alt='' aria-hidden='true'><div class='icon-shell'><img class='icon' src='GewuInsightAppIcon.png' alt='Gewu Insight'></div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
     [self.startupWebView loadHTMLString:html baseURL:[NSBundle mainBundle].resourceURL];
 }
 
@@ -1735,6 +1740,118 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openUserGuide:(id)sender {
     [self showUserGuideWindow];
+}
+
+- (void)openAbout:(id)sender {
+    [self showAboutWindow];
+}
+
+- (NSTextField *)aboutLabelWithString:(NSString *)value
+                                 font:(NSFont *)font
+                                frame:(NSRect)frame
+                                color:(NSColor *)color {
+    NSTextField *label = [NSTextField labelWithString:value ?: @""];
+    label.frame = frame;
+    label.font = font;
+    label.textColor = color ?: NSColor.labelColor;
+    label.alignment = NSTextAlignmentCenter;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    label.maximumNumberOfLines = 0;
+    label.selectable = YES;
+    return label;
+}
+
+- (void)openAboutProjectWebsite:(id)sender {
+    NSURL *url = [NSURL URLWithString:@"https://github.com/LKong92/Gewu-Insight"];
+    if (url) [[NSWorkspace sharedWorkspace] openURL:url];
+}
+
+- (void)showAboutWindow {
+    if (!self.aboutWindow) {
+        const CGFloat width = 420.0;
+        const CGFloat height = 448.0;
+        self.aboutWindow = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, width, height)
+                      styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+                        backing:NSBackingStoreBuffered
+                          defer:NO];
+        self.aboutWindow.title = @"About Gewu Insight";
+        self.aboutWindow.titleVisibility = NSWindowTitleHidden;
+        self.aboutWindow.titlebarAppearsTransparent = YES;
+        self.aboutWindow.releasedWhenClosed = NO;
+        self.aboutWindow.movableByWindowBackground = YES;
+        self.aboutWindow.backgroundColor = NSColor.windowBackgroundColor;
+
+        NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+        self.aboutWindow.contentView = content;
+
+        NSURL *sealURL = [[NSBundle mainBundle] URLForResource:@"GewuSealGlyphs" withExtension:@"png"];
+        NSImage *sealImage = sealURL ? [[NSImage alloc] initWithContentsOfURL:sealURL] : nil;
+        if (sealImage) {
+            NSImageView *sealView = [[NSImageView alloc] initWithFrame:NSMakeRect(278, 38, 126, 126)];
+            sealView.image = sealImage;
+            sealView.imageScaling = NSImageScaleProportionallyUpOrDown;
+            sealView.alphaValue = 0.045;
+            [content addSubview:sealView];
+        }
+
+        NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(162, 326, 96, 96)];
+        iconView.image = NSApp.applicationIconImage;
+        iconView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        [content addSubview:iconView];
+
+        [content addSubview:[self aboutLabelWithString:@"Gewu Insight"
+                                                   font:[NSFont systemFontOfSize:27 weight:NSFontWeightSemibold]
+                                                  frame:NSMakeRect(30, 286, 360, 34)
+                                                  color:NSColor.labelColor]];
+        [content addSubview:[self aboutLabelWithString:@"格物洞见"
+                                                   font:[NSFont systemFontOfSize:15 weight:NSFontWeightMedium]
+                                                  frame:NSMakeRect(30, 260, 360, 23)
+                                                  color:NSColor.secondaryLabelColor]];
+
+        NSBundle *bundle = NSBundle.mainBundle;
+        NSString *version = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+        NSString *build = [bundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
+        NSString *versionText = build.length
+            ? [NSString stringWithFormat:@"Version %@ (Build %@)", version, build]
+            : [NSString stringWithFormat:@"Version %@", version];
+        [content addSubview:[self aboutLabelWithString:versionText
+                                                   font:[NSFont systemFontOfSize:12]
+                                                  frame:NSMakeRect(30, 237, 360, 18)
+                                                  color:NSColor.tertiaryLabelColor]];
+
+        [content addSubview:[self aboutLabelWithString:@"A local-first workspace for discovering, organizing, reading, and preserving scholarly work."
+                                                   font:[NSFont systemFontOfSize:13]
+                                                  frame:NSMakeRect(48, 184, 324, 42)
+                                                  color:NSColor.labelColor]];
+        [content addSubview:[self aboutLabelWithString:@"SQLite is the source of truth.\nYour research files remain visible and locally controlled."
+                                                   font:[NSFont systemFontOfSize:12]
+                                                  frame:NSMakeRect(48, 142, 324, 36)
+                                                  color:NSColor.secondaryLabelColor]];
+
+        NSButton *guideButton = [NSButton buttonWithTitle:@"User Guide" target:self action:@selector(openUserGuide:)];
+        guideButton.frame = NSMakeRect(105, 99, 96, 32);
+        guideButton.bezelStyle = NSBezelStyleRounded;
+        [content addSubview:guideButton];
+        NSButton *githubButton = [NSButton buttonWithTitle:@"GitHub" target:self action:@selector(openAboutProjectWebsite:)];
+        githubButton.frame = NSMakeRect(219, 99, 96, 32);
+        githubButton.bezelStyle = NSBezelStyleRounded;
+        [content addSubview:githubButton];
+
+        [content addSubview:[self aboutLabelWithString:@"Designed and developed by Lingyuan Kong and Zhengran Wu.\nDeveloped with coding assistance from OpenAI Codex."
+                                                   font:[NSFont systemFontOfSize:10.5]
+                                                  frame:NSMakeRect(36, 54, 348, 34)
+                                                  color:NSColor.secondaryLabelColor]];
+        NSString *copyright = [bundle objectForInfoDictionaryKey:@"NSHumanReadableCopyright"]
+            ?: @"Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.";
+        [content addSubview:[self aboutLabelWithString:copyright
+                                                   font:[NSFont systemFontOfSize:10]
+                                                  frame:NSMakeRect(24, 20, 372, 28)
+                                                  color:NSColor.tertiaryLabelColor]];
+        [self.aboutWindow center];
+    }
+    [self.aboutWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (void)showUserGuideWindow {

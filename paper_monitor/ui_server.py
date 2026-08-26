@@ -4940,14 +4940,14 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.wfile.write(data)
 
     def handle_app_icon(self) -> None:
-        icon_path = ROOT / "Gewu Insight.app" / "Contents" / "Resources" / "PaperMonitor.png"
+        icon_path = ROOT / "assets" / "gewu-insight-app-icon.png"
         if not icon_path.is_file():
             self.send_error_json(HTTPStatus.NOT_FOUND, "App icon was not found")
             return
         data = icon_path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "image/png")
-        self.send_header("Cache-Control", "public, max-age=3600")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -23840,10 +23840,6 @@ INDEX_HTML = """<!doctype html>
       flex: 0 0 62px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(35,31,26,.10);
-      border-radius: 17px;
-      background: #fbfaf7;
-      box-shadow: 0 10px 24px rgba(35,31,26,.12);
     }
     .app-startup-icon {
       width: 58px;

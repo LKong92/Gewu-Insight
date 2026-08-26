@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -17,7 +18,11 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         loading_page = source.split("- (void)showLoadingPage", 1)[1].split(
             "- (void)ensureServerThenLoad", 1
         )[0]
-        self.assertIn("src='PaperMonitor.png'", loading_page)
+        self.assertIn("src='GewuInsightAppIcon.png'", loading_page)
+        icon_shell_css = loading_page.split('".icon-shell{', 1)[1].split('}"', 1)[0]
+        self.assertNotIn("border:", icon_shell_css)
+        self.assertNotIn("background:", icon_shell_css)
+        self.assertNotIn("box-shadow:", icon_shell_css)
         self.assertIn("Starting Gewu Insight", loading_page)
         self.assertIn("brand-art", loading_page)
         self.assertIn("src='GewuSealGlyphs.png'", loading_page)
@@ -33,7 +38,8 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.startupWebView loadHTMLString:html", loading_page)
         self.assertNotIn("[self.webView loadHTMLString:html", loading_page)
         self.assertNotIn("<div class='icon'>G</div>", loading_page)
-        self.assertIn('URLForResource:@"GewuInsightAppIconV3"', source)
+        self.assertIn('objectForInfoDictionaryKey:@"CFBundleIconFile"', source)
+        self.assertIn('URLForResource:applicationIconName', source)
         self.assertIn('withExtension:@"png"', source)
         self.assertIn("applicationIcon.template = NO;", source)
         self.assertIn("NSApp.applicationIconImage = applicationIcon;", source)
@@ -58,27 +64,79 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertGreater(INDEX_HTML.index('class="app-startup-brand-art"'), INDEX_HTML.index('class="app-startup-card"'))
         self.assertNotIn('-webkit-mask: url("/api/startup-brand-art")', INDEX_HTML)
         self.assertIn('class="app-startup-icon" src="/api/app-icon"', INDEX_HTML)
+        web_icon_shell_css = INDEX_HTML.split(".app-startup-icon-shell {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("border:", web_icon_shell_css)
+        self.assertNotIn("background:", web_icon_shell_css)
+        self.assertNotIn("box-shadow:", web_icon_shell_css)
         self.assertNotIn('class="app-startup-chinese-name"', INDEX_HTML)
         self.assertNotIn('class="app-startup-brand-seal"', INDEX_HTML)
         self.assertNotIn('<div class="app-startup-icon">D</div>', INDEX_HTML)
 
-    def test_dock_icon_uses_one_versioned_packaged_asset(self) -> None:
+    def test_dock_and_startup_icons_use_the_current_versioned_asset(self) -> None:
         app = ROOT / "Gewu Insight.app"
         resources = app / "Contents" / "Resources"
+        source_icon = ROOT / "assets" / "gewu-insight-app-icon.png"
+        expected_build = subprocess.check_output(
+            ["cksum", str(source_icon)], text=True
+        ).split()[0]
+        expected_name = f"GewuInsightAppIcon-{expected_build}"
         with (app / "Contents" / "Info.plist").open("rb") as handle:
             info = plistlib.load(handle)
 
-        self.assertEqual(info["CFBundleIconFile"], "GewuInsightAppIconV3")
-        self.assertEqual(info["CFBundleVersion"], "2")
-        self.assertTrue((resources / "GewuInsightAppIconV3.icns").is_file())
+        self.assertEqual(info["CFBundleIconFile"], expected_name)
+        self.assertEqual(info["CFBundleVersion"], expected_build)
+        self.assertTrue((resources / f"{expected_name}.icns").is_file())
         self.assertEqual(
-            (resources / "GewuInsightAppIconV3.png").read_bytes(),
-            (ROOT / "assets" / "gewu-insight-app-icon.png").read_bytes(),
+            (resources / f"{expected_name}.png").read_bytes(),
+            source_icon.read_bytes(),
         )
-        self.assertNotEqual(
-            (resources / "GewuInsightAppIconV3.png").read_bytes(),
-            (resources / "PaperMonitor.png").read_bytes(),
+        self.assertEqual(
+            (resources / "GewuInsightAppIcon.png").read_bytes(),
+            source_icon.read_bytes(),
         )
+
+        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
+        self.assertIn('APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_BUILD_VERSION"', build_script)
+        self.assertIn('touch "$APP"', build_script)
+
+    def test_native_about_panel_uses_bundle_identity_and_explicit_credits(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+        app = ROOT / "Gewu Insight.app"
+        with (app / "Contents" / "Info.plist").open("rb") as handle:
+            info = plistlib.load(handle)
+
+        self.assertIn('addItemWithTitle:@"About Gewu Insight"', source)
+        self.assertIn("- (void)showAboutWindow", source)
+        self.assertIn("NSApp.applicationIconImage", source)
+        self.assertIn('objectForInfoDictionaryKey:@"CFBundleShortVersionString"', source)
+        self.assertIn('objectForInfoDictionaryKey:@"CFBundleVersion"', source)
+        self.assertIn('objectForInfoDictionaryKey:@"NSHumanReadableCopyright"', source)
+        self.assertIn('@"格物洞见"', source)
+        self.assertIn("SQLite is the source of truth.", source)
+        self.assertIn("Designed and developed by Lingyuan Kong and Zhengran Wu.", source)
+        self.assertIn("Developed with coding assistance from OpenAI Codex.", source)
+        self.assertIn('buttonWithTitle:@"User Guide"', source)
+        self.assertIn('buttonWithTitle:@"GitHub"', source)
+        self.assertEqual(
+            info["NSHumanReadableCopyright"],
+            "Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.",
+        )
+
+        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
+        self.assertIn("NSHumanReadableCopyright", build_script)
+
+    def test_repository_license_and_readme_match_about_attribution(self) -> None:
+        license_text = (ROOT / "LICENSE").read_text()
+        readme = (ROOT / "README.md").read_text()
+
+        for document in [license_text, readme]:
+            self.assertIn("Copyright © 2026 Lingyuan Kong and Zhengran Wu", document)
+            self.assertIn("All rights reserved", document)
+        normalized_license = " ".join(license_text.lower().split())
+        self.assertIn("not offered under an open-source license", normalized_license)
+        self.assertIn("Developed with coding assistance from **OpenAI Codex**", readme)
+        self.assertIn("[LICENSE](LICENSE)", readme)
+        self.assertNotIn("Licensed under the MIT License", readme)
 
     def test_native_startup_overlay_persists_until_library_is_ready(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()

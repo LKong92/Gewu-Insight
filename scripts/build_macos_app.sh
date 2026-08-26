@@ -5,12 +5,16 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd -P)"
 SOURCE="$PROJECT_DIR/scripts/PaperMonitorApp.m"
 APP="$PROJECT_DIR/Gewu Insight.app"
 OUTPUT="$APP/Contents/MacOS/Gewu Insight"
+INFO_PLIST="$APP/Contents/Info.plist"
 BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"
 BRAND_ART_DEST="$APP/Contents/Resources/GewuSealGlyphs.png"
 APP_ICON_SOURCE="$PROJECT_DIR/assets/gewu-insight-app-icon.png"
-APP_ICON_PNG_DEST="$APP/Contents/Resources/GewuInsightAppIconV3.png"
+APP_ICON_BUILD_VERSION="$(cksum "$APP_ICON_SOURCE" | awk '{print $1}')"
+APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_BUILD_VERSION"
+APP_ICON_PNG_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.png"
+STARTUP_ICON_PNG_DEST="$APP/Contents/Resources/GewuInsightAppIcon.png"
 APP_ICONSET="$APP/Contents/Resources/PaperMonitor.iconset"
-APP_ICON_ICNS_DEST="$APP/Contents/Resources/GewuInsightAppIconV3.icns"
+APP_ICON_ICNS_DEST="$APP/Contents/Resources/$APP_ICON_BASENAME.icns"
 SIGN_WORKDIR="${TMPDIR:-/private/tmp}/paper-monitor-sign-$$"
 SIGN_APP="$SIGN_WORKDIR/Gewu Insight.app"
 BACKUP_APP="$SIGN_WORKDIR/Gewu Insight.previous.app"
@@ -32,6 +36,7 @@ chmod +x "$OUTPUT"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
 cp "$APP_ICON_SOURCE" "$APP_ICON_PNG_DEST"
+cp "$APP_ICON_SOURCE" "$STARTUP_ICON_PNG_DEST"
 mkdir -p "$APP_ICONSET"
 for icon_spec in \
   "16 icon_16x16.png" \
@@ -57,6 +62,10 @@ if ! iconutil -c icns -o "$APP_ICON_ICNS_DEST" "$APP_ICONSET"; then
   echo "iconutil rejected the regenerated iconset; keeping the existing app icon." >&2
 fi
 cp "$APP_ICON_ICNS_DEST" "$APP/Contents/Resources/PaperMonitor.icns"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $APP_ICON_BASENAME" "$INFO_PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_ICON_BUILD_VERSION" "$INFO_PLIST"
+/usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST" 2>/dev/null || \
+  /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved." "$INFO_PLIST"
 mkdir -p "$SIGN_WORKDIR"
 ditto "$APP" "$SIGN_APP"
 xattr -cr "$SIGN_APP" 2>/dev/null || true
@@ -71,4 +80,7 @@ if ! codesign --verify --deep --strict "$APP"; then
   mv "$BACKUP_APP" "$APP"
   exit 1
 fi
+# ditto preserves the old bundle directory timestamp. Touch the bundle so
+# Finder, Launch Services, and pinned Dock tiles can detect icon changes.
+touch "$APP"
 file "$OUTPUT"

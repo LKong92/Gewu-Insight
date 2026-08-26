@@ -4,6 +4,18 @@
 <dict>
 	<key>files</key>
 	<dict>
+		<key>Resources/GewuInsightAppIcon-673606679.icns</key>
+		<data>
+		QMkzsH8woB/u5GbjADF5mGttUTM=
+		</data>
+		<key>Resources/GewuInsightAppIcon-673606679.png</key>
+		<data>
+		ML1UlfWnEMCngDFfoRX+KtTkK8c=
+		</data>
+		<key>Resources/GewuInsightAppIcon.png</key>
+		<data>
+		ML1UlfWnEMCngDFfoRX+KtTkK8c=
+		</data>
 		<key>Resources/GewuInsightAppIconV3.icns</key>
 		<data>
 		QMkzsH8woB/u5GbjADF5mGttUTM=
@@ -79,6 +91,27 @@
 			</data>
 			<key>requirement</key>
 			<string>cdhash H"504d5cfb475decf91add332df9ec773addb87f41" or cdhash H"8f0b2f36e0af94e80a9291a3883bec853fc2d8cc"</string>
+		</dict>
+		<key>Resources/GewuInsightAppIcon-673606679.icns</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			JU6rJZCtrTzqLALEETtNGP18aFhn1Wco5LQa6wuZ5cQ=
+			</data>
+		</dict>
+		<key>Resources/GewuInsightAppIcon-673606679.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			EgQql0K/40IlJQVUXLp7EoyLGIaLduI6tZ2gNCMC8AQ=
+			</data>
+		</dict>
+		<key>Resources/GewuInsightAppIcon.png</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			EgQql0K/40IlJQVUXLp7EoyLGIaLduI6tZ2gNCMC8AQ=
+			</data>
 		</dict>
 		<key>Resources/GewuInsightAppIconV3.icns</key>
 		<dict>
