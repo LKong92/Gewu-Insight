@@ -26,7 +26,6 @@ copy_item "requirements.txt"
 copy_item "config"
 copy_item "paper_monitor"
 copy_item "scripts"
-copy_item "skills"
 
 mkdir -p "$BUILD_DIR/data" "$BUILD_DIR/reports"
 

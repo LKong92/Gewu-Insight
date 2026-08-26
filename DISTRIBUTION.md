@@ -21,7 +21,7 @@ It creates a zip under `dist/` containing:
 - empty `data/` and `reports/` directories
 
 It does not include local SQLite databases, downloaded PDFs, generated notes,
-analysis jobs, logs, virtual environments, or presentation/output artifacts.
+logs, virtual environments, or presentation/output artifacts.
 
 ## Recipient Requirements
 
@@ -47,38 +47,6 @@ quarantine/permission changes introduced by file sharing, or keeping the folder
 inside protected macOS locations such as `Desktop`, `Documents`, or `Downloads`.
 For Finder launch, tell recipients to move the whole folder to a regular location
 such as `~/Applications/PaperMonitor` or `~/PaperMonitor`.
-
-## Codex Analysis
-
-The UI can queue Codex analysis jobs, but it does not bundle Codex itself. It
-does bundle the paper-reading skill instructions at:
-
-```text
-skills/paper-broad-reading-analysis/SKILL.md
-```
-
-A recipient who has Codex can open the project folder in Codex and say:
-
-```text
-处理分析队列
-```
-
-Codex should read `AGENTS.md`, inspect `reports/analysis_jobs/queued/*.md`, read
-the listed PDFs, write notes to `reports/analyses/`, and run
-`python -m paper_monitor complete-analysis-job JOB_PATH` for each completed job.
-
-If the user has installed a customized global skill, queued jobs may also point
-to:
-
-```text
-~/.codex/skills/paper-broad-reading-analysis/SKILL.md
-```
-
-Users can override this with:
-
-```bash
-export PAPER_MONITOR_SKILL_PATH=/path/to/SKILL.md
-```
 
 ## GitHub
 

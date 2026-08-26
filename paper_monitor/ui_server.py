@@ -36,7 +36,6 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from .analysis import queue_codex_analysis
 from .config import (
     AppConfig,
     DEFAULT_ASSOCIATED_FILES_DIR,
@@ -558,9 +557,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/download":
                 self.handle_download(payload)
-                return
-            if parsed.path == "/api/analyze":
-                self.handle_analyze(payload)
                 return
             if parsed.path == "/api/delete-pdf":
                 self.handle_delete_pdf(payload)
@@ -1497,25 +1493,6 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         finally:
             storage.close()
         self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None})
-
-    def handle_analyze(self, payload: dict[str, Any]) -> None:
-        paper_id = str(payload.get("paper_id") or "")
-        if not paper_id:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
-            return
-        storage = Storage(self.configured_db_path)
-        try:
-            job_path = queue_codex_analysis(storage=storage, paper_id=paper_id)
-            paper = storage.get_paper(paper_id)
-        finally:
-            storage.close()
-        self.send_json(
-            {
-                "job_path": str(job_path),
-                "analysis_content": "",
-                "paper": paper_to_api(paper) if paper else None,
-            }
-        )
 
     def handle_library(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -49429,7 +49406,7 @@ INDEX_HTML = """<!doctype html>
         }
         toggleLibraryAddMenu(event, article, paper.paper_id);
       });
-      article.querySelector('[data-action="download"]').addEventListener("click", () => runAction(article, paper.paper_id, "download"));
+      article.querySelector('[data-action="download"]').addEventListener("click", () => downloadReportPaper(article, paper.paper_id));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
       if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, paper));
       const analysisButton = article.querySelector('[data-action="view-analysis"]');
@@ -49965,26 +49942,15 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function runAction(article, paperId, action) {
+    async function downloadReportPaper(article, paperId) {
       const buttons = article.querySelectorAll("button");
       const status = article.querySelector('[data-role="status"]');
       buttons.forEach((button) => button.disabled = true);
-      status.textContent = action === "download" ? "Downloading..." : "Queueing Codex analysis...";
+      status.textContent = "Downloading...";
       status.className = "status";
       try {
-        let data;
-        if (action === "download") {
-          data = await requestPaperPdfDownload({paper_id: paperId});
-        } else {
-          const res = await fetch(`/api/${action}`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paperId})
-          });
-          data = await res.json();
-          if (!res.ok) throw new Error(data.error || "request failed");
-        }
-        const monitorViewport = action === "download" ? captureMonitorViewport(article) : null;
+        const data = await requestPaperPdfDownload({paper_id: paperId});
+        const monitorViewport = captureMonitorViewport(article);
         updatePaperState(paperId, data.paper);
         renderCurrentPaperSurface({monitorViewport});
       } catch (error) {

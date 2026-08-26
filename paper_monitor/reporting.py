@@ -97,7 +97,6 @@ def render_paper_block(paper: dict[str, Any]) -> list[str]:
             "",
             "Actions:",
             f"- Download: `python -m paper_monitor download {paper_id}`",
-            f"- Analyze: `python -m paper_monitor analyze {paper_id}`",
             "",
         ]
     )

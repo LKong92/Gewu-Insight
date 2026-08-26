@@ -31,8 +31,6 @@
 - Run journal monitor: `python3 -m paper_monitor journal`
 - Run explicit journal window: `python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD`
 - Download paper: `python3 -m paper_monitor download PAPER_ID`
-- Analyze paper: `python3 -m paper_monitor analyze PAPER_ID`
-- Complete queued analysis job: `python3 -m paper_monitor complete-analysis-job reports/analysis_jobs/queued/JOB.md`
 - Compile check: `python3 -m py_compile paper_monitor/*.py paper_monitor/sources/*.py`
 - Clickable launcher: `Gewu Insight.app`
 
@@ -44,17 +42,7 @@
 - `data/paper_monitor.sqlite`: SQLite database.
 - `reports/daily/`: generated Markdown reports.
 - `reports/analyses/`: generated analysis notes.
-- `skills/paper-broad-reading-analysis/SKILL.md`: bundled analysis skill instructions for users who have Codex but have not installed the skill globally.
 - `README.md`: user-facing usage documentation.
-
-## Codex Analysis Queue
-
-When the user asks to process the analysis queue, inspect `reports/analysis_jobs/queued/*.md`. For each job:
-
-- Read the embedded JSON and listed PDF paths.
-- Follow `skill_path`; if the skill is not installed globally, read the bundled file at `skills/paper-broad-reading-analysis/SKILL.md`.
-- Write the Chinese note to `analysis_path`.
-- Run `python3 -m paper_monitor complete-analysis-job JOB_PATH` to update SQLite and move the job to `reports/analysis_jobs/done/`.
 
 ## Done Criteria
 

@@ -283,7 +283,7 @@ data/Spaces/                    independent Space roots
 data/My Publications/          managed files for personal publications
 data/Associated Files/         versions, supplements, and attachments
 data/cache/journal_logos/       rebuildable local logo cache
-reports/                        generated notes, reports, and analysis jobs
+reports/                        generated notes and reports
 logs/                           launcher and runtime diagnostics
 config/journals.json            initial/default journal source definitions
 ```
@@ -334,12 +334,8 @@ python3 -m paper_monitor journal
 # Explicit publication window
 python3 -m paper_monitor journal --from-date YYYY-MM-DD --until-date YYYY-MM-DD
 
-# Download and analyze one paper
+# Download one paper
 python3 -m paper_monitor download PAPER_ID
-python3 -m paper_monitor analyze PAPER_ID
-
-# Inspect queued reading jobs
-python3 -m paper_monitor analysis-queue
 
 # Export diagnostic JSON without replacing SQLite
 python3 -m paper_monitor export-json reports/export.json

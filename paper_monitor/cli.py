@@ -6,7 +6,6 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from .analysis import mark_job_done, pending_analysis_jobs, queue_codex_analysis, read_job
 from .config import DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH, load_config
 from .download import download_paper
 from .importers.inventory import import_library_inventory
@@ -38,17 +37,6 @@ def build_parser() -> argparse.ArgumentParser:
     download = subparsers.add_parser("download", help="Download main PDF and PDF supplements for one paper.")
     download.add_argument("paper_id")
     download.add_argument("--force", action="store_true", help="Retry even if download already succeeded.")
-
-    analyze = subparsers.add_parser("analyze", help="Queue a Codex analysis job.")
-    analyze.add_argument("paper_id")
-    analyze.add_argument("--no-download", action="store_true", help="Deprecated; analysis queueing never downloads automatically.")
-
-    queue = subparsers.add_parser("analysis-queue", help="List queued Codex analysis jobs that still need notes.")
-    queue.add_argument("--jobs-dir", type=Path, help="Analysis jobs directory.")
-
-    complete = subparsers.add_parser("complete-analysis-job", help="Mark one Codex analysis job done after its note has been written.")
-    complete.add_argument("job_path", type=Path)
-    complete.add_argument("--note-path", type=Path, help="Override the note path stored in the job file.")
 
     status = subparsers.add_parser("status", help="Show one paper's stored status.")
     status.add_argument("paper_id")
@@ -97,20 +85,6 @@ def main(argv: list[str] | None = None) -> int:
             result = download_paper(storage=storage, paper_id=args.paper_id, force=args.force)
             print_result(result)
             return 0 if result["status"] in {"success", "partial", "skipped"} else 1
-        if args.command == "analyze":
-            path = queue_codex_analysis(storage=storage, paper_id=args.paper_id)
-            print(f"Codex analysis job: {path}")
-            return 0
-        if args.command == "analysis-queue":
-            jobs = pending_analysis_jobs(args.jobs_dir) if args.jobs_dir else pending_analysis_jobs()
-            if not jobs:
-                print("No pending Codex analysis jobs.")
-                return 0
-            for job in jobs:
-                print(job)
-            return 0
-        if args.command == "complete-analysis-job":
-            return handle_complete_analysis_job(args, storage)
         if args.command == "status":
             paper = storage.get_paper(args.paper_id)
             if not paper:
@@ -159,30 +133,6 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     return 1
-
-
-def handle_complete_analysis_job(args: argparse.Namespace, storage: Storage) -> int:
-    job_path = args.job_path
-    job = read_job(job_path)
-    if not job:
-        print(f"Could not read analysis job: {job_path}", file=sys.stderr)
-        return 1
-
-    note_path = args.note_path or Path(str(job.get("analysis_path") or ""))
-    if not note_path.exists():
-        print(f"Analysis note does not exist: {note_path}", file=sys.stderr)
-        return 1
-
-    paper_id = ((job.get("paper") or {}).get("paper_id") or "").strip()
-    if not paper_id:
-        print(f"Analysis job has no paper_id: {job_path}", file=sys.stderr)
-        return 1
-
-    storage.update_analysis_status(paper_id, status="done", path=str(note_path), message="codex analysis complete")
-    done_path = mark_job_done(job_path, note_path=note_path)
-    print(f"Analysis note: {note_path}")
-    print(f"Completed job: {done_path}")
-    return 0
 
 
 def handle_journal(args: argparse.Namespace, config, storage: Storage) -> int:
