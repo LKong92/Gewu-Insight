@@ -179,11 +179,36 @@ class SubjectMonitorUiTests(unittest.TestCase):
         )[0]
 
         self.assertIn('button.addEventListener("contextmenu"', tabs)
-        self.assertIn('showJournalContextMenu(event, group.journal)', tabs)
+        self.assertIn('showJournalContextMenu(event, button.dataset.journal || "")', tabs)
         self.assertIn('Refresh This Journal', menu)
         self.assertIn('refreshCurrentJournalDate(journalName)', menu)
         self.assertIn('refreshJournal: journalName', refresh)
         self.assertIn('refresh_journal=${encodeURIComponent(refreshJournal)}', INDEX_HTML)
+
+    def test_journal_tabs_reuse_existing_nodes_and_reveal_active_source(self):
+        render_report = INDEX_HTML.split('function renderReport()', 1)[1].split(
+            'function renderLateArrivalsBanner', 1
+        )[0]
+        tabs = INDEX_HTML.split('function renderReportTabs', 1)[1].split(
+            'function updateReportTabsOverflow', 1
+        )[0]
+        sync = INDEX_HTML.split('function syncReportJournalTab', 1)[1].split(
+            'function renderReportTabs', 1
+        )[0]
+
+        self.assertNotIn('$("reportTabs").innerHTML = ""', render_report)
+        self.assertIn('const existing = new Map(', tabs)
+        self.assertIn('let button = existing.get(journal)', tabs)
+        self.assertIn('if (!button)', tabs)
+        self.assertIn('root.insertBefore(button, currentAtIndex || null)', tabs)
+        self.assertIn('previousActiveJournal !== state.activeReportJournal', tabs)
+        self.assertIn('revealActiveReportTab({smooth:', tabs)
+        self.assertIn('state.logoUnavailableJournals.has(journalKey)', sync)
+        self.assertIn('state.logoUnavailableJournals.add(journalKey)', sync)
+        self.assertIn('label.textContent = journal', sync)
+        self.assertIn('const logo = new Image()', sync)
+        self.assertIn('label.replaceChildren(logo)', sync)
+        self.assertNotIn('--journal-tab-width', sync)
 
     def test_monitor_status_and_progress_stay_outside_the_scrolling_paper_list(self):
         layout = INDEX_HTML.split('<section class="report-column">', 1)[1].split(

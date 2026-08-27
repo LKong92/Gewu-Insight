@@ -32486,6 +32486,7 @@ INDEX_HTML = """<!doctype html>
       fetchSnapshotInflight: {},
       fetchCompletionWatchers: new Set(),
       logoRequests: {},
+      logoUnavailableJournals: new Set(),
       figureRequests: {},
       figureQueue: [],
       queuedFigureIds: new Set(),
@@ -36267,8 +36268,6 @@ INDEX_HTML = """<!doctype html>
       root.style.minHeight = "";
       clearMonitorStatusDisplay();
       const statusRoot = $("monitorStatusHost");
-      $("reportTabs").classList.remove("open");
-      $("reportTabs").innerHTML = "";
       const fetchPending = reportFetchIsPending(state.selectedDate);
       if (fetchPending) {
         updateFetchProgressDisplay(state.selectedDate);
@@ -36277,10 +36276,12 @@ INDEX_HTML = """<!doctype html>
       }
       const groups = groupedReportPapers(filtered);
       if (!groups.length && fetchPending) {
+        renderReportTabs([]);
         clearMonitorPaperSurface(root, "report");
         return;
       }
       if (!groups.length) {
+        renderReportTabs([]);
         clearMonitorPaperSurface(root, "report");
         const fetchErrors = state.reportFetchErrors || [];
         if (fetchErrors.length) {
@@ -36353,56 +36354,115 @@ INDEX_HTML = """<!doctype html>
       root.appendChild(banner);
     }
 
+    function syncReportJournalTab(button, group) {
+      const journal = String(group.journal || "Unknown Journal");
+      const journalKey = journal.toLowerCase();
+      const active = journal === state.activeReportJournal;
+      button.className = `journal-tab${active ? " active" : ""}`;
+      button.title = journal;
+      button.dataset.journal = journal;
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+
+      const label = button.querySelector(".journal-tab-label");
+      const logoUrl = journalLogoUrl(journal);
+      const canUseLogo = Boolean(logoUrl) && !state.logoUnavailableJournals.has(journalKey);
+      const currentLogo = label?.querySelector("img");
+      if (label && canUseLogo && currentLogo?.getAttribute("src") !== logoUrl) {
+        if (label.dataset.logoUrl !== logoUrl) {
+          label.textContent = journal;
+          label.dataset.logoUrl = logoUrl;
+          const logo = new Image();
+          logo.alt = `${journal} logo`;
+          logo.addEventListener("load", () => {
+            if (!document.body.contains(button) || button.dataset.journal !== journal) return;
+            state.logoUnavailableJournals.delete(journalKey);
+            delete label.dataset.logoUrl;
+            label.replaceChildren(logo);
+          }, {once: true});
+          logo.addEventListener("error", () => {
+            state.logoUnavailableJournals.add(journalKey);
+            delete label.dataset.logoUrl;
+            label.textContent = journal;
+          }, {once: true});
+          logo.src = logoUrl;
+        }
+      } else if (label && !canUseLogo && label.textContent !== journal) {
+        delete label.dataset.logoUrl;
+        label.textContent = journal;
+      }
+
+      const count = button.querySelector(".journal-tab-count");
+      if (count) count.textContent = String(group.papers.length);
+      const hasUnreadLateArrival = group.papers.some((paper) => paper.late_arrival_unread);
+      let lateDot = button.querySelector(".late-dot");
+      if (hasUnreadLateArrival && !lateDot) {
+        lateDot = document.createElement("span");
+        lateDot.className = "late-dot";
+        lateDot.title = "Unread late arrival";
+        button.appendChild(lateDot);
+      } else if (!hasUnreadLateArrival && lateDot) {
+        lateDot.remove();
+      }
+    }
+
     function renderReportTabs(groups) {
       const root = $("reportTabs");
-      root.innerHTML = "";
       if (!groups.length) {
         root.classList.remove("open");
+        root.replaceChildren();
+        root.dataset.activeJournal = "";
         return;
       }
       root.classList.add("open");
-      groups.forEach((group) => {
-        const button = document.createElement("button");
-        button.className = `journal-tab${group.journal === state.activeReportJournal ? " active" : ""}`;
-        button.type = "button";
-        button.title = group.journal;
-        button.dataset.journal = group.journal;
-        const logoUrl = journalLogoUrl(group.journal);
-        const hasUnreadLateArrival = group.papers.some((paper) => paper.late_arrival_unread);
-        button.innerHTML = `
-          <span class="journal-tab-label">${logoUrl ? `<img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(group.journal)} logo">` : escapeHtml(group.journal)}</span>
-          <span class="journal-tab-count">${group.papers.length}</span>
-          ${hasUnreadLateArrival ? `<span class="late-dot" title="Unread late arrival"></span>` : ""}
-        `;
-        const logo = button.querySelector("img");
-        if (logo) {
-          logo.addEventListener("error", () => {
-            button.querySelector(".journal-tab-label").textContent = group.journal;
-          }, {once: true});
-        } else {
-          hydrateJournalLogo(group.journal, button.querySelector(".journal-tab-label"), "");
+      const previousActiveJournal = root.dataset.activeJournal || "";
+      const existing = new Map(
+        [...root.querySelectorAll(":scope > .journal-tab[data-journal]")]
+          .map((button) => [button.dataset.journal, button])
+      );
+      const retained = new Set();
+      groups.forEach((group, index) => {
+        const journal = String(group.journal || "Unknown Journal");
+        let button = existing.get(journal);
+        if (!button) {
+          button = document.createElement("button");
+          button.type = "button";
+          button.innerHTML = `
+            <span class="journal-tab-label"></span>
+            <span class="journal-tab-count"></span>
+          `;
+          button.addEventListener("click", () => {
+            const selectedJournal = button.dataset.journal || "";
+            const currentGroup = groupedReportPapers(reportVisiblePapers())
+              .find((entry) => entry.journal === selectedJournal);
+            if (!currentGroup) return;
+            state.primaryKeyboardLayer = "content";
+            syncPrimaryKeyboardLayer({focus: false});
+            state.monitorKeyboardPanes.report = "papers";
+            state.activeReportJournal = selectedJournal;
+            state.reportSelectedPaperId = currentGroup.papers[0]?.paper_id || "";
+            state.monitorSelectedPaperIds.report = state.reportSelectedPaperId;
+            renderReport();
+            focusMonitorPaperSelection("report");
+          });
+          button.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            showJournalContextMenu(event, button.dataset.journal || "");
+          });
         }
-        button.addEventListener("click", () => {
-          state.primaryKeyboardLayer = "content";
-          syncPrimaryKeyboardLayer({focus: false});
-          state.monitorKeyboardPanes.report = "papers";
-          state.activeReportJournal = group.journal;
-          state.reportSelectedPaperId = group.papers[0]?.paper_id || "";
-          state.monitorSelectedPaperIds.report = state.reportSelectedPaperId;
-          renderReport();
-          focusMonitorPaperSelection("report");
-        });
-        button.addEventListener("contextmenu", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          showJournalContextMenu(event, group.journal);
-        });
-        root.appendChild(button);
+        retained.add(button);
+        const currentAtIndex = root.children[index];
+        if (currentAtIndex !== button) root.insertBefore(button, currentAtIndex || null);
+        syncReportJournalTab(button, group);
       });
+      [...root.querySelectorAll(":scope > .journal-tab")].forEach((button) => {
+        if (!retained.has(button)) button.remove();
+      });
+      root.dataset.activeJournal = state.activeReportJournal;
       root.onscroll = () => updateReportTabsOverflow();
       window.requestAnimationFrame(() => {
         updateReportTabsOverflow();
-        revealActiveReportTab();
+        revealActiveReportTab({smooth: Boolean(previousActiveJournal && previousActiveJournal !== state.activeReportJournal)});
       });
     }
 
