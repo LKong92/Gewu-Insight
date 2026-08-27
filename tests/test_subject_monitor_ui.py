@@ -25,6 +25,37 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('moveThemeGroup', render_tabs)
         self.assertLess(render_tabs.index('subject-add-tab'), render_tabs.index('groups.forEach'))
 
+    def test_subject_selection_survives_empty_dates_and_calendar_uses_active_subject(self):
+        calendar_day = INDEX_HTML.split('function updateCalendarDayButton', 1)[1].split(
+            'function renderCalendar', 1
+        )[0]
+        calendar = INDEX_HTML.split('function renderCalendar()', 1)[1].split(
+            'function updateReportTabsOverflow', 1
+        )[0]
+        keyboard_calendar = INDEX_HTML.split('async function moveMonitorCalendarCursor', 1)[1].split(
+            'async function enterMonitorCalendarDate', 1
+        )[0]
+        selection = INDEX_HTML.split('function setActiveThemeGroupKey', 1)[1].split(
+            'function selectedThemeGroupKeys', 1
+        )[0]
+        switcher = INDEX_HTML.split('function switchThemeSubjectTab', 1)[1].split(
+            'function renderThemeMonitor', 1
+        )[0]
+        monitor = INDEX_HTML.split('function renderThemeMonitor', 1)[1].split(
+            'function themeLastFetchLabel', 1
+        )[0]
+
+        self.assertIn('dayCounts[state.activeThemeGroupKey]', calendar_day)
+        self.assertIn('activeThemeCount', calendar_day)
+        self.assertNotIn('state.activeThemeGroupKey = ""', calendar)
+        self.assertNotIn('state.activeThemeGroupKey = ""', keyboard_calendar)
+        self.assertIn('THEME_ACTIVE_GROUP_STORAGE_KEY', selection)
+        self.assertIn('window.localStorage?.setItem', selection)
+        self.assertIn('const groups = groupedThemePapers();', switcher)
+        self.assertNotIn('.filter((group) => group.papers.length)', switcher)
+        self.assertNotIn('firstNonEmptyGroup', monitor)
+        self.assertIn('No papers in ${activeGroup?.name || "this subject"} for this date.', monitor)
+
     def test_subject_fetch_scope_includes_all_configured_subjects(self):
         selection = INDEX_HTML.split('function selectedThemeGroupKeys', 1)[1].split(
             'function selectedThemeGroupParam', 1

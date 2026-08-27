@@ -32169,6 +32169,7 @@ INDEX_HTML = """<!doctype html>
 	    const LIBRARY_CONTENT_VIEW_STORAGE_KEY = "daiqo-library-content-view";
 	    const LIBRARY_IMPORT_DRAFT_KEY = "daiqo-library-import-draft";
 	    const THEME_SELECTED_GROUPS_STORAGE_KEY = "daiqo-theme-selected-groups";
+    const THEME_ACTIVE_GROUP_STORAGE_KEY = "daiqo-theme-active-group";
     const ARXIV_SELECTED_CATEGORIES_STORAGE_KEY = "daiqo-arxiv-selected-categories";
     const AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
@@ -35623,10 +35624,14 @@ INDEX_HTML = """<!doctype html>
 
     function updateCalendarDayButton(button, iso, day) {
       const isThemeCalendar = state.mode === "theme";
-      const calendarCounts = isThemeCalendar ? state.themeCounts : state.reportCounts;
-      const dayCounts = calendarCounts[iso] || {};
-      const hasCount = Object.keys(dayCounts).length > 0;
-      const total = Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
+      const dayCounts = isThemeCalendar
+        ? {...(state.themeCounts[iso] || {}), ...(state.themeFilterCounts[iso] || {})}
+        : (state.reportCounts[iso] || {});
+      const activeThemeCount = Number(dayCounts[state.activeThemeGroupKey] || 0);
+      const hasCount = isThemeCalendar ? activeThemeCount > 0 : Object.keys(dayCounts).length > 0;
+      const total = isThemeCalendar
+        ? activeThemeCount
+        : Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
       const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
       const isFuture = isFutureDateIso(iso);
       const isToday = iso === todayIsoDate();
@@ -35686,8 +35691,7 @@ INDEX_HTML = """<!doctype html>
             setCalendarDateForActiveMode(selectedIso);
             state.reportSelectedPaperId = "";
             state.monitorSelectedPaperIds[calendarMode] = "";
-            if (calendarMode === "theme") state.activeThemeGroupKey = "";
-            else state.activeReportJournal = "";
+            if (calendarMode !== "theme") state.activeReportJournal = "";
             updateReportRefreshButton();
             renderCalendar();
             if (state.mode === "theme") {
@@ -36575,8 +36579,7 @@ INDEX_HTML = """<!doctype html>
       setCalendarDateForActiveMode(nextIso);
       state.reportSelectedPaperId = "";
       state.monitorSelectedPaperIds[mode] = "";
-      if (mode === "theme") state.activeThemeGroupKey = "";
-      else state.activeReportJournal = "";
+      if (mode !== "theme") state.activeReportJournal = "";
       updateReportRefreshButton();
       renderCalendar();
       focusMonitorCalendarCursor(mode);
@@ -50886,7 +50889,7 @@ INDEX_HTML = """<!doctype html>
 	        state.themeGroupsLoaded = true;
 	        if (data.group?.key) {
 	          state.selectedThemeGroups.add(data.group.key);
-	          state.activeThemeGroupKey = data.group.key;
+	          setActiveThemeGroupKey(data.group.key, {renderCalendar: false});
 	        }
 	        saveSelectedThemeGroups();
 	        closeThemeGroupDialog();
@@ -51024,7 +51027,7 @@ INDEX_HTML = """<!doctype html>
       }
       state.themeGroups = data.groups || [];
       state.themeGroupsLoaded = true;
-      if (state.activeThemeGroupKey === group.key) state.activeThemeGroupKey = "";
+      if (state.activeThemeGroupKey === group.key) setActiveThemeGroupKey("", {renderCalendar: false});
       state.selectedThemeGroups.delete(group.key);
       const known = new Set(knownThemeGroupKeys());
       state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
@@ -51153,6 +51156,30 @@ INDEX_HTML = """<!doctype html>
 
     function knownThemeGroupKeys() {
       return state.themeGroups.map((group) => group.key).filter(Boolean);
+    }
+
+    function loadStoredActiveThemeGroupKey() {
+      try {
+        return String(window.localStorage?.getItem(THEME_ACTIVE_GROUP_STORAGE_KEY) || "");
+      } catch (_error) {
+        return "";
+      }
+    }
+
+    function setActiveThemeGroupKey(key, options = {}) {
+      const known = knownThemeGroupKeys();
+      const requested = String(key || "");
+      const nextKey = known.includes(requested) ? requested : (known[0] || "");
+      const changed = state.activeThemeGroupKey !== nextKey;
+      state.activeThemeGroupKey = nextKey;
+      try {
+        if (nextKey) window.localStorage?.setItem(THEME_ACTIVE_GROUP_STORAGE_KEY, nextKey);
+        else window.localStorage?.removeItem(THEME_ACTIVE_GROUP_STORAGE_KEY);
+      } catch (_error) {
+        // The in-memory selection still remains stable when local storage is unavailable.
+      }
+      if (changed && options.renderCalendar !== false && state.mode === "theme") renderCalendar();
+      return nextKey;
     }
 
     function selectedThemeGroupKeys() {
@@ -51576,7 +51603,7 @@ INDEX_HTML = """<!doctype html>
 
     async function refreshThemeGroupForDate(group) {
       if (!group?.key) return;
-      state.activeThemeGroupKey = group.key;
+      setActiveThemeGroupKey(group.key);
       await forceFetchSelectedThemeDate(group.key);
     }
 
@@ -51711,6 +51738,11 @@ INDEX_HTML = """<!doctype html>
       state.themeGroups = data.groups || [];
       state.themeGroupsLoaded = true;
 	      const known = new Set(knownThemeGroupKeys());
+	      const storedActiveKey = loadStoredActiveThemeGroupKey();
+	      const activeKey = known.has(state.activeThemeGroupKey)
+	        ? state.activeThemeGroupKey
+	        : (known.has(storedActiveKey) ? storedActiveKey : knownThemeGroupKeys()[0]);
+	      setActiveThemeGroupKey(activeKey, {renderCalendar: false});
 	      const stored = loadStoredThemeGroupKeys().filter((key) => known.has(key));
 	      state.selectedThemeGroups = new Set([...state.selectedThemeGroups].filter((key) => known.has(key)));
 	      if (!state.selectedThemeGroups.size && stored.length) {
@@ -51918,7 +51950,7 @@ INDEX_HTML = """<!doctype html>
           state.primaryKeyboardLayer = "content";
           syncPrimaryKeyboardLayer({focus: false});
           state.monitorKeyboardPanes.theme = "papers";
-          state.activeThemeGroupKey = entry.key;
+          setActiveThemeGroupKey(entry.key);
           state.reportSelectedPaperId = entry.papers[0]?.paper_id || "";
           state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
           renderThemeMonitor();
@@ -51976,7 +52008,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function switchThemeSubjectTab(delta) {
-      const groups = groupedThemePapers().filter((group) => group.papers.length);
+      const groups = groupedThemePapers();
       if (!groups.length) return true;
       const currentIndex = groups.findIndex((group) => group.key === state.activeThemeGroupKey);
       const baseIndex = currentIndex >= 0 ? currentIndex : 0;
@@ -51984,7 +52016,7 @@ INDEX_HTML = """<!doctype html>
       if (nextIndex === baseIndex) return true;
       const next = groups[nextIndex];
       const followSelection = state.libraryQuickLookOpen;
-      state.activeThemeGroupKey = next.key;
+      setActiveThemeGroupKey(next.key);
       state.reportSelectedPaperId = next.papers[0]?.paper_id || "";
       state.monitorKeyboardPanes.theme = "papers";
       state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
@@ -52027,10 +52059,7 @@ INDEX_HTML = """<!doctype html>
       const visiblePapers = themeVisiblePapers();
       const groups = groupedThemePapers(visiblePapers);
       const currentGroup = groups.find((group) => group.key === state.activeThemeGroupKey);
-      const firstNonEmptyGroup = groups.find((group) => group.papers.length);
-      if (!currentGroup || (!currentGroup.papers.length && firstNonEmptyGroup)) {
-        state.activeThemeGroupKey = firstNonEmptyGroup?.key || groups[0]?.key || "";
-      }
+      if (!currentGroup) setActiveThemeGroupKey(groups[0]?.key || "", {renderCalendar: false});
       renderThemeTabs(groups);
       const activeGroup = groups.find((group) => group.key === state.activeThemeGroupKey) || groups[0] || null;
       const activePapers = activeGroup?.papers || [];
@@ -52064,7 +52093,7 @@ INDEX_HTML = """<!doctype html>
       }
       if (!state.themePapers.length) {
         clearMonitorPaperSurface(root, "theme");
-        showMonitorStatusMessage("No subject-matched papers for this window.");
+        showMonitorStatusMessage(`No papers in ${activeGroup?.name || "this subject"} for this date.`);
         showRuntimeEmptyBrand(root);
         return;
       }

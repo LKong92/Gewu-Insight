@@ -369,10 +369,12 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn('restoreMonitorKeyboardFocus("report")', journal_open)
         self.assertIn('restoreMonitorKeyboardFocus("theme")', subject_open)
         self.assertIn(".day.keyboard-current:not(.active)", ui_server.INDEX_HTML)
+        subject_render = self.js_function("renderThemeMonitor")
         self.assertIn(
-            "if (!currentGroup || (!currentGroup.papers.length && firstNonEmptyGroup))",
-            self.js_function("renderThemeMonitor"),
+            'if (!currentGroup) setActiveThemeGroupKey(groups[0]?.key || "", {renderCalendar: false})',
+            subject_render,
         )
+        self.assertNotIn("firstNonEmptyGroup", subject_render)
 
 
 if __name__ == "__main__":
