@@ -125,8 +125,10 @@ class MacosWindowBehaviorTests(unittest.TestCase):
             "Your personal research workspace where papers, evidence, and files stay connected over time.",
             source,
         )
-        self.assertIn("const CGFloat width = 392.0", source)
-        self.assertIn("const CGFloat height = 414.0", source)
+        self.assertIn("const CGFloat width = 336.0", source)
+        self.assertIn("const CGFloat height = 340.0", source)
+        self.assertIn("self.aboutWindow.titleVisibility = NSWindowTitleVisible", source)
+        self.assertIn("self.aboutWindow.titlebarAppearsTransparent = NO", source)
         self.assertIn("aboutLinkButtonWithTitle", source)
         self.assertIn("button.bordered = NO", source)
         self.assertIn("button.contentTintColor = NSColor.linkColor", source)
