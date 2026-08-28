@@ -48,6 +48,10 @@ class SubjectMonitorUiTests(unittest.TestCase):
 
         self.assertIn('dayCounts[state.activeThemeGroupKey]', calendar_day)
         self.assertIn('activeThemeCount', calendar_day)
+        self.assertIn(
+            'Object.prototype.hasOwnProperty.call(dayCounts, state.activeThemeGroupKey)',
+            calendar_day,
+        )
         self.assertNotIn('state.activeThemeGroupKey = ""', calendar)
         self.assertNotIn('state.activeThemeGroupKey = ""', keyboard_calendar)
         self.assertIn('THEME_ACTIVE_GROUP_STORAGE_KEY', selection)

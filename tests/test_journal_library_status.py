@@ -84,6 +84,68 @@ class JournalLibraryStatusTests(unittest.TestCase):
             {"2026-07-15": {"Nature": 1, "arXiv": 1}},
         )
 
+    def test_calendar_marks_completed_empty_journal_days_but_not_unfetched_or_failed_days(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "monitor.sqlite")
+            try:
+                storage.record_fetch_run(
+                    monitor_type="journal",
+                    source="journal",
+                    journal="Nature",
+                    window_start="2026-07-10",
+                    window_end="2026-07-11",
+                    status="empty",
+                    records_found=0,
+                    started_at="2026-07-12T09:00:00+08:00",
+                )
+                storage.record_fetch_run(
+                    monitor_type="journal",
+                    source="journal",
+                    journal="Science",
+                    window_start="2026-07-12",
+                    window_end="2026-07-12",
+                    status="error",
+                    records_found=0,
+                    started_at="2026-07-12T09:01:00+08:00",
+                    message="network unavailable",
+                )
+                storage.record_fetch_run(
+                    monitor_type="journal",
+                    source="journal",
+                    journal="Not Monitored",
+                    window_start="2026-07-13",
+                    window_end="2026-07-13",
+                    status="empty",
+                    records_found=0,
+                    started_at="2026-07-13T09:00:00+08:00",
+                )
+
+                counts = journal_counts_for_month(
+                    storage,
+                    prefix="2026-07-",
+                    journals=["Nature", "Science"],
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(
+            counts,
+            {
+                "2026-07-10": {"Nature": 0},
+                "2026-07-11": {"Nature": 0},
+            },
+        )
+
+    def test_journal_calendar_renders_known_zero_but_leaves_unfetched_dates_blank(self):
+        calendar_day = INDEX_HTML.split('function updateCalendarDayButton', 1)[1].split(
+            'function renderCalendar', 1
+        )[0]
+
+        self.assertIn(
+            'Object.prototype.hasOwnProperty.call(state.reportCounts, iso)',
+            calendar_day,
+        )
+
     def test_arxiv_category_defaults_and_user_selection_are_persistent(self):
         self.assertIn('"cond-mat.mes-hall",', INDEX_HTML)
         self.assertIn('"cond-mat.str-el",', INDEX_HTML)

@@ -131,6 +131,20 @@ class PdfQuickLookPerformanceTests(unittest.TestCase):
         self.assertIn('frame.addEventListener("load", renderWhenIdle', scheduler)
         self.assertIn("requestIdleCallback", scheduler)
 
+    def test_quicklook_reuses_only_the_same_pdf_and_replaces_the_frame_for_a_new_path(self) -> None:
+        renderer = self.js_function("renderLibraryQuickLookPages")
+
+        self.assertIn(
+            "existingFrame?.dataset.pdfPath === state.libraryQuickLookPath",
+            renderer,
+        )
+        self.assertIn("root.innerHTML = `<iframe", renderer)
+        self.assertIn("frame.dataset.pdfPath = state.libraryQuickLookPath", renderer)
+        self.assertLess(
+            renderer.index("existingFrame?.dataset.pdfPath"),
+            renderer.index("root.innerHTML = `<iframe"),
+        )
+
     def test_startup_retains_bounded_thumbnail_cache(self) -> None:
         source = ui_server.run_ui_server.__code__.co_names
         self.assertIn("trim_pdf_thumbnail_cache_if_needed", source)

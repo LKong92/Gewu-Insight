@@ -7883,6 +7883,48 @@ def journal_counts_for_month(
         journal = str(row["journal"] or "")
         if day and journal:
             counts.setdefault(day, {})[journal] = int(row["count"] or 0)
+
+    # A calendar day with no papers is meaningfully different from a day that
+    # has never been checked. Seed completed Journal Monitor windows with
+    # zeroes so the API preserves that distinction even when the papers query
+    # above has no rows for the date. Only final journal/arXiv summary runs are
+    # authoritative here; child-source errors must not turn an unfetched date
+    # into a misleading zero.
+    try:
+        month_start = date.fromisoformat(f"{prefix.rstrip('-')}-01")
+    except ValueError:
+        return counts
+    next_month = (
+        date(month_start.year + 1, 1, 1)
+        if month_start.month == 12
+        else date(month_start.year, month_start.month + 1, 1)
+    )
+    month_end = next_month - timedelta(days=1)
+    run_rows = storage.conn.execute(
+        f"""
+        SELECT window_start, window_end, journal
+        FROM fetch_runs
+        WHERE monitor_type = 'journal'
+          AND source IN ('journal', 'arxiv')
+          AND status IN ('success', 'empty')
+          AND window_end >= ?
+          AND window_start <= ?
+          AND journal IN ({placeholders})
+        ORDER BY finished_at ASC, id ASC
+        """,
+        (month_start.isoformat(), month_end.isoformat(), *journal_names),
+    ).fetchall()
+    for row in run_rows:
+        journal = str(row["journal"] or "")
+        try:
+            run_start = max(date.fromisoformat(str(row["window_start"])), month_start)
+            run_end = min(date.fromisoformat(str(row["window_end"])), month_end)
+        except ValueError:
+            continue
+        current = run_start
+        while current <= run_end:
+            counts.setdefault(current.isoformat(), {}).setdefault(journal, 0)
+            current += timedelta(days=1)
     return counts
 
 
@@ -36249,7 +36291,9 @@ INDEX_HTML = """<!doctype html>
         ? {...(state.themeCounts[iso] || {}), ...(state.themeFilterCounts[iso] || {})}
         : (state.reportCounts[iso] || {});
       const activeThemeCount = Number(dayCounts[state.activeThemeGroupKey] || 0);
-      const hasCount = isThemeCalendar ? activeThemeCount > 0 : Object.keys(dayCounts).length > 0;
+      const hasCount = isThemeCalendar
+        ? Object.prototype.hasOwnProperty.call(dayCounts, state.activeThemeGroupKey)
+        : Object.prototype.hasOwnProperty.call(state.reportCounts, iso);
       const total = isThemeCalendar
         ? activeThemeCount
         : Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
@@ -46678,9 +46722,11 @@ INDEX_HTML = """<!doctype html>
         ? Math.min(state.libraryQuickLookPage || 1, count)
         : Number(state.libraryQuickLookPage || 1));
       const existingFrame = root.querySelector(".library-pdf-frame");
-      if (existingFrame) return;
+      if (existingFrame?.dataset.pdfPath === state.libraryQuickLookPath) return;
       root.innerHTML = `<iframe class="library-pdf-frame" title="PDF preview" src="${escapeAttr(libraryPdfFrameUrl(page))}"></iframe>`;
-      wireLibraryQuickLookPdfFrame(root.querySelector(".library-pdf-frame"));
+      const frame = root.querySelector(".library-pdf-frame");
+      if (frame) frame.dataset.pdfPath = state.libraryQuickLookPath;
+      wireLibraryQuickLookPdfFrame(frame);
       root.scrollTop = 0;
       root.onscroll = null;
     }

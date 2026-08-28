@@ -237,6 +237,40 @@ class ThemeMonitorTest(unittest.TestCase):
             finally:
                 storage.close()
 
+    def test_month_count_preserves_completed_empty_state_per_subject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+            try:
+                storage.record_fetch_run(
+                    monitor_type="theme",
+                    source="multi",
+                    journal="theme:scanning-squid",
+                    window_start="2026-06-03",
+                    window_end="2026-06-03",
+                    status="empty",
+                    records_found=0,
+                    started_at="2026-06-03T09:00:00+08:00",
+                )
+
+                scanning_counts = theme_counts_for_month(
+                    storage,
+                    prefix="2026-06-",
+                    group_keys=["scanning-squid"],
+                )
+                other_subject_counts = theme_counts_for_month(
+                    storage,
+                    prefix="2026-06-",
+                    group_keys=["wigner-crystal"],
+                )
+            finally:
+                storage.close()
+
+        self.assertEqual(
+            scanning_counts,
+            {"2026-06-03": {"scanning-squid": 0}},
+        )
+        self.assertEqual(other_subject_counts, {})
+
     def test_missing_theme_group_keys_skip_completed_and_present_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "paper_monitor.sqlite")
