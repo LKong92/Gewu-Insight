@@ -24,7 +24,7 @@ from paper_monitor.sources.publisher import (
     reset_aps_abstract_fetch_state,
     sync_aps_rss_feeds,
 )
-from paper_monitor.storage import Storage
+from paper_monitor.storage import APS_RECLASSIFICATION_SETTING, Storage
 from paper_monitor.ui_server import (
     JOURNAL_PRESETS,
     canonical_journal_name_for_add,
@@ -728,6 +728,10 @@ class PrlRecentTests(unittest.TestCase):
                 "UPDATE papers SET publisher_section = 'research article', section_allowed = 1 WHERE paper_id = ?",
                 (accepted["paper_id"],),
             )
+            storage.conn.execute(
+                "DELETE FROM app_settings WHERE key = ?",
+                (APS_RECLASSIFICATION_SETTING,),
+            )
             storage.conn.commit()
             storage.close()
 
@@ -755,6 +759,10 @@ class PrlRecentTests(unittest.TestCase):
             storage.conn.execute(
                 "UPDATE papers SET publisher_section = 'research article', section_allowed = 1 WHERE paper_id = ?",
                 (accepted["paper_id"],),
+            )
+            storage.conn.execute(
+                "DELETE FROM app_settings WHERE key = ?",
+                (APS_RECLASSIFICATION_SETTING,),
             )
             storage.conn.commit()
             storage.close()
@@ -786,6 +794,10 @@ class PrlRecentTests(unittest.TestCase):
                 WHERE paper_id = ?
                 """,
                 (accepted["paper_id"],),
+            )
+            storage.conn.execute(
+                "DELETE FROM app_settings WHERE key = ?",
+                (APS_RECLASSIFICATION_SETTING,),
             )
             storage.conn.commit()
             storage.close()

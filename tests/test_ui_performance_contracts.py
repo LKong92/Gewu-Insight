@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paper_monitor import ui_server
-from paper_monitor.storage import STORAGE_SCHEMA_VERSION, Storage
+from paper_monitor.storage import APS_RECLASSIFICATION_SETTING, STORAGE_SCHEMA_VERSION, Storage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +59,44 @@ class UiPerformanceContractTests(unittest.TestCase):
                 reopened.close()
 
         self.assertEqual(schema_version, STORAGE_SCHEMA_VERSION)
+
+    def test_storage_runs_versioned_aps_cleanup_only_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                completed = storage.conn.execute(
+                    "SELECT value FROM app_settings WHERE key = ?",
+                    (APS_RECLASSIFICATION_SETTING,),
+                ).fetchone()
+            finally:
+                storage.close()
+
+            with patch.object(
+                Storage,
+                "_apply_aps_record_reclassification",
+                side_effect=AssertionError("APS cleanup repeated"),
+            ):
+                reopened = Storage(db_path)
+                reopened.close()
+
+        self.assertIsNotNone(completed)
+
+    def test_loaded_library_navigation_preserves_the_existing_shell(self) -> None:
+        partial_renderer = self.js_function("renderLibraryNavigationContent")
+        self.assertIn("renderLibraryColumns();", partial_renderer)
+        self.assertIn("renderLibraryDetail();", partial_renderer)
+        self.assertNotIn("root.innerHTML", partial_renderer)
+        self.assertNotIn("wireLibraryInteractions();", partial_renderer)
+
+        for function_name in (
+            "loadLibraryFolderAndRender",
+            "selectLibraryEntry",
+            "focusLibraryFolder",
+        ):
+            function_body = self.js_function(function_name)
+            self.assertIn("renderLibraryNavigationContent();", function_body, function_name)
+            self.assertNotIn("renderLibrary();", function_body, function_name)
 
     def test_author_monitor_card_cache_is_a_rebuildable_sqlite_index(self) -> None:
         schema = ui_server.Storage.__module__
@@ -315,7 +353,9 @@ class UiPerformanceContractTests(unittest.TestCase):
         self.assertIn("focusPrimarySurfaceContent", primary)
         self.assertIn("activatePrimaryKeyboardRoot()", report)
         self.assertIn("activatePrimaryKeyboardRoot()", author)
-        self.assertIn("activatePrimaryKeyboardRoot()", library)
+        self.assertNotIn("activatePrimaryKeyboardRoot()", library)
+        self.assertIn("focusLibraryNavigationRail()", library)
+        self.assertIn("handleLibraryNavigationRailKeydown(event, key)", library)
         self.assertIn("handlePrimaryKeyboardNavigation(event)", ui_server.INDEX_HTML)
         self.assertIn(".view-switcher.keyboard-active .view-switch.active", ui_server.INDEX_HTML)
         self.assertIn(".view-switch:focus-visible", ui_server.INDEX_HTML)

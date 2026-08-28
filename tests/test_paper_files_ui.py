@@ -116,6 +116,36 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("library-resource-state", resources)
         self.assertNotIn("library-resource-row", resources)
 
+    def test_empty_and_loading_file_states_share_a_compact_inline_component(self) -> None:
+        resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
+            "function libraryColumnFolderIds", 1
+        )[0]
+        panel = INDEX_HTML.split("function paperFilesPanelMarkup", 1)[1].split(
+            "async function loadPaperFiles", 1
+        )[0]
+
+        self.assertIn("function paperFilesStatusMarkup(kind)", INDEX_HTML)
+        self.assertIn('paperFilesStatusMarkup(snapshot ? "empty" : "loading")', resources)
+        self.assertIn('paperFilesStatusMarkup("loading")', panel)
+        self.assertIn('paperFilesStatusMarkup("empty")', panel)
+        self.assertIn('class="paper-files-status ', INDEX_HTML)
+        self.assertIn('class="paper-files-status-title"', INDEX_HTML)
+        self.assertIn('class="paper-files-status-hint"', INDEX_HTML)
+        self.assertIn('class="paper-files-status-spinner"', INDEX_HTML)
+        self.assertNotIn('<div class="empty">', resources)
+        self.assertNotIn("No local files attached.", INDEX_HTML)
+
+    def test_library_folder_loading_and_empty_states_use_the_same_compact_component(self) -> None:
+        columns = INDEX_HTML.split("function libraryColumnMarkup", 1)[1].split(
+            "function renderLibrarySearchResults", 1
+        )[0]
+
+        self.assertIn("function surfaceInlineStatusMarkup", INDEX_HTML)
+        self.assertIn('surfaceInlineStatusMarkup("loading", "Loading folder")', columns)
+        self.assertIn('surfaceInlineStatusMarkup("empty", "Empty folder"', columns)
+        self.assertNotIn('<div class="empty">Loading folder...</div>', columns)
+        self.assertNotIn('<div class="empty">Right-click to create a folder', columns)
+
     def test_resource_cards_select_on_click_and_open_only_on_double_click(self) -> None:
         interactions = INDEX_HTML.split('shell.querySelectorAll(".library-resource-card[data-library-resource-id]")', 1)[1].split(
             'shell.querySelectorAll("[data-library-resource-role]")', 1

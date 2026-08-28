@@ -122,9 +122,10 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('ABOUT_CALLIGRAPHY_SOURCE="$PROJECT_DIR/assets/branding/GewuAboutCalligraphy.png"', build_script)
         self.assertIn('cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"', build_script)
         self.assertIn(
-            "Your personal research workspace where papers, evidence, and files stay connected over time.",
+            '@"Your personal research workspace where papers,\\nevidence, and files stay connected over time."',
             source,
         )
+        self.assertIn("taglineLabel.maximumNumberOfLines = 2", source)
         self.assertIn("const CGFloat width = 336.0", source)
         self.assertIn("const CGFloat height = 340.0", source)
         self.assertIn("self.aboutWindow.titleVisibility = NSWindowTitleVisible", source)

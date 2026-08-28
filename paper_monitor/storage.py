@@ -16,6 +16,8 @@ from .time_utils import local_timezone, now_iso, system_timezone_name
 
 STORAGE_SCHEMA_VERSION = 11
 _STORAGE_SCHEMA_LOCK = threading.RLock()
+APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
+APS_RECLASSIFICATION_VERSION = "1"
 
 
 SCHEMA = """
@@ -923,6 +925,26 @@ class Storage:
 
     def _reclassify_aps_records(self) -> None:
         """Hide legacy Accepted APS rows without removing user-linked paper data."""
+        completed = self.conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (APS_RECLASSIFICATION_SETTING,),
+        ).fetchone()
+        if completed and str(completed["value"] or "") == APS_RECLASSIFICATION_VERSION:
+            return
+
+        self._apply_aps_record_reclassification()
+        self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (APS_RECLASSIFICATION_SETTING, APS_RECLASSIFICATION_VERSION, now_iso()),
+        )
+        self.conn.commit()
+
+    def _apply_aps_record_reclassification(self) -> None:
+        """Apply the versioned legacy APS cleanup once for a database."""
         journal_names = list(APS_MONITORED_JOURNALS.values())
         placeholders = ", ".join(["?"] * len(journal_names))
         rows = self.conn.execute(
@@ -959,7 +981,6 @@ class Storage:
                 "UPDATE papers SET publisher_section = ?, section_allowed = ? WHERE paper_id = ?",
                 updates,
             )
-            self.conn.commit()
 
     def _ensure_library_root(self) -> None:
         timestamp = now_iso()

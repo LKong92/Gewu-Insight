@@ -1894,6 +1894,64 @@ class PaperResourceStorageTests(unittest.TestCase):
             [1, 2],
         )
 
+    def test_paper_files_hide_untyped_predecessor_of_legacy_backfill_after_rename(self) -> None:
+        missing = {
+            "id": 1,
+            "original_filename": "2607.13933v1.pdf",
+            "file_role": None,
+            "version_role": None,
+            "added_via": None,
+            "size_bytes": 29_339_810,
+            "exists": False,
+            "is_primary": False,
+            "is_preferred": False,
+        }
+        existing = {
+            "id": 2,
+            "original_filename": "Z.Review_2607.13933v1.pdf",
+            "file_role": "publication_version",
+            "version_role": "other",
+            "added_via": "legacy_backfill",
+            "size_bytes": 29_379_347,
+            "exists": True,
+            "is_primary": True,
+            "is_preferred": False,
+        }
+
+        self.assertEqual(
+            [resource["id"] for resource in ui_server.visible_paper_resources([missing, existing])],
+            [2],
+        )
+
+    def test_paper_files_keep_typed_missing_attachment_next_to_legacy_backfill(self) -> None:
+        missing = {
+            "id": 1,
+            "original_filename": "notes.md",
+            "file_role": "note",
+            "version_role": None,
+            "added_via": None,
+            "size_bytes": 120,
+            "exists": False,
+            "is_primary": False,
+            "is_preferred": False,
+        }
+        existing = {
+            "id": 2,
+            "original_filename": "paper.pdf",
+            "file_role": "publication_version",
+            "version_role": "version_of_record",
+            "added_via": "legacy_backfill",
+            "size_bytes": 1000,
+            "exists": True,
+            "is_primary": True,
+            "is_preferred": False,
+        }
+
+        self.assertEqual(
+            [resource["id"] for resource in ui_server.visible_paper_resources([missing, existing])],
+            [1, 2],
+        )
+
     def test_existing_non_primary_resource_can_be_adopted_without_changing_primary(self) -> None:
         self.add_paper("paper-adopt-resource")
         primary = self.write_pdf("Topic/Published.pdf")

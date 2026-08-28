@@ -21,6 +21,81 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertNotIn("LIBRARY_SHORTCUT_TAB_COUNT", INDEX_HTML)
         self.assertNotIn("LIBRARY_WORKSPACE_TAB_COUNT", INDEX_HTML)
 
+    def test_keyboard_navigation_moves_between_library_content_and_vertical_tabs(self) -> None:
+        rail_keys = INDEX_HTML.split("function handleLibraryNavigationRailKeydown", 1)[1].split(
+            "function handleLibraryKeydown", 1
+        )[0]
+        library_keys = INDEX_HTML.split("function handleLibraryKeydown", 1)[1].split(
+            "function updatePaperState", 1
+        )[0]
+
+        self.assertIn("function libraryNavigationKeyboardButtons()", INDEX_HTML)
+        self.assertIn("function focusLibraryNavigationRail()", INDEX_HTML)
+        button_order = INDEX_HTML.split("function libraryNavigationKeyboardButtons", 1)[1].split(
+            "function currentLibraryNavigationButton", 1
+        )[0]
+        self.assertIn("data-root-tab", button_order)
+        self.assertIn("data-shortcut-tab", button_order)
+        self.assertIn("data-workspace-tab", button_order)
+        self.assertIn('key === "ArrowUp" || key === "ArrowDown"', rail_keys)
+        self.assertIn('if (key === "ArrowRight")', rail_keys)
+        self.assertIn("activateLibraryNavigationButton(next, {enterContent: false})", rail_keys)
+        self.assertIn("focusLibraryContentAfterNavigation();", rail_keys)
+        self.assertIn(
+            "eventButton || (state.libraryNavigationRailFocus ? currentLibraryNavigationButton() : null)",
+            rail_keys,
+        )
+        self.assertIn("const displayRootId = Number(libraryDisplayRootId()", library_keys)
+        self.assertIn("return focusLibraryNavigationRail();", library_keys)
+        self.assertNotIn("activatePrimaryKeyboardRoot()", library_keys)
+        self.assertIn(".library-tab-rail .library-tab:focus-visible", INDEX_HTML)
+        self.assertIn(".library-tab-rail.keyboard-active .library-tab:focus", INDEX_HTML)
+        self.assertIn(".library-shell.navigation-rail-focus-active .library-row.active", INDEX_HTML)
+        self.assertIn("libraryNavigationRailFocus: false", INDEX_HTML)
+        self.assertIn("libraryNavigationFocusRevision: 0", INDEX_HTML)
+        self.assertIn("function setLibraryNavigationRailFocus(active)", INDEX_HTML)
+
+    def test_navigation_rail_focus_survives_async_renders_without_stealing_content_focus(self) -> None:
+        focus_setter = INDEX_HTML.split("function setLibraryNavigationRailFocus", 1)[1].split(
+            "function focusLibraryContentAfterNavigation", 1
+        )[0]
+        focus_restorer = INDEX_HTML.split("function focusCurrentLibraryNavigationButton", 1)[1].split(
+            "function activateLibraryNavigationButton", 1
+        )[0]
+        activation = INDEX_HTML.split("function activateLibraryNavigationButton", 1)[1].split(
+            "function handleLibraryNavigationRailKeydown", 1
+        )[0]
+        tab_render = INDEX_HTML.split("function renderLibraryShortcutTabs", 1)[1].split(
+            "function captureLibraryNavigationScroll", 1
+        )[0]
+
+        self.assertIn("state.libraryNavigationFocusRevision", focus_setter)
+        self.assertIn("if (!state.libraryNavigationRailFocus) return;", focus_restorer)
+        self.assertIn("expectedRevision", focus_restorer)
+        self.assertIn("setLibraryNavigationRailFocus(true)", activation)
+        self.assertIn("focusCurrentLibraryNavigationButton(focusRevision)", activation)
+        self.assertIn("if (state.libraryNavigationRailFocus)", tab_render)
+        self.assertIn("focusCurrentLibraryNavigationButton(state.libraryNavigationFocusRevision)", tab_render)
+
+    def test_live_navigation_tab_switches_keep_a_visible_root_entry_selected(self) -> None:
+        root_selection = INDEX_HTML.split("function selectLibraryDisplayRootEntry", 1)[1].split(
+            "function selectLibraryColumnFolder", 1
+        )[0]
+        shortcut_open = INDEX_HTML.split("async function openLibraryShortcutTab", 1)[1].split(
+            "async function assignLibraryShortcutTab", 1
+        )[0]
+        workspace_open = INDEX_HTML.split("async function openLibraryWorkspaceTab", 1)[1].split(
+            "async function renameLibraryWorkspace", 1
+        )[0]
+
+        self.assertIn("const remembered = ensureLibraryColumnSelection(displayRootId);", root_selection)
+        self.assertIn("libraryEntriesForFolder(displayRootId)[0]", root_selection)
+        self.assertIn("setLibraryColumnSelection(displayRootId, remembered || firstEntry);", root_selection)
+        self.assertIn("selectLibraryDisplayRootEntry(folderId);", shortcut_open)
+        self.assertIn("selectLibraryDisplayRootEntry(folderId);", workspace_open)
+        self.assertNotIn('state.librarySelection = {type: "folder", id: folderId};', shortcut_open)
+        self.assertNotIn('state.librarySelection = {type: "folder", id: folderId};', workspace_open)
+
     def test_navigation_rail_exposes_add_remove_and_reorder_actions(self) -> None:
         self.assertIn('data-nav-add="shortcut"', INDEX_HTML)
         self.assertIn('data-nav-remove="shortcut"', INDEX_HTML)
@@ -143,7 +218,8 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn("function rememberLibraryLocation()", INDEX_HTML)
         self.assertIn("function restoreLibraryLastLocation()", INDEX_HTML)
         self.assertIn("if (!options.root) restoreLibraryLastLocation();", INDEX_HTML)
-        self.assertIn("if (!options.root && !restoreLibraryLastLocation()) resetLibraryRootSelection();", INDEX_HTML)
+        self.assertIn("if (options.root) selectLibraryDisplayRootEntry(state.libraryRootId);", INDEX_HTML)
+        self.assertIn("else if (!restoreLibraryLastLocation()) resetLibraryRootSelection();", INDEX_HTML)
         self.assertIn("loadLibrary({root: true})", INDEX_HTML)
 
     def test_space_dialog_explains_real_directory_semantics(self) -> None:

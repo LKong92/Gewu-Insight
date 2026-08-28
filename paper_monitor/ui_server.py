@@ -8954,6 +8954,20 @@ def visible_paper_resources(resources: Iterable[dict[str, Any]]) -> list[dict[st
     materialized = [dict(resource) for resource in resources]
     existing = [resource for resource in materialized if resource.get("exists")]
 
+    # Schema 9 introduced explicit publication-version resources for papers that
+    # previously had only a path-bearing, untyped import row. The backfill kept
+    # the old row for auditability. If that old path was later renamed or moved,
+    # it now looks like a second, missing attachment even though the backfilled
+    # resource is the same paper's live canonical file. Treat those untyped
+    # predecessors as hidden aliases regardless of filename changes or benign PDF
+    # metadata/annotation size differences. Genuine typed attachments, preferred
+    # resources, and current resources remain visible for recovery.
+    has_existing_legacy_backfill = any(
+        clean_text(resource.get("added_via") or "").lower() == "legacy_backfill"
+        and clean_text(resource.get("file_role") or "").lower() == "publication_version"
+        for resource in existing
+    )
+
     def filename_key(resource: dict[str, Any]) -> str:
         local_path = clean_text(
             resource.get("local_path")
@@ -8978,7 +8992,12 @@ def visible_paper_resources(resources: Iterable[dict[str, Any]]) -> list[dict[st
         size = int(resource.get("size_bytes") or 0)
         exact_hash = clean_text(resource.get("sha256") or "")
         content_hash = clean_text(resource.get("content_sha256") or "")
-        stale_alias = False
+        stale_alias = bool(
+            role in {"", "other"}
+            and has_existing_legacy_backfill
+            and not clean_text(resource.get("version_role") or "")
+            and not clean_text(resource.get("added_via") or "")
+        )
         if role in {"", "other"} and name:
             for candidate in existing:
                 if filename_key(candidate) != name:
@@ -24238,6 +24257,10 @@ INDEX_HTML = """<!doctype html>
     .fetch-progress {
       display: grid;
       gap: 10px;
+      padding: 14px 16px;
+      border: 1px solid rgba(31, 79, 122, 0.16);
+      border-radius: 8px;
+      background: rgba(247, 250, 253, 0.78);
       text-align: left;
       animation: fetchPanelPulse 1.8s ease-in-out infinite;
     }
@@ -25420,12 +25443,54 @@ INDEX_HTML = """<!doctype html>
     }
     .fetch-progress-host.open { display: block; }
     .monitor-status-host {
-      display: grid;
-      gap: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
       min-height: 0;
-      margin: -6px 0 12px;
+      margin: -5px 0 6px;
     }
     .monitor-status-host:empty { display: none; }
+    .monitor-inline-status {
+      max-width: min(620px, calc(100% - 28px));
+      min-height: 24px;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 3px 10px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #788497;
+      font-size: 11px;
+      font-weight: 520;
+      line-height: 1.35;
+      text-align: center;
+    }
+    .monitor-inline-status-mark {
+      width: 5px;
+      height: 5px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: #aeb8c5;
+    }
+    .monitor-inline-status.is-loading .monitor-inline-status-mark {
+      width: 10px;
+      height: 10px;
+      border: 1.5px solid rgba(31, 79, 122, 0.20);
+      border-top-color: var(--accent);
+      background: transparent;
+      animation: monitorStatusSpin 900ms linear infinite;
+    }
+    .monitor-inline-status.is-error {
+      color: #9b5b54;
+    }
+    .monitor-inline-status.is-error .monitor-inline-status-mark {
+      background: #c47a70;
+    }
+    @keyframes monitorStatusSpin { to { transform: rotate(360deg); } }
     .report-tabs {
       display: none;
       gap: 8px;
@@ -25557,53 +25622,44 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-tools {
       display: none;
-      align-items: center;
       position: fixed;
       top: 3px;
       right: 30px;
       z-index: 76;
       width: 292px;
-      justify-content: flex-end;
+      height: 32px;
       pointer-events: none;
       -webkit-app-region: no-drag;
     }
-    .library-search-tools.open { display: flex; }
+    .library-search-tools.open { display: block; }
     .library-search-wrap {
-      position: relative;
+      position: absolute;
+      top: 0;
+      right: 0;
       width: 34px;
       min-width: 34px;
       height: 32px;
-      flex: 0 0 34px;
       transition: width 160ms ease;
       pointer-events: auto;
       z-index: 1;
       isolation: isolate;
       -webkit-app-region: no-drag;
     }
-    .library-search-wrap::before {
-      content: "";
+    .library-search-icon {
       position: absolute;
-      left: 10px;
+      left: 7px;
       top: 50%;
-      width: 11px;
-      height: 11px;
-      border: 1.6px solid #667085;
-      border-radius: 999px;
-      transform: translateY(-58%);
+      width: 20px;
+      height: 20px;
+      color: #667085;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transform: translateY(-50%);
       pointer-events: none;
-    }
-    .library-search-wrap::after {
-      content: "";
-      position: absolute;
-      left: 20px;
-      top: 22px;
-      width: 7px;
-      height: 1.6px;
-      border-radius: 999px;
-      background: #667085;
-      transform: rotate(42deg);
-      transform-origin: left center;
-      pointer-events: none;
+      z-index: 3;
     }
     .library-search-wrap input {
       position: relative;
@@ -25636,7 +25692,6 @@ INDEX_HTML = """<!doctype html>
     .library-search-wrap:focus-within,
     .library-search-tools.has-query .library-search-wrap {
       width: 292px;
-      flex-basis: 292px;
     }
     .library-search-wrap:hover input,
     .library-search-wrap:focus-within input,
@@ -25659,7 +25714,7 @@ INDEX_HTML = """<!doctype html>
       font-size: 16px;
       line-height: 1;
       display: none;
-      z-index: 2;
+      z-index: 4;
       -webkit-app-region: no-drag;
     }
     .library-search-clear.open { display: grid; place-items: center; }
@@ -25837,6 +25892,21 @@ INDEX_HTML = """<!doctype html>
     .library-tab-rail .library-tab:not(.active):focus-visible {
       opacity: 0.68;
       filter: saturate(0.82) brightness(1.03);
+    }
+    .library-tab-rail .library-tab:focus-visible {
+      opacity: 1;
+      filter: none;
+      outline: 2px solid rgba(31, 79, 122, 0.72);
+      outline-offset: -2px;
+      z-index: 5;
+    }
+    .library-tab-rail.keyboard-active .library-tab:focus {
+      opacity: 1;
+      filter: none;
+      outline: 2px solid #0b67d8;
+      outline-offset: -2px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.74);
+      z-index: 6;
     }
     .library-tab-rail .library-tab.nav-dragging { opacity: 0.46; }
     .library-tab-rail .library-tab.drag-over-before { box-shadow: inset -3px 0 0 var(--accent); }
@@ -27846,6 +27916,9 @@ INDEX_HTML = """<!doctype html>
       -webkit-user-select: none;
       user-select: none;
     }
+    .library-column-body > .surface-inline-status {
+      padding: 7px 4px;
+    }
     .library-row {
       width: 100%;
       height: 30px;
@@ -27933,6 +28006,10 @@ INDEX_HTML = """<!doctype html>
     .library-row.range-selected .library-meta { color: #45637f; }
     .library-row.active:not(.range-selected) { background: #0b67d8; border-color: #0b67d8; color: #fff; }
     .library-shell.paper-files-focus-active .library-row.active:not(.range-selected)[data-library-type="item"] {
+      background: #5f95ce;
+      border-color: #5f95ce;
+    }
+    .library-shell.navigation-rail-focus-active .library-row.active:not(.range-selected) {
       background: #5f95ce;
       border-color: #5f95ce;
     }
@@ -28789,8 +28866,67 @@ INDEX_HTML = """<!doctype html>
     .paper-files-panel.is-collapsed .paper-files-add-controls,
     .paper-files-panel.is-collapsed .paper-files-body { display: none; }
     .paper-files-panel.is-collapsed .paper-files-current-summary { display: block; }
-    .paper-files-empty,
-    .paper-files-loading { padding: 7px 3px; color: var(--muted); font-size: 11px; }
+    .paper-files-status {
+      min-width: 0;
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 4px;
+      color: #788497;
+      font-size: 10px;
+      line-height: 1.25;
+    }
+    .paper-files-status-icon {
+      width: 25px;
+      height: 25px;
+      flex: 0 0 25px;
+      position: relative;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #e9edf2;
+      color: #8190a3;
+    }
+    .paper-files-status.is-empty .paper-files-status-icon::before {
+      content: "";
+      width: 11px;
+      height: 14px;
+      border: 1px solid currentColor;
+      border-radius: 2px;
+      background: rgba(255, 255, 255, 0.42);
+    }
+    .paper-files-status.is-empty .paper-files-status-icon::after {
+      content: "";
+      position: absolute;
+      left: 9px;
+      top: 10px;
+      width: 7px;
+      height: 1px;
+      background: currentColor;
+      box-shadow: 0 3px 0 currentColor;
+      opacity: 0.72;
+    }
+    .paper-files-status-spinner {
+      width: 12px;
+      height: 12px;
+      border: 1.5px solid rgba(106, 126, 149, 0.25);
+      border-top-color: #6d86a2;
+      border-radius: 50%;
+      animation: paperFilesStatusSpin 900ms linear infinite;
+    }
+    @keyframes paperFilesStatusSpin { to { transform: rotate(360deg); } }
+    .paper-files-status-copy { min-width: 0; display: grid; gap: 1px; }
+    .paper-files-status-title {
+      color: #596779;
+      font-size: 10.5px;
+      font-weight: 650;
+    }
+    .paper-files-status-hint {
+      color: #8a95a4;
+      font-size: 9px;
+      line-height: 1.25;
+    }
     .paper-files-sync-row {
       display: flex;
       justify-content: flex-end;
@@ -28940,6 +29076,7 @@ INDEX_HTML = """<!doctype html>
       -webkit-user-select: none;
       user-select: none;
     }
+    .library-resource-body > .paper-files-status { padding: 7px 3px; }
     .library-resource-section + .library-resource-section { margin-top: 10px; }
     .library-resource-section-head {
       display: flex;
@@ -29407,12 +29544,19 @@ INDEX_HTML = """<!doctype html>
     }
     .subject-option.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
     .papers {
+      position: relative;
       min-height: 0;
       overflow-y: auto;
       display: grid;
       align-content: start;
       gap: 12px;
       padding-right: 2px;
+    }
+    .papers > .runtime-branded-empty {
+      position: absolute;
+      inset: 0;
+      width: auto;
+      min-height: 0;
     }
     .papers.library-view {
       display: block;
@@ -30084,9 +30228,10 @@ INDEX_HTML = """<!doctype html>
       z-index: 1;
     }
     .author-monitor-empty {
-      padding: 28px 18px;
+      padding: 13px 16px;
       color: var(--muted);
       text-align: center;
+      font-size: 11px;
       line-height: 1.5;
     }
     .author-monitor-importing-empty {
@@ -30098,11 +30243,11 @@ INDEX_HTML = """<!doctype html>
     }
     .author-monitor-importing-empty strong {
       color: var(--ink);
-      font-size: 15px;
+      font-size: 12px;
     }
     .author-monitor-importing-empty span {
       display: block;
-      font-size: 12px;
+      font-size: 10.5px;
     }
     .author-profile-results {
       display: grid;
@@ -30557,11 +30702,13 @@ INDEX_HTML = """<!doctype html>
     .status.warn { border-color: var(--warn); color: var(--warn); }
     .status.err { border-color: var(--accent-2); color: var(--accent-2); }
     .empty {
-      border: 1px dashed var(--line);
-      border-radius: 8px;
-      padding: 28px;
+      border: 0;
+      border-radius: 0;
+      padding: 10px 12px;
       color: var(--muted);
-      background: #fff;
+      background: transparent;
+      font-size: 11px;
+      line-height: 1.4;
       text-align: center;
     }
     .runtime-branded-empty {
@@ -31081,6 +31228,20 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .report-column {
       padding-right: 0;
     }
+    .app.report-mode .report-column > .toolbar,
+    .app.theme-mode .report-column > .toolbar { grid-row: 1; }
+    .app.report-mode .report-column > .summary,
+    .app.theme-mode .report-column > .summary { grid-row: 2; }
+    .app.report-mode .report-column > .report-tabs,
+    .app.theme-mode .report-column > .report-tabs { grid-row: 3; }
+    .app.report-mode .report-column > .fetch-progress-host,
+    .app.theme-mode .report-column > .fetch-progress-host { grid-row: 4; }
+    .app.report-mode .report-column > .monitor-status-host,
+    .app.theme-mode .report-column > .monitor-status-host { grid-row: 5; }
+    .app.report-mode .report-column > .library-controls,
+    .app.theme-mode .report-column > .library-controls { grid-row: 6; }
+    .app.report-mode .report-column > .papers,
+    .app.theme-mode .report-column > .papers { grid-row: 7; }
     .app.report-mode .brand,
     .app.theme-mode .brand {
       display: none;
@@ -32133,11 +32294,15 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="toolbar-actions hidden theme-toolbar-actions" id="themeToolbarActions">
               <button class="smallbtn" id="forceThemeFetch" type="button" title="Refresh all subjects for this date">Refresh</button>
-              <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle"> arXiv</label>
+              <label class="toolbar-toggle"><input type="checkbox" id="themeArxivToggle" checked> arXiv</label>
             </div>
             <div class="auto-update-status" id="autoUpdateStatus" aria-live="polite"></div>
             <div class="library-search-tools" id="librarySearchTools">
               <div class="library-search-wrap">
+                <svg class="library-search-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <circle cx="10.5" cy="10.5" r="6.25"></circle>
+                  <path d="M14.92 14.92 19.75 19.75"></path>
+                </svg>
                 <input class="search" id="librarySearchBox" placeholder="Search Library" type="search" aria-label="Search Library and all Spaces">
                 <button class="library-search-clear" id="clearLibrarySearch" type="button" title="Clear search">×</button>
               </div>
@@ -32507,7 +32672,7 @@ INDEX_HTML = """<!doctype html>
       themeGroupsLoaded: false,
       selectedThemeGroups: new Set(),
       activeThemeGroupKey: "",
-      showThemeArxiv: false,
+      showThemeArxiv: true,
       themeGroup: "ALL",
       themeFromDate: initialToday,
       themeUntilDate: initialToday,
@@ -32564,6 +32729,8 @@ INDEX_HTML = """<!doctype html>
       libraryNavDropAfter: false,
       libraryNavDropCommitted: false,
       libraryNavSuppressClick: false,
+      libraryNavigationRailFocus: false,
+      libraryNavigationFocusRevision: 0,
       activeShortcutIndex: -1,
       activeWorkspaceIndex: -1,
       workspaceStatus: "",
@@ -33355,16 +33522,28 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = runtimeBrandedEmptyMarkup(message);
     }
 
+    function monitorStatusMarkup(message) {
+      const text = String(message || "");
+      const loading = /^(Loading|Refreshing|Fetching|Searching|Preparing|Restoring|Importing)\\b/i.test(text);
+      const error = /(failed|could not|error|incomplete)/i.test(text);
+      return `
+        <div class="monitor-inline-status${loading ? " is-loading" : ""}${error ? " is-error" : ""}" role="status" aria-live="polite">
+          <span class="monitor-inline-status-mark" aria-hidden="true"></span>
+          <span>${escapeHtml(text)}</span>
+        </div>
+      `;
+    }
+
     function showMonitorStatusMessage(message) {
       const root = $("monitorStatusHost");
       if (!root) return;
-      root.innerHTML = `<div class="empty">${escapeHtml(message || "")}</div>`;
+      root.innerHTML = monitorStatusMarkup(message);
     }
 
     function appendMonitorStatusMessage(message) {
       const root = $("monitorStatusHost");
       if (!root) return;
-      root.insertAdjacentHTML("beforeend", `<div class="empty">${escapeHtml(message || "")}</div>`);
+      root.insertAdjacentHTML("beforeend", monitorStatusMarkup(message));
     }
 
     async function refreshReportSnapshotDuringFetch(selectedDate) {
@@ -33436,7 +33615,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryCurrentFolderId = Number(state.libraryRootId || 1);
       state.librarySelection = {type: "folder", id: Number(state.libraryRootId || 1)};
       clearLibraryRangeSelection();
-      ensureLibraryColumnSelection(state.libraryRootId);
+      selectLibraryDisplayRootEntry(state.libraryRootId);
     }
 
     function rememberLibraryLocation() {
@@ -33518,7 +33697,8 @@ INDEX_HTML = """<!doctype html>
           });
       }
       await state.libraryLoadingPromise;
-      if (!options.root && !restoreLibraryLastLocation()) resetLibraryRootSelection();
+      if (options.root) selectLibraryDisplayRootEntry(state.libraryRootId);
+      else if (!restoreLibraryLastLocation()) resetLibraryRootSelection();
       renderLibrary();
       requestAnimationFrame(() => requestAnimationFrame(finishAppStartup));
     }
@@ -33822,7 +34002,7 @@ INDEX_HTML = """<!doctype html>
       return ensureLibraryFolderLoaded(folderId, options)
         .then(() => {
           if (state.mode === "library" && state.libraryTab !== "my-publications") {
-            renderLibrary();
+            renderLibraryNavigationContent();
             refreshLibraryQuickLookForSelection();
           }
         })
@@ -34709,6 +34889,23 @@ INDEX_HTML = """<!doctype html>
 
     function selectedEntryInFolder(folderId) {
       return ensureLibraryColumnSelection(folderId);
+    }
+
+    function selectLibraryDisplayRootEntry(folderId) {
+      const displayRootId = Number(folderId || libraryDisplayRootId() || state.libraryRootId || 1);
+      clearLibraryRangeSelection();
+      const remembered = ensureLibraryColumnSelection(displayRootId);
+      const firstEntry = libraryFolderLoaded(displayRootId)
+        ? libraryEntriesForFolder(displayRootId)[0]
+        : null;
+      if (remembered || firstEntry) {
+        setLibraryColumnSelection(displayRootId, remembered || firstEntry);
+        return remembered || firstEntry;
+      }
+      state.libraryActiveFolderId = displayRootId;
+      state.libraryCurrentFolderId = displayRootId;
+      state.librarySelection = {type: "folder", id: displayRootId};
+      return null;
     }
 
     function selectLibraryColumnFolder(folderId) {
@@ -37501,7 +37698,7 @@ INDEX_HTML = """<!doctype html>
     function fetchProgressMarkup(selectedDate) {
       const progress = normalizedFetchProgress(selectedDate);
       return `
-        <div class="empty fetch-progress" data-fetch-progress="${escapeAttr(selectedDate)}">
+        <div class="fetch-progress" data-fetch-progress="${escapeAttr(selectedDate)}">
           <div class="fetch-progress-head">
             <strong>Fetching recent papers in the background. You can keep browsing other dates.</strong>
             <span class="fetch-progress-percent" data-role="fetch-percent">${progress.percent}%</span>
@@ -37543,7 +37740,7 @@ INDEX_HTML = """<!doctype html>
     function themeFetchProgressMarkup(selectedDate, lastFetch = null) {
       const progress = normalizedThemeFetchProgress(selectedDate, lastFetch);
       return `
-        <div class="empty fetch-progress theme-fetch-progress" data-theme-fetch-progress="${escapeAttr(selectedDate)}">
+        <div class="fetch-progress theme-fetch-progress" data-theme-fetch-progress="${escapeAttr(selectedDate)}">
 	          <div class="fetch-progress-head">
 	            <strong>Fetching subject papers for ${escapeHtml(selectedDate)}. You can keep browsing other dates.</strong>
 	            <span class="fetch-progress-percent" data-role="theme-fetch-percent">${progress.percent}%</span>
@@ -38130,7 +38327,7 @@ INDEX_HTML = """<!doctype html>
       $("summary").textContent = "";
       root.classList.add("library-view");
       root.innerHTML = `
-        <div class="library-shell${paperFilesFocusActive ? " paper-files-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
+        <div class="library-shell${paperFilesFocusActive ? " paper-files-focus-active" : ""}${state.libraryNavigationRailFocus ? " navigation-rail-focus-active" : ""}" id="libraryShell" tabindex="0" style="--library-detail-width:${Math.max(280, Math.min(620, Number(state.libraryDetailWidth || 420)))}px">
           <aside class="library-tab-rail" id="libraryShortcutTabs" aria-label="Library shortcuts and spaces"></aside>
           <div class="library-main-area">
             ${workspaceToolsMarkup()}
@@ -38224,6 +38421,45 @@ INDEX_HTML = """<!doctype html>
         if (librarySearchIsActive()) revealLibrarySearchSelection();
         else revealLibrarySelectionInColumn(state.libraryActiveFolderId);
       });
+      rememberLibraryLocation();
+    }
+
+    function renderLibraryNavigationContent() {
+      const shell = $("libraryShell");
+      const existingColumns = $("libraryColumns");
+      if (!shell || !existingColumns || librarySearchIsActive()) {
+        renderLibrary();
+        return;
+      }
+
+      captureLibraryColumnScrollTops();
+      const previousColumnsScrollLeft = existingColumns.scrollLeft ?? state.libraryColumnsScrollLeft;
+      shell.classList.toggle("paper-files-focus-active", Boolean(selectedLibraryPaperResource()));
+      shell.classList.toggle("navigation-rail-focus-active", Boolean(state.libraryNavigationRailFocus));
+      renderLibraryColumns();
+      renderLibraryDetail();
+      restoreLibraryColumnScrollTops();
+
+      const columns = $("libraryColumns");
+      if (columns) {
+        columns.scrollLeft = Math.max(0, previousColumnsScrollLeft);
+        state.libraryColumnsScrollLeft = columns.scrollLeft;
+        if (state.libraryRevealColumnFolderId) {
+          const folderId = state.libraryRevealColumnFolderId;
+          const direction = state.libraryRevealColumnDirection || "nearest";
+          state.libraryRevealColumnFolderId = 0;
+          state.libraryRevealColumnDirection = "";
+          revealLibraryColumns(folderId, direction);
+        }
+      }
+
+      const pathBar = $("libraryPathBar");
+      if (pathBar) {
+        pathBar.title = librarySelectionPathText();
+        const parts = pathBar.querySelector(".library-path-parts");
+        if (parts) parts.innerHTML = librarySelectionPathMarkup();
+      }
+      window.requestAnimationFrame(() => revealLibrarySelectionInColumn(state.libraryActiveFolderId));
       rememberLibraryLocation();
     }
 
@@ -39513,6 +39749,9 @@ INDEX_HTML = """<!doctype html>
       window.requestAnimationFrame(() => {
         updateLibraryNavigationRailLayout();
         revealActiveLibraryNavigationTab();
+        if (state.libraryNavigationRailFocus) {
+          focusCurrentLibraryNavigationButton(state.libraryNavigationFocusRevision);
+        }
       });
     }
 
@@ -39698,11 +39937,13 @@ INDEX_HTML = """<!doctype html>
       const folderId = Number(state.libraryShortcutTabs[index]?.folder_id || 0);
       if (!folderId || !libraryFolderById(folderId)) return;
       state.libraryTab = `shortcut-${index}`;
-      state.libraryActiveFolderId = folderId;
-      state.libraryCurrentFolderId = folderId;
-      state.librarySelection = {type: "folder", id: folderId};
-      ensureLibraryColumnSelection(folderId);
+      selectLibraryDisplayRootEntry(folderId);
       renderLibrary();
+      if (!libraryFolderLoaded(folderId)) {
+        await loadLibraryFolderAndRender(folderId);
+        selectLibraryDisplayRootEntry(folderId);
+        renderLibrary();
+      }
     }
 
     async function assignLibraryShortcutTab(index, folderId) {
@@ -39747,11 +39988,13 @@ INDEX_HTML = """<!doctype html>
       if (!folderId || !libraryFolderById(folderId)) return;
       state.libraryTab = `workspace-${index}`;
       state.activeWorkspaceIndex = index;
-      state.libraryActiveFolderId = folderId;
-      state.libraryCurrentFolderId = folderId;
-      state.librarySelection = {type: "folder", id: folderId};
-      ensureLibraryColumnSelection(folderId);
+      selectLibraryDisplayRootEntry(folderId);
       renderLibrary();
+      if (!libraryFolderLoaded(folderId)) {
+        await loadLibraryFolderAndRender(folderId);
+        selectLibraryDisplayRootEntry(folderId);
+        renderLibrary();
+      }
     }
 
     async function renameLibraryWorkspace(index, labelOverride = null) {
@@ -41235,7 +41478,7 @@ INDEX_HTML = """<!doctype html>
             }).join("")}
             </section>`;
           }).join("")
-        : `<div class="empty">${snapshot ? "No local files attached." : "Loading files..."}</div>`;
+        : paperFilesStatusMarkup(snapshot ? "empty" : "loading");
       const title = item.display_name || libraryPaperDisplayName(paper) || "Paper Files";
       return `
         <section class="library-column library-resource-column" data-library-resource-paper="${escapeAttr(paperId)}" style="--library-column-width:260px">
@@ -41302,8 +41545,8 @@ INDEX_HTML = """<!doctype html>
           <div class="library-pane-header">${escapeHtml(folder.name || "Library")}</div>
           <div class="library-column-body">
             ${loaded
-              ? (inlineAddPaper + rows || `<div class="empty">Right-click to create a folder or add a paper.</div>`)
-              : `<div class="empty">Loading folder...</div>`}
+              ? (inlineAddPaper + rows || surfaceInlineStatusMarkup("empty", "Empty folder", "Right-click to create a folder or add a paper."))
+              : surfaceInlineStatusMarkup("loading", "Loading folder")}
           </div>
           <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
         </section>
@@ -41336,8 +41579,8 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="library-column-body library-table-body">
               ${loaded
-                ? (inlineAddPaper + rows || `<div class="empty">Right-click to create a folder or add a paper.</div>`)
-                : `<div class="empty">Loading folder...</div>`}
+                ? (inlineAddPaper + rows || surfaceInlineStatusMarkup("empty", "Empty folder", "Right-click to create a folder or add a paper."))
+                : surfaceInlineStatusMarkup("loading", "Loading folder")}
             </div>
           </div>
           <div class="library-column-resizer" data-library-resize-folder="${folderId}" title="Resize column"></div>
@@ -41838,6 +42081,25 @@ INDEX_HTML = """<!doctype html>
       `;
     }
 
+    function surfaceInlineStatusMarkup(kind, title, hint = "") {
+      const loading = kind === "loading";
+      return `
+        <div class="paper-files-status surface-inline-status ${loading ? "is-loading" : "is-empty"}" role="status" aria-live="polite">
+          <span class="paper-files-status-icon" aria-hidden="true">${loading ? '<span class="paper-files-status-spinner"></span>' : ""}</span>
+          <span class="paper-files-status-copy">
+            <span class="paper-files-status-title">${escapeHtml(title || (loading ? "Loading" : "Nothing here"))}</span>
+            ${hint ? `<span class="paper-files-status-hint">${escapeHtml(hint)}</span>` : ""}
+          </span>
+        </div>
+      `;
+    }
+
+    function paperFilesStatusMarkup(kind) {
+      return kind === "loading"
+        ? surfaceInlineStatusMarkup("loading", "Loading files")
+        : surfaceInlineStatusMarkup("empty", "No files yet", "Add or drop a file to attach it.");
+    }
+
     function paperFilesPanelMarkup(paper) {
       const paperId = String(paper?.paper_id || "");
       const snapshot = paperFilesSnapshot(paperId);
@@ -41851,13 +42113,13 @@ INDEX_HTML = """<!doctype html>
           : "No Current File";
       const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
       const body = !snapshot
-        ? `<div class="paper-files-loading">Loading files...</div>`
+        ? paperFilesStatusMarkup("loading")
         : files.length
           ? groups.map((group) => {
               const rows = files.filter((file) => paperFileGroup(file) === group);
               return rows.length ? `<div class="paper-files-group-label">${group}</div>${rows.map(paperFileRowMarkup).join("")}` : "";
             }).join("")
-          : `<div class="paper-files-empty">No local files attached.</div>`;
+          : paperFilesStatusMarkup("empty");
       return `
         <section class="paper-files-panel${collapsed ? " is-collapsed" : ""}" data-paper-files-panel data-paper-id="${escapeAttr(paperId)}">
           <div class="paper-files-head">
@@ -44766,6 +45028,7 @@ INDEX_HTML = """<!doctype html>
     function wireLibraryInteractions() {
       const shell = $("libraryShell");
       if (!shell) return;
+      shell.addEventListener("pointerdown", () => setLibraryNavigationRailFocus(false), {capture: true});
       const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
       const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
       const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
@@ -45273,7 +45536,7 @@ INDEX_HTML = """<!doctype html>
         refreshLibraryQuickLookForSelection();
         return;
       }
-      renderLibrary();
+      renderLibraryNavigationContent();
       if (type === "folder" && !options.extendRange) {
         prefetchLibraryFolder(id);
       }
@@ -45292,7 +45555,7 @@ INDEX_HTML = """<!doctype html>
         refreshLibraryQuickLookForSelection();
         return;
       }
-      renderLibrary();
+      renderLibraryNavigationContent();
       refreshLibraryQuickLookForSelection();
     }
 
@@ -46853,6 +47116,123 @@ INDEX_HTML = """<!doctype html>
       $("libraryTabContextMenu")?.classList.remove("open");
     }
 
+    function libraryNavigationKeyboardButtons() {
+      return [...document.querySelectorAll(
+        "#libraryShortcutTabs .library-tab[data-root-tab], "
+        + "#libraryShortcutTabs .library-tab[data-shortcut-tab], "
+        + "#libraryShortcutTabs .library-tab[data-workspace-tab]"
+      )];
+    }
+
+    function currentLibraryNavigationButton() {
+      const root = $("libraryShortcutTabs");
+      if (!root) return null;
+      if (state.libraryTab?.startsWith("shortcut-")) {
+        const index = Number(state.libraryTab.slice("shortcut-".length) || 0);
+        return root.querySelector(`[data-shortcut-tab="${index}"]`);
+      }
+      if (state.libraryTab?.startsWith("workspace-")) {
+        const index = Number(state.libraryTab.slice("workspace-".length) || 0);
+        return root.querySelector(`[data-workspace-tab="${index}"]`);
+      }
+      return root.querySelector('[data-root-tab="library"]');
+    }
+
+    function focusLibraryNavigationRail() {
+      const button = currentLibraryNavigationButton() || libraryNavigationKeyboardButtons()[0];
+      if (!button) return true;
+      const focusRevision = setLibraryNavigationRailFocus(true);
+      button.focus({preventScroll: true});
+      button.scrollIntoView({block: "nearest", inline: "nearest"});
+      focusCurrentLibraryNavigationButton(focusRevision);
+      return true;
+    }
+
+    function setLibraryNavigationRailFocus(active) {
+      const next = Boolean(active);
+      if (state.libraryNavigationRailFocus !== next) {
+        state.libraryNavigationRailFocus = next;
+        state.libraryNavigationFocusRevision = Number(state.libraryNavigationFocusRevision || 0) + 1;
+      }
+      $("libraryShortcutTabs")?.classList.toggle("keyboard-active", next);
+      $("libraryShell")?.classList.toggle("navigation-rail-focus-active", next);
+      return Number(state.libraryNavigationFocusRevision || 0);
+    }
+
+    function focusLibraryContentAfterNavigation() {
+      const focusRevision = setLibraryNavigationRailFocus(false);
+      window.requestAnimationFrame(() => {
+        if (state.libraryNavigationRailFocus || Number(state.libraryNavigationFocusRevision || 0) !== focusRevision) return;
+        const shell = $("libraryShell");
+        if (shell && !shell.hasAttribute("tabindex")) shell.tabIndex = -1;
+        shell?.focus({preventScroll: true});
+      });
+    }
+
+    function focusCurrentLibraryNavigationButton(expectedRevision = state.libraryNavigationFocusRevision) {
+      const restoreFocus = () => {
+        if (!state.libraryNavigationRailFocus) return;
+        if (Number(state.libraryNavigationFocusRevision || 0) !== Number(expectedRevision || 0)) return;
+        setLibraryNavigationRailFocus(true);
+        const button = currentLibraryNavigationButton() || libraryNavigationKeyboardButtons()[0];
+        button?.focus({preventScroll: true});
+        button?.scrollIntoView({block: "nearest", inline: "nearest"});
+      };
+      window.requestAnimationFrame(() => {
+        restoreFocus();
+        window.setTimeout(restoreFocus, 0);
+      });
+    }
+
+    function activateLibraryNavigationButton(button, options = {}) {
+      const enterContent = options.enterContent !== false;
+      const focusRevision = enterContent
+        ? Number(state.libraryNavigationFocusRevision || 0)
+        : setLibraryNavigationRailFocus(true);
+      let task = null;
+      if (button?.matches('[data-root-tab="library"]')) {
+        task = loadLibrary({root: true});
+      } else if (button?.matches("[data-shortcut-tab]")) {
+        task = openLibraryShortcutTab(Number(button.dataset.shortcutTab || 0));
+      } else if (button?.matches("[data-workspace-tab]")) {
+        task = openLibraryWorkspaceTab(Number(button.dataset.workspaceTab || 0));
+      }
+      Promise.resolve(task)
+        .then(() => {
+          if (enterContent) focusLibraryContentAfterNavigation();
+          else focusCurrentLibraryNavigationButton(focusRevision);
+        })
+        .catch((error) => updateLibraryActivityStatus(
+          error?.message || "Could not open this Library location",
+          {live: false, delay: 5000}
+        ));
+      return true;
+    }
+
+    function handleLibraryNavigationRailKeydown(event, key) {
+      const eventButton = event.target?.closest?.("#libraryShortcutTabs .library-tab");
+      const button = eventButton || (state.libraryNavigationRailFocus ? currentLibraryNavigationButton() : null);
+      if (!button) return false;
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter", " ", "Escape"].includes(key)) {
+        return false;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const buttons = libraryNavigationKeyboardButtons();
+      const currentIndex = buttons.indexOf(button);
+      if (key === "ArrowUp" || key === "ArrowDown") {
+        const delta = key === "ArrowDown" ? 1 : -1;
+        const nextIndex = Math.max(0, Math.min(buttons.length - 1, currentIndex + delta));
+        const next = buttons[nextIndex] || button;
+        return activateLibraryNavigationButton(next, {enterContent: false});
+      }
+      if (key === "ArrowRight") {
+        focusLibraryContentAfterNavigation();
+        return true;
+      }
+      return true;
+    }
+
     function handleLibraryKeydown(event) {
       if (state.mode !== "library") return false;
       const keyAliases = {
@@ -46871,6 +47251,7 @@ INDEX_HTML = """<!doctype html>
         return true;
       }
       if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target?.tagName)) return false;
+      if (handleLibraryNavigationRailKeydown(event, key)) return true;
       if (libraryPaperFilesNavigationEnabled() && handleLibraryPaperResourceKeydown(event, key)) return true;
       if (
         libraryPaperFilesNavigationEnabled()
@@ -46923,15 +47304,10 @@ INDEX_HTML = """<!doctype html>
       }
       if (librarySearchIsActive() && ["ArrowUp", "ArrowDown"].includes(key)) {
         const results = librarySearchResults();
-        if (!results.length) {
-          if (key === "ArrowUp") return activatePrimaryKeyboardRoot();
-          return true;
-        }
+        if (!results.length) return true;
         const currentKey = libraryEntryKey(state.librarySelection);
         const currentIndex = results.findIndex((entry) => libraryEntryKey(entry) === currentKey);
-        if (key === "ArrowUp" && currentIndex <= 0) {
-          return activatePrimaryKeyboardRoot();
-        }
+        if (key === "ArrowUp" && currentIndex <= 0) return true;
         const fallback = key === "ArrowDown" ? 0 : results.length - 1;
         const nextIndex = currentIndex < 0
           ? fallback
@@ -46942,17 +47318,19 @@ INDEX_HTML = """<!doctype html>
       }
       if (key === "ArrowLeft") {
         const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
+        const displayRootId = Number(libraryDisplayRootId() || state.libraryRootId || 1);
         clearLibraryRangeSelection();
-        if (activeFolderId !== Number(state.libraryRootId)) {
+        if (activeFolderId !== displayRootId) {
           const parentId = parentFolderId(activeFolderId);
           state.libraryActiveFolderId = parentId;
           state.libraryCurrentFolderId = activeFolderId;
           state.librarySelection = {type: "folder", id: activeFolderId};
           requestLibraryColumnReveal(parentId, "left");
+          renderLibrary();
+          refreshLibraryQuickLookForSelection();
+          return true;
         }
-        renderLibrary();
-        refreshLibraryQuickLookForSelection();
-        return true;
+        return focusLibraryNavigationRail();
       }
       if (key === "ArrowRight") {
         const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
@@ -46983,15 +47361,10 @@ INDEX_HTML = """<!doctype html>
       }
       const activeFolderId = Number(state.libraryActiveFolderId || state.libraryRootId);
       const entries = libraryEntriesForFolder(activeFolderId);
-      if (!entries.length) {
-        if (key === "ArrowUp") return activatePrimaryKeyboardRoot();
-        return true;
-      }
+      if (!entries.length) return true;
       const currentSelection = selectedEntryInFolder(activeFolderId);
       const currentIndex = entries.findIndex((entry) => libraryEntryKey(entry) === libraryEntryKey(currentSelection));
-      if (key === "ArrowUp" && currentIndex <= 0) {
-        return activatePrimaryKeyboardRoot();
-      }
+      if (key === "ArrowUp" && currentIndex <= 0) return true;
       const fallback = key === "ArrowDown" ? 0 : entries.length - 1;
       const nextIndex = currentIndex < 0
         ? fallback
@@ -48984,7 +49357,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       state.authorMonitorLoading = true;
-      $("papers").innerHTML = `<div class="empty">Loading Author Monitor...</div>`;
+      $("papers").innerHTML = monitorStatusMarkup("Loading Author Monitor...");
       updateAuthorMonitorActivityStatus("Loading Author Monitor...", {live: true, clear: false});
       try {
         const requestedId = Number(state.authorMonitorSelectedId) >= 0

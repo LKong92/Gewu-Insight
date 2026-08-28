@@ -1833,10 +1833,13 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
                                                   frame:NSMakeRect(20, 160, 296, 16)
                                                   color:NSColor.tertiaryLabelColor]];
 
-        [content addSubview:[self aboutLabelWithString:@"Your personal research workspace where papers, evidence, and files stay connected over time."
-                                                   font:[NSFont systemFontOfSize:12.5]
-                                                  frame:NSMakeRect(27, 116, 282, 32)
-                                                  color:NSColor.labelColor]];
+        NSTextField *taglineLabel = [self aboutLabelWithString:@"Your personal research workspace where papers,\nevidence, and files stay connected over time."
+                                                           font:[NSFont systemFontOfSize:12.0]
+                                                          frame:NSMakeRect(16, 112, 304, 36)
+                                                          color:NSColor.labelColor];
+        taglineLabel.maximumNumberOfLines = 2;
+        taglineLabel.selectable = NO;
+        [content addSubview:taglineLabel];
 
         NSButton *guideButton = [self aboutLinkButtonWithTitle:@"User Guide"
                                                         frame:NSMakeRect(83, 84, 82, 22)

@@ -2249,11 +2249,24 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         )[0]
         self.assertIn("right: 30px;", search_tools_css)
         self.assertIn("width: 292px;", search_tools_css)
-        self.assertIn("justify-content: flex-end;", search_tools_css)
+        self.assertIn("height: 32px;", search_tools_css)
         self.assertNotIn('id="librarySearchCount"', html)
         self.assertNotIn("function surfaceSearchResultCount", html)
         self.assertNotIn("surfaceSearchResultCount", search_update)
         self.assertIn('closest(".library-search-wrap")?.addEventListener("pointerdown"', html)
+        search_wrap_css = html.split(".library-search-wrap {", 1)[1].split("}", 1)[0]
+        search_expanded_css = html.split(
+            ".library-search-tools.has-query .library-search-wrap {", 1
+        )[1].split("}", 1)[0]
+        search_icon_css = html.split(".library-search-icon {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: absolute;", search_wrap_css)
+        self.assertIn("right: 0;", search_wrap_css)
+        self.assertNotIn("flex-basis", search_expanded_css)
+        self.assertIn("z-index: 3;", search_icon_css)
+        self.assertIn('class="library-search-icon" viewBox="0 0 24 24"', html)
+        self.assertIn('<circle cx="10.5" cy="10.5" r="6.25"></circle>', html)
+        self.assertIn('<path d="M14.92 14.92 19.75 19.75"></path>', html)
+        self.assertNotIn(".library-search-wrap::before", html)
         search_pointer = html.split(
             '$("librarySearchBox").closest(".library-search-wrap")?.addEventListener("pointerdown"',
             1,

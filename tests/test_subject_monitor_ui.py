@@ -4,13 +4,14 @@ from paper_monitor.ui_server import INDEX_HTML
 
 
 class SubjectMonitorUiTests(unittest.TestCase):
-    def test_subject_toolbar_has_refresh_and_optional_arxiv_hidden_by_default(self):
+    def test_subject_toolbar_has_refresh_and_arxiv_visible_by_default(self):
         toolbar = INDEX_HTML.split('id="themeToolbarActions"', 1)[1].split('</div>', 1)[0]
 
         self.assertIn('id="forceThemeFetch"', toolbar)
         self.assertIn('>Refresh</button>', toolbar)
         self.assertIn('id="themeArxivToggle"', toolbar)
-        self.assertNotIn('id="themeArxivToggle" checked', toolbar)
+        self.assertIn('id="themeArxivToggle" checked', toolbar)
+        self.assertIn('showThemeArxiv: true', INDEX_HTML)
         self.assertNotIn('Zenodo', toolbar)
 
     def test_subjects_render_as_journal_style_tabs(self):
@@ -266,6 +267,46 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertNotIn('renderLateArrivalsBanner(statusRoot)', journal_render)
         self.assertIn('renderArxivUpdateCountdown(statusRoot', journal_render)
         self.assertIn('renderMonitorPaperList(root, activePapers, "report")', journal_render)
+
+    def test_monitor_empty_states_are_compact_and_watermark_uses_the_full_paper_surface(self):
+        status = INDEX_HTML.split('function monitorStatusMarkup', 1)[1].split(
+            'function showMonitorStatusMessage', 1
+        )[0]
+        show_status = INDEX_HTML.split('function showMonitorStatusMessage', 1)[1].split(
+            'function appendMonitorStatusMessage', 1
+        )[0]
+        papers_css = INDEX_HTML.split('.papers {', 1)[1].split('.papers.library-view', 1)[0]
+        status_css = INDEX_HTML.split('.monitor-inline-status {', 1)[1].split(
+            '.monitor-inline-status-mark {', 1
+        )[0]
+
+        self.assertIn('class="monitor-inline-status', status)
+        self.assertIn('monitorStatusMarkup(message)', show_status)
+        self.assertNotIn('class="empty"', show_status)
+        self.assertIn('background: transparent;', status_css)
+        self.assertIn('border: 0;', status_css)
+        self.assertIn('font-size: 11px;', status_css)
+        self.assertIn('position: relative;', papers_css)
+        self.assertIn('.papers > .runtime-branded-empty {', INDEX_HTML)
+        watermark_css = INDEX_HTML.split('.papers > .runtime-branded-empty {', 1)[1].split('}', 1)[0]
+        self.assertIn('position: absolute;', watermark_css)
+        self.assertIn('inset: 0;', watermark_css)
+        self.assertIn('.app.theme-mode .report-column > .papers { grid-row: 7; }', INDEX_HTML)
+
+    def test_legacy_empty_states_are_globally_compact_without_affecting_progress_panels(self):
+        empty_css = INDEX_HTML.split('.empty {', 1)[1].split('}', 1)[0]
+        fetch_markup = INDEX_HTML.split('function fetchProgressMarkup', 1)[1].split(
+            'function normalizedThemeFetchProgress', 1
+        )[0]
+
+        self.assertIn('border: 0;', empty_css)
+        self.assertIn('background: transparent;', empty_css)
+        self.assertIn('font-size: 11px;', empty_css)
+        self.assertNotIn('dashed', empty_css)
+        self.assertNotIn('padding: 28px;', empty_css)
+        self.assertIn('class="fetch-progress"', fetch_markup)
+        self.assertIn('class="fetch-progress theme-fetch-progress"', fetch_markup)
+        self.assertNotIn('class="empty fetch-progress', fetch_markup)
 
     def test_monitor_header_stats_updates_and_late_arrivals_move_to_the_sidebar(self):
         sidebar = INDEX_HTML.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
