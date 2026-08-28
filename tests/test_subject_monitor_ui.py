@@ -308,17 +308,31 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('window.setInterval(refreshAutoMonitorStatus, 60000)', polling)
         self.assertIn('still incomplete after 3 retries', INDEX_HTML)
 
-    def test_subject_progress_distinguishes_partial_waiting_and_failure(self):
+    def test_subject_progress_distinguishes_deferred_partial_waiting_and_failure(self):
         status = INDEX_HTML.split('function themeFetchSubjectStatus', 1)[1].split(
             'function themeFetchSubjectMeta', 1
+        )[0]
+        progress = INDEX_HTML.split('function normalizedThemeFetchProgress', 1)[1].split(
+            'function normalizedThemeProgressSubjects', 1
+        )[0]
+        sidebar_render = INDEX_HTML.split('function renderMonitorSidebarSummary()', 1)[1].split(
+            'function renderReport()', 1
+        )[0]
+        theme_render = INDEX_HTML.split('function renderThemeMonitor', 1)[1].split(
+            'function themeLastFetchLabel', 1
         )[0]
 
         self.assertIn('status === "partial"', status)
         self.assertIn('label: "Partial"', status)
+        self.assertIn('status === "deferred"', status)
+        self.assertIn('label: "Online discovery deferred"', status)
         self.assertIn('status === "waiting"', status)
         self.assertIn('label: "Waiting"', status)
         self.assertIn('status === "error"', status)
         self.assertIn('label: "Failed"', status)
+        self.assertIn('"deferred"', progress)
+        self.assertIn('"Discovery", "Deferred · local cache only"', sidebar_render)
+        self.assertIn('Online discovery deferred · local cache only', theme_render)
 
 
 if __name__ == "__main__":

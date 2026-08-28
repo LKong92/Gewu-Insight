@@ -112,7 +112,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('objectForInfoDictionaryKey:@"CFBundleShortVersionString"', source)
         self.assertIn('objectForInfoDictionaryKey:@"CFBundleVersion"', source)
         self.assertIn('objectForInfoDictionaryKey:@"NSHumanReadableCopyright"', source)
-        self.assertIn('withString:@".\\nAll rights reserved."', source)
+        self.assertIn('withString:@".\\nAll Rights Reserved."', source)
         self.assertIn("copyrightDisplay", source)
         self.assertIn('@"格物洞见"', source)
         self.assertNotIn('aboutLabelWithString:@"格物洞见"', source)

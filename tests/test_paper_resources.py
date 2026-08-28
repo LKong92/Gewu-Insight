@@ -1831,6 +1831,69 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(Path(payload_note["local_path"]).resolve(), moved_path.resolve())
         self.assertTrue(payload_note["exists"])
 
+    def test_paper_files_hide_only_a_matching_stale_legacy_alias(self) -> None:
+        resources = [
+            {
+                "id": 1,
+                "original_filename": "science.ado7136.pdf",
+                "stored_path": "/old/Space/science.ado7136.pdf",
+                "file_role": "other",
+                "size_bytes": 6908035,
+                "exists": False,
+                "is_primary": False,
+                "is_preferred": False,
+            },
+            {
+                "id": 2,
+                "original_filename": "science.ado7136.pdf",
+                "stored_path": "/new/Space/science.ado7136.pdf",
+                "file_role": "publication_version",
+                "size_bytes": 6908035,
+                "exists": True,
+                "is_primary": True,
+                "is_preferred": False,
+            },
+            {
+                "id": 3,
+                "original_filename": "genuinely-missing-note.md",
+                "stored_path": "/old/Space/genuinely-missing-note.md",
+                "file_role": "note",
+                "size_bytes": 120,
+                "exists": False,
+                "is_primary": False,
+                "is_preferred": False,
+            },
+        ]
+
+        visible = ui_server.visible_paper_resources(resources)
+
+        self.assertEqual([resource["id"] for resource in visible], [2, 3])
+
+    def test_paper_files_keep_a_missing_preferred_resource_for_recovery(self) -> None:
+        missing = {
+            "id": 1,
+            "original_filename": "same.pdf",
+            "file_role": "other",
+            "size_bytes": 100,
+            "exists": False,
+            "is_primary": False,
+            "is_preferred": True,
+        }
+        existing = {
+            "id": 2,
+            "original_filename": "same.pdf",
+            "file_role": "publication_version",
+            "size_bytes": 100,
+            "exists": True,
+            "is_primary": True,
+            "is_preferred": False,
+        }
+
+        self.assertEqual(
+            [resource["id"] for resource in ui_server.visible_paper_resources([missing, existing])],
+            [1, 2],
+        )
+
     def test_existing_non_primary_resource_can_be_adopted_without_changing_primary(self) -> None:
         self.add_paper("paper-adopt-resource")
         primary = self.write_pdf("Topic/Published.pdf")

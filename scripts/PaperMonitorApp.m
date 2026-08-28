@@ -1858,7 +1858,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         NSString *copyright = [bundle objectForInfoDictionaryKey:@"NSHumanReadableCopyright"]
             ?: @"Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.";
         NSString *copyrightDisplay = [copyright stringByReplacingOccurrencesOfString:@". All rights reserved."
-                                                                          withString:@".\nAll rights reserved."];
+                                                                          withString:@".\nAll Rights Reserved."];
         [content addSubview:[self aboutLabelWithString:copyrightDisplay
                                                    font:[NSFont systemFontOfSize:9]
                                                   frame:NSMakeRect(14, 12, 308, 25)

@@ -12,6 +12,9 @@ from paper_monitor.storage import Storage
 class SemanticScholarCredentialTests(unittest.TestCase):
     def tearDown(self):
         semantic_scholar.configure_semantic_scholar_api_key("")
+        with ui_server.SEMANTIC_INFLUENTIAL_CACHE_LOCK:
+            ui_server.SEMANTIC_INFLUENTIAL_CACHE.clear()
+            ui_server.SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL.clear()
 
     def test_saved_key_status_does_not_expose_secret(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,6 +108,68 @@ class SemanticScholarCredentialTests(unittest.TestCase):
         self.assertEqual(result["status"], "rate_limited")
         self.assertIsNone(result["ok"])
         self.assertTrue(result["configured"])
+
+    def test_influential_citations_use_one_large_request_and_success_cache(self):
+        response = Mock()
+        response.json.return_value = {
+            "data": [
+                {
+                    "isInfluential": True,
+                    "contexts": ["A useful citation context."],
+                    "intents": ["background"],
+                    "citingPaper": {
+                        "paperId": "citing-paper",
+                        "title": "Citing paper",
+                        "year": 2025,
+                        "venue": "Test Journal",
+                        "authors": [{"name": "A. Author"}],
+                        "citationCount": 12,
+                        "influentialCitationCount": 2,
+                    },
+                }
+            ]
+        }
+        with patch.object(
+            ui_server,
+            "semantic_scholar_request",
+            return_value=response,
+        ) as request:
+            first = ui_server.fetch_semantic_scholar_influential_citations(
+                {"doi": "10.1000/cache-test"},
+                limit=20,
+            )
+            repeated = ui_server.fetch_semantic_scholar_influential_citations(
+                {"doi": "10.1000/cache-test"},
+                limit=20,
+            )
+
+        self.assertEqual(first, repeated)
+        self.assertEqual(len(first), 1)
+        request.assert_called_once()
+        self.assertEqual(request.call_args.kwargs["params"]["limit"], 1000)
+        self.assertEqual(request.call_args.kwargs["params"]["offset"], 0)
+        self.assertEqual(request.call_args.kwargs["max_retries"], 1)
+
+    def test_influential_rate_limit_enters_cooldown_without_repeating_request(self):
+        with patch.object(
+            ui_server,
+            "semantic_scholar_request",
+            side_effect=RuntimeError("HTTP 429 Too Many Requests for a private URL"),
+        ) as request:
+            with self.assertRaises(ui_server.SemanticScholarRateLimitError) as first:
+                ui_server.fetch_semantic_scholar_influential_citations(
+                    {"doi": "10.1000/rate-test"},
+                    limit=20,
+                )
+            with self.assertRaises(ui_server.SemanticScholarRateLimitError) as repeated:
+                ui_server.fetch_semantic_scholar_influential_citations(
+                    {"doi": "10.1000/rate-test"},
+                    limit=20,
+                )
+
+        self.assertEqual(request.call_count, 1)
+        self.assertNotIn("private URL", str(first.exception))
+        self.assertIn("paused", str(repeated.exception))
 
 
 class SemanticScholarSettingsUiContractTests(unittest.TestCase):

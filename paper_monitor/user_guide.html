@@ -1325,6 +1325,10 @@
           <h2>Compare citation sources</h2>
           <p><span class="ui">Merged Citations</span> brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and PubMed when those services have a match. Select a source label to inspect that source’s count and evidence. The headline is a merged best estimate; counts from different services are not added together.</p>
 
+          <h2>Inspect influential citations</h2>
+          <p>When Semantic Scholar reports an <span class="ui">Influential</span> count, select it to inspect citing papers that Semantic Scholar classifies as especially meaningful to the cited work. This is Semantic Scholar’s classification, not a score calculated by Gewu Insight. The list can include citation context, intent, citing authors, venue, year, and citation counts when the service supplies them.</p>
+          <p>Influential Citations is fetched on demand and cached locally for several hours. A saved API key gives Gewu Insight an individual Semantic Scholar allowance, but it is still limited to about one request per second and can be temporarily throttled. If the service returns a rate-limit message, the app pauses repeat requests for a few minutes; the paper record, existing citation totals, and any previously displayed result remain unaffected.</p>
+
           <h2>Read and reuse the record</h2>
           <ul>
             <li>A representative first figure, when available, provides a visual checkpoint above the actions.</li>
@@ -1689,6 +1693,10 @@
             <li>Choose <span class="ui">Comments</span> to build or open a citation-comments report from citing-paper metadata. This is not a personal note field.</li>
             <li>Use <span class="ui">Hide</span> or <span class="ui">Show</span> in the context menu to control export inclusion. Use <span class="ui">Open in Finder</span> or <span class="ui">Delete</span> for the corresponding local action.</li>
           </ul>
+
+          <h2>Build a citation-comments report</h2>
+          <p><span class="ui">Comments</span> gathers citing-paper metadata and available Semantic Scholar citation-context sentences, then writes a local report that groups strong praise, positive impact statements, cautions, and unmatched citing records. It helps you review how later literature describes a publication; it does not modify the publication metadata or replace your own notes.</p>
+          <p>The report is a generated local reading artifact. Network services may return fewer contexts than citation records, and a temporary rate limit can leave some entries without quoted context. Reopen or rebuild the report later to retry the available sources; an existing report remains on disk until you deliberately replace or remove it.</p>
 
           <h2>Work with files</h2>
           <p>My Publications uses the same Paper Details and Paper Files model as Library. A publication can keep a current PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>

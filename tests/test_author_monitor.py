@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from paper_monitor import ui_server
 from paper_monitor.sources.openalex import openalex_author_work_is_excluded
@@ -379,6 +379,46 @@ class AuthorMonitorStorageTests(unittest.TestCase):
             self.assertEqual(saved_path.read_bytes(), b"\xff\xd8\xffcached")
             self.assertEqual(repeated["avatar_override_path"], str(saved_path))
             request.assert_called_once()
+
+    def test_local_author_photos_are_prewarmed_and_served_without_per_image_sqlite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(
+                    scholar_profile("prewarmed-photo", "Prewarmed Photo")
+                )
+                author_id = int(author["id"])
+            finally:
+                storage.close()
+            ui_server.save_author_monitor_photo(
+                db_path,
+                author_id,
+                b"\x89PNG\r\n\x1a\nprewarmed",
+            )
+            with ui_server.AUTHOR_PHOTO_MEMORY_CACHE_LOCK:
+                ui_server.AUTHOR_PHOTO_MEMORY_CACHE.pop(
+                    ui_server.author_monitor_photo_cache_key(db_path, author_id),
+                    None,
+                )
+
+            self.assertEqual(ui_server.prewarm_author_monitor_photo_cache(db_path), 1)
+            handler = object.__new__(ui_server.PaperMonitorUiHandler)
+            handler.configured_db_path = db_path
+            handler.send_bytes = MagicMock()
+            handler.send_error_json = MagicMock()
+            with patch.object(
+                ui_server,
+                "Storage",
+                side_effect=AssertionError("avatar response reopened SQLite"),
+            ):
+                handler.handle_author_monitor_photo({"author_id": [str(author_id)]})
+
+            handler.send_error_json.assert_not_called()
+            handler.send_bytes.assert_called_once_with(
+                b"\x89PNG\r\n\x1a\nprewarmed",
+                content_type="image/png",
+            )
 
     def test_scholar_avatar_cache_never_overwrites_a_manual_photo(self):
         with tempfile.TemporaryDirectory() as tmp:

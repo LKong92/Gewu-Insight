@@ -115,6 +115,10 @@ class MacOSTrashError(OSError):
     pass
 
 
+class SemanticScholarRateLimitError(RuntimeError):
+    pass
+
+
 AUTHOR_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 AUTHOR_PHOTO_TYPES = {
     "jpeg": ("jpg", "image/jpeg"),
@@ -124,6 +128,14 @@ AUTHOR_PHOTO_TYPES = {
 AUTHOR_PHOTO_DOWNLOAD_INTERVAL_SECONDS = 0.4
 AUTHOR_PHOTO_DOWNLOAD_LOCK = threading.Lock()
 AUTHOR_PHOTO_DOWNLOAD_LAST_AT = 0.0
+AUTHOR_PHOTO_MEMORY_CACHE_LOCK = threading.RLock()
+AUTHOR_PHOTO_MEMORY_CACHE: dict[tuple[str, int], tuple[str, bytes]] = {}
+
+SEMANTIC_INFLUENTIAL_CACHE_TTL_SECONDS = 6 * 60 * 60
+SEMANTIC_INFLUENTIAL_RATE_LIMIT_COOLDOWN_SECONDS = 5 * 60
+SEMANTIC_INFLUENTIAL_CACHE_LOCK = threading.RLock()
+SEMANTIC_INFLUENTIAL_CACHE: dict[tuple[str, int], tuple[float, list[dict[str, Any]]]] = {}
+SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL: dict[str, float] = {}
 
 
 MACOS_TRASH_JXA = r'''
@@ -340,6 +352,7 @@ def run_ui_server(
         )
     finally:
         credential_storage.close()
+    prewarm_author_monitor_photo_cache(db_path)
     config = load_config(db_path=db_path)
     journals = configured_source_names(config)
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
@@ -1074,7 +1087,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "primary_resource_id": int(paper.get("primary_resource_id") or 0),
                 "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
-                "files": [paper_resource_to_api(resource) for resource in resources],
+                "files": paper_resources_to_api(resources),
             }
         )
 
@@ -1093,8 +1106,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         try:
             citations = fetch_semantic_scholar_influential_citations(paper, limit=20)
+        except SemanticScholarRateLimitError as exc:
+            self.send_error_json(HTTPStatus.TOO_MANY_REQUESTS, str(exc))
+            return
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Semantic Scholar influential citations failed: {exc}")
+            self.send_error_json(
+                HTTPStatus.BAD_GATEWAY,
+                "Semantic Scholar could not load influential citations right now. Try again later.",
+            )
             return
         self.send_json({"paper_id": paper_id, "citations": citations})
 
@@ -1379,7 +1398,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "paper_id": paper_id,
                 "preferred_resource_id": int(resource_id or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
-                "files": [paper_resource_to_api(resource) for resource in resources],
+                "files": paper_resources_to_api(resources),
                 "paper": paper_to_api(paper) if paper else None,
             }
         )
@@ -1410,7 +1429,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "primary_resource_id": int((paper or {}).get("primary_resource_id") or 0),
                 "preferred_resource_id": int((paper or {}).get("preferred_resource_id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
-                "files": [paper_resource_to_api(resource) for resource in resources],
+                "files": paper_resources_to_api(resources),
                 "deleted": deleted,
                 "paper": paper_to_api(paper) if paper else None,
             }
@@ -1987,6 +2006,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not author_monitor_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "author_id is required")
             return
+        cached_photo = author_monitor_photo_from_memory(
+            self.configured_db_path,
+            author_monitor_id,
+        )
+        if cached_photo:
+            content_type, content = cached_photo
+            self.send_bytes(content, content_type=content_type)
+            return
         storage = Storage(self.configured_db_path)
         try:
             author = storage.get_author_monitor(author_monitor_id)
@@ -2012,7 +2039,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             self.send_error_json(HTTPStatus.NOT_FOUND, "Author photo not found")
             return
         content_type = mimetypes.guess_type(str(photo_path))[0] or "application/octet-stream"
-        self.send_bytes(photo_path.read_bytes(), content_type=content_type)
+        content = photo_path.read_bytes()
+        remember_author_monitor_photo(
+            self.configured_db_path,
+            author_monitor_id,
+            content_type,
+            content,
+        )
+        self.send_bytes(content, content_type=content_type)
 
     def handle_set_author_monitor_photo(self) -> None:
         try:
@@ -4580,6 +4614,8 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             selected_counts = theme_counts_for_month(storage, prefix=selected, group_keys=group_keys).get(selected, {})
             all_counts = theme_counts_for_month(storage, prefix=selected, group_keys=all_group_keys).get(selected, {})
             summary["last_fetch"] = theme_last_fetch_info(storage, selected, group_keys)
+            if not isinstance(summary.get("online_discovery"), dict):
+                summary["online_discovery"] = theme_online_discovery_from_last_fetch(summary["last_fetch"])
             if fetched:
                 summary["selected_groups"] = group_keys
                 summary["displayed_saved"] = len(papers)
@@ -6154,6 +6190,11 @@ def run_theme_monitor(
         "raw_results": 0,
         "saved": 0,
         "errors": [],
+        "online_discovery": {
+            "status": "not_started",
+            "queries_attempted": 0,
+            "sources": {},
+        },
     }
     groups = theme_groups or load_theme_groups(storage)
     group_keys = [key for key in group_keys if key in groups]
@@ -6304,8 +6345,14 @@ def run_theme_monitor(
             summary["queries"] += int(source_result["queries_attempted"])
             summary["source_counts"][source_name] = int(source_result["raw_results"])
             summary["source_statuses"][source_name] = str(source_result["status"])
+            summary["online_discovery"]["sources"][source_name] = {
+                "status": str(source_result["status"]),
+                "message": clean_text(source_result.get("message") or ""),
+                "retry_after": clean_text(source_result.get("retry_after") or ""),
+                "queries_attempted": int(source_result["queries_attempted"]),
+            }
             summary["raw_results"] += int(source_result["raw_results"])
-            if source_result.get("message"):
+            if source_result.get("message") and str(source_result.get("status") or "") not in {"cooldown", "waiting"}:
                 summary["errors"].append(str(source_result["message"]))
             for query, state in (source_result.get("task_states") or {}).items():
                 task_states[(source_name, query)] = str(state)
@@ -6438,6 +6485,24 @@ def run_theme_monitor(
                     source_completed=source_totals[group_key],
                     source_total=source_totals[group_key],
                 )
+        online_sources = summary["online_discovery"]["sources"]
+        online_statuses = [str(item.get("status") or "") for item in online_sources.values()]
+        attempted_queries = int(summary["queries"] or 0)
+        summary["online_discovery"]["queries_attempted"] = attempted_queries
+        if online_statuses and attempted_queries == 0 and all(
+            status in {"cooldown", "waiting"} for status in online_statuses
+        ):
+            summary["online_discovery"]["status"] = "deferred"
+            summary["online_discovery"]["message"] = (
+                "Online discovery was not run because every metadata source is cooling down. "
+                "Only local cached papers were rematched."
+            )
+        elif online_statuses and all(status in {"success", "empty"} for status in online_statuses):
+            summary["online_discovery"]["status"] = "complete"
+        elif online_statuses:
+            summary["online_discovery"]["status"] = "partial"
+        else:
+            summary["online_discovery"]["status"] = "not_configured"
     finally:
         if progress_date:
             finish_theme_fetch_progress(progress_date)
@@ -6601,7 +6666,7 @@ def run_theme_source_plan(
                 if not task or str(task.get("status") or "") not in {"success", "empty"}:
                     continue
                 reusable_states[query] = str(task["status"])
-                reusable_messages[query] = str(task.get("message") or "")
+                reusable_messages[query] = sanitize_theme_status_message(task.get("message") or "")
                 reusable_counts[query] = int(task.get("records_found") or 0)
         elif str(latest.get("status") or "") in {"success", "empty"}:
             reusable_states = {
@@ -6645,6 +6710,7 @@ def run_theme_source_plan(
         return {
             "status": "partial" if reusable_states else "cooldown",
             "message": message,
+            "retry_after": clean_text(cooldown.get("retry_after") or ""),
             "queries_attempted": 0,
             "raw_results": len(cached_papers),
             "task_states": task_states,
@@ -6723,6 +6789,10 @@ def run_theme_source_plan(
         status = "partial"
     elif completed:
         status = "success" if raw_results else "empty"
+    elif states and all(state == "cooldown" for state in states):
+        status = "cooldown"
+    elif states and all(state == "waiting" for state in states):
+        status = "waiting"
     else:
         status = "error"
     message = "; ".join(dict.fromkeys(errors))[:1500]
@@ -6748,6 +6818,7 @@ def run_theme_source_plan(
     return {
         "status": status,
         "message": message,
+        "retry_after": retry_after,
         "queries_attempted": queries_attempted,
         "raw_results": raw_results,
         "task_states": task_states,
@@ -6902,6 +6973,13 @@ def aggregate_theme_source_task_status(states: list[str], counts: list[int]) -> 
 
 
 def aggregate_theme_group_status(source_statuses: dict[str, str], saved: int) -> str:
+    online_statuses = [
+        str(status or "waiting")
+        for source, status in source_statuses.items()
+        if source not in {"local_arxiv", "local_aps_rss"}
+    ]
+    if online_statuses and all(status in {"cooldown", "waiting"} for status in online_statuses):
+        return "deferred"
     statuses = [
         str(status or "waiting")
         for status in source_statuses.values()
@@ -7174,14 +7252,38 @@ def combined_theme_search_queries(queries: list[str], *, max_length: int = 240) 
     return chunks
 
 
+def sanitize_theme_status_message(value: Any) -> str:
+    message = clean_text(value or "")
+    message = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?token|token)(\s*[:=]\s*)([^&\s;,]+)",
+        r"\1\2[redacted]",
+        message,
+    )
+    message = re.sub(
+        r"(?i)(authorization\s*:\s*(?:bearer\s+)?)([^\s,;]+)",
+        r"\1[redacted]",
+        message,
+    )
+    return message
+
+
 def theme_fetch_error_message(group_name: str, exc: Exception, *, source_name: str = "") -> str:
     text = str(exc)
+    lower = text.lower()
     label = f"{group_name}/{source_name}" if source_name else group_name
     if "429" in text or "Too Many Requests" in text:
         return f"{label}: rate-limited this request. Try again later or select fewer subjects."
-    if "timed out" in text.lower() or "timeout" in text.lower():
+    if "timed out" in lower or "timeout" in lower:
         return f"{label}: request timed out."
-    return f"{label}: {text}"
+    if "ssl" in lower or "certificate" in lower:
+        return f"{label}: secure connection failed."
+    if "connection" in lower or "network" in lower or "name resolution" in lower:
+        return f"{label}: network connection failed."
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code:
+        return f"{label}: request failed (HTTP {int(status_code)})."
+    return f"{label}: request failed."
 
 
 def append_theme_fetch_error(
@@ -7492,6 +7594,28 @@ def theme_last_fetch_info(storage: Storage, selected: str, group_keys: list[str]
     return month_fetches.get(selected, {"finished_at": "", "fetched_group_count": 0, "selected_group_count": len(group_keys), "groups": {}})
 
 
+def theme_online_discovery_from_last_fetch(last_fetch: dict[str, Any] | None) -> dict[str, Any]:
+    groups = (last_fetch or {}).get("groups") or {}
+    statuses = [
+        clean_text((item or {}).get("status") or "")
+        for item in groups.values()
+        if isinstance(item, dict)
+    ]
+    if statuses and all(status == "deferred" for status in statuses):
+        return {
+            "status": "deferred",
+            "queries_attempted": 0,
+            "message": "Online discovery was deferred; only local cached papers were rematched.",
+        }
+    if statuses and any(status == "deferred" for status in statuses):
+        return {
+            "status": "partial",
+            "queries_attempted": 0,
+            "message": "Online discovery was deferred for one or more selected subjects.",
+        }
+    return {}
+
+
 def theme_last_fetches_for_month(storage: Storage, *, prefix: str, group_keys: list[str]) -> dict[str, dict[str, Any]]:
     if not group_keys:
         return {}
@@ -7528,7 +7652,7 @@ def theme_last_fetches_for_month(storage: Storage, *, prefix: str, group_keys: l
         groups_for_day[group_key] = {
             "status": str(row["status"] or ""),
             "records_found": int(row["records_found"] or 0),
-            "message": str(row["message"] or ""),
+            "message": sanitize_theme_status_message(row["message"] or ""),
             "started_at": str(row["started_at"] or ""),
             "finished_at": str(row["finished_at"] or ""),
         }
@@ -8825,6 +8949,65 @@ def paper_resource_to_api(resource: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def visible_paper_resources(resources: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hide only provable stale aliases while retaining genuine missing resources."""
+    materialized = [dict(resource) for resource in resources]
+    existing = [resource for resource in materialized if resource.get("exists")]
+
+    def filename_key(resource: dict[str, Any]) -> str:
+        local_path = clean_text(
+            resource.get("local_path")
+            or resource.get("stored_path")
+            or resource.get("source_path")
+            or ""
+        )
+        name = clean_text(
+            resource.get("display_name")
+            or resource.get("original_filename")
+            or Path(local_path).name
+        )
+        return unicodedata.normalize("NFKC", name).casefold()
+
+    visible: list[dict[str, Any]] = []
+    for resource in materialized:
+        if resource.get("exists") or resource.get("is_primary") or resource.get("is_preferred"):
+            visible.append(resource)
+            continue
+        role = clean_text(resource.get("file_role") or "other").lower()
+        name = filename_key(resource)
+        size = int(resource.get("size_bytes") or 0)
+        exact_hash = clean_text(resource.get("sha256") or "")
+        content_hash = clean_text(resource.get("content_sha256") or "")
+        stale_alias = False
+        if role in {"", "other"} and name:
+            for candidate in existing:
+                if filename_key(candidate) != name:
+                    continue
+                same_hash = bool(
+                    (exact_hash and exact_hash == clean_text(candidate.get("sha256") or ""))
+                    or (
+                        content_hash
+                        and content_hash == clean_text(candidate.get("content_sha256") or "")
+                    )
+                )
+                same_legacy_file = bool(
+                    size > 0
+                    and size == int(candidate.get("size_bytes") or 0)
+                    and clean_text(candidate.get("file_role") or "").lower()
+                    == "publication_version"
+                )
+                if same_hash or same_legacy_file:
+                    stale_alias = True
+                    break
+        if not stale_alias:
+            visible.append(resource)
+    return visible
+
+
+def paper_resources_to_api(resources: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [paper_resource_to_api(resource) for resource in visible_paper_resources(resources)]
+
+
 def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     if not paper:
@@ -8838,7 +9021,7 @@ def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]
         "primary_resource_id": int(paper.get("primary_resource_id") or 0),
         "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
         "resolved_resource_id": int((resolved or {}).get("id") or 0),
-        "files": [paper_resource_to_api(resource) for resource in resources],
+        "files": paper_resources_to_api(resources),
         "paper": paper_to_api(paper),
     }
 
@@ -12959,6 +13142,61 @@ def author_photo_type(content: bytes) -> tuple[str, str]:
     return AUTHOR_PHOTO_TYPES[kind]
 
 
+def author_monitor_photo_cache_key(db_path: Path, author_monitor_id: int) -> tuple[str, int]:
+    return (str(Path(db_path).expanduser().resolve()), int(author_monitor_id))
+
+
+def remember_author_monitor_photo(
+    db_path: Path,
+    author_monitor_id: int,
+    content_type: str,
+    content: bytes,
+) -> None:
+    if not content:
+        return
+    with AUTHOR_PHOTO_MEMORY_CACHE_LOCK:
+        AUTHOR_PHOTO_MEMORY_CACHE[
+            author_monitor_photo_cache_key(db_path, author_monitor_id)
+        ] = (content_type, bytes(content))
+
+
+def author_monitor_photo_from_memory(
+    db_path: Path,
+    author_monitor_id: int,
+) -> tuple[str, bytes] | None:
+    with AUTHOR_PHOTO_MEMORY_CACHE_LOCK:
+        cached = AUTHOR_PHOTO_MEMORY_CACHE.get(
+            author_monitor_photo_cache_key(db_path, author_monitor_id)
+        )
+    return cached
+
+
+def prewarm_author_monitor_photo_cache(db_path: Path) -> int:
+    """Load local author photos once so per-image HTTP requests never reopen SQLite."""
+    storage = Storage(db_path)
+    try:
+        authors = storage.list_author_monitors()
+    finally:
+        storage.close()
+    loaded = 0
+    for author in authors:
+        author_id = int(author.get("id") or 0)
+        photo_path = managed_author_photo_path(
+            author.get("avatar_override_path"),
+            db_path,
+        )
+        if not author_id or not photo_path or not photo_path.exists() or not photo_path.is_file():
+            continue
+        try:
+            content = photo_path.read_bytes()
+        except OSError:
+            continue
+        content_type = mimetypes.guess_type(str(photo_path))[0] or "application/octet-stream"
+        remember_author_monitor_photo(db_path, author_id, content_type, content)
+        loaded += 1
+    return loaded
+
+
 def save_author_monitor_photo(
     db_path: Path,
     author_monitor_id: int,
@@ -12990,6 +13228,12 @@ def save_author_monitor_photo(
         )
         if old_path and old_path != target_path.resolve() and old_path.exists():
             old_path.unlink()
+        remember_author_monitor_photo(
+            db_path,
+            int(author_monitor_id),
+            _content_type,
+            content,
+        )
         return updated
     finally:
         storage.close()
@@ -15830,68 +16074,91 @@ def fetch_semantic_scholar_influential_citations(paper: dict[str, Any], *, limit
     paper_ref = semantic_scholar_citation_ref(paper)
     if not paper_ref:
         return []
+    requested_limit = max(1, int(limit or 1))
+    cache_key = (paper_ref, requested_limit)
+    now = time.monotonic()
+    with SEMANTIC_INFLUENTIAL_CACHE_LOCK:
+        cached = SEMANTIC_INFLUENTIAL_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return [dict(item) for item in cached[1]]
+        rate_limited_until = SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL.get(paper_ref, 0.0)
+    if rate_limited_until > now:
+        raise SemanticScholarRateLimitError(
+            "Semantic Scholar is temporarily rate limited. Gewu Insight has paused "
+            "Influential Citations requests for a few minutes; try again later."
+        )
     citations: list[dict[str, Any]] = []
-    offset = 0
     fields = (
         "contexts,intents,isInfluential,"
         "citingPaper.paperId,citingPaper.title,citingPaper.year,citingPaper.venue,citingPaper.url,"
         "citingPaper.externalIds,citingPaper.authors,citingPaper.citationCount,citingPaper.influentialCitationCount"
     )
-    while len(citations) < limit and offset < 1000:
+    try:
         response = semantic_scholar_request(
             "GET",
             f"https://api.semanticscholar.org/graph/v1/paper/{quote(paper_ref, safe='')}/citations",
-            params={"fields": fields, "limit": 100, "offset": offset},
+            # The Graph API accepts up to 1,000 citation rows. One larger request is
+            # gentler than the former ten-page scan and stays within the key's 1 RPS limit.
+            params={"fields": fields, "limit": 1000, "offset": 0},
             timeout=30,
-            max_retries=2,
+            max_retries=1,
         )
-        payload = response.json()
-        data = payload.get("data") if isinstance(payload, dict) else []
-        if not isinstance(data, list) or not data:
-            break
-        for item in data:
-            if not isinstance(item, dict) or not item.get("isInfluential"):
-                continue
-            citing = item.get("citingPaper") if isinstance(item.get("citingPaper"), dict) else {}
-            contexts = [
-                trim_citation_context(clean_text(str(context or "")))
-                for context in (item.get("contexts") or [])
-                if clean_text(str(context or ""))
-            ]
-            authors = citing.get("authors") if isinstance(citing.get("authors"), list) else []
-            citations.append(
-                {
-                    "paper_id": clean_text(citing.get("paperId") or ""),
-                    "title": clean_text(citing.get("title") or "Untitled citing paper"),
-                    "venue": clean_text(citing.get("venue") or ""),
-                    "year": clean_text(str(citing.get("year") or "")),
-                    "url": clean_text(citing.get("url") or ""),
-                    "authors": [
-                        clean_text(author.get("name") or "")
-                        for author in authors
-                        if isinstance(author, dict) and clean_text(author.get("name") or "")
-                    ],
-                    "citation_count": int_or_none(citing.get("citationCount")) or 0,
-                    "influential_citation_count": int_or_none(citing.get("influentialCitationCount")) or 0,
-                    "intents": [
-                        clean_text(str(value))
-                        for value in (item.get("intents") or [])
-                        if clean_text(str(value))
-                    ],
-                    "contexts": contexts[:5],
-                }
-            )
-            if len(citations) >= limit:
-                break
-        next_offset = payload.get("next") if isinstance(payload, dict) else None
-        if isinstance(next_offset, int) and next_offset > offset:
-            offset = next_offset
-        else:
-            offset += len(data)
-            if len(data) < 100:
-                break
+    except Exception as exc:
+        if "HTTP 429" in str(exc):
+            with SEMANTIC_INFLUENTIAL_CACHE_LOCK:
+                SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL[paper_ref] = (
+                    time.monotonic() + SEMANTIC_INFLUENTIAL_RATE_LIMIT_COOLDOWN_SECONDS
+                )
+            raise SemanticScholarRateLimitError(
+                "Semantic Scholar is temporarily rate limited. Gewu Insight has paused "
+                "Influential Citations requests for a few minutes; try again later."
+            ) from None
+        raise
+    payload = response.json()
+    data = payload.get("data") if isinstance(payload, dict) else []
+    if not isinstance(data, list):
+        data = []
+    for item in data:
+        if not isinstance(item, dict) or not item.get("isInfluential"):
+            continue
+        citing = item.get("citingPaper") if isinstance(item.get("citingPaper"), dict) else {}
+        contexts = [
+            trim_citation_context(clean_text(str(context or "")))
+            for context in (item.get("contexts") or [])
+            if clean_text(str(context or ""))
+        ]
+        authors = citing.get("authors") if isinstance(citing.get("authors"), list) else []
+        citations.append(
+            {
+                "paper_id": clean_text(citing.get("paperId") or ""),
+                "title": clean_text(citing.get("title") or "Untitled citing paper"),
+                "venue": clean_text(citing.get("venue") or ""),
+                "year": clean_text(str(citing.get("year") or "")),
+                "url": clean_text(citing.get("url") or ""),
+                "authors": [
+                    clean_text(author.get("name") or "")
+                    for author in authors
+                    if isinstance(author, dict) and clean_text(author.get("name") or "")
+                ],
+                "citation_count": int_or_none(citing.get("citationCount")) or 0,
+                "influential_citation_count": int_or_none(citing.get("influentialCitationCount")) or 0,
+                "intents": [
+                    clean_text(str(value))
+                    for value in (item.get("intents") or [])
+                    if clean_text(str(value))
+                ],
+                "contexts": contexts[:5],
+            }
+        )
     citations.sort(key=lambda item: (int(item.get("citation_count") or 0), int(item.get("influential_citation_count") or 0)), reverse=True)
-    return citations[:limit]
+    result = citations[:requested_limit]
+    with SEMANTIC_INFLUENTIAL_CACHE_LOCK:
+        SEMANTIC_INFLUENTIAL_CACHE[cache_key] = (
+            time.monotonic() + SEMANTIC_INFLUENTIAL_CACHE_TTL_SECONDS,
+            [dict(item) for item in result],
+        )
+        SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL.pop(paper_ref, None)
+    return result
 
 
 def semantic_scholar_last_author(authors: list[Any]) -> str:
@@ -17958,7 +18225,7 @@ def finish_theme_fetch_progress(selected: str) -> None:
 
 def theme_fetch_progress_payload(subjects: list[dict[str, Any]], *, active: bool) -> dict[str, Any]:
     total = len(subjects)
-    terminal_statuses = {"success", "empty", "partial", "error", "waiting", "cooldown"}
+    terminal_statuses = {"success", "empty", "partial", "deferred", "error", "waiting", "cooldown"}
     completed = sum(1 for item in subjects if item.get("status") in terminal_statuses)
     source_total = 0
     source_completed = 0
@@ -33494,24 +33761,39 @@ INDEX_HTML = """<!doctype html>
       const folders = Array.isArray(data.folders) ? data.folders : [];
       const items = Array.isArray(data.items) ? data.items : [];
       const folder = data.folder;
-      if (folder?.id) {
-        const id = Number(folder.id);
-        const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
-        if (index >= 0) state.libraryFolders[index] = folder;
-        else state.libraryFolders.push(folder);
-      }
+      const folderMap = new Map(state.libraryFolders.map((entry) => [Number(entry.id), entry]));
+      if (folder?.id) folderMap.set(Number(folder.id), folder);
       folders.forEach((child) => {
-        if (!child?.id) return;
-        const id = Number(child.id);
-        const index = state.libraryFolders.findIndex((entry) => Number(entry.id) === id);
-        if (index >= 0) state.libraryFolders[index] = child;
-        else state.libraryFolders.push(child);
+        if (child?.id) folderMap.set(Number(child.id), child);
       });
+      state.libraryFolders = [...folderMap.values()];
+      state.libraryFoldersById = folderMap;
+      if (folder?.id && folder.parent_id !== null && folder.parent_id !== undefined) {
+        const parentId = Number(folder.parent_id || 0);
+        const siblings = [...(state.libraryChildFoldersByParent.get(parentId) || [])];
+        const siblingIndex = siblings.findIndex((entry) => Number(entry.id) === Number(folder.id));
+        if (siblingIndex >= 0) siblings[siblingIndex] = folder;
+        else siblings.push(folder);
+        siblings.sort((a, b) => compareLibraryOrder(a, b, "name"));
+        state.libraryChildFoldersByParent.set(parentId, siblings);
+      }
+      state.libraryChildFoldersByParent.set(
+        folderId,
+        [...folders].sort((a, b) => compareLibraryOrder(a, b, "name"))
+      );
+      const previousItems = state.libraryItemsByFolder.get(folderId) || [];
+      previousItems.forEach((item) => state.libraryItemsById.delete(Number(item.id)));
       state.libraryItems = state.libraryItems
         .filter((item) => Number(item.folder_id || 0) !== folderId)
         .concat(items);
+      items.forEach((item) => state.libraryItemsById.set(Number(item.id), item));
+      state.libraryItemsByFolder.set(
+        folderId,
+        [...items].sort((a, b) => compareLibraryOrder(a, b, "display_name"))
+      );
       state.libraryLoadedFolderIds.add(folderId);
-      rebuildLibraryIndexes();
+      clearLibrarySearchCache();
+      state.librarySearchVersion += 1;
     }
 
     function libraryFolderLoaded(folderId) {
@@ -34371,6 +34653,29 @@ INDEX_HTML = """<!doctype html>
     function requestLibraryColumnReveal(folderId, direction = "nearest") {
       state.libraryRevealColumnFolderId = Number(folderId || state.libraryActiveFolderId || state.libraryRootId);
       state.libraryRevealColumnDirection = direction;
+    }
+
+    function syncLibrarySelectionAppearance() {
+      const pathFolderIds = selectedLibraryPathFolderIds();
+      document.querySelectorAll(".library-row[data-library-type][data-library-id]").forEach((row) => {
+        const entry = {type: row.dataset.libraryType, id: Number(row.dataset.libraryId || 0)};
+        const parentFolderId = Number(row.dataset.libraryParentFolder || 0);
+        const selected = parentFolderId === Number(state.libraryActiveFolderId || 0)
+          && libraryEntryKey(state.librarySelection) === libraryEntryKey(entry);
+        const rangeSelected = libraryEntryIsRangeSelected(parentFolderId, entry);
+        const pathParent = entry.type === "folder" && pathFolderIds.has(entry.id) && !selected;
+        row.classList.toggle("active", selected && !rangeSelected);
+        row.classList.toggle("range-selected", rangeSelected);
+        row.classList.toggle("path-parent", pathParent);
+        row.setAttribute("aria-selected", selected || rangeSelected ? "true" : "false");
+      });
+      $("libraryShell")?.classList.remove("paper-files-focus-active");
+      const pathBar = $("libraryPathBar");
+      if (pathBar) {
+        pathBar.title = librarySelectionPathText();
+        const parts = pathBar.querySelector(".library-path-parts");
+        if (parts) parts.innerHTML = librarySelectionPathMarkup();
+      }
     }
 
     function parentFolderId(folderId) {
@@ -36234,17 +36539,24 @@ INDEX_HTML = """<!doctype html>
         const activePapers = activeGroup?.papers || [];
         const saved = Number(summary.saved || 0);
         const raw = Number(summary.raw_results || 0);
-        const errors = Array.isArray(summary.errors) ? summary.errors : [];
-        const lastFetch = themeLastFetchLabel(summary.last_fetch).replace(/^Last fetched:\s*/i, "");
-        const auto = autoMonitorStatusDetails("theme");
-        const updates = auto.parts.slice(1).join(" · ") || "not run yet";
-        warning = auto.warning || Boolean(errors.length);
+	        const errors = Array.isArray(summary.errors) ? summary.errors : [];
+	        const discovery = summary.online_discovery || {};
+	        const discoveryStatus = String(discovery.status || "");
+	        const lastFetch = themeLastFetchLabel(summary.last_fetch).replace(/^Last fetched:\s*/i, "");
+	        const auto = autoMonitorStatusDetails("theme");
+	        const updates = auto.parts.slice(1).join(" · ") || "not run yet";
+	        warning = auto.warning || Boolean(errors.length) || discoveryStatus === "deferred";
         rows.push(monitorSidebarSummaryRow("Subjects", `${knownThemeGroupKeys().length} monitored`));
         rows.push(monitorSidebarSummaryRow("Selected", activeGroup?.name || selectedThemeGroupLabel()));
         rows.push(monitorSidebarSummaryRow("Papers", `${activePapers.length} shown · ${visiblePapers.length} visible`));
         rows.push(monitorSidebarSummaryRow("Results", `${saved} saved · ${raw} raw hits`));
-        rows.push(monitorSidebarSummaryRow("Last fetch", lastFetch));
-        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
+	        rows.push(monitorSidebarSummaryRow("Last fetch", lastFetch));
+	        if (discoveryStatus === "deferred") {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Deferred · local cache only", "errors"));
+	        } else if (discoveryStatus === "partial") {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Partially completed", "updates"));
+	        }
+	        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
         if (errors.length) rows.push(monitorSidebarSummaryRow("Errors", `${errors.length} incomplete`, "errors"));
       }
       root.className = `monitor-sidebar-summary${warning ? " warning" : ""}`;
@@ -37248,7 +37560,7 @@ INDEX_HTML = """<!doctype html>
 	      const live = themeProgress?.kind === "theme" ? themeProgress : null;
 	      const subjects = live ? normalizedThemeProgressSubjects(live.subjects || []) : themeSubjectsFromLastFetch(lastFetch);
 	      const total = Number(live?.total || subjects.length || 0);
-	      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "partial", "error", "waiting", "cooldown"].includes(item.status)).length || 0);
+	      const completed = Number(live?.completed || subjects.filter((item) => ["success", "empty", "partial", "deferred", "error", "waiting", "cooldown"].includes(item.status)).length || 0);
 	      const percent = Math.max(0, Math.min(100, Number(live?.percent ?? (total ? Math.round((completed / total) * 100) : 0))));
 	      const sourceTotal = Number(live?.sourceTotal || 0);
 	      const sourceCompleted = Number(live?.sourceCompleted || 0);
@@ -37311,7 +37623,8 @@ INDEX_HTML = """<!doctype html>
       const status = String(item?.status || "pending");
       if (status === "success") return {label: "Fetched", className: "ok"};
       if (status === "empty") return {label: "Fetched, no matches", className: "warn"};
-      if (status === "partial") return {label: "Partial", className: "warn"};
+	      if (status === "partial") return {label: "Partial", className: "warn"};
+	      if (status === "deferred") return {label: "Online discovery deferred", className: "warn"};
       if (status === "waiting") return {label: "Waiting", className: "pending"};
       if (status === "cooldown") return {label: "Cooling down", className: "pending"};
       if (status === "error") return {label: "Failed", className: "err"};
@@ -37326,6 +37639,7 @@ INDEX_HTML = """<!doctype html>
 	        const saved = `${Number(item.records_found || 0)} saved`;
 	        return status === "partial" && item.message ? `${saved} · ${item.message}` : saved;
 	      }
+	      if (status === "deferred") return item.message || "Only local cached papers were rematched";
 	      if (status === "waiting" || status === "cooldown") return item.message || "Waiting for an available source";
 	      if (status === "error") return item.message || "No successful source fetches";
 	      if (status === "running") {
@@ -44655,148 +44969,163 @@ INDEX_HTML = """<!doctype html>
           }
         });
       });
-      shell.querySelectorAll(".library-row").forEach((row) => {
-        row.querySelectorAll("[data-native-file-drag-handle]").forEach((handle) => {
-          handle.addEventListener("mousedown", (event) => {
-            event.stopPropagation();
-            if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
-            else {
-              const itemRow = handle.closest('.library-row[data-library-type="item"]');
-              if (itemRow) armNativeLibraryItemDrop(Number(itemRow.dataset.libraryId || 0));
-              prepareNativeFileDrag(handle);
-            }
-          });
-          handle.addEventListener("dragstart", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          });
-        });
-        row.addEventListener("keydown", (event) => {
-          if (
-            row.tagName !== "DIV"
-            || event.target !== row
-            || (event.key !== "Enter" && event.key !== " ")
-          ) return;
+      shell.addEventListener("mousedown", (event) => {
+        const handle = event.target.closest?.("[data-native-file-drag-handle]");
+        if (!handle) return;
+        event.stopPropagation();
+        if (handle.dataset.nativeFolderDragId) armNativeFolderDrag(handle);
+        else {
+          const itemRow = handle.closest('.library-row[data-library-type="item"]');
+          if (itemRow) armNativeLibraryItemDrop(Number(itemRow.dataset.libraryId || 0));
+          prepareNativeFileDrag(handle);
+        }
+      });
+      shell.addEventListener("keydown", (event) => {
+        const row = event.target.closest?.(".library-row");
+        if (
+          !row
+          || row.tagName !== "DIV"
+          || event.target !== row
+          || (event.key !== "Enter" && event.key !== " ")
+        ) return;
+        event.preventDefault();
+        row.click();
+      });
+      shell.addEventListener("click", (event) => {
+        const row = event.target.closest?.(".library-row");
+        if (!row) return;
+        if (state.suppressClickOnce) {
           event.preventDefault();
-          row.click();
+          event.stopPropagation();
+          return;
+        }
+        if (event.target.closest("[data-library-rename-input]")) return;
+        if (event.target.closest('[data-action="show-library-search-result"]')) return;
+        const type = row.dataset.libraryType;
+        const id = Number(row.dataset.libraryId);
+        const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+        if (librarySearchIsActive()) {
+          selectLibrarySearchEntry(parentFolderId, type, id);
+          return;
+        }
+        selectLibraryEntry(parentFolderId, type, id, {
+          extendRange: event.shiftKey,
+          revealChildColumn: type === "folder" && !event.shiftKey
         });
-        row.addEventListener("click", (event) => {
-          if (state.suppressClickOnce) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          if (event.target.closest("[data-library-rename-input]")) return;
-          if (event.target.closest('[data-action="show-library-search-result"]')) return;
-          const type = row.dataset.libraryType;
-          const id = Number(row.dataset.libraryId);
-          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          if (librarySearchIsActive()) {
-            selectLibrarySearchEntry(parentFolderId, type, id);
-            return;
-          }
-          selectLibraryEntry(parentFolderId, type, id, {
-            extendRange: event.shiftKey,
-            revealChildColumn: type === "folder" && !event.shiftKey
-          });
-        });
-        row.addEventListener("dblclick", () => {
-          const id = Number(row.dataset.libraryId);
-          if (row.dataset.libraryType === "folder") {
-            focusLibraryFolder(id);
-            return;
-          }
-          if (row.dataset.libraryType === "item") {
-            openNativeLibraryEntry("item", id);
-          }
-        });
-        row.addEventListener("dragstart", (event) => {
-          if (state.selectionMarquee) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          if (row.getAttribute("draggable") === "false") {
-            event.preventDefault();
-            return;
-          }
-          const payload = {
-            type: row.dataset.libraryType,
-            id: Number(row.dataset.libraryId),
-            parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
-          };
-          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          const dragEntry = {type: payload.type, id: payload.id};
-          const selectedEntries = libraryEntryIsInActionSelection(parentFolderId, dragEntry)
-            ? selectedLibraryEntriesForAction()
-            : [];
-          if (selectedEntries.length > 1) {
-            payload.entries = selectedEntries.map((entry) => ({type: entry.type, id: Number(entry.id)}));
-          }
-          state.libraryDragPayload = payload;
-          if (payload.type === "item") armNativeLibraryItemDrop(payload.id);
-          event.dataTransfer.setData("application/x-paper-monitor-library", JSON.stringify(payload));
-          event.dataTransfer.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
-          event.dataTransfer.effectAllowed = "copyMove";
-        });
-        row.addEventListener("dragend", () => {
-          state.libraryDragPayload = null;
-          document.querySelectorAll(".library-attachment-drop-target").forEach((node) => node.classList.remove("library-attachment-drop-target"));
-        });
-        row.addEventListener("dragover", (event) => {
-          const payload = libraryDragPayload(event);
-          if (!payload || !libraryDropIsReorder(payload, row, event)) return;
+      });
+      shell.addEventListener("dblclick", (event) => {
+        const row = event.target.closest?.(".library-row");
+        if (!row) return;
+        const id = Number(row.dataset.libraryId);
+        if (row.dataset.libraryType === "folder") {
+          focusLibraryFolder(id);
+          return;
+        }
+        if (row.dataset.libraryType === "item") openNativeLibraryEntry("item", id);
+      });
+      shell.addEventListener("dragstart", (event) => {
+        if (event.target.closest?.("[data-native-file-drag-handle]")) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        const row = event.target.closest?.(".library-row");
+        if (!row) return;
+        if (state.selectionMarquee) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (row.getAttribute("draggable") === "false") {
+          event.preventDefault();
+          return;
+        }
+        const payload = {
+          type: row.dataset.libraryType,
+          id: Number(row.dataset.libraryId),
+          parent_folder_id: Number(row.dataset.libraryParentFolder || state.libraryRootId)
+        };
+        const dragEntry = {type: payload.type, id: payload.id};
+        const selectedEntries = libraryEntryIsInActionSelection(payload.parent_folder_id, dragEntry)
+          ? selectedLibraryEntriesForAction()
+          : [];
+        if (selectedEntries.length > 1) {
+          payload.entries = selectedEntries.map((entry) => ({type: entry.type, id: Number(entry.id)}));
+        }
+        state.libraryDragPayload = payload;
+        if (payload.type === "item") armNativeLibraryItemDrop(payload.id);
+        event.dataTransfer?.setData("application/x-paper-monitor-library", JSON.stringify(payload));
+        event.dataTransfer?.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
+      });
+      shell.addEventListener("dragend", (event) => {
+        if (!event.target.closest?.(".library-row")) return;
+        state.libraryDragPayload = null;
+        document.querySelectorAll(".library-attachment-drop-target").forEach((node) => node.classList.remove("library-attachment-drop-target"));
+      });
+      shell.addEventListener("dragover", (event) => {
+        const payload = libraryDragPayload(event);
+        if (!payload) return;
+        const row = event.target.closest?.(".library-row");
+        if (row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           markLibraryReorderTarget(row, event);
-        });
-        row.addEventListener("dragleave", () => clearLibraryDragClasses(row));
-        row.addEventListener("drop", async (event) => {
-          const payload = libraryDragPayload(event);
-          if (!payload || !libraryDropIsReorder(payload, row, event)) return;
+          return;
+        }
+        const target = event.target.closest?.("[data-library-drop-folder]");
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        target.classList.add("drag-over");
+      });
+      shell.addEventListener("dragleave", (event) => {
+        const row = event.target.closest?.(".library-row");
+        if (row && !row.contains(event.relatedTarget)) clearLibraryDragClasses(row);
+        const target = event.target.closest?.("[data-library-drop-folder]");
+        if (target && !target.contains(event.relatedTarget)) target.classList.remove("drag-over");
+      });
+      shell.addEventListener("drop", async (event) => {
+        const payload = libraryDragPayload(event);
+        if (!payload) return;
+        const row = event.target.closest?.(".library-row");
+        if (row && libraryDropIsReorder(payload, row, event)) {
           event.preventDefault();
           event.stopPropagation();
           const position = libraryDropIntent(row, event);
           clearLibraryDragClasses(row);
           await reorderLibraryEntry(payload.type, Number(payload.id), Number(payload.parent_folder_id), Number(row.dataset.libraryId), position);
-        });
-        row.addEventListener("contextmenu", (event) => {
-          if (state.suppressContextMenuOnce) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          event.stopPropagation();
-          const type = row.dataset.libraryType;
-          const id = Number(row.dataset.libraryId);
-          const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
-          if (!libraryEntryIsInActionSelection(parentFolderId, {type, id})) {
-            setLibraryColumnSelection(parentFolderId, {type, id});
-          }
-          renderLibraryDetail();
-          refreshLibraryQuickLookForSelection();
-          const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
-          showLibraryContextMenu(event, parentId, type, id);
-        });
+          return;
+        }
+        const target = event.target.closest?.("[data-library-drop-folder]");
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        target.classList.remove("drag-over");
+        const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
+        if (Array.isArray(payload.entries) && payload.entries.length > 1) await moveLibraryEntries(payload.entries, folderId);
+        else if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
       });
-      shell.querySelectorAll("[data-library-drop-folder]").forEach((target) => {
-        target.addEventListener("dragover", (event) => {
-          if (!libraryDragPayload(event)) return;
+      shell.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest?.(".library-row");
+        if (!row) return;
+        if (state.suppressContextMenuOnce) {
           event.preventDefault();
-          event.stopPropagation();
-          target.classList.add("drag-over");
-        });
-        target.addEventListener("dragleave", () => target.classList.remove("drag-over"));
-        target.addEventListener("drop", async (event) => {
-          const payload = libraryDragPayload(event);
-          if (!payload) return;
-          event.preventDefault();
-          event.stopPropagation();
-          target.classList.remove("drag-over");
-          const folderId = Number(target.dataset.libraryDropFolder || state.libraryActiveFolderId || state.libraryRootId);
-          if (Array.isArray(payload.entries) && payload.entries.length > 1) await moveLibraryEntries(payload.entries, folderId);
-          else if (payload.type && payload.id) await moveLibraryEntry(payload.type, payload.id, folderId);
-        });
+          event.stopImmediatePropagation();
+          return;
+        }
+        event.stopImmediatePropagation();
+        const type = row.dataset.libraryType;
+        const id = Number(row.dataset.libraryId);
+        const parentFolderId = Number(row.dataset.libraryParentFolder || state.libraryRootId);
+        if (!libraryEntryIsInActionSelection(parentFolderId, {type, id})) {
+          setLibraryColumnSelection(parentFolderId, {type, id});
+          syncLibrarySelectionAppearance();
+        }
+        renderLibraryDetail();
+        refreshLibraryQuickLookForSelection();
+        const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
+        showLibraryContextMenu(event, parentId, type, id);
       });
       shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
         const body = column.querySelector(".library-column-body");
@@ -44938,6 +45267,12 @@ INDEX_HTML = """<!doctype html>
       if (options.extendRange) setLibraryRangeSelection(parentFolderId, entry);
       else setLibraryColumnSelection(parentFolderId, entry);
       if (options.revealChildColumn) requestLibraryColumnReveal(parentFolderId, "right");
+      if (type === "folder" && !options.extendRange && !libraryFolderLoaded(id)) {
+        syncLibrarySelectionAppearance();
+        loadLibraryFolderAndRender(id);
+        refreshLibraryQuickLookForSelection();
+        return;
+      }
       renderLibrary();
       if (type === "folder" && !options.extendRange) {
         prefetchLibraryFolder(id);
@@ -44951,8 +45286,13 @@ INDEX_HTML = """<!doctype html>
       setLibraryColumnSelection(parentId, {type: "folder", id: Number(folderId)});
       state.libraryActiveFolderId = Number(folderId);
       state.libraryCurrentFolderId = Number(folderId);
+      if (!libraryFolderLoaded(folderId)) {
+        syncLibrarySelectionAppearance();
+        loadLibraryFolderAndRender(folderId);
+        refreshLibraryQuickLookForSelection();
+        return;
+      }
       renderLibrary();
-      loadLibraryFolderAndRender(folderId);
       refreshLibraryQuickLookForSelection();
     }
 
@@ -52065,12 +52405,16 @@ INDEX_HTML = """<!doctype html>
       const activePapers = activeGroup?.papers || [];
       const groupLabel = selectedThemeGroupLabel();
       const saved = Number(summary.saved || 0);
-      const raw = Number(summary.raw_results || 0);
-      const errors = Array.isArray(summary.errors) ? summary.errors : [];
+	      const raw = Number(summary.raw_results || 0);
+	      const errors = Array.isArray(summary.errors) ? summary.errors : [];
+	      const discoveryStatus = String(summary.online_discovery?.status || "");
+	      const discoverySuffix = discoveryStatus === "deferred"
+	        ? " · Online discovery deferred · local cache only"
+	        : (discoveryStatus === "partial" ? " · Online discovery partially completed" : "");
       const dateLabel = windowStart === windowEnd ? windowStart : `${windowStart} to ${windowEnd}`;
       const lastFetchLabel = themeLastFetchLabel(summary.last_fetch);
       $("summary").textContent = state.themeSearched
-        ? `${dateLabel} · ${groupLabel} · ${activePapers.length} shown in ${activeGroup?.name || "Subject"} · ${visiblePapers.length} visible · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${errors.length ? ` · ${errors.length} errors` : ""}`
+	        ? `${dateLabel} · ${groupLabel} · ${activePapers.length} shown in ${activeGroup?.name || "Subject"} · ${visiblePapers.length} visible · ${saved} saved · ${raw} raw hits · ${lastFetchLabel}${discoverySuffix}${errors.length ? ` · ${errors.length} errors` : ""}`
         : "Choose a date on the calendar to fetch subject-matched papers from multiple metadata sources.";
       renderMonitorSidebarSummary();
       if (currentThemeBusy) {

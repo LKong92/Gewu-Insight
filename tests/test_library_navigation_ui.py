@@ -104,6 +104,26 @@ class LibraryNavigationUiTests(unittest.TestCase):
             INDEX_HTML,
         )
 
+    def test_folder_navigation_avoids_full_index_and_listener_rebuilds(self) -> None:
+        apply_children = INDEX_HTML.split("function applyLibraryFolderChildren", 1)[1].split(
+            "function libraryFolderLoaded", 1
+        )[0]
+        select_entry = INDEX_HTML.split("function selectLibraryEntry", 1)[1].split(
+            "function focusLibraryFolder", 1
+        )[0]
+        interactions = INDEX_HTML.split("function wireLibraryInteractions", 1)[1].split(
+            "function libraryDragPayload", 1
+        )[0]
+
+        self.assertIn("state.libraryItemsByFolder.set(", apply_children)
+        self.assertIn("state.libraryChildFoldersByParent.set(", apply_children)
+        self.assertNotIn("rebuildLibraryIndexes()", apply_children)
+        self.assertIn('if (type === "folder" && !options.extendRange && !libraryFolderLoaded(id))', select_entry)
+        self.assertIn("loadLibraryFolderAndRender(id);", select_entry)
+        self.assertIn('shell.addEventListener("click"', interactions)
+        self.assertIn('shell.addEventListener("dragover"', interactions)
+        self.assertNotIn('shell.querySelectorAll(".library-row").forEach', interactions)
+
     def test_remote_avatar_fallbacks_do_not_access_a_removed_parent(self) -> None:
         self.assertNotIn("this.remove(); this.parentElement", INDEX_HTML)
         self.assertIn('data-fallback="${escapeAttr(initials)}"', INDEX_HTML)

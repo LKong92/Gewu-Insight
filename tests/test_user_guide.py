@@ -466,6 +466,26 @@ class UserGuideTests(unittest.TestCase):
         )
         self.assertIn("data/cache/journal_logos", storage_text)
 
+    def test_guide_explains_influential_citations_and_comments_reports(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        paper_details = soup.find("article", id="paper-details").get_text(" ", strip=True)
+        for phrase in [
+            "Inspect influential citations",
+            "Semantic Scholar’s classification",
+            "cached locally for several hours",
+            "temporarily throttled",
+        ]:
+            self.assertIn(phrase, paper_details)
+
+        publications = soup.find("article", id="my-publications").get_text(" ", strip=True)
+        for phrase in [
+            "Build a citation-comments report",
+            "citation-context sentences",
+            "does not modify the publication metadata",
+            "generated local reading artifact",
+        ]:
+            self.assertIn(phrase, publications)
+
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         html = ui_server.load_user_guide_html()
         self.assertIn('id="guideSearch"', html)

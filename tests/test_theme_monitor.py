@@ -14,11 +14,14 @@ from paper_monitor.ui_server import (
     recommend_theme_keywords,
     theme_keyword_recommendation_response,
     run_theme_monitor,
+    sanitize_theme_status_message,
     start_fetch_progress,
     start_theme_fetch_progress,
     theme_candidate_in_window,
     theme_candidate_is_literature_like,
     theme_counts_for_month,
+    theme_fetch_error_message,
+    theme_online_discovery_from_last_fetch,
     theme_paper_to_api,
 )
 
@@ -866,6 +869,81 @@ class ThemeMonitorTest(unittest.TestCase):
                     storage.close()
         finally:
             ui_server.theme_source_fetchers = original_fetchers
+
+    def test_all_online_sources_in_cooldown_are_deferred_not_completed(self):
+        import paper_monitor.ui_server as ui_server
+
+        selected = date(2026, 6, 2)
+        groups = {"alpha": {"name": "Alpha", "queries": ["alpha"]}}
+        calls = []
+
+        def limited_source(query, start_date, end_date):
+            calls.append(query)
+            raise RuntimeError("429 Too Many Requests")
+
+        original_fetchers = ui_server.theme_source_fetchers
+        try:
+            ui_server.theme_source_fetchers = lambda: [("limited_source", limited_source)]
+            with tempfile.TemporaryDirectory() as tmp:
+                storage = Storage(Path(tmp) / "paper_monitor.sqlite")
+                try:
+                    run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                        trigger="manual",
+                    )
+                    second = run_theme_monitor(
+                        storage=storage,
+                        start_date=selected,
+                        end_date=selected,
+                        group_keys=["alpha"],
+                        theme_groups=groups,
+                        trigger="manual",
+                    )
+
+                    self.assertEqual(calls, ["alpha"])
+                    self.assertEqual(second["groups"]["alpha"]["status"], "deferred")
+                    self.assertEqual(second["online_discovery"]["status"], "deferred")
+                    self.assertEqual(second["online_discovery"]["queries_attempted"], 0)
+                    self.assertIn("local cached papers", second["online_discovery"]["message"])
+                    self.assertEqual(
+                        missing_theme_group_keys_for_date(storage, selected.isoformat(), ["alpha"]),
+                        ["alpha"],
+                    )
+                finally:
+                    storage.close()
+        finally:
+            ui_server.theme_source_fetchers = original_fetchers
+
+    def test_deferred_discovery_survives_cached_report_reload(self):
+        discovery = theme_online_discovery_from_last_fetch(
+            {
+                "groups": {
+                    "alpha": {"status": "deferred"},
+                    "beta": {"status": "deferred"},
+                }
+            }
+        )
+
+        self.assertEqual(discovery["status"], "deferred")
+        self.assertEqual(discovery["queries_attempted"], 0)
+
+    def test_theme_fetch_errors_do_not_persist_request_credentials(self):
+        message = theme_fetch_error_message(
+            "Subject Monitor",
+            RuntimeError("connection failed for https://example.test/?api_key=do-not-store-this"),
+            source_name="openalex",
+        )
+
+        self.assertEqual(message, "Subject Monitor/openalex: network connection failed.")
+        self.assertNotIn("do-not-store-this", message)
+        self.assertEqual(
+            sanitize_theme_status_message("request failed: api_key=do-not-show-this&query=alpha"),
+            "request failed: api_key=[redacted]&query=alpha",
+        )
 
     def test_on_demand_refresh_reuses_completed_source_plan(self):
         import paper_monitor.ui_server as ui_server
