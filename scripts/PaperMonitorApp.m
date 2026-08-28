@@ -544,8 +544,8 @@
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
-    if ([message.name isEqualToString:@"printUserGuide"]) {
-        [self printUserGuide];
+    if ([message.name isEqualToString:@"openUserGuidePDF"]) {
+        [self openUserGuidePDF];
         return;
     }
     if ([message.name isEqualToString:@"appReady"]) {
@@ -1872,31 +1872,33 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-- (void)printUserGuide {
-    if (!self.userGuideWebView || !self.userGuideWindow) return;
-    NSPrintInfo *printInfo = [[NSPrintInfo sharedPrintInfo] copy];
-    NSPrintOperation *operation = [self.userGuideWebView printOperationWithPrintInfo:printInfo];
-    operation.showsPrintPanel = YES;
-    operation.showsProgressPanel = YES;
-    [operation runOperationModalForWindow:self.userGuideWindow
-                                  delegate:self
-                            didRunSelector:@selector(userGuidePrintOperationDidRun:success:contextInfo:)
-                               contextInfo:NULL];
-}
-
-- (void)userGuidePrintOperationDidRun:(NSPrintOperation *)operation
-                               success:(BOOL)success
-                           contextInfo:(void *)contextInfo {
-    (void)operation;
-    (void)success;
-    (void)contextInfo;
+- (void)openUserGuidePDF {
+    NSURL *pdfURL = [[NSBundle mainBundle] URLForResource:@"Gewu Insight User Guide" withExtension:@"pdf"];
+    if (!pdfURL) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"User Guide PDF is unavailable";
+        alert.informativeText = @"Rebuild or reinstall Gewu Insight with the complete application resources.";
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+        return;
+    }
+    NSURL *previewURL = [NSURL fileURLWithPath:@"/System/Applications/Preview.app"];
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    [[NSWorkspace sharedWorkspace] openURLs:@[pdfURL]
+                       withApplicationAtURL:previewURL
+                              configuration:configuration
+                          completionHandler:^(NSRunningApplication *application, NSError *error) {
+        if (error) {
+            [[NSWorkspace sharedWorkspace] openURL:pdfURL];
+        }
+    }];
 }
 
 - (void)showUserGuideWindow {
     if (!self.userGuideWindow) {
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
         WKUserContentController *userContentController = [[WKUserContentController alloc] init];
-        [userContentController addScriptMessageHandler:self name:@"printUserGuide"];
+        [userContentController addScriptMessageHandler:self name:@"openUserGuidePDF"];
         configuration.userContentController = userContentController;
         self.userGuideWebView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
         self.userGuideWebView.UIDelegate = self;

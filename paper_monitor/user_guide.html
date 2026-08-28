@@ -2335,12 +2335,12 @@
 
       window.addEventListener('hashchange', () => showTopic(currentId()));
       document.getElementById('print-topic').addEventListener('click', () => {
-        const nativePrint = window.webkit?.messageHandlers?.printUserGuide;
-        if (nativePrint) {
-          nativePrint.postMessage({ scope: 'guide' });
+        const nativePDF = window.webkit?.messageHandlers?.openUserGuidePDF;
+        if (nativePDF) {
+          nativePDF.postMessage({ scope: 'guide' });
           return;
         }
-        window.print();
+        window.open('/user-guide.pdf', '_blank', 'noopener');
       });
       document.addEventListener('keydown', event => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {

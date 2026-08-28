@@ -441,6 +441,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/user-guide":
                 self.send_text(load_user_guide_html(), content_type="text/html; charset=utf-8")
                 return
+            if parsed.path == "/user-guide.pdf":
+                if not USER_GUIDE_PDF_PATH.is_file():
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "User Guide PDF was not found")
+                    return
+                self.send_bytes(USER_GUIDE_PDF_PATH.read_bytes(), content_type="application/pdf")
+                return
             if parsed.path == "/api/month":
                 self.handle_month(parse_qs(parsed.query))
                 return
@@ -24150,6 +24156,7 @@ def is_relative_to(path: Path, root: Path) -> bool:
 
 
 USER_GUIDE_PATH = Path(__file__).with_name("user_guide.html")
+USER_GUIDE_PDF_PATH = Path(__file__).with_name("Gewu_Insight_User_Guide.pdf")
 
 
 def load_user_guide_html() -> str:

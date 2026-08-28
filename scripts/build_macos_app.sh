@@ -10,6 +10,8 @@ BRAND_ART_SOURCE="$PROJECT_DIR/assets/branding/GewuSealGlyphs.png"
 BRAND_ART_DEST="$APP/Contents/Resources/GewuSealGlyphs.png"
 ABOUT_CALLIGRAPHY_SOURCE="$PROJECT_DIR/assets/branding/GewuAboutCalligraphy.png"
 ABOUT_CALLIGRAPHY_DEST="$APP/Contents/Resources/GewuAboutCalligraphy.png"
+USER_GUIDE_PDF_SOURCE="$PROJECT_DIR/paper_monitor/Gewu_Insight_User_Guide.pdf"
+USER_GUIDE_PDF_DEST="$APP/Contents/Resources/Gewu Insight User Guide.pdf"
 APP_ICON_SOURCE="$PROJECT_DIR/assets/gewu-insight-app-icon.png"
 APP_ICON_BUILD_VERSION="$(cksum "$APP_ICON_SOURCE" | awk '{print $1}')"
 APP_ICON_BASENAME="GewuInsightAppIcon-$APP_ICON_BUILD_VERSION"
@@ -38,6 +40,11 @@ chmod +x "$OUTPUT"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
 cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"
+if [[ ! -s "$USER_GUIDE_PDF_SOURCE" ]]; then
+  echo "The fixed-layout User Guide PDF is missing. Run scripts/build_user_guide_pdf.py first." >&2
+  exit 1
+fi
+cp "$USER_GUIDE_PDF_SOURCE" "$USER_GUIDE_PDF_DEST"
 cp "$APP_ICON_SOURCE" "$APP_ICON_PNG_DEST"
 cp "$APP_ICON_SOURCE" "$STARTUP_ICON_PNG_DEST"
 mkdir -p "$APP_ICONSET"

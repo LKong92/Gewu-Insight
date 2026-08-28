@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
 from paper_monitor import ui_server
 
@@ -33,6 +34,17 @@ class UserGuideTests(unittest.TestCase):
         handler.send_text.assert_called_once_with(
             "<html>guide</html>", content_type="text/html; charset=utf-8"
         )
+
+    def test_fixed_layout_pdf_route_serves_the_packaged_manual(self) -> None:
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.path = "/user-guide.pdf"
+        handler.send_bytes = MagicMock()
+
+        handler.do_GET()
+
+        data = ui_server.USER_GUIDE_PDF_PATH.read_bytes()
+        self.assertTrue(data.startswith(b"%PDF-"))
+        handler.send_bytes.assert_called_once_with(data, content_type="application/pdf")
 
     def test_user_guide_calligraphy_route_uses_the_packaged_brand_asset(self) -> None:
         handler = object.__new__(ui_server.PaperMonitorUiHandler)
@@ -532,9 +544,10 @@ class UserGuideTests(unittest.TestCase):
         self.assertIn('id="guideSearch"', html)
         self.assertIn("hashchange", html)
         self.assertIn("showTopic", html)
-        self.assertIn("window.print()", html)
-        self.assertIn("messageHandlers?.printUserGuide", html)
-        self.assertIn("nativePrint.postMessage", html)
+        self.assertNotIn("window.print()", html)
+        self.assertIn("messageHandlers?.openUserGuidePDF", html)
+        self.assertIn("nativePDF.postMessage", html)
+        self.assertIn("/user-guide.pdf", html)
         self.assertIn("@media print", html)
         soup = BeautifulSoup(html, "html.parser")
         self.assertFalse(soup.select("script[src]"))
@@ -548,6 +561,27 @@ class UserGuideTests(unittest.TestCase):
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:
         release_script = (ROOT / "scripts" / "make_release.sh").read_text(encoding="utf-8")
         self.assertIn('copy_item "paper_monitor"', release_script)
+
+    def test_latex_manual_contains_the_complete_fixed_layout_guide(self) -> None:
+        tex_path = ROOT / "paper_monitor" / "user_guide.tex"
+        pdf_path = ui_server.USER_GUIDE_PDF_PATH
+        self.assertTrue(tex_path.is_file())
+        self.assertTrue(pdf_path.is_file())
+        source = tex_path.read_text(encoding="utf-8")
+        self.assertIn("\\documentclass", source)
+        self.assertIn("\\chapter{Start Here}", source)
+        self.assertIn("\\chapter{Publications and Monitors}", source)
+        self.assertIn("\\chapter{Reference}", source)
+        reader = PdfReader(str(pdf_path))
+        self.assertGreater(len(reader.pages), 30)
+        sample = " ".join((reader.pages[index].extract_text() or "") for index in [0, 1, len(reader.pages) - 1])
+        self.assertIn("Gewu Insight", sample)
+        self.assertIn("Copyright and product notice", sample)
+
+    def test_app_builder_packages_the_fixed_layout_pdf(self) -> None:
+        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn("Gewu_Insight_User_Guide.pdf", build_script)
+        self.assertIn("Gewu Insight User Guide.pdf", build_script)
 
 
 if __name__ == "__main__":
