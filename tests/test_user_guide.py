@@ -440,6 +440,9 @@ class UserGuideTests(unittest.TestCase):
             "Library and Space columns",
             "main Library, a shortcut, and every Space",
             "returns to the same paper",
+            "vertical source rail",
+            "Library, shortcuts, and Spaces",
+            "stays in the Library",
         ]:
             self.assertIn(phrase, navigation_text)
 
@@ -465,6 +468,44 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         self.assertIn("data/cache/journal_logos", storage_text)
+
+    def test_guide_documents_current_subject_resource_photo_and_quick_look_behavior(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+
+        subject_text = soup.find("article", id="subject-monitor").get_text(" ", strip=True)
+        for phrase in [
+            "Moving to a date with no result does not switch",
+            "calendar's day numbers describe the active subject",
+            "arXiv display option is enabled by default",
+        ]:
+            self.assertIn(phrase, subject_text)
+
+        paper_files_text = soup.find("article", id="paper-files").get_text(" ", strip=True)
+        for phrase in [
+            "Understand a Missing File row",
+            "SQLite still has a resource record",
+            "older untyped migration alias",
+        ]:
+            self.assertIn(phrase, paper_files_text)
+
+        quick_look = soup.find("article", id="quick-look")
+        self.assertIsNotNone(quick_look)
+        quick_look_text = quick_look.get_text(" ", strip=True)
+        for phrase in [
+            "document viewer starts first",
+            "Page count and other metadata load in parallel",
+            "bounded thumbnail cache",
+            "does not change the PDF",
+        ]:
+            self.assertIn(phrase, quick_look_text)
+
+        author_text = soup.find("article", id="author-monitor").get_text(" ", strip=True)
+        for phrase in [
+            "saved locally",
+            "does not need to reopen SQLite or contact the image host for every row",
+            "manual photo takes precedence",
+        ]:
+            self.assertIn(phrase, author_text)
 
     def test_guide_explains_influential_citations_and_comments_reports(self) -> None:
         soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")

@@ -517,6 +517,7 @@
           <button class="topic-link" data-topic="paper-details">Use Paper Details</button>
           <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
           <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
+          <button class="topic-link" data-topic="quick-look">Preview PDFs with Quick Look</button>
           <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
           <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
           <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
@@ -1186,7 +1187,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#organize">Folders, Shortcuts, and Spaces</a><a href="#search-views">Search, List View, and Table View</a><a href="#paper-files">Understand Paper Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="navigation" data-group="Library" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus space quick look double click selection">
+        <article class="help-topic guide-topic" id="navigation" data-group="Library" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus source rail shortcut space quick look double click selection">
           <p class="topic-kicker">Library</p>
           <h1>Navigate with Mouse and Keyboard</h1>
           <p class="lead">Library and Space columns form one keyboard path with Paper Files. Focus moves into Paper Files with the Right Arrow and returns to the selected paper with the Left Arrow.</p>
@@ -1198,6 +1199,15 @@
             <li>Press <kbd>←</kbd> to return to its parent.</li>
             <li>Double-click a normal file to open it with its macOS application.</li>
           </ul>
+
+          <h2>Move between the source rail and Library columns</h2>
+          <ol class="steps">
+            <li><strong>Return to the leftmost Library column.</strong> Press <kbd>←</kbd> once more to move focus to the vertical source rail.</li>
+            <li><strong>Press <kbd>↑</kbd> or <kbd>↓</kbd> on the rail.</strong> Move through Library, shortcuts, and Spaces. The highlighted source opens immediately; you do not need to press Return.</li>
+            <li><strong>Press <kbd>→</kbd>.</strong> Focus enters the first visible Library column for that source. Its active row changes from the quieter background selection to the stronger blue content selection.</li>
+          </ol>
+
+          <p>While the source rail owns focus, the current row in the adjacent column remains visible in a quieter blue so you do not lose your place. The rail keeps focus while you move between sources and releases it only after you press <kbd>→</kbd>. Once you are navigating Library content, pressing <kbd>↑</kbd> at the first row stays in the Library instead of unexpectedly moving to the app tabs across the top.</p>
 
           <h2>Enter and leave Paper Files</h2>
           <ol class="steps">
@@ -1222,7 +1232,7 @@
 
           <div class="note"><span class="callout-title">Note</span>Single-click selects a Paper Files item. Double-click opens it. This prevents an accidental external app launch while you are classifying files.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#quick-look">Preview PDFs with Quick Look</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="organize" data-group="Library" data-title="Folders, Shortcuts, and Spaces" data-keywords="move copy paste alias tabs reorder roots colors rename folder">
@@ -1245,7 +1255,7 @@
             <li><strong>Check the breadcrumb and Paper Details.</strong> The visible path and folder membership update immediately.</li>
           </ol>
 
-          <p>Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style.</p>
+          <p>Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press <kbd>←</kbd> from the leftmost content column to focus this rail, use <kbd>↑</kbd> and <kbd>↓</kbd> to open another source, then press <kbd>→</kbd> to enter its content.</p>
 
           <h2>Work with several entries</h2>
           <p>Command-click to add or remove individual entries from a selection. Shift-click, or hold Shift while using the arrow keys, to extend a range in the current folder. Copy the selected entries with <kbd>⌘</kbd><kbd>C</kbd>, paste into the active destination with <kbd>⌘</kbd><kbd>V</kbd>, or press <kbd>Delete</kbd> to apply the normal reference-aware deletion rules.</p>
@@ -1395,7 +1405,41 @@
 
           <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+          <h2>Understand a Missing File row</h2>
+          <p><span class="ui">Missing File</span> means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper's live canonical file.</p>
+
+          <p>A missing attachment is not another copy of the current PDF merely because both rows have a similar name. Check <span class="ui">Show in Finder</span>, the paper's Associated Files bundle, and Recycle before deleting or importing anything. The current resource and explicitly typed attachments remain visible even when their paths need repair.</p>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview PDFs with Quick Look</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="quick-look" data-group="Library" data-title="Preview PDFs with Quick Look" data-keywords="pdf preview quick look space thumbnails page count range streaming cache large file performance">
+          <p class="topic-kicker">Library</p>
+          <h1>Preview PDFs with Quick Look</h1>
+          <p class="lead">Quick Look keeps the existing in-app PDF reading workflow while reducing the time between pressing Space and seeing the document.</p>
+
+          <h2>Open and follow a preview</h2>
+          <ol class="steps">
+            <li><strong>Select a PDF in Paper Files.</strong> Press <kbd>Space</kbd> to open Quick Look.</li>
+            <li><strong>Move with <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> When Quick Look is open, the preview follows the selected Paper Files resource.</li>
+            <li><strong>Press <kbd>Space</kbd> again.</strong> Close Quick Look and return keyboard focus to the same file.</li>
+          </ol>
+
+          <h2>Read the loading sequence</h2>
+          <p>The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails begin after the main document is ready, so a large PDF can already be readable while the thumbnail strip is still filling in.</p>
+
+          <p>On the first open, the app may still need to inspect the PDF and render thumbnail pages. Later opens can reuse stable local-file validators, remembered page information, and a bounded thumbnail cache. The cache is automatically trimmed and can always be rebuilt; it is not part of the paper record or a substitute for the PDF.</p>
+
+          <h2>Choose Quick Look or Preview</h2>
+          <table class="plain-table">
+            <tr><th>Use</th><th>Best for</th></tr>
+            <tr><td><span class="ui">Quick Look</span></td><td>Fast inspection, keyboard comparison among versions, and page navigation without leaving Gewu Insight.</td></tr>
+            <tr><td><span class="ui">Open in Preview</span></td><td>Full macOS Preview tools, annotation, export, printing, and a separate reading window.</td></tr>
+          </table>
+
+          <div class="note"><span class="callout-title">Note</span>Previewing is read-only from Gewu Insight's perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change the PDF, its role, its current-file status, or the SQLite paper record.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
@@ -1766,7 +1810,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#subject-monitor">Subject Monitor</a><a href="#network-access">Publisher and Network Access</a><a href="#import-files">Add Papers and Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="subject-monitor" data-group="Publications and Monitors" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar">
+        <article class="help-topic guide-topic" id="subject-monitor" data-group="Publications and Monitors" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar selected subject counts empty date">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Subject Monitor</h1>
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
@@ -1781,10 +1825,13 @@
 
           <p>Keywords use case-insensitive literal matching. Enter the words or phrases you expect to appear; they are not regular expressions and are not silently expanded into unrelated concepts.</p>
 
+          <h2>Keep one subject selected across dates</h2>
+          <p>Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar's day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.</p>
+
           <h2>Refresh subjects</h2>
           <ol class="steps">
             <li><strong>Select a calendar date.</strong> Selecting a date only loads the result already stored for that day; it does not start a network request.</li>
-            <li><strong>Choose <span class="ui">Refresh</span>.</strong> The command refreshes every configured subject for the currently selected date. Enable the arXiv option when desired.</li>
+            <li><strong>Choose <span class="ui">Refresh</span>.</strong> The command refreshes every configured subject for the currently selected date. The arXiv display option is enabled by default; clear it when you want to hide arXiv cards without changing what is stored.</li>
             <li><strong>Read source status.</strong> A source can be complete, partial, empty, or failed. Source-level retries are managed by the background scheduler.</li>
             <li><strong>Cancel if necessary.</strong> Completed results remain distinguishable from unfinished work.</li>
           </ol>
@@ -1821,7 +1868,7 @@
           <p><span class="ui">Update All Citations</span> is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.</p>
 
           <h2>Manage the profile image</h2>
-          <p>Control-click an author and choose <span class="ui">Edit Homepage</span> or <span class="ui">Change Photo</span>. A downloaded Google Scholar avatar is cached locally so the app does not fetch it on every launch. A manual photo takes precedence.</p>
+          <p>Control-click an author and choose <span class="ui">Edit Homepage</span> or <span class="ui">Change Photo</span>. A downloaded Google Scholar avatar is saved locally, and local photo bytes are prepared when the service starts so opening Author Monitor does not need to reopen SQLite or contact the image host for every row. A manual photo takes precedence. If no valid local photo exists, the list can use initials until you explicitly refresh or replace the profile image.</p>
 
           <h2>Discovery entries and managed papers</h2>
           <p>An Author Monitor result is a cataloged shared record, while its Monitor relationship remains a discovery context. The compact view hides the Gewu Key, and the result does not need a local Files bundle. Adding it to Library creates another relationship to the existing record; downloading or attaching a file creates a resource relationship.</p>
@@ -2010,9 +2057,9 @@
 
           <table class="plain-table">
             <tr><th>Shortcut</th><th>Action</th></tr>
-            <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move through the focused Library or Paper Files list.</td></tr>
-            <tr><td><kbd>→</kbd></td><td>Enter a folder or move from a selected paper into Paper Files.</td></tr>
-            <tr><td><kbd>←</kbd></td><td>Leave Paper Files for the selected paper, or return to a parent folder.</td></tr>
+            <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move through the focused Library or Paper Files list; on the source rail, move among Library, shortcuts, and Spaces and open the highlighted source.</td></tr>
+            <tr><td><kbd>→</kbd></td><td>Enter the highlighted source from the vertical rail, enter a folder, or move from a selected paper into Paper Files.</td></tr>
+            <tr><td><kbd>←</kbd></td><td>Leave Paper Files for the selected paper, return to a parent folder, or move from the leftmost Library column to the source rail.</td></tr>
             <tr><td><kbd>Space</kbd></td><td>Open or close Quick Look for the selected Paper Files item.</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Dismiss an active transient control or return focus where supported.</td></tr>
             <tr><td><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></td><td>Toggle List View and Table View.</td></tr>
@@ -2090,6 +2137,12 @@
             <li>Check Recycle before importing another copy.</li>
           </ol>
 
+          <h2>Paper Files shows Missing File</h2>
+          <p>This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check <span class="ui">Show in Finder</span>, the corresponding <code>data/Associated Files</code> bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the current PDF; explicitly typed attachments and current resources are intentionally retained for recovery.</p>
+
+          <h2>Quick Look is slow on the first open</h2>
+          <p>A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use <span class="ui">Open in Preview</span> to check whether the file itself is valid.</p>
+
           <h2>The wrong PDF is current</h2>
           <ol>
             <li>Open Paper Files and verify every file type.</li>
@@ -2139,6 +2192,8 @@
             <li><code>reports</code><span>Generated reading notes and reports. These are artifacts, not the database.</span></li>
             <li><code>logs/paper_monitor_launcher.log</code><span>macOS launcher diagnostics when the local UI cannot start.</span></li>
           </ul>
+
+          <p>Quick Look page thumbnails use a separate, automatically trimmed temporary cache. It is rebuildable preview data, not part of the Library, Associated Files, or the SQLite record, so it does not belong in a research backup.</p>
 
           <h2>Associated Files layout</h2>
           <p>An associated bundle follows the managed scope and path, then a work-specific bundle. Its children separate <code>Versions</code>, <code>Supplements</code>, and <code>Files</code>. The exact physical name can change as the paper moves; the Gewu Key remains stable.</p>

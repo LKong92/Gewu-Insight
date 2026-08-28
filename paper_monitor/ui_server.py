@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from email.parser import BytesParser
 from email.policy import default as email_policy
+from email.utils import formatdate
+from functools import lru_cache
 import html
 import hashlib
 from io import BytesIO
@@ -303,6 +305,9 @@ AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
 PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
+PDF_THUMB_CACHE_MAX_BYTES = 256 * 1024 * 1024
+PDF_THUMB_CACHE_TARGET_BYTES = 192 * 1024 * 1024
+LOCAL_FILE_RESPONSE_CHUNK_BYTES = 1024 * 1024
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
@@ -328,6 +333,38 @@ class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
         host, port = self.server_address[:2]
         self.server_name = str(host)
         self.server_port = port
+
+
+def parse_single_byte_range(range_header: str, file_size: int) -> tuple[int, int] | None:
+    header = str(range_header or "").strip()
+    if not header:
+        return None
+    if file_size <= 0 or not header.lower().startswith("bytes="):
+        raise ValueError("Invalid byte range")
+    range_spec = header.split("=", 1)[1].strip()
+    if not range_spec or "," in range_spec or "-" not in range_spec:
+        raise ValueError("Only one byte range is supported")
+    start_text, end_text = (part.strip() for part in range_spec.split("-", 1))
+    try:
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+            if start < 0 or start >= file_size or end < start:
+                raise ValueError("Requested range is outside the file")
+            return start, min(end, file_size - 1)
+        suffix_length = int(end_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid byte range") from exc
+    if suffix_length <= 0:
+        raise ValueError("Invalid suffix byte range")
+    return max(0, file_size - suffix_length), file_size - 1
+
+
+def local_file_response_metadata(path: Path) -> tuple[os.stat_result, str, str]:
+    stat = path.stat()
+    etag = f'"{stat.st_size:x}-{stat.st_mtime_ns:x}"'
+    last_modified = formatdate(stat.st_mtime, usegmt=True)
+    return stat, etag, last_modified
 
 
 def run_ui_server(
@@ -356,7 +393,7 @@ def run_ui_server(
     config = load_config(db_path=db_path)
     journals = configured_source_names(config)
     threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
-    threading.Thread(target=clear_pdf_thumbnail_cache, daemon=True).start()
+    threading.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
     threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
     threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
     threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
@@ -4857,6 +4894,64 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         self.refresh_journals()
         self.send_json({"journals": journals_for_api(raw), "history": journal_history(raw)})
 
+    def send_local_file(self, requested: Path, content_type: str) -> None:
+        stat, etag, last_modified = local_file_response_metadata(requested)
+        request_headers = getattr(self, "headers", {})
+        range_header = str(request_headers.get("Range") or "").strip()
+        if_range = str(request_headers.get("If-Range") or "").strip()
+        if range_header and if_range and if_range not in {etag, last_modified}:
+            range_header = ""
+
+        if_none_match = str(request_headers.get("If-None-Match") or "").strip()
+        if not range_header and if_none_match:
+            validators = {value.strip() for value in if_none_match.split(",")}
+            if "*" in validators or etag in validators:
+                self.send_response(HTTPStatus.NOT_MODIFIED)
+                self.send_header("ETag", etag)
+                self.send_header("Last-Modified", last_modified)
+                self.send_header("Cache-Control", "private, no-cache")
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return
+
+        try:
+            byte_range = parse_single_byte_range(range_header, int(stat.st_size))
+        except ValueError:
+            self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+            self.send_header("Content-Range", f"bytes */{stat.st_size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        start, end = byte_range or (0, int(stat.st_size) - 1)
+        content_length = max(0, end - start + 1)
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if byte_range else HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "private, no-cache")
+        self.send_header("ETag", etag)
+        self.send_header("Last-Modified", last_modified)
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{stat.st_size}")
+        self.end_headers()
+        if not content_length:
+            return
+
+        try:
+            with requested.open("rb") as handle:
+                handle.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = handle.read(min(LOCAL_FILE_RESPONSE_CHUNK_BYTES, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     def handle_file(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
         if not raw_path:
@@ -4870,12 +4965,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
         content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
-        data = requested.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        self.send_local_file(requested, content_type)
 
     def handle_native_file_preview(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -4887,12 +4977,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
             return
         content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
-        data = requested.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        self.send_local_file(requested, content_type)
 
     def handle_pdf_info(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -4906,11 +4991,15 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not requested.exists() or requested.suffix.lower() != ".pdf":
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
             return
-        try:
-            page_count = len(PdfReader(str(requested)).pages)
-        except Exception:
-            page_count = 0
-        self.send_json({"path": str(requested), "page_count": page_count})
+        stat = requested.stat()
+        page_count = cached_pdf_page_count(str(requested), int(stat.st_size), int(stat.st_mtime_ns))
+        self.send_json(
+            {
+                "path": str(requested),
+                "page_count": page_count,
+                "file_version": f"{stat.st_size:x}-{stat.st_mtime_ns:x}",
+            }
+        )
 
     def handle_pdf_page(self, query: dict[str, list[str]]) -> None:
         requested = self.validated_pdf_path(query)
@@ -7854,6 +7943,26 @@ def clear_webkit_network_cache() -> dict[str, Any]:
 def clear_pdf_thumbnail_cache() -> dict[str, Any]:
     before, entries = cache_file_entries(PDF_THUMB_CACHE_DIR)
     return prune_cache_files(root=PDF_THUMB_CACHE_DIR, entries=entries, before=before, target_bytes=0)
+
+
+def trim_pdf_thumbnail_cache_if_needed() -> dict[str, Any]:
+    before, entries = cache_file_entries(PDF_THUMB_CACHE_DIR)
+    if before <= PDF_THUMB_CACHE_MAX_BYTES:
+        return {
+            "status": "skipped",
+            "path": str(PDF_THUMB_CACHE_DIR),
+            "before_bytes": before,
+            "after_bytes": before,
+            "removed_bytes": 0,
+            "removed_files": 0,
+            "errors": [],
+        }
+    return prune_cache_files(
+        root=PDF_THUMB_CACHE_DIR,
+        entries=entries,
+        before=before,
+        target_bytes=PDF_THUMB_CACHE_TARGET_BYTES,
+    )
 
 
 def prune_cache_files(
@@ -23670,6 +23779,15 @@ def file_type_icon_glyph(kind: str, accent: str) -> str:
     return f'<path d="M22 23h20M22 29h17M22 35h13" stroke="{accent}" stroke-width="2.2" stroke-linecap="round" opacity=".75"/>'
 
 
+@lru_cache(maxsize=256)
+def cached_pdf_page_count(path_text: str, file_size: int, modified_ns: int) -> int:
+    del file_size, modified_ns
+    try:
+        return len(PdfReader(path_text).pages)
+    except Exception:
+        return 0
+
+
 def single_page_pdf_bytes(path: Path, page_number: int) -> bytes | None:
     try:
         reader = PdfReader(str(path))
@@ -32804,6 +32922,7 @@ INDEX_HTML = """<!doctype html>
       libraryQuickLookUrl: "",
       libraryQuickLookPage: 1,
       libraryQuickLookPageCount: 0,
+      libraryQuickLookThumbScheduleKey: "",
       libraryQuickLookManualFrame: false,
       libraryQuickLookFrameRect: null,
       libraryQuickLookPdfHasFocus: false,
@@ -46306,6 +46425,7 @@ INDEX_HTML = """<!doctype html>
       state.reportQuickLookPaperId = "";
       state.libraryQuickLookPage = 1;
       state.libraryQuickLookPageCount = 0;
+      state.libraryQuickLookThumbScheduleKey = "";
       state.libraryQuickLookPdfHasFocus = false;
       const overlay = $("libraryQuickLook");
       const pages = $("libraryQuickLookPages");
@@ -46466,7 +46586,7 @@ INDEX_HTML = """<!doctype html>
       const safePage = Math.max(1, Number(page || 1));
       const [baseUrl] = state.libraryQuickLookUrl.split("#");
       const separator = baseUrl.includes("?") ? "&" : "?";
-      return `${baseUrl}${separator}pm_page=${safePage}&pm_nonce=${Date.now()}#page=${safePage}&toolbar=0&navpanes=0&view=FitH`;
+      return `${baseUrl}${separator}pm_page=${safePage}#page=${safePage}&toolbar=0&navpanes=0&view=FitH`;
     }
 
     function updateLibraryPdfFramePage(page) {
@@ -46488,7 +46608,7 @@ INDEX_HTML = """<!doctype html>
       if (!root) return;
       const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
       if (!count) {
-        root.innerHTML = `<div class="empty">Pages</div>`;
+        root.innerHTML = "";
         return;
       }
       root.innerHTML = Array.from({length: count}, (_, index) => {
@@ -46509,15 +46629,56 @@ INDEX_HTML = """<!doctype html>
       root.querySelector(".library-page-thumb.active")?.scrollIntoView({block: "nearest"});
     }
 
+    function scheduleLibraryQuickLookThumbs(path, pageCount) {
+      const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
+      if (!count || !path) {
+        renderLibraryQuickLookThumbs(0);
+        return;
+      }
+      const token = state.libraryQuickLookRenderToken;
+      const scheduleKey = `${token}:${path}:${count}`;
+      if (state.libraryQuickLookThumbScheduleKey === scheduleKey) return;
+      state.libraryQuickLookThumbScheduleKey = scheduleKey;
+      const renderWhenIdle = () => {
+        window.setTimeout(() => {
+          const render = () => {
+            if (
+              token !== state.libraryQuickLookRenderToken
+              || path !== state.libraryQuickLookPath
+              || !state.libraryQuickLookOpen
+            ) return;
+            renderLibraryQuickLookThumbs(count);
+          };
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(render, {timeout: 900});
+          } else {
+            render();
+          }
+        }, 180);
+      };
+      const frame = $("libraryQuickLookPages")?.querySelector(".library-pdf-frame");
+      if (frame?.dataset.loaded === "1") {
+        renderWhenIdle();
+      } else if (frame) {
+        frame.addEventListener("load", renderWhenIdle, {once: true});
+      } else {
+        renderWhenIdle();
+      }
+    }
+
     function renderLibraryQuickLookPages(pageCount) {
       const root = $("libraryQuickLookPages");
       if (!root) return;
       const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
-      if (!count) {
-        root.innerHTML = `<div class="empty">Loading pages...</div>`;
+      if (!state.libraryQuickLookUrl) {
+        root.innerHTML = "";
         return;
       }
-      const page = Math.max(1, Math.min(state.libraryQuickLookPage || 1, count));
+      const page = Math.max(1, count
+        ? Math.min(state.libraryQuickLookPage || 1, count)
+        : Number(state.libraryQuickLookPage || 1));
+      const existingFrame = root.querySelector(".library-pdf-frame");
+      if (existingFrame) return;
       root.innerHTML = `<iframe class="library-pdf-frame" title="PDF preview" src="${escapeAttr(libraryPdfFrameUrl(page))}"></iframe>`;
       wireLibraryQuickLookPdfFrame(root.querySelector(".library-pdf-frame"));
       root.scrollTop = 0;
@@ -46531,6 +46692,7 @@ INDEX_HTML = """<!doctype html>
       frame.addEventListener("pointerdown", markPdfFocus);
       frame.addEventListener("mousedown", markPdfFocus);
       frame.addEventListener("load", () => {
+        frame.dataset.loaded = "1";
         try {
           frame.contentWindow?.addEventListener("keydown", handleLibraryQuickLookPdfKeydown, true);
         } catch (error) {
@@ -46586,12 +46748,11 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok || path !== state.libraryQuickLookPath) return;
         state.libraryQuickLookPageCount = Number(data.page_count || 0);
-        renderLibraryQuickLookThumbs(state.libraryQuickLookPageCount);
         renderLibraryQuickLookPages(state.libraryQuickLookPageCount);
+        scheduleLibraryQuickLookThumbs(path, state.libraryQuickLookPageCount);
       } catch (error) {
         state.libraryQuickLookPageCount = 0;
         renderLibraryQuickLookThumbs(0);
-        renderLibraryQuickLookPages(0);
       }
     }
 
@@ -46615,7 +46776,7 @@ INDEX_HTML = """<!doctype html>
       captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "pdf";
-      state.libraryQuickLookRenderToken += 1;
+      if (isNewPdf) state.libraryQuickLookRenderToken += 1;
       state.libraryQuickLookPath = paper.merged_pdf_path;
       state.libraryQuickLookUrl = pdfUrl;
       state.libraryQuickLookPdfHasFocus = false;
@@ -46623,6 +46784,7 @@ INDEX_HTML = """<!doctype html>
       if (isNewPdf) {
         state.libraryQuickLookPage = 1;
         state.libraryQuickLookPageCount = 0;
+        state.libraryQuickLookThumbScheduleKey = "";
         renderLibraryQuickLookThumbs(0);
         renderLibraryQuickLookPages(0);
         loadLibraryQuickLookInfo(paper.merged_pdf_path);
