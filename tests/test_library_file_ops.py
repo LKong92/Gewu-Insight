@@ -572,6 +572,239 @@ class LibraryFileOperationTests(unittest.TestCase):
             ui_server.local_copy_dir_for_library_folder(self.storage, int(target_folder["id"])).resolve(),
         )
 
+    def test_copy_library_item_creates_only_the_target_alias(self) -> None:
+        source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
+        target_folder = self.storage.create_library_folder(parent_id=1, name="Target")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(source_folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "copy-targeted-paper",
+                "doi": "10.1234/copy-targeted",
+                "title": "Copy Targeted Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "copy-targeted-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(
+            paper_id="copy-targeted-paper",
+            folder_id=int(source_folder["id"]),
+        )
+
+        with patch.object(ui_server, "sync_all_pdf_aliases_for_paper") as full_sync:
+            pasted = ui_server.PaperMonitorUiHandler.paste_library_entry_in_storage(
+                None,
+                self.storage,
+                "item",
+                int(item["id"]),
+                int(target_folder["id"]),
+            )
+
+        target_path = ui_server.library_item_local_pdf_path(
+            self.storage,
+            pasted,
+            self.storage.get_paper("copy-targeted-paper"),
+        )
+        full_sync.assert_not_called()
+        self.assertTrue(source_pdf.exists())
+        self.assertIsNotNone(target_path)
+        self.assertTrue(target_path.is_symlink())
+        self.assertEqual(target_path.resolve(), source_pdf.resolve())
+
+    def test_alias_only_library_item_move_does_not_run_global_sync(self) -> None:
+        owner_folder = self.storage.create_library_folder(parent_id=1, name="Owner")
+        source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
+        target_folder = self.storage.create_library_folder(parent_id=1, name="Target")
+        owner_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(owner_folder["id"]))
+        owner_dir.mkdir(parents=True)
+        source_pdf = owner_dir / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "alias-move-paper",
+                "doi": "10.1234/alias-move",
+                "title": "Alias Move Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "alias-move-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        self.storage.add_library_item(paper_id="alias-move-paper", folder_id=int(owner_folder["id"]))
+        item = self.storage.add_library_item(paper_id="alias-move-paper", folder_id=int(source_folder["id"]))
+        source_alias = ui_server.sync_alias_for_library_item(
+            self.storage,
+            "alias-move-paper",
+            int(source_folder["id"]),
+        )
+
+        with patch.object(ui_server, "sync_all_pdf_aliases_for_paper") as full_sync:
+            canonical_moved = ui_server.move_or_alias_library_item_pdf(
+                self.storage,
+                item=item,
+                target_folder_id=int(target_folder["id"]),
+            )
+            moved = self.storage.move_library_item(item_id=int(item["id"]), folder_id=int(target_folder["id"]))
+            target_alias = ui_server.sync_alias_for_library_item(
+                self.storage,
+                "alias-move-paper",
+                int(target_folder["id"]),
+            )
+
+        full_sync.assert_not_called()
+        self.assertFalse(canonical_moved)
+        self.assertFalse(source_alias.exists())
+        self.assertEqual(int(moved["folder_id"]), int(target_folder["id"]))
+        self.assertTrue(target_alias.is_symlink())
+        self.assertEqual(target_alias.resolve(), source_pdf.resolve())
+
+    def test_canonical_item_move_relocates_the_associated_work_directory(self) -> None:
+        source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
+        target_folder = self.storage.create_library_folder(parent_id=1, name="Target")
+        source_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(source_folder["id"]))
+        source_dir.mkdir(parents=True)
+        source_pdf = source_dir / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "associated-move-paper",
+                "doi": "10.1234/associated-move",
+                "title": "Associated Move Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "associated-move-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        item = self.storage.add_library_item(
+            paper_id="associated-move-paper",
+            folder_id=int(source_folder["id"]),
+        )
+        storage_key = self.storage.storage_key_for_paper_id("associated-move-paper")
+        old_work_dir = (
+            ui_server.ASSOCIATED_FILES_ROOT
+            / "Library"
+            / "Source"
+            / f"paper [{storage_key}]"
+        )
+        old_work_dir.mkdir(parents=True)
+        attachment = old_work_dir / "notes.md"
+        attachment.write_text("fixture notes", encoding="utf-8")
+        resource = self.storage.create_paper_resource(
+            paper_id="associated-move-paper",
+            stored_path=str(attachment),
+            file_role="other",
+            added_via="test",
+        )
+
+        canonical_moved = ui_server.move_or_alias_library_item_pdf(
+            self.storage,
+            item=item,
+            target_folder_id=int(target_folder["id"]),
+        )
+        moved = self.storage.move_library_item(
+            item_id=int(item["id"]),
+            folder_id=int(target_folder["id"]),
+        )
+        self.assertTrue(canonical_moved)
+        ui_server.sync_all_pdf_aliases_for_paper(self.storage, "associated-move-paper")
+
+        paper = self.storage.get_paper("associated-move-paper") or {}
+        moved_pdf = Path(paper["merged_pdf_path"])
+        new_work_dir = ui_server.existing_associated_work_dir(
+            self.storage,
+            "associated-move-paper",
+        )
+        moved_resource = self.storage.get_paper_resource(int(resource["id"])) or {}
+        moved_attachment = Path(str(moved_resource.get("stored_path") or ""))
+        self.assertEqual(int(moved["folder_id"]), int(target_folder["id"]))
+        self.assertEqual(moved_pdf.parent.resolve(), ui_server.local_copy_dir_for_library_folder(
+            self.storage,
+            int(target_folder["id"]),
+        ).resolve())
+        self.assertFalse(old_work_dir.exists())
+        self.assertIsNotNone(new_work_dir)
+        self.assertEqual(
+            new_work_dir.parent.resolve(),
+            (ui_server.ASSOCIATED_FILES_ROOT / "Library" / "Target").resolve(),
+        )
+        self.assertTrue(moved_attachment.is_file())
+        self.assertEqual(moved_attachment.parent.resolve(), new_work_dir.resolve())
+        self.assertEqual(moved_attachment.read_text(encoding="utf-8"), "fixture notes")
+
+    def test_folder_move_reconciles_a_canonical_pdf_only_once(self) -> None:
+        source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
+        child_folder = self.storage.create_library_folder(parent_id=int(source_folder["id"]), name="Child")
+        target_folder = self.storage.create_library_folder(parent_id=1, name="Target")
+        child_dir = ui_server.local_copy_dir_for_library_folder(self.storage, int(child_folder["id"]))
+        child_dir.mkdir(parents=True)
+        source_pdf = child_dir / "paper.pdf"
+        source_pdf.write_bytes(b"%PDF fixture")
+        self.storage.upsert_paper(
+            {
+                "paper_id": "folder-move-paper",
+                "doi": "10.1234/folder-move",
+                "title": "Folder Move Paper",
+                "journal": "Fixture Journal",
+                "publication_date": "2026-01-01",
+                "abstract": "",
+                "source": "test",
+                "type": "article",
+            }
+        )
+        self.storage.update_download_status(
+            "folder-move-paper",
+            status="success",
+            main_pdf_path=str(source_pdf),
+            merged_pdf_path=str(source_pdf),
+            supplement_pdf_paths=[],
+        )
+        self.storage.add_library_item(paper_id="folder-move-paper", folder_id=int(child_folder["id"]))
+        plan = ui_server.folder_tree_pdf_move_plan(self.storage, int(source_folder["id"]))
+        self.storage.move_library_folder(folder_id=int(source_folder["id"]), parent_id=int(target_folder["id"]))
+
+        original_sync = ui_server.sync_all_pdf_aliases_for_paper
+        with patch.object(ui_server, "sync_all_pdf_aliases_for_paper", wraps=original_sync) as full_sync:
+            ui_server.apply_folder_tree_pdf_move_plan(self.storage, plan)
+
+        paper = self.storage.get_paper("folder-move-paper") or {}
+        moved_pdf = Path(paper["merged_pdf_path"])
+        full_sync.assert_called_once()
+        self.assertFalse(source_pdf.exists())
+        self.assertTrue(moved_pdf.exists())
+        self.assertEqual(
+            moved_pdf.parent.resolve(),
+            ui_server.local_copy_dir_for_library_folder(self.storage, int(child_folder["id"])).resolve(),
+        )
+
     def test_journal_download_infers_existing_space_as_real_pdf_target(self) -> None:
         space = self.storage.create_library_root_folder(name="Wigner Crystal")
         self.storage.upsert_paper(

@@ -224,7 +224,10 @@ class PaperFilesUiTests(unittest.TestCase):
         resource_keyboard = INDEX_HTML.split("function handleLibraryPaperResourceKeydown", 1)[1].split(
             "function quickLookLibraryPaperResource", 1
         )[0]
-        self.assertIn('["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape"]', resource_keyboard)
+        self.assertIn(
+            '["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape", "Delete", "Backspace"]',
+            resource_keyboard,
+        )
         self.assertIn("moveLibraryPaperResourceSelection", resource_keyboard)
         self.assertIn("quickLookLibraryPaperResource(selected", resource_keyboard)
         self.assertIn("clearLibraryPaperResourceSelection({focusPaper: true})", resource_keyboard)

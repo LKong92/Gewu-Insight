@@ -141,11 +141,10 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertNotIn("Developed with coding assistance from OpenAI Codex.", source)
         self.assertIn('aboutLinkButtonWithTitle:@"User Guide"', source)
         self.assertIn('aboutLinkButtonWithTitle:@"GitHub"', source)
-        self.assertIn('addScriptMessageHandler:self name:@"printUserGuide"', source)
-        self.assertIn('message.name isEqualToString:@"printUserGuide"', source)
-        self.assertIn("printOperationWithPrintInfo", source)
-        self.assertIn("runOperationModalForWindow:self.userGuideWindow", source)
-        self.assertIn("userGuidePrintOperationDidRun:success:contextInfo:", source)
+        self.assertIn('addScriptMessageHandler:self name:@"openUserGuidePDF"', source)
+        self.assertIn('message.name isEqualToString:@"openUserGuidePDF"', source)
+        self.assertIn('URLForResource:@"Gewu Insight User Guide" withExtension:@"pdf"', source)
+        self.assertIn('@"/System/Applications/Preview.app"', source)
         self.assertEqual(
             info["NSHumanReadableCopyright"],
             "Copyright © 2026 Lingyuan Kong and Zhengran Wu. All rights reserved.",

@@ -199,6 +199,75 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn('shell.addEventListener("dragover"', interactions)
         self.assertNotIn('shell.querySelectorAll(".library-row").forEach', interactions)
 
+    def test_partial_library_render_rebinds_paper_file_mouse_interactions(self) -> None:
+        partial_render = INDEX_HTML.split("function renderLibraryNavigationContent", 1)[1].split(
+            "function libraryViewTitle", 1
+        )[0]
+        resource_interactions = INDEX_HTML.split("function wireLibraryResourceInteractions", 1)[1].split(
+            "function wireLibraryInteractions", 1
+        )[0]
+        full_interactions = INDEX_HTML.split("function wireLibraryInteractions", 1)[1].split(
+            "function libraryDragPayload", 1
+        )[0]
+
+        self.assertIn("renderLibraryColumns();", partial_render)
+        self.assertIn("renderLibraryDetail();", partial_render)
+        self.assertIn("wireLibraryResourceInteractions(shell);", partial_render)
+        self.assertIn('card.addEventListener("click"', resource_interactions)
+        self.assertIn('card.addEventListener("contextmenu"', resource_interactions)
+        self.assertIn("wireLibraryResourceInteractions(shell);", full_interactions)
+
+    def test_partial_library_render_rebinds_column_marquee_interactions(self) -> None:
+        partial_render = INDEX_HTML.split("function renderLibraryNavigationContent", 1)[1].split(
+            "function libraryViewTitle", 1
+        )[0]
+        column_interactions = INDEX_HTML.split("function wireLibraryColumnInteractions", 1)[1].split(
+            "function wireLibraryInteractions", 1
+        )[0]
+        full_interactions = INDEX_HTML.split("function wireLibraryInteractions", 1)[1].split(
+            "function libraryDragPayload", 1
+        )[0]
+
+        self.assertIn("wireLibraryColumnInteractions(shell);", partial_render)
+        self.assertIn('column.addEventListener("pointerdown"', column_interactions)
+        self.assertIn('startDragSelection(event, "library")', column_interactions)
+        self.assertIn("wireLibraryColumnInteractions(shell);", full_interactions)
+
+    def test_delete_key_in_paper_files_deletes_only_the_selected_resource(self) -> None:
+        resource_keydown = INDEX_HTML.split("function handleLibraryPaperResourceKeydown", 1)[1].split(
+            "function quickLookLibraryPaperResource", 1
+        )[0]
+        resource_delete = INDEX_HTML.split("async function deleteSelectedLibraryPaperResource", 1)[1].split(
+            "function handleLibraryPaperResourceKeydown", 1
+        )[0]
+        library_keydown = INDEX_HTML.split("function handleLibraryKeydown", 1)[1].split(
+            "function renderLibraryDetail", 1
+        )[0]
+
+        self.assertIn('"Delete", "Backspace"', resource_keydown)
+        self.assertIn("deleteSelectedLibraryPaperResource(selected);", resource_keydown)
+        self.assertIn("event.stopImmediatePropagation", resource_keydown)
+        self.assertIn("if (file?.is_primary)", resource_delete)
+        self.assertIn("The current file cannot be deleted", resource_delete)
+        self.assertIn("await deletePaperFile(paperId, resourceId)", resource_delete)
+        self.assertNotIn("deleteSelectedLibraryEntries", resource_delete)
+        self.assertLess(
+            library_keydown.index("handleLibraryPaperResourceKeydown(event, key)"),
+            library_keydown.index("runLibraryMenuAction(deleteSelectedLibraryEntries)"),
+        )
+
+    def test_internal_item_drag_does_not_arm_the_native_attachment_bridge(self) -> None:
+        drag_start = INDEX_HTML.split('shell.addEventListener("dragstart"', 1)[1].split(
+            'shell.addEventListener("dragend"', 1
+        )[0]
+        mouse_down = INDEX_HTML.split('shell.addEventListener("mousedown"', 1)[1].split(
+            'shell.addEventListener("keydown"', 1
+        )[0]
+
+        self.assertIn('application/x-paper-monitor-library', drag_start)
+        self.assertNotIn("armNativeLibraryItemDrop", drag_start)
+        self.assertIn("armNativeLibraryItemDrop", mouse_down)
+
     def test_remote_avatar_fallbacks_do_not_access_a_removed_parent(self) -> None:
         self.assertNotIn("this.remove(); this.parentElement", INDEX_HTML)
         self.assertIn('data-fallback="${escapeAttr(initials)}"', INDEX_HTML)

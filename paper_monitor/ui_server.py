@@ -3713,14 +3713,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 if not source_item:
                     raise ValueError("Library item not found")
                 affected_paper_ids.add(str(source_item.get("paper_id") or ""))
-                move_or_alias_library_item_pdf(storage, item=source_item, target_folder_id=target_folder_id)
+                canonical_moved = move_or_alias_library_item_pdf(
+                    storage,
+                    item=source_item,
+                    target_folder_id=target_folder_id,
+                )
                 if target_folder_id == recycle_id:
                     moved = storage.move_library_item_to_trash(item_id=item_id, recycle_folder_id=recycle_id)
                 else:
                     moved = storage.move_library_item(item_id=item_id, folder_id=target_folder_id)
                 if moved:
-                    sync_all_pdf_aliases_for_paper(storage, str(moved.get("paper_id") or source_item.get("paper_id") or ""))
-                    updated_paper = storage.get_paper(str(moved.get("paper_id") or source_item.get("paper_id") or ""))
+                    moved_paper_id = str(moved.get("paper_id") or source_item.get("paper_id") or "")
+                    if canonical_moved:
+                        sync_all_pdf_aliases_for_paper(storage, moved_paper_id)
+                    else:
+                        sync_alias_for_library_item(
+                            storage,
+                            moved_paper_id,
+                            int(moved.get("folder_id") or target_folder_id),
+                        )
+                    updated_paper = storage.get_paper(moved_paper_id)
                     if updated_paper:
                         annotated = annotate_papers_with_library_status(storage, [updated_paper])
                         updated_paper = annotated[0] if annotated else updated_paper
@@ -4342,8 +4354,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if entry_type == "folder":
             pasted = storage.copy_library_folder(folder_id=entry_id, parent_id=target_folder_id)
             if pasted:
-                for paper_id in storage.library_paper_ids_in_folder_tree(folder_id=int(pasted.get("id") or 0)):
-                    sync_all_pdf_aliases_for_paper(storage, paper_id)
+                for item in library_items_in_folder_tree(storage, int(pasted.get("id") or 0)):
+                    sync_alias_for_library_item(
+                        storage,
+                        str(item.get("paper_id") or ""),
+                        int(item.get("folder_id") or 1),
+                        item=item,
+                    )
             return pasted
         raise ValueError("type must be item or folder")
 
@@ -22668,20 +22685,46 @@ def create_pdf_alias(
     return alias_path
 
 
-def sync_alias_for_library_item(storage: Storage, paper_id: str, folder_id: int) -> Path | None:
-    sync_all_pdf_aliases_for_paper(storage, paper_id)
-    item = storage.conn.execute(
-        """
-        SELECT *
-        FROM library_items
-        WHERE paper_id = ? AND folder_id = ?
-        ORDER BY id ASC
-        LIMIT 1
-        """,
-        (str(paper_id), int(folder_id or 0)),
-    ).fetchone()
+def sync_alias_for_library_item(
+    storage: Storage,
+    paper_id: str,
+    folder_id: int,
+    *,
+    item: dict[str, Any] | None = None,
+) -> Path | None:
+    """Create only the Finder alias required by one Library placement.
+
+    Full-paper reconciliation is intentionally kept out of this hot path. A
+    normal copy or alias-only move does not change the canonical PDF and must
+    not rescan every placement of the paper.
+    """
+    paper_id = str(paper_id or "")
+    folder_id = int(folder_id or 0)
+    if not paper_id or not folder_id:
+        return None
+    if item is None:
+        row = storage.conn.execute(
+            """
+            SELECT *
+            FROM library_items
+            WHERE paper_id = ? AND folder_id = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (paper_id, folder_id),
+        ).fetchone()
+        item = dict(row) if row else None
     paper = storage.get_paper(paper_id)
-    return library_item_local_pdf_path(storage, dict(item), paper) if item and paper else None
+    canonical = canonical_pdf_path_for_paper(paper)
+    if not item or not paper or not canonical:
+        return None
+    target_dir = local_copy_dir_for_library_folder(storage, folder_id).resolve()
+    alias = create_pdf_alias(
+        canonical,
+        target_dir,
+        library_item_pdf_filename(item, paper, canonical),
+    )
+    return alias or library_item_local_pdf_path(storage, item, paper)
 
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
@@ -23112,14 +23155,21 @@ def reconcile_paper_pdf_storage(
     return changed
 
 
-def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], target_folder_id: int) -> None:
+def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], target_folder_id: int) -> bool:
+    """Move one canonical PDF or relocate one alias.
+
+    Returns True only when the canonical file path changed and a subsequent
+    full-paper alias reconciliation is therefore required.
+    """
     paper_id = str(item.get("paper_id") or "")
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
-        return
+        return False
     source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
     target_dir = local_copy_dir_for_library_folder(storage, int(target_folder_id or 1)).resolve()
+    if source_dir == target_dir:
+        return False
     if is_path_inside_dir(canonical, source_dir) and canonical.parent == source_dir:
         target_dir.mkdir(parents=True, exist_ok=True)
         remove_direct_symlinks_to(canonical, [target_dir])
@@ -23130,13 +23180,28 @@ def move_or_alias_library_item_pdf(storage: Storage, *, item: dict[str, Any], ta
             update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library shortcut")
             remove_symlinks_to(old_path, [LIBRARY_LOCAL_COPY_ROOT, MY_PUBLICATIONS_LOCAL_COPY_ROOT, SPACES_LOCAL_COPY_ROOT])
             cleanup_local_copy_empty_parents([str(old_path)])
-        return
-    remove_symlinks_to(canonical, [source_dir])
-    create_pdf_alias(
-        canonical,
-        target_dir,
-        library_item_pdf_filename(item, paper, canonical),
+            return True
+        return False
+    removed = remove_symlinks_to(canonical, [source_dir])
+    target_item_exists = bool(
+        storage.conn.execute(
+            """
+            SELECT 1
+            FROM library_items
+            WHERE paper_id = ? AND folder_id = ? AND id != ?
+            LIMIT 1
+            """,
+            (paper_id, int(target_folder_id or 1), int(item.get("id") or 0)),
+        ).fetchone()
     )
+    if not target_item_exists:
+        create_pdf_alias(
+            canonical,
+            target_dir,
+            library_item_pdf_filename(item, paper, canonical),
+        )
+    cleanup_local_copy_empty_parents(removed)
+    return False
 
 
 def library_items_in_folder_tree(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
@@ -23178,15 +23243,28 @@ def library_folder_tree_ids(storage: Storage, folder_id: int) -> list[int]:
 
 def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
     plan: list[dict[str, Any]] = []
+    papers: dict[str, dict[str, Any] | None] = {}
+    source_dirs: dict[int, Path] = {}
     for item in library_items_in_folder_tree(storage, folder_id):
-        paper = storage.get_paper(str(item.get("paper_id") or ""))
+        paper_id = str(item.get("paper_id") or "")
+        if paper_id not in papers:
+            papers[paper_id] = storage.get_paper(paper_id)
+        paper = papers[paper_id]
         canonical = canonical_pdf_path_for_paper(paper)
         if not paper or not canonical:
             continue
-        source_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+        item_folder_id = int(item.get("folder_id") or 1)
+        if item_folder_id not in source_dirs:
+            source_dirs[item_folder_id] = local_copy_dir_for_library_folder(
+                storage,
+                item_folder_id,
+            ).resolve()
+        source_dir = source_dirs[item_folder_id]
         plan.append({
             "item_id": int(item.get("id") or 0),
-            "paper_id": str(item.get("paper_id") or ""),
+            "item": item,
+            "folder_id": item_folder_id,
+            "paper_id": paper_id,
             "old_path": canonical,
             "old_dir": source_dir,
             "basename": paper_pdf_basename(paper, canonical),
@@ -23196,27 +23274,67 @@ def folder_tree_pdf_move_plan(storage: Storage, folder_id: int) -> list[dict[str
 
 
 def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]) -> None:
-    paper_ids: set[str] = set()
+    canonical_moves: dict[str, tuple[str, Path]] = {}
+    canonical_moved_paper_ids: set[str] = set()
+    removed_paths: list[str] = []
+    target_dirs: dict[int, Path] = {}
+
+    # Move each physical Current File first.  The complete paper sync below
+    # relocates its Associated Files bundle and creates every required alias,
+    # so placements of the same work must not be reconciled a second time.
     for entry in plan:
-        item = storage.get_library_item(int(entry.get("item_id") or 0))
+        if not entry.get("is_canonical_here"):
+            continue
+        item = entry.get("item")
+        if not isinstance(item, dict):
+            item = storage.get_library_item(int(entry.get("item_id") or 0))
         paper_id = str(entry.get("paper_id") or "")
         if not item or not paper_id:
             continue
-        paper_ids.add(paper_id)
-        target_dir = local_copy_dir_for_library_folder(storage, int(item.get("folder_id") or 1)).resolve()
+        item_folder_id = int(entry.get("folder_id") or item.get("folder_id") or 1)
+        if item_folder_id not in target_dirs:
+            target_dirs[item_folder_id] = local_copy_dir_for_library_folder(
+                storage,
+                item_folder_id,
+            ).resolve()
+        target_dir = target_dirs[item_folder_id]
         old_path = entry.get("old_path")
-        if isinstance(old_path, Path) and entry.get("is_canonical_here") and old_path.exists():
+        if isinstance(old_path, Path) and old_path.exists():
             target_dir.mkdir(parents=True, exist_ok=True)
             target_path = unique_path_in_dir(target_dir / finder_safe_name(str(entry.get("basename") or old_path.name), old_path.name))
             if old_path != target_path:
                 shutil.move(str(old_path), str(target_path))
                 update_paper_pdf_paths(storage, paper_id, target_path, message="PDF moved with Library folder")
-                sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
-                cleanup_local_copy_empty_parents([str(old_path)])
+                canonical_moves.setdefault(str(old_path.resolve()), (paper_id, old_path))
+                canonical_moved_paper_ids.add(paper_id)
+                removed_paths.append(str(old_path))
+
+    for paper_id, old_path in canonical_moves.values():
+        sync_all_pdf_aliases_for_paper(storage, paper_id, old_target=old_path)
+
+    # Papers whose Current File stayed elsewhere only need the alias for the
+    # moved placement.  This is the hot path for copied works and avoids a
+    # repository-wide alias scan for every item in a folder.
+    for entry in plan:
+        paper_id = str(entry.get("paper_id") or "")
+        if not paper_id or paper_id in canonical_moved_paper_ids:
             continue
-        sync_alias_for_library_item(storage, paper_id, int(item.get("folder_id") or 1))
-    for paper_id in paper_ids:
-        reconcile_paper_pdf_storage(storage, paper_id)
+        item = entry.get("item")
+        if not isinstance(item, dict):
+            item = storage.get_library_item(int(entry.get("item_id") or 0))
+        if not item:
+            continue
+        old_dir = entry.get("old_dir")
+        old_path = entry.get("old_path")
+        if isinstance(old_path, Path) and isinstance(old_dir, Path):
+            removed_paths.extend(remove_direct_symlinks_to(old_path, [old_dir]))
+        sync_alias_for_library_item(
+            storage,
+            paper_id,
+            int(entry.get("folder_id") or item.get("folder_id") or 1),
+            item=item,
+        )
+    cleanup_local_copy_empty_parents(removed_paths)
 
 
 def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
@@ -38608,6 +38726,8 @@ INDEX_HTML = """<!doctype html>
       shell.classList.toggle("navigation-rail-focus-active", Boolean(state.libraryNavigationRailFocus));
       renderLibraryColumns();
       renderLibraryDetail();
+      wireLibraryResourceInteractions(shell);
+      wireLibraryColumnInteractions(shell);
       restoreLibraryColumnScrollTops();
 
       const columns = $("libraryColumns");
@@ -45008,12 +45128,58 @@ INDEX_HTML = """<!doctype html>
       return true;
     }
 
+    async function deleteSelectedLibraryPaperResource(file) {
+      const selection = state.libraryPaperResourceSelection || {};
+      const paperId = String(selection.paperId || file?.paper_id || "");
+      const resourceId = Number(file?.id || selection.resourceId || 0);
+      if (!paperId || !resourceId) return false;
+      if (file?.is_primary) {
+        updateLibraryActivityStatus(
+          "The current file cannot be deleted. Select another Publication Version first.",
+          {live: false, clear: false}
+        );
+        return true;
+      }
+      const name = file?.display_name || String(file?.local_path || "").split("/").pop() || "Attached File";
+      if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return true;
+      const filesBeforeDelete = orderedLibraryPaperResources(paperId);
+      const deletedIndex = filesBeforeDelete.findIndex((candidate) => Number(candidate.id || 0) === resourceId);
+      try {
+        const data = await deletePaperFile(paperId, resourceId);
+        const remainingFiles = orderedLibraryPaperResources(paperId);
+        const next = remainingFiles.length
+          ? remainingFiles[Math.max(0, Math.min(deletedIndex, remainingFiles.length - 1))]
+          : null;
+        state.libraryPaperResourceSelection = next
+          ? {paperId, resourceId: Number(next.id || 0)}
+          : {paperId: "", resourceId: 0};
+        renderLibrary();
+        if (next) {
+          window.requestAnimationFrame(() => {
+            setLibraryPaperResourceSelection(paperId, Number(next.id || 0), {focus: true});
+            document.querySelector(`.library-resource-card[data-library-resource-id="${Number(next.id || 0)}"]`)?.scrollIntoView({block: "nearest"});
+          });
+        }
+        updateLibraryActivityStatus(
+          data.deleted?.trashed ? `${name} moved to Trash.` : `${name} removed from this paper.`,
+          {delay: 3000}
+        );
+      } catch (error) {
+        updateLibraryActivityStatus(error.message || "Could not delete file", {live: false, clear: false});
+      }
+      return true;
+    }
+
     function handleLibraryPaperResourceKeydown(event, key) {
       const selected = selectedLibraryPaperResource();
-      if (!selected || !["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape"].includes(key)) return false;
+      if (!selected || !["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape", "Delete", "Backspace"].includes(key)) return false;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation?.();
+      if (key === "Delete" || key === "Backspace") {
+        deleteSelectedLibraryPaperResource(selected);
+        return true;
+      }
       if (key === "ArrowUp" || key === "ArrowDown") {
         moveLibraryPaperResourceSelection(key === "ArrowDown" ? 1 : -1);
         return true;
@@ -45170,21 +45336,9 @@ INDEX_HTML = """<!doctype html>
       }
       if (deleteButton) {
         deleteButton.style.display = file && !file.is_primary ? "" : "none";
-        deleteButton.onclick = async () => {
-          const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
+        deleteButton.onclick = () => {
           hidePaperResourceContextMenu();
-          if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return;
-          try {
-            const data = await deletePaperFile(paperId, Number(file.id || 0));
-            state.libraryPaperResourceSelection = {paperId: "", resourceId: 0};
-            renderLibrary();
-            updateLibraryActivityStatus(
-              data.deleted?.trashed ? `${name} moved to Trash.` : `${name} removed from this paper.`,
-              {delay: 3000}
-            );
-          } catch (error) {
-            updateLibraryActivityStatus(error.message || "Could not delete file", {live: false, clear: false});
-          }
+          deleteSelectedLibraryPaperResource(file);
         };
       }
       refreshLibraryContextMenuSeparators(menu);
@@ -45195,102 +45349,8 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    function wireLibraryInteractions() {
-      const shell = $("libraryShell");
+    function wireLibraryResourceInteractions(shell) {
       if (!shell) return;
-      shell.addEventListener("pointerdown", () => setLibraryNavigationRailFocus(false), {capture: true});
-      const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
-      const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
-      const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
-      if (inlineAddPaper && inlineAddPaperInput) {
-        ["pointerdown", "click", "contextmenu"].forEach((eventName) => {
-          inlineAddPaper.addEventListener(eventName, (event) => event.stopPropagation());
-        });
-        inlineAddPaperInput.addEventListener("input", () => {
-          state.libraryInlineAddQuery = inlineAddPaperInput.value;
-          if (state.libraryInlineAddError) {
-            state.libraryInlineAddError = "";
-            inlineAddPaperInput.classList.remove("error");
-            inlineAddPaper.querySelector(".library-inline-add-paper-error")?.remove();
-          }
-        });
-        inlineAddPaperInput.addEventListener("keydown", (event) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            submitLibraryInlineAddPaper();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            cancelLibraryInlineAddPaper();
-          }
-        });
-        inlineAddPaperSubmit?.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          submitLibraryInlineAddPaper();
-        });
-        window.setTimeout(() => {
-          if (!state.libraryInlineAddBusy && document.body.contains(inlineAddPaperInput)) {
-            inlineAddPaperInput.focus({preventScroll: true});
-            inlineAddPaperInput.setSelectionRange(inlineAddPaperInput.value.length, inlineAddPaperInput.value.length);
-          }
-        }, 0);
-      }
-      const renameInput = shell.querySelector("[data-library-rename-input]");
-      if (renameInput) {
-        window.setTimeout(() => {
-          renameInput.focus({preventScroll: true});
-          renameInput.select();
-        }, 0);
-        let finished = false;
-        const finish = async (save) => {
-          if (finished) return;
-          finished = true;
-          if (!save) {
-            cancelLibraryEntryRename();
-            return;
-          }
-          renameInput.disabled = true;
-          updateLibraryActivityStatus("Renaming...", {live: true, clear: false});
-          try {
-            await commitLibraryEntryRename(renameInput.dataset.libraryRenameType, Number(renameInput.dataset.libraryRenameId), renameInput.value);
-          } catch (error) {
-            updateLibraryActivityStatus(`Rename failed: ${error.message || "Unknown error"}`, {live: false, clear: false});
-            renderLibrary();
-          }
-        };
-        renameInput.addEventListener("keydown", (event) => {
-          event.stopPropagation();
-          if (event.key === "Enter") {
-            event.preventDefault();
-            finish(true);
-          }
-          if (event.key === "Escape") {
-            event.preventDefault();
-            finish(false);
-          }
-        });
-        renameInput.addEventListener("click", (event) => event.stopPropagation());
-        renameInput.addEventListener("blur", () => finish(true));
-      }
-      shell.querySelectorAll('[data-action="show-library-search-result"]').forEach((button) => {
-        button.addEventListener("click", async (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          button.disabled = true;
-          try {
-            await showLibrarySearchResultInLibrary(
-              Number(button.dataset.libraryItemId || 0)
-            );
-          } catch (error) {
-            button.disabled = false;
-            updateLibraryActivityStatus(
-              error.message || "Could not show paper in Library",
-              {live: false, clear: false}
-            );
-          }
-        });
-      });
       shell.querySelectorAll(".library-resource-card[data-library-resource-id]").forEach((card) => {
         const paperId = String(card.dataset.libraryResourcePaperId || "");
         const resourceId = Number(card.dataset.libraryResourceId || 0);
@@ -45402,6 +45462,136 @@ INDEX_HTML = """<!doctype html>
           }
         });
       });
+    }
+
+    function wireLibraryColumnInteractions(shell) {
+      if (!shell) return;
+      shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
+        const body = column.querySelector(".library-column-body");
+        const folderId = Number(column.dataset.libraryColumnFolder || 0);
+        column.addEventListener("pointerdown", (event) => startDragSelection(event, "library"));
+        body?.addEventListener("scroll", () => {
+          if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
+        });
+        column.addEventListener("click", (event) => {
+          if (state.suppressClickOnce) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          if (event.target.closest(".library-row")) return;
+          selectLibraryColumnFolder(Number(column.dataset.libraryColumnFolder || state.libraryRootId));
+          renderLibrary();
+          refreshLibraryQuickLookForSelection();
+        });
+      });
+      $("libraryColumns")?.addEventListener("scroll", (event) => {
+        state.libraryColumnsScrollLeft = event.currentTarget.scrollLeft;
+      });
+      shell.querySelectorAll("[data-library-resize-folder]").forEach((handle) => {
+        handle.addEventListener("pointerdown", (event) => startLibraryColumnResize(event, Number(handle.dataset.libraryResizeFolder || 0)));
+      });
+      $("libraryDetailDivider")?.addEventListener("pointerdown", startLibraryDetailResize);
+    }
+
+    function wireLibraryInteractions() {
+      const shell = $("libraryShell");
+      if (!shell) return;
+      shell.addEventListener("pointerdown", () => setLibraryNavigationRailFocus(false), {capture: true});
+      const inlineAddPaper = shell.querySelector("[data-library-inline-add-paper]");
+      const inlineAddPaperInput = inlineAddPaper?.querySelector("[data-library-inline-add-paper-input]");
+      const inlineAddPaperSubmit = inlineAddPaper?.querySelector("[data-library-inline-add-paper-submit]");
+      if (inlineAddPaper && inlineAddPaperInput) {
+        ["pointerdown", "click", "contextmenu"].forEach((eventName) => {
+          inlineAddPaper.addEventListener(eventName, (event) => event.stopPropagation());
+        });
+        inlineAddPaperInput.addEventListener("input", () => {
+          state.libraryInlineAddQuery = inlineAddPaperInput.value;
+          if (state.libraryInlineAddError) {
+            state.libraryInlineAddError = "";
+            inlineAddPaperInput.classList.remove("error");
+            inlineAddPaper.querySelector(".library-inline-add-paper-error")?.remove();
+          }
+        });
+        inlineAddPaperInput.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submitLibraryInlineAddPaper();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            cancelLibraryInlineAddPaper();
+          }
+        });
+        inlineAddPaperSubmit?.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          submitLibraryInlineAddPaper();
+        });
+        window.setTimeout(() => {
+          if (!state.libraryInlineAddBusy && document.body.contains(inlineAddPaperInput)) {
+            inlineAddPaperInput.focus({preventScroll: true});
+            inlineAddPaperInput.setSelectionRange(inlineAddPaperInput.value.length, inlineAddPaperInput.value.length);
+          }
+        }, 0);
+      }
+      const renameInput = shell.querySelector("[data-library-rename-input]");
+      if (renameInput) {
+        window.setTimeout(() => {
+          renameInput.focus({preventScroll: true});
+          renameInput.select();
+        }, 0);
+        let finished = false;
+        const finish = async (save) => {
+          if (finished) return;
+          finished = true;
+          if (!save) {
+            cancelLibraryEntryRename();
+            return;
+          }
+          renameInput.disabled = true;
+          updateLibraryActivityStatus("Renaming...", {live: true, clear: false});
+          try {
+            await commitLibraryEntryRename(renameInput.dataset.libraryRenameType, Number(renameInput.dataset.libraryRenameId), renameInput.value);
+          } catch (error) {
+            updateLibraryActivityStatus(`Rename failed: ${error.message || "Unknown error"}`, {live: false, clear: false});
+            renderLibrary();
+          }
+        };
+        renameInput.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            finish(true);
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            finish(false);
+          }
+        });
+        renameInput.addEventListener("click", (event) => event.stopPropagation());
+        renameInput.addEventListener("blur", () => finish(true));
+      }
+      shell.querySelectorAll('[data-action="show-library-search-result"]').forEach((button) => {
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          button.disabled = true;
+          try {
+            await showLibrarySearchResultInLibrary(
+              Number(button.dataset.libraryItemId || 0)
+            );
+          } catch (error) {
+            button.disabled = false;
+            updateLibraryActivityStatus(
+              error.message || "Could not show paper in Library",
+              {live: false, clear: false}
+            );
+          }
+        });
+      });
+      wireLibraryResourceInteractions(shell);
+      wireLibraryColumnInteractions(shell);
       shell.addEventListener("mousedown", (event) => {
         const handle = event.target.closest?.("[data-native-file-drag-handle]");
         if (!handle) return;
@@ -45486,7 +45676,6 @@ INDEX_HTML = """<!doctype html>
           payload.entries = selectedEntries.map((entry) => ({type: entry.type, id: Number(entry.id)}));
         }
         state.libraryDragPayload = payload;
-        if (payload.type === "item") armNativeLibraryItemDrop(payload.id);
         event.dataTransfer?.setData("application/x-paper-monitor-library", JSON.stringify(payload));
         event.dataTransfer?.setData("text/plain", row.querySelector(".library-name")?.textContent || "");
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "copyMove";
@@ -45560,32 +45749,6 @@ INDEX_HTML = """<!doctype html>
         const parentId = row.dataset.libraryDropFolder || row.dataset.libraryParentFolder || state.libraryActiveFolderId;
         showLibraryContextMenu(event, parentId, type, id);
       });
-      shell.querySelectorAll("[data-library-column-folder]").forEach((column) => {
-        const body = column.querySelector(".library-column-body");
-        const folderId = Number(column.dataset.libraryColumnFolder || 0);
-        column.addEventListener("pointerdown", (event) => startDragSelection(event, "library"));
-        body?.addEventListener("scroll", () => {
-          if (folderId) state.libraryColumnScrollTops[folderId] = body.scrollTop;
-        });
-        column.addEventListener("click", (event) => {
-          if (state.suppressClickOnce) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
-          if (event.target.closest(".library-row")) return;
-          selectLibraryColumnFolder(Number(column.dataset.libraryColumnFolder || state.libraryRootId));
-          renderLibrary();
-          refreshLibraryQuickLookForSelection();
-        });
-      });
-      $("libraryColumns")?.addEventListener("scroll", (event) => {
-        state.libraryColumnsScrollLeft = event.currentTarget.scrollLeft;
-      });
-      shell.querySelectorAll("[data-library-resize-folder]").forEach((handle) => {
-        handle.addEventListener("pointerdown", (event) => startLibraryColumnResize(event, Number(handle.dataset.libraryResizeFolder || 0)));
-      });
-      $("libraryDetailDivider")?.addEventListener("pointerdown", startLibraryDetailResize);
       shell.addEventListener("contextmenu", (event) => {
         if (state.suppressContextMenuOnce) {
           event.preventDefault();
