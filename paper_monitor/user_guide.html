@@ -107,6 +107,16 @@
 
     .nav-group { margin: 0 0 12px; }
     .nav-group[hidden] { display: none; }
+    .nav-part { margin: 0 0 15px; }
+    .nav-part[hidden] { display: none; }
+    .nav-part-title {
+      margin: 0 8px 7px;
+      color: #9aa3b0;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
     .nav-heading {
       margin: 0 8px 4px;
       color: #667085;
@@ -514,75 +524,102 @@
       </div>
 
       <nav id="guide-nav">
-        <section class="nav-group">
-          <h2 class="nav-heading">Start Here</h2>
-          <button class="topic-link active" data-topic="welcome" aria-current="page">Welcome</button>
-          <button class="topic-link" data-topic="guided-tour">Guided Tour</button>
-          <button class="topic-link" data-topic="first-session">Your First Session</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Understand the System</h2>
-          <button class="topic-link" data-topic="system-overview">System Architecture at a Glance</button>
-          <button class="topic-link" data-topic="persistent-paper-object">The Persistent Paper Object</button>
-          <button class="topic-link" data-topic="sqlite-core">Why SQLite Is the Core</button>
-          <button class="topic-link" data-topic="visible-research-files">Visible Research Files</button>
-          <button class="topic-link" data-topic="personal-research-workspace">The Personal Research Workspace</button>
-          <button class="topic-link" data-topic="research-loop">From Discovery to Durable Memory</button>
-          <button class="topic-link" data-topic="state-and-scope">State, Scope, and Safe Change</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Library</h2>
-          <button class="topic-link" data-topic="library-layout">Library Layout</button>
-          <button class="topic-link" data-topic="navigation">Navigate with Mouse and Keyboard</button>
-          <button class="topic-link" data-topic="organize">Folders, Shortcuts, and Spaces</button>
-          <button class="topic-link" data-topic="search-views">Search, List View, and Table View</button>
-          <button class="topic-link" data-topic="import-files">Add Papers and Files</button>
-          <button class="topic-link" data-topic="paper-details">Use Paper Details</button>
-          <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
-          <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
-          <button class="topic-link" data-topic="quick-look">Preview Files with Quick Look</button>
-          <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
-          <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
-          <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
-          <button class="topic-link" data-topic="drag-attach">Move a Standalone File into Paper Files</button>
-          <button class="topic-link" data-topic="recycle">Delete and Recover Items</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Import and Transfer</h2>
-          <button class="topic-link" data-topic="folder-loader">Use Folder Loader</button>
-          <button class="topic-link" data-topic="loader-maintenance">Refresh an Imported Library</button>
-          <button class="topic-link" data-topic="desktop-copy">Make a Portable Desktop Copy</button>
-          <button class="topic-link" data-topic="backup-migrate">Back Up or Move to Another Mac</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Publications and Monitors</h2>
-          <button class="topic-link" data-topic="my-publications">My Publications</button>
-          <button class="topic-link" data-topic="journal-monitor">Journal Monitor</button>
-          <button class="topic-link" data-topic="subject-monitor">Subject Monitor</button>
-          <button class="topic-link" data-topic="author-monitor">Author Monitor</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Settings and Safety</h2>
-          <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
-          <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
-          <button class="topic-link" data-topic="field-settings">Field Settings</button>
-          <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
-          <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
-          <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
-          <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">About Gewu Insight</h2>
-          <button class="topic-link" data-topic="visual-identity">Visual Identity and Cultural Elements</button>
-        </section>
-        <section class="nav-group">
-          <h2 class="nav-heading">Reference</h2>
-          <button class="topic-link" data-topic="keyboard">Keyboard Shortcuts</button>
-          <button class="topic-link" data-topic="network-access">Publisher and Network Access</button>
-          <button class="topic-link" data-topic="startup">Startup and Web Cache</button>
-          <button class="topic-link" data-topic="troubleshooting">Troubleshooting</button>
-          <button class="topic-link" data-topic="storage-reference">Storage Reference</button>
-        </section>
+        <div class="nav-part">
+          <p class="nav-part-title">Part I · Orientation</p>
+          <section class="nav-group">
+            <h2 class="nav-heading">Start Here</h2>
+            <button class="topic-link active" data-topic="welcome" aria-current="page">Welcome</button>
+            <button class="topic-link" data-topic="guided-tour">Guided Tour</button>
+            <button class="topic-link" data-topic="first-session">Your First Session</button>
+          </section>
+        </div>
+        <div class="nav-part">
+          <p class="nav-part-title">Part II · Product Concepts and Architecture</p>
+          <section class="nav-group">
+            <h2 class="nav-heading">Understand the System</h2>
+            <button class="topic-link" data-topic="system-overview">System Architecture at a Glance</button>
+            <button class="topic-link" data-topic="persistent-paper-object">The Persistent Paper Object</button>
+            <button class="topic-link" data-topic="sqlite-core">Why SQLite Is the Core</button>
+            <button class="topic-link" data-topic="visible-research-files">Visible Research Files</button>
+            <button class="topic-link" data-topic="personal-research-workspace">The Personal Research Workspace</button>
+            <button class="topic-link" data-topic="research-loop">From Discovery to Durable Memory</button>
+            <button class="topic-link" data-topic="state-and-scope">State, Scope, and Safe Change</button>
+          </section>
+        </div>
+        <div class="nav-part">
+          <p class="nav-part-title">Part III · User Manual</p>
+          <section class="nav-group">
+            <h2 class="nav-heading">Workspace Navigation</h2>
+            <button class="topic-link" data-topic="library-layout">Library Layout</button>
+            <button class="topic-link" data-topic="navigation">Navigate with Mouse and Keyboard</button>
+            <button class="topic-link" data-topic="organize">Folders, Shortcuts, and Spaces</button>
+            <button class="topic-link" data-topic="search-views">Search, List View, and Table View</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Papers and Files</h2>
+            <button class="topic-link" data-topic="import-files">Add Papers and Files</button>
+            <button class="topic-link" data-topic="paper-details">Use Paper Details</button>
+            <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
+            <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
+            <button class="topic-link" data-topic="quick-look">Preview Files with Quick Look</button>
+            <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
+            <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
+            <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
+            <button class="topic-link" data-topic="drag-attach">Move a Standalone File into Paper Files</button>
+            <button class="topic-link" data-topic="recycle">Delete and Recover Items</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Import and Transfer</h2>
+            <button class="topic-link" data-topic="folder-loader">Use Folder Loader</button>
+            <button class="topic-link" data-topic="loader-maintenance">Refresh an Imported Library</button>
+            <button class="topic-link" data-topic="desktop-copy">Make a Portable Desktop Copy</button>
+            <button class="topic-link" data-topic="backup-migrate">Back Up or Move to Another Mac</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">My Publications</h2>
+            <button class="topic-link" data-topic="my-publications">Publication Profile, Metrics, and Exports</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Journal Monitor</h2>
+            <button class="topic-link" data-topic="journal-monitor">Dates, Journals, Sources, and Provenance</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Subject Monitor</h2>
+            <button class="topic-link" data-topic="subject-monitor">Topics, Discovery, and Subject State</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Author Monitor</h2>
+            <button class="topic-link" data-topic="author-monitor">Researchers, Profiles, and New Work</button>
+          </section>
+          <section class="nav-group">
+            <h2 class="nav-heading">Settings and Safety</h2>
+            <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
+            <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
+            <button class="topic-link" data-topic="field-settings">Field Settings</button>
+            <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
+            <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
+            <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
+            <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
+          </section>
+        </div>
+        <div class="nav-part">
+          <p class="nav-part-title">Part IV · Product Identity</p>
+          <section class="nav-group">
+            <h2 class="nav-heading">About Gewu Insight</h2>
+            <button class="topic-link" data-topic="visual-identity">Visual Identity and Cultural Elements</button>
+          </section>
+        </div>
+        <div class="nav-part">
+          <p class="nav-part-title">Part V · Technical and Operational Reference</p>
+          <section class="nav-group">
+            <h2 class="nav-heading">Reference</h2>
+            <button class="topic-link" data-topic="keyboard">Keyboard Shortcuts</button>
+            <button class="topic-link" data-topic="network-access">Publisher and Network Access</button>
+            <button class="topic-link" data-topic="startup">Startup and Web Cache</button>
+            <button class="topic-link" data-topic="troubleshooting">Troubleshooting</button>
+            <button class="topic-link" data-topic="storage-reference">Storage Reference</button>
+          </section>
+        </div>
         <p class="no-results" role="status" aria-live="polite">No matching topics.</p>
       </nav>
     </aside>
@@ -686,12 +723,14 @@
           </div>
 
           <h2>Choose a path through this guide</h2>
+          <p>This is one comprehensive manual with three complementary reading paths. The <strong>operational path</strong> explains how to use the app; the <strong>concept and architecture path</strong> explains why the workspace is organized this way; and the <strong>technical reference path</strong> documents storage, database, network, migration, and troubleshooting details. They remain together so visible behavior, product principles, and implementation constraints do not drift apart.</p>
           <table class="plain-table">
             <tr><th>If you want to</th><th>Continue with</th></tr>
-            <tr><td>Start using the app now</td><td><a href="#guided-tour">Guided Tour</a>, then <a href="#first-session">Your First Session</a>.</td></tr>
-            <tr><td>Understand why the data and files are organized this way</td><td><a href="#system-overview">System Architecture at a Glance</a> and the rest of <strong>Understand the System</strong>.</td></tr>
+            <tr><td>Start using the app now</td><td>Read <strong>Part I · Orientation</strong>, then use <strong>Part III · User Manual</strong> as the operational guide.</td></tr>
+            <tr><td>Understand the product idea and architecture</td><td>Read <strong>Part II · Product Concepts and Architecture</strong>, followed by <strong>Part IV · Product Identity</strong>.</td></tr>
+            <tr><td>Maintain, migrate, or inspect the system</td><td>Use <strong>Part V · Technical and Operational Reference</strong>, with Part II for the underlying model.</td></tr>
             <tr><td>Look up one operation</td><td>Use the topic list or press <kbd>⌘</kbd><kbd>F</kbd> to search this guide.</td></tr>
-            <tr><td>Prepare an upgrade or move to another Mac</td><td><a href="#backup-migrate">Back Up or Move to Another Mac</a> before changing the installation.</td></tr>
+            <tr><td>Prepare an upgrade or move to another Mac</td><td>Read <a href="#backup-migrate">Back Up or Move to Another Mac</a> before changing the installation.</td></tr>
           </table>
 
           <h2>Open this guide again</h2>
@@ -1192,7 +1231,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#recycle">Delete and Recover Items</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="library-layout" data-group="Library" data-title="Library Layout" data-keywords="column view breadcrumb details paper files list table root">
+        <article class="help-topic guide-topic" id="library-layout" data-group="Workspace Navigation" data-title="Library Layout" data-keywords="column view breadcrumb details paper files list table root">
           <p class="topic-kicker">Library</p>
           <h1>Understand the Library Layout</h1>
           <p class="lead">The Library uses a Finder-style column view, but the database—not the visible folder alone—defines the paper and its relationships.</p>
@@ -1220,7 +1259,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#organize">Folders, Shortcuts, and Spaces</a><a href="#search-views">Search, List View, and Table View</a><a href="#paper-files">Understand Paper Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="navigation" data-group="Library" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus source rail shortcut space quick look double click selection">
+        <article class="help-topic guide-topic" id="navigation" data-group="Workspace Navigation" data-title="Navigate with Mouse and Keyboard" data-keywords="arrow left right up down focus source rail shortcut space quick look double click selection">
           <p class="topic-kicker">Library</p>
           <h1>Navigate with Mouse and Keyboard</h1>
           <p class="lead">Library and Space columns form one keyboard path with Paper Files. Focus moves into Paper Files with the Right Arrow and returns to the selected paper with the Left Arrow.</p>
@@ -1268,7 +1307,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#quick-look">Preview PDFs with Quick Look</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="organize" data-group="Library" data-title="Folders, Shortcuts, and Spaces" data-keywords="move copy paste alias tabs reorder roots colors rename folder">
+        <article class="help-topic guide-topic" id="organize" data-group="Workspace Navigation" data-title="Folders, Shortcuts, and Spaces" data-keywords="move copy paste alias tabs reorder roots colors rename folder">
           <p class="topic-kicker">Library</p>
           <h1>Organize Folders, Shortcuts, and Spaces</h1>
           <p class="lead">Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.</p>
@@ -1306,7 +1345,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#storage-model">How Gewu Insight Stores Files</a><a href="#recycle">Delete and Recover Items</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="search-views" data-group="Library" data-title="Search, List View, and Table View" data-keywords="search library spaces list table sort columns selection">
+        <article class="help-topic guide-topic" id="search-views" data-group="Workspace Navigation" data-title="Search, List View, and Table View" data-keywords="search library spaces list table sort columns selection">
           <p class="topic-kicker">Library</p>
           <h1>Search and Change Views</h1>
           <p class="lead">Search locates items across the managed collection. List View emphasizes browsing; Table View emphasizes metadata comparison.</p>
@@ -1328,7 +1367,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="import-files" data-group="Library" data-title="Add Papers and Files" data-keywords="drag drop add paper PDF import external source original copy">
+        <article class="help-topic guide-topic" id="import-files" data-group="Papers and Files" data-title="Add Papers and Files" data-keywords="drag drop add paper PDF import external source original copy">
           <p class="topic-kicker">Library</p>
           <h1>Add Papers and Files</h1>
           <p class="lead">A normal Library import creates a managed local copy and a database record. The original source file remains where it was.</p>
@@ -1349,7 +1388,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#folder-loader">Use Folder Loader</a><a href="#drag-attach">Move a Standalone File into Paper Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-details" data-group="Library" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key">
+        <article class="help-topic guide-topic" id="paper-details" data-group="Papers and Files" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key">
           <p class="topic-kicker">Library</p>
           <h1>Use Paper Details</h1>
           <p class="lead">Paper Details combines the actions, identifiers, file summary, metadata, citation counts, and folder membership for the selected work.</p>
@@ -1391,7 +1430,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#identifiers">Edit DOI and arXiv Identifiers</a><a href="#paper-files">Understand Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="identifiers" data-group="Library" data-title="Edit DOI and arXiv Identifiers" data-keywords="DOI arXiv preprint edit inline return refresh wrong identifier empty download open">
+        <article class="help-topic guide-topic" id="identifiers" data-group="Papers and Files" data-title="Edit DOI and arXiv Identifiers" data-keywords="DOI arXiv preprint edit inline return refresh wrong identifier empty download open">
           <p class="topic-kicker">Library</p>
           <h1>Edit DOI and arXiv Identifiers</h1>
           <p class="lead">DOI and arXiv can identify the same work across publication stages. Correct either value in Paper Details before downloading or synchronizing versions.</p>
@@ -1418,7 +1457,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Citation Settings</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-files" data-group="Library" data-title="Understand Paper Files" data-keywords="current versions supplements attachments files panel groups inspector">
+        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="current versions supplements attachments files panel groups inspector">
           <p class="topic-kicker">Library</p>
           <h1>Understand Paper Files</h1>
           <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
@@ -1454,7 +1493,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="quick-look" data-group="Library" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance">
+        <article class="help-topic guide-topic" id="quick-look" data-group="Papers and Files" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance">
           <p class="topic-kicker">Library</p>
           <h1>Preview Files with Quick Look</h1>
           <p class="lead">Press Space to inspect the selected resource without changing its paper record. Quick Look can stay inside Gewu Insight, use the macOS system panel, or combine both approaches.</p>
@@ -1486,7 +1525,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look-settings">Quick Look Settings</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
+        <article class="help-topic guide-topic" id="versions-current" data-group="Papers and Files" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
           <p class="topic-kicker">Library</p>
           <h1>Choose Versions and the Current File</h1>
           <p class="lead">The current file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
@@ -1524,7 +1563,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#attachments">Add and Classify Attachments</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="attachments" data-group="Library" data-title="Add and Classify Attachments" data-keywords="add file image supplement note presentation data code other PDF type dropdown">
+        <article class="help-topic guide-topic" id="attachments" data-group="Papers and Files" data-title="Add and Classify Attachments" data-keywords="add file image supplement note presentation data code other PDF type dropdown">
           <p class="topic-kicker">Library</p>
           <h1>Add and Classify Attachments</h1>
           <p class="lead">Import first, classify afterward. This keeps the add operation simple and lets you decide the role after seeing the file in context.</p>
@@ -1548,7 +1587,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#drag-attach">Move a Standalone File into Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="download-sync" data-group="Library" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite validation truncated HTML temporary atomic skipped role">
+        <article class="help-topic guide-topic" id="download-sync" data-group="Papers and Files" data-title="Download and Sync Versions" data-keywords="download publisher DOI arXiv sync versions deduplicate SHA fingerprint annotation overwrite validation truncated HTML temporary atomic skipped role">
           <p class="topic-kicker">Library</p>
           <h1>Download and Sync Versions</h1>
           <p class="lead">Downloads add a version to the paper bundle. They do not silently overwrite a different preserved PDF.</p>
@@ -1584,7 +1623,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="drag-attach" data-group="Library" data-title="Move a Standalone File into Paper Files" data-keywords="drag adopt convert standalone attachment move into paper files remove independent item">
+        <article class="help-topic guide-topic" id="drag-attach" data-group="Papers and Files" data-title="Move a Standalone File into Paper Files" data-keywords="drag adopt convert standalone attachment move into paper files remove independent item">
           <p class="topic-kicker">Library</p>
           <h1>Move a Standalone File into Paper Files</h1>
           <p class="lead">If a data, image, presentation, or other file was imported as its own Library item, drag it onto the correct paper’s Paper Files area to make it an attachment.</p>
@@ -1608,7 +1647,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="recycle" data-group="Library" data-title="Delete and Recover Items" data-keywords="delete recycle recover trash permanent shared references soft delete">
+        <article class="help-topic guide-topic" id="recycle" data-group="Papers and Files" data-title="Delete and Recover Items" data-keywords="delete recycle recover trash permanent shared references soft delete">
           <p class="topic-kicker">Library</p>
           <h1>Delete and Recover Items</h1>
           <p class="lead">Deleting a paper reference either removes only that reference or moves the last Library reference to Recycle. Final deletion inside Recycle is reference-aware and uses the macOS Trash for managed files.</p>
@@ -1759,7 +1798,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#storage-reference">Storage Reference</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="my-publications" data-group="Publications and Monitors" data-title="My Publications" data-keywords="Google Scholar URL name affiliation profile metrics author role export latex overleaf word h index">
+        <article class="help-topic guide-topic" id="my-publications" data-group="My Publications" data-title="My Publications" data-keywords="Google Scholar URL name affiliation profile metrics author role export latex overleaf word h index">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use My Publications</h1>
           <p class="lead">My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.</p>
@@ -1804,7 +1843,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="journal-monitor" data-group="Publications and Monitors" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent">
+        <article class="help-topic guide-topic" id="journal-monitor" data-group="Journal Monitor" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Journal Monitor</h1>
           <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
@@ -1865,7 +1904,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#subject-monitor">Subject Monitor</a><a href="#network-access">Publisher and Network Access</a><a href="#import-files">Add Papers and Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="subject-monitor" data-group="Publications and Monitors" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar selected subject counts empty date">
+        <article class="help-topic guide-topic" id="subject-monitor" data-group="Subject Monitor" data-title="Subject Monitor" data-keywords="topic keywords prompt sources feeds RSS arXiv APS retry failed Zenodo rejected calendar selected subject counts empty date">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Subject Monitor</h1>
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
@@ -1909,7 +1948,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="author-monitor" data-group="Publications and Monitors" data-title="Author Monitor" data-keywords="researcher profile Google Scholar ResearchGate OpenAlex Semantic avatar photo homepage new unread baseline conference">
+        <article class="help-topic guide-topic" id="author-monitor" data-group="Author Monitor" data-title="Author Monitor" data-keywords="researcher profile Google Scholar ResearchGate OpenAlex Semantic avatar photo homepage new unread baseline conference">
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Author Monitor</h1>
           <p class="lead">Author Monitor follows researchers and separates a first-import baseline from newly discovered work.</p>
@@ -2468,6 +2507,9 @@
         });
         document.querySelectorAll('.nav-group').forEach(group => {
           group.hidden = ![...group.querySelectorAll('.topic-link')].some(link => !link.hidden);
+        });
+        document.querySelectorAll('.nav-part').forEach(part => {
+          part.hidden = !part.querySelector('.nav-group:not([hidden])');
         });
         noResults.style.display = visibleCount ? 'none' : 'block';
         clearSearch.style.display = query ? 'block' : 'none';

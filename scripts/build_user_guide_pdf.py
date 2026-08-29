@@ -37,6 +37,21 @@ IMAGE_ROUTES = {
     "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
 }
 
+PART_BY_GROUP = {
+    "Start Here": "Orientation",
+    "Understand the System": "Product Concepts and Architecture",
+    "Workspace Navigation": "User Manual",
+    "Papers and Files": "User Manual",
+    "Import and Transfer": "User Manual",
+    "My Publications": "User Manual",
+    "Journal Monitor": "User Manual",
+    "Subject Monitor": "User Manual",
+    "Author Monitor": "User Manual",
+    "Settings and Safety": "User Manual",
+    "About Gewu Insight": "Product Identity",
+    "Reference": "Technical and Operational Reference",
+}
+
 
 def app_version() -> tuple[str, str]:
     try:
@@ -58,7 +73,7 @@ def _new_tag(soup: BeautifulSoup, name: str, text: str | None = None, **attrs: s
 
 
 def _promote_heading(tag: Tag) -> None:
-    levels = {"h2": "h3", "h3": "h4", "h4": "h5"}
+    levels = {"h2": "h4", "h3": "h5", "h4": "h6"}
     tag.name = levels.get(tag.name, tag.name)
 
 
@@ -95,17 +110,23 @@ def clean_guide_html() -> str:
     body = output.body
     assert body is not None
 
+    current_part: str | None = None
     current_group: str | None = None
     for article in source.select("article.guide-topic"):
         group = str(article.get("data-group") or "User Guide")
+        part = PART_BY_GROUP.get(group, "User Manual")
         title = str(article.get("data-title") or article.get("id") or "Topic")
+        if part != current_part:
+            body.append(_new_tag(output, "h1", part, id=f"part-{len(body.find_all('h1')) + 1}"))
+            current_part = part
+            current_group = None
         if group != current_group:
-            body.append(_new_tag(output, "h1", group, id=f"group-{len(body.find_all('h1')) + 1}"))
+            body.append(_new_tag(output, "h2", group, id=f"chapter-{len(body.find_all('h2')) + 1}"))
             current_group = group
 
         topic_id = str(article.get("id") or "topic")
         section = _new_tag(output, "section")
-        section.append(_new_tag(output, "h2", title, id=topic_id))
+        section.append(_new_tag(output, "h3", title, id=topic_id))
         for child in list(article.children):
             if isinstance(child, NavigableString):
                 if child.strip():
@@ -120,8 +141,8 @@ def clean_guide_html() -> str:
         body.append(section)
 
     for section in body.select("section"):
-        topic_heading = section.find("h2", recursive=False)
-        for heading in section.find_all(["h2", "h3", "h4"]):
+        topic_heading = section.find("h3", recursive=False)
+        for heading in section.find_all(["h2", "h3", "h4", "h5", "h6"]):
             if heading is topic_heading:
                 continue
             _promote_heading(heading)
@@ -369,7 +390,7 @@ def latex_preamble(version: str, build: str) -> str:
 \setstretch{{1.01}}
 \setlist{{topsep=2.5pt,itemsep=1.25pt,parsep=.5pt,leftmargin=5.5mm}}
 \setcounter{{secnumdepth}}{{0}}
-\setcounter{{tocdepth}}{{1}}
+\setcounter{{tocdepth}}{{2}}
 \renewcommand{{\arraystretch}}{{1.16}}
 \setlength{{\tabcolsep}}{{3.5pt}}
 \setlength{{\LTpre}}{{4pt}}
@@ -386,9 +407,13 @@ def latex_preamble(version: str, build: str) -> str:
 \providecommand{{\tightlist}}{{\setlength{{\itemsep}}{{1pt}}\setlength{{\parskip}}{{0pt}}}}
 \providecommand{{\pandocbounded}}[1]{{#1}}
 
+\setkomafont{{part}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{25}}{{29}}\selectfont}}
+\setkomafont{{partnumber}}{{\sffamily\bfseries\color{{GewuBlue}}\fontsize{{11}}{{13}}\selectfont}}
 \setkomafont{{chapter}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{21}}{{24}}\selectfont}}
 \setkomafont{{section}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{15.5}}{{18.5}}\selectfont}}
 \setkomafont{{subsection}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{11.8}}{{14}}\selectfont}}
+\setkomafont{{subsubsection}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{10.5}}{{12.5}}\selectfont}}
+\renewcommand*{{\partformat}}{{\partname~\thepart\autodot\enskip}}
 \RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex]{{chapter}}
 \RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex]{{section}}
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{{subsection}}
@@ -455,6 +480,16 @@ def latex_preamble(version: str, build: str) -> str:
 \addcontentsline{{toc}}{{chapter}}{{About this manual}}
 This PDF is the fixed-layout edition of the in-app Gewu Insight User Guide. It contains the same product guidance as the searchable Help window, arranged for comfortable reading, printing, and archival use. Interface names remain in English so that the manual matches the application.
 
+\section*{{Three complementary reading paths}}
+\begin{{description}}[style=nextline,leftmargin=0pt,labelindent=0pt,itemsep=3pt]
+  \item[Operate the workspace] Parts I and III explain the interface and everyday workflows: navigation, papers and files, importing, monitors, settings, recovery, and transfer.
+  \item[Understand the product] Parts II and IV explain the local-first philosophy, the visible-workspace model, SQLite's role as the source of truth, and the product's visual identity.
+  \item[Inspect the technical contract] Part V documents storage, database relationships, network behavior, migration, troubleshooting, and other details needed for maintenance or development.
+\end{{description}}
+
+These paths intentionally share one manual. The user-facing behavior, the product model, and the implementation constraints can therefore be read independently without drifting into separate and contradictory documents.
+
+\clearpage
 \section*{{Contents}}
 \makeatletter
 \@starttoc{{toc}}
@@ -608,7 +643,7 @@ def build(tex_output: Path, pdf_output: Path) -> None:
                 "--from=html",
                 "--to=latex",
                 "--wrap=none",
-                "--top-level-division=chapter",
+                "--top-level-division=part",
                 f"--resource-path={ROOT}",
                 "--output",
                 str(body_tex),

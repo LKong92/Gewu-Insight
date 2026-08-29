@@ -41,7 +41,7 @@
 \setstretch{1.01}
 \setlist{topsep=2.5pt,itemsep=1.25pt,parsep=.5pt,leftmargin=5.5mm}
 \setcounter{secnumdepth}{0}
-\setcounter{tocdepth}{1}
+\setcounter{tocdepth}{2}
 \renewcommand{\arraystretch}{1.16}
 \setlength{\tabcolsep}{3.5pt}
 \setlength{\LTpre}{4pt}
@@ -58,9 +58,13 @@
 \providecommand{\tightlist}{\setlength{\itemsep}{1pt}\setlength{\parskip}{0pt}}
 \providecommand{\pandocbounded}[1]{#1}
 
+\setkomafont{part}{\sffamily\bfseries\color{GewuInk}\fontsize{25}{29}\selectfont}
+\setkomafont{partnumber}{\sffamily\bfseries\color{GewuBlue}\fontsize{11}{13}\selectfont}
 \setkomafont{chapter}{\sffamily\bfseries\color{GewuInk}\fontsize{21}{24}\selectfont}
 \setkomafont{section}{\sffamily\bfseries\color{GewuInk}\fontsize{15.5}{18.5}\selectfont}
 \setkomafont{subsection}{\sffamily\bfseries\color{GewuInk}\fontsize{11.8}{14}\selectfont}
+\setkomafont{subsubsection}{\sffamily\bfseries\color{GewuInk}\fontsize{10.5}{12.5}\selectfont}
+\renewcommand*{\partformat}{\partname~\thepart\autodot\enskip}
 \RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex]{chapter}
 \RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex]{section}
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{subsection}
@@ -127,13 +131,25 @@
 \addcontentsline{toc}{chapter}{About this manual}
 This PDF is the fixed-layout edition of the in-app Gewu Insight User Guide. It contains the same product guidance as the searchable Help window, arranged for comfortable reading, printing, and archival use. Interface names remain in English so that the manual matches the application.
 
+\section*{Three complementary reading paths}
+\begin{description}[style=nextline,leftmargin=0pt,labelindent=0pt,itemsep=3pt]
+  \item[Operate the workspace] Parts I and III explain the interface and everyday workflows: navigation, papers and files, importing, monitors, settings, recovery, and transfer.
+  \item[Understand the product] Parts II and IV explain the local-first philosophy, the visible-workspace model, SQLite's role as the source of truth, and the product's visual identity.
+  \item[Inspect the technical contract] Part V documents storage, database relationships, network behavior, migration, troubleshooting, and other details needed for maintenance or development.
+\end{description}
+
+These paths intentionally share one manual. The user-facing behavior, the product model, and the implementation constraints can therefore be read independently without drifting into separate and contradictory documents.
+
+\clearpage
 \section*{Contents}
 \makeatletter
 \@starttoc{toc}
 \makeatother
 \clearpage
 \RaggedRight
-\chapter{Start Here}\label{group-1}
+\part{Orientation}\label{part-1}
+
+\chapter{Start Here}\label{chapter-1}
 
 \section{Welcome}\label{welcome}
 
@@ -319,6 +335,8 @@ SQLite is the source of truth for Gewu Insight. Do not replace, rebuild, or edit
 
 \subsection{Choose a path through this guide}\label{choose-a-path-through-this-guide}
 
+This is one comprehensive manual with three complementary reading paths. The \textbf{operational path} explains how to use the app; the \textbf{concept and architecture path} explains why the workspace is organized this way; and the \textbf{technical reference path} documents storage, database, network, migration, and troubleshooting details. They remain together so visible behavior, product principles, and implementation constraints do not drift apart.
+
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
 \begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
@@ -329,10 +347,11 @@ If you want to & Continue with \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-Start using the app now & \hyperref[guided-tour]{Guided Tour}, then \hyperref[first-session]{Your First Session}. \\
-Understand why the data and files are organized this way & \hyperref[system-overview]{System Architecture at a Glance} and the rest of \textbf{Understand the System}. \\
+Start using the app now & Read \textbf{Part I · Orientation}, then use \textbf{Part III · User Manual} as the operational guide. \\
+Understand the product idea and architecture & Read \textbf{Part II · Product Concepts and Architecture}, followed by \textbf{Part IV · Product Identity}. \\
+Maintain, migrate, or inspect the system & Use \textbf{Part V · Technical and Operational Reference}, with Part II for the underlying model. \\
 Look up one operation & Use the topic list or press \texttt{{\symbolfont ⌘}}\texttt{F} to search this guide. \\
-Prepare an upgrade or move to another Mac & \hyperref[backup-migrate]{Back Up or Move to Another Mac} before changing the installation. \\
+Prepare an upgrade or move to another Mac & Read \hyperref[backup-migrate]{Back Up or Move to Another Mac} before changing the installation. \\
 \end{longtable}
 \GewuTableEnd
 }
@@ -710,7 +729,9 @@ Before a major import, upgrade, or migration, quit Gewu Insight and back up both
 
 \hyperref[import-files]{Add Papers and Files} · \hyperref[paper-details]{Use Paper Details} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
 
-\chapter{Understand the System}\label{group-2}
+\part{Product Concepts and Architecture}\label{part-2}
+
+\chapter{Understand the System}\label{chapter-30}
 
 \section{System Architecture at a Glance}\label{system-overview}
 
@@ -1266,7 +1287,9 @@ Quit Gewu Insight, preserve the entire project data set, verify the backup can b
 
 \hyperref[recycle]{Delete and Recover Items} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[troubleshooting]{Troubleshooting}
 
-\chapter{Library}\label{group-3}
+\part{User Manual}\label{part-3}
+
+\chapter{Workspace Navigation}\label{chapter-68}
 
 \section{Library Layout}\label{library-layout}
 
@@ -1480,6 +1503,8 @@ Control-click the folder contents and choose \textbf{Sort by Name} or \textbf{So
 \subsection{See also}\label{see-also-13}
 
 \hyperref[library-layout]{Library Layout} · \hyperref[keyboard]{Keyboard Shortcuts}
+
+\chapter{Papers and Files}\label{chapter-88}
 
 \section{Add Papers and Files}\label{import-files}
 
@@ -1983,7 +2008,7 @@ Use final deletion only inside Recycle. The confirmation summarizes how many pap
 
 \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
 
-\chapter{Import and Transfer}\label{group-4}
+\chapter{Import and Transfer}\label{chapter-133}
 
 \section{Use Folder Loader}\label{folder-loader}
 
@@ -2191,7 +2216,7 @@ Never migrate by copying only \texttt{paper\_monitor.sqlite} or only the visible
 
 \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[storage-reference]{Storage Reference} · \hyperref[troubleshooting]{Troubleshooting}
 
-\chapter{Publications and Monitors}\label{group-5}
+\chapter{My Publications}\label{chapter-149}
 
 \section{My Publications}\label{my-publications}
 
@@ -2260,6 +2285,8 @@ Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf proje
 \subsection{See also}\label{see-also-28}
 
 \hyperref[citation-settings]{Citation Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
+
+\chapter{Journal Monitor}\label{chapter-157}
 
 \section{Journal Monitor}\label{journal-monitor}
 
@@ -2349,6 +2376,8 @@ Per-paper status text and the bottom progress area make completed downloads and 
 
 \hyperref[subject-monitor]{Subject Monitor} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[import-files]{Add Papers and Files}
 
+\chapter{Subject Monitor}\label{chapter-167}
+
 \section{Subject Monitor}\label{subject-monitor}
 
 \begin{GewuLead}
@@ -2415,6 +2444,8 @@ Subject Monitor rejects Zenodo records during ingestion and when cached results 
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[network-access]{Publisher and Network Access}
 
+\chapter{Author Monitor}\label{chapter-174}
+
 \section{Author Monitor}\label{author-monitor}
 
 \begin{GewuLead}
@@ -2469,7 +2500,7 @@ Google Scholar requests are paced and protected by a cooldown. Repeated manual r
 
 \hyperref[my-publications]{My Publications} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[privacy]{Local Data and Privacy}
 
-\chapter{Settings and Safety}\label{group-6}
+\chapter{Settings and Safety}\label{chapter-182}
 
 \section{Citation Settings}\label{citation-settings}
 
@@ -2816,7 +2847,9 @@ Optional service credentials belong only in Citation Settings or approved enviro
 
 \hyperref[citation-settings]{Citation Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
 
-\chapter{About Gewu Insight}\label{group-7}
+\part{Product Identity}\label{part-4}
+
+\chapter{About Gewu Insight}\label{chapter-211}
 
 \section{Visual Identity and Cultural Elements}\label{visual-identity}
 
@@ -2911,7 +2944,9 @@ Together the three registers establish the product\textquotesingle s visual iden
 
 \hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup and Web Cache}
 
-\chapter{Reference}\label{group-8}
+\part{Technical and Operational Reference}\label{part-5}
+
+\chapter{Reference}\label{chapter-216}
 
 \section{Keyboard Shortcuts}\label{keyboard}
 
