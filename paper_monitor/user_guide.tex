@@ -1468,6 +1468,24 @@ Command-click to add or remove individual entries from a selection. Shift-click,
 
 A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a secondary symbolic link where appropriate. Paper versions and attachments remain associated with the work.
 
+\subsection{Move an entire Space into Library}\label{move-an-entire-space-into-library}
+
+Use this when a temporary or project Space should become part of the permanent Library hierarchy.
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Select the Space on the left rail.} Open the Space that you want to keep as a normal Library folder.
+\item
+  \textbf{Choose \textbf{Move Space to Library}.} The move sheet explains that the Space will become a folder with the same name.
+\item
+  \textbf{Choose \textbf{Destination in My Library}.} Select the Library folder that should contain the moved Space.
+\item
+  \textbf{Confirm the move.} The complete Space hierarchy, including its files and subfolders, moves together.
+\end{enumerate}
+
+When the move finishes, the Space tab is removed and Library opens the moved folder. Canonical paper identities, folder placements, and Paper Files resource associations remain connected; the operation does not create duplicate paper records.
+
 \begin{quote}
 \textbf{Important}
 
@@ -1532,9 +1550,27 @@ A normal Library import creates a managed local copy and a database record. The 
   \textbf{Review Paper Details.} Confirm the title, DOI, arXiv identifier, and file classification.
 \end{enumerate}
 
-\subsection{Use Add Paper}\label{use-add-paper}
+\subsection{Add a paper by DOI, arXiv ID, URL, or title}\label{add-a-paper-by-doi-arxiv-id-url-or-title}
 
-Open the destination folder, Control-click blank space in its contents, and choose \textbf{Add Paper}. Enter a DOI, arXiv identifier, supported URL, or title in the inline field, then choose \textbf{Add Paper} again. This lookup can create a managed record before a local PDF is available.
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Open the destination folder.} The resolved paper will be placed in the active Library folder.
+\item
+  \textbf{Choose \textbf{Add Paper}.} Control-click blank space in the folder contents and choose the command to open the inline lookup field.
+\item
+  \textbf{Enter a DOI, arXiv identifier, supported article URL, or title.} A DOI or arXiv identifier is the strongest identity clue. A title search may return alternatives that need review.
+\item
+  \textbf{Review and confirm the resolved match.} Check the title, authors, journal, and year, then choose \textbf{Add Paper} again.
+\end{enumerate}
+
+If the identity already exists, Gewu Insight reuses the canonical paper and adds the selected folder placement rather than creating an unrelated duplicate.
+
+\begin{quote}
+\textbf{Note}
+
+A paper record does not require a local PDF. \textbf{Add Paper} creates or reuses the metadata record; it does not automatically download a PDF. Use \textbf{Download} or \textbf{Add File} separately when you want a managed local file.
+\end{quote}
 
 \begin{quote}
 \textbf{Note}
@@ -2363,12 +2399,26 @@ Use \textbf{Journal Filter}, \textbf{Preprint Filter}, and \textbf{Field Filter}
 \item
   \textbf{Open Website} opens the publisher or best known record in the external browser.
 \item
-  \textbf{Add to Library} creates a managed reference; after that, \textbf{Show in Library} returns to it.
+  \textbf{Add to Library} begins the placement workflow described below; after that, \textbf{Show in Library} returns to the managed paper.
 \item
   \textbf{Download} retrieves the paper file. \textbf{PDF} opens an existing local PDF in Preview, and \textbf{Delete PDF} removes that managed download and resets its status.
 \item
   When a reading note exists, \textbf{Note} opens it in the right-side drawer. The list compresses but keeps its own scroll position. \textbf{Delete Note} removes the note and resets analysis status.
 \end{itemize}
+
+\subsection{Add a Journal result to Library}\label{add-a-journal-result-to-library}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Choose \textbf{Add to Library} on the result.} The Library destination chooser opens without leaving the selected date.
+\item
+  \textbf{Choose the target Library folder.} This is the visible folder placement for the managed paper.
+\item
+  \textbf{Complete the add.} The card changes to \textbf{Show in Library}; use it to reveal the existing placement later.
+\end{enumerate}
+
+The operation links the Journal discovery to the canonical paper, preserves its source and run provenance, and adds the chosen Library placement. It does not automatically download a PDF. Choose \textbf{Download} separately when you also want a local file. If the paper is already managed, \textbf{Show in Library} reveals it instead of creating a duplicate identity.
 
 Per-paper status text and the bottom progress area make completed downloads and background work visible, which helps avoid repeating the same action.
 
@@ -2440,6 +2490,20 @@ The current candidate layer can draw from local arXiv data, local APS RSS data, 
 
 Select a paper to read its title, authors, abstract, source, date, identifier, topic score, and matched subject terms. Use \textbf{Open Website}, \textbf{Download}, \textbf{PDF}, and the note controls in the same way as Journal Monitor. Choose \textbf{Add to Library} to create a managed reference, or \textbf{Show in Library} when one already exists.
 
+\subsection{Add a Subject result to Library}\label{add-a-subject-result-to-library}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Choose \textbf{Add to Library} on the matching paper.} The subject and selected date remain in place while the destination chooser opens.
+\item
+  \textbf{Select the target Library folder.} The same canonical paper can be placed in a durable topic hierarchy without losing the Subject relationship.
+\item
+  \textbf{Complete the add.} Use \textbf{Show in Library} on later visits to reveal the managed placement.
+\end{enumerate}
+
+Adding the result preserves the matched subject, score, terms, and discovery provenance. It does not automatically download a PDF; use \textbf{Download} separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.
+
 \begin{quote}
 \textbf{Important}
 
@@ -2491,6 +2555,20 @@ Control-click an author and choose \textbf{Edit Homepage} or \textbf{Change Phot
 \subsection{Discovery entries and managed papers}\label{discovery-entries-and-managed-papers}
 
 An Author Monitor result is a cataloged shared record, while its Monitor relationship remains a discovery context. The compact view hides the Gewu Key, and the result does not need a local Files bundle. Adding it to Library creates another relationship to the existing record; downloading or attaching a file creates a resource relationship.
+
+\subsection{Add an author result to Library}\label{add-an-author-result-to-library}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Select the publication and choose \textbf{Add to Library}.} This opens the Library destination chooser without removing the author from view.
+\item
+  \textbf{Choose the target Library folder.} The selected placement becomes the durable organizational path for the shared paper record.
+\item
+  \textbf{Complete the add.} The action becomes \textbf{Show in Library}, which reveals the managed paper later.
+\end{enumerate}
+
+The author-publication relationship and canonical identity remain intact. Adding a placement does not automatically download a PDF, and a paper already managed elsewhere is reused rather than duplicated.
 
 \subsection{Remove a monitored author}\label{remove-a-monitored-author}
 

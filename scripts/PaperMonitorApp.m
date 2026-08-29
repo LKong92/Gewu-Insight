@@ -293,52 +293,9 @@
 @end
 
 @interface GewuInsightWindow : NSWindow
-@property(nonatomic, copy) void (^titlebarDoubleClickHandler)(void);
 @end
 
 @implementation GewuInsightWindow
-
-- (BOOL)handleTitlebarDoubleClickAction {
-    NSEvent *event = NSApp.currentEvent;
-    if (!event || event.clickCount != 2 || event.window != self) return NO;
-    NSPoint point = event.locationInWindow;
-    CGFloat distanceFromTop = NSHeight(self.frame) - point.y;
-    if (point.x < 90.0 || distanceFromTop < 0.0 || distanceFromTop > 40.0) return NO;
-    if (self.titlebarDoubleClickHandler) self.titlebarDoubleClickHandler();
-    return YES;
-}
-
-- (void)sendEvent:(NSEvent *)event {
-    if (event.type == NSEventTypeLeftMouseDown && event.clickCount == 2) {
-        NSPoint point = event.locationInWindow;
-        CGFloat distanceFromTop = NSHeight(self.frame) - point.y;
-        if (point.x >= 90.0 && distanceFromTop >= 0.0 && distanceFromTop <= 40.0) {
-            if (self.titlebarDoubleClickHandler) self.titlebarDoubleClickHandler();
-            return;
-        }
-    }
-    [super sendEvent:event];
-}
-
-- (void)performMiniaturize:(id)sender {
-    if ([self handleTitlebarDoubleClickAction]) return;
-    [super performMiniaturize:sender];
-}
-
-- (void)miniaturize:(id)sender {
-    if ([self handleTitlebarDoubleClickAction]) return;
-    [super miniaturize:sender];
-}
-
-- (void)performZoom:(id)sender {
-    if ([self handleTitlebarDoubleClickAction]) return;
-    [super performZoom:sender];
-}
-
-- (void)zoom:(id)sender {
-    if ([self handleTitlebarDoubleClickAction]) return;
-    [super zoom:sender];
-}
 
 @end
 
@@ -372,7 +329,6 @@
 @property(nonatomic) NSPoint windowDragStartPoint;
 @property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
-@property(nonatomic) BOOL recoverTitlebarDoubleClickMiniaturize;
 @property(nonatomic, strong) NSURL *nativeQuickLookURL;
 @property(nonatomic) BOOL nativeQuickLookActive;
 @property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
@@ -432,28 +388,6 @@
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     [sender orderOut:nil];
     return NO;
-}
-
-- (void)windowWillMiniaturize:(NSNotification *)notification {
-    NSEvent *event = NSApp.currentEvent;
-    if (!event || event.clickCount != 2 || event.window != self.window) {
-        self.recoverTitlebarDoubleClickMiniaturize = NO;
-        return;
-    }
-    NSPoint point = event.locationInWindow;
-    CGFloat distanceFromTop = NSHeight(self.window.frame) - point.y;
-    self.recoverTitlebarDoubleClickMiniaturize = point.x >= 90.0
-        && distanceFromTop >= 0.0
-        && distanceFromTop <= 40.0;
-}
-
-- (void)windowDidMiniaturize:(NSNotification *)notification {
-    if (!self.recoverTitlebarDoubleClickMiniaturize) return;
-    self.recoverTitlebarDoubleClickMiniaturize = NO;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.window deminiaturize:nil];
-        [self toggleMainWindowFill];
-    });
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
@@ -711,13 +645,6 @@
     }
     [contentView addSubview:self.webView];
     self.window.contentView = contentView;
-    __weak PaperMonitorDelegate *weakSelf = self;
-    ((GewuInsightWindow *)self.window).titlebarDoubleClickHandler = ^{
-        PaperMonitorDelegate *strongSelf = weakSelf;
-        if (!strongSelf) return;
-        strongSelf.windowDragging = NO;
-        [strongSelf toggleMainWindowFill];
-    };
     if (self.window.isMiniaturized) [self.window deminiaturize:nil];
     [self.window makeKeyAndOrderFront:nil];
     [self positionTrafficLightButtons];

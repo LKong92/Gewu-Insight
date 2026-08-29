@@ -26037,7 +26037,7 @@ INDEX_HTML = """<!doctype html>
       position: fixed;
       top: 0;
       left: 0;
-      right: 430px;
+      right: 0;
       height: 40px;
       z-index: 60;
       -webkit-user-select: none;
@@ -55622,7 +55622,7 @@ INDEX_HTML = """<!doctype html>
         handler.postMessage({type, screenX: event.screenX, screenY: event.screenY});
       };
       region.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || event.target !== region) return;
         dragging = true;
         region.setPointerCapture?.(event.pointerId);
         post("begin", event);
@@ -55642,7 +55642,7 @@ INDEX_HTML = """<!doctype html>
       region.addEventListener("pointerup", stop);
       region.addEventListener("pointercancel", stop);
       region.addEventListener("dblclick", (event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || event.target !== region) return;
         dragging = false;
         post("toggleFill", event);
         event.preventDefault();

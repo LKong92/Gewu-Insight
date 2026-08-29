@@ -218,6 +218,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         )[0]
 
         self.assertIn('region.addEventListener("dblclick"', drag_region)
+        self.assertIn("event.target !== region", drag_region)
         self.assertIn('post("toggleFill", event);', drag_region)
 
     def test_native_fill_toggle_restores_previous_frame(self) -> None:
@@ -229,25 +230,18 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.window setFrame:targetFrame display:YES animate:YES];", source)
         self.assertNotIn("toggleFullScreen", source)
 
-    def test_native_window_consumes_system_titlebar_double_click_action(self) -> None:
+    def test_native_window_leaves_titlebar_hit_testing_to_the_web_ui(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 
         self.assertIn("@interface GewuInsightWindow : NSWindow", source)
         self.assertIn('setObject:@"None" forKey:@"AppleActionOnDoubleClick"', source)
-        self.assertIn("- (void)sendEvent:(NSEvent *)event", source)
-        self.assertIn("event.clickCount == 2", source)
-        self.assertIn("distanceFromTop <= 40.0", source)
-        self.assertIn("- (void)performMiniaturize:(id)sender", source)
-        self.assertIn("- (void)performZoom:(id)sender", source)
-        self.assertIn("[self handleTitlebarDoubleClickAction]", source)
-        self.assertIn("[strongSelf toggleMainWindowFill]", source)
+        self.assertNotIn("- (void)sendEvent:(NSEvent *)event", source)
+        self.assertNotIn("handleTitlebarDoubleClickAction", source)
+        self.assertNotIn("titlebarDoubleClickHandler", source)
+        self.assertNotIn("distanceFromTop <= 40.0", source)
         self.assertNotIn("GewuInsightTitlebarGestureView", source)
         self.assertNotIn("[self.webView addSubview:self.titlebarGestureView", source)
         self.assertIn("[self.window deminiaturize:nil]", source)
-        self.assertIn("- (void)windowWillMiniaturize:(NSNotification *)notification", source)
-        self.assertIn("- (void)windowDidMiniaturize:(NSNotification *)notification", source)
-        self.assertIn("recoverTitlebarDoubleClickMiniaturize", source)
-        self.assertIn("return;", source)
 
     def test_quicklook_uses_native_pdf_zoom_without_showing_webkit_hud(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()

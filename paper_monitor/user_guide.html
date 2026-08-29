@@ -1350,6 +1350,16 @@
           <h2>Copy a paper to another folder</h2>
           <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a secondary symbolic link where appropriate. Paper versions and attachments remain associated with the work.</p>
 
+          <h2>Move an entire Space into Library</h2>
+          <p>Use this when a temporary or project Space should become part of the permanent Library hierarchy.</p>
+          <ol class="steps">
+            <li><strong>Select the Space on the left rail.</strong> Open the Space that you want to keep as a normal Library folder.</li>
+            <li><strong>Choose <span class="ui">Move Space to Library</span>.</strong> The move sheet explains that the Space will become a folder with the same name.</li>
+            <li><strong>Choose <span class="ui">Destination in My Library</span>.</strong> Select the Library folder that should contain the moved Space.</li>
+            <li><strong>Confirm the move.</strong> The complete Space hierarchy, including its files and subfolders, moves together.</li>
+          </ol>
+          <p>When the move finishes, the Space tab is removed and Library opens the moved folder. Canonical paper identities, folder placements, and Paper Files resource associations remain connected; the operation does not create duplicate paper records.</p>
+
           <div class="important"><span class="callout-title">Important</span>Move managed papers in Gewu Insight, not directly in Finder. The app updates the visible file, associated bundle, and live database paths together.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#storage-model">How Gewu Insight Stores Files</a><a href="#recycle">Delete and Recover Items</a></div></div>
@@ -1390,8 +1400,16 @@
             <li><strong>Review Paper Details.</strong> Confirm the title, DOI, arXiv identifier, and file classification.</li>
           </ol>
 
-          <h2>Use Add Paper</h2>
-          <p>Open the destination folder, Control-click blank space in its contents, and choose <span class="ui">Add Paper</span>. Enter a DOI, arXiv identifier, supported URL, or title in the inline field, then choose <span class="ui">Add Paper</span> again. This lookup can create a managed record before a local PDF is available.</p>
+          <h2>Add a paper by DOI, arXiv ID, URL, or title</h2>
+          <ol class="steps">
+            <li><strong>Open the destination folder.</strong> The resolved paper will be placed in the active Library folder.</li>
+            <li><strong>Choose <span class="ui">Add Paper</span>.</strong> Control-click blank space in the folder contents and choose the command to open the inline lookup field.</li>
+            <li><strong>Enter a DOI, arXiv identifier, supported article URL, or title.</strong> A DOI or arXiv identifier is the strongest identity clue. A title search may return alternatives that need review.</li>
+            <li><strong>Review and confirm the resolved match.</strong> Check the title, authors, journal, and year, then choose <span class="ui">Add Paper</span> again.</li>
+          </ol>
+          <p>If the identity already exists, Gewu Insight reuses the canonical paper and adds the selected folder placement rather than creating an unrelated duplicate.</p>
+
+          <div class="note"><span class="callout-title">Note</span>A paper record does not require a local PDF. <span class="ui">Add Paper</span> creates or reuses the metadata record; it does not automatically download a PDF. Use <span class="ui">Download</span> or <span class="ui">Add File</span> separately when you want a managed local file.</div>
 
           <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Files</span> panel is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.</div>
 
@@ -1902,10 +1920,18 @@
           <h2>Act on a result</h2>
           <ul>
             <li><span class="ui">Open Website</span> opens the publisher or best known record in the external browser.</li>
-            <li><span class="ui">Add to Library</span> creates a managed reference; after that, <span class="ui">Show in Library</span> returns to it.</li>
+            <li><span class="ui">Add to Library</span> begins the placement workflow described below; after that, <span class="ui">Show in Library</span> returns to the managed paper.</li>
             <li><span class="ui">Download</span> retrieves the paper file. <span class="ui">PDF</span> opens an existing local PDF in Preview, and <span class="ui">Delete PDF</span> removes that managed download and resets its status.</li>
             <li>When a reading note exists, <span class="ui">Note</span> opens it in the right-side drawer. The list compresses but keeps its own scroll position. <span class="ui">Delete Note</span> removes the note and resets analysis status.</li>
           </ul>
+
+          <h2>Add a Journal result to Library</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Add to Library</span> on the result.</strong> The Library destination chooser opens without leaving the selected date.</li>
+            <li><strong>Choose the target Library folder.</strong> This is the visible folder placement for the managed paper.</li>
+            <li><strong>Complete the add.</strong> The card changes to <span class="ui">Show in Library</span>; use it to reveal the existing placement later.</li>
+          </ol>
+          <p>The operation links the Journal discovery to the canonical paper, preserves its source and run provenance, and adds the chosen Library placement. It does not automatically download a PDF. Choose <span class="ui">Download</span> separately when you also want a local file. If the paper is already managed, <span class="ui">Show in Library</span> reveals it instead of creating a duplicate identity.</p>
 
           <p>Per-paper status text and the bottom progress area make completed downloads and background work visible, which helps avoid repeating the same action.</p>
 
@@ -1953,6 +1979,14 @@
           <h2>Inspect and keep a result</h2>
           <p>Select a paper to read its title, authors, abstract, source, date, identifier, topic score, and matched subject terms. Use <span class="ui">Open Website</span>, <span class="ui">Download</span>, <span class="ui">PDF</span>, and the note controls in the same way as Journal Monitor. Choose <span class="ui">Add to Library</span> to create a managed reference, or <span class="ui">Show in Library</span> when one already exists.</p>
 
+          <h2>Add a Subject result to Library</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">Add to Library</span> on the matching paper.</strong> The subject and selected date remain in place while the destination chooser opens.</li>
+            <li><strong>Select the target Library folder.</strong> The same canonical paper can be placed in a durable topic hierarchy without losing the Subject relationship.</li>
+            <li><strong>Complete the add.</strong> Use <span class="ui">Show in Library</span> on later visits to reveal the managed placement.</li>
+          </ol>
+          <p>Adding the result preserves the matched subject, score, terms, and discovery provenance. It does not automatically download a PDF; use <span class="ui">Download</span> separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.</p>
+
           <div class="important"><span class="callout-title">Important</span>Subject Monitor rejects Zenodo records during ingestion and when cached results are displayed. There is no Zenodo show/hide option.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#network-access">Publisher and Network Access</a></div></div>
@@ -1986,6 +2020,14 @@
 
           <h2>Discovery entries and managed papers</h2>
           <p>An Author Monitor result is a cataloged shared record, while its Monitor relationship remains a discovery context. The compact view hides the Gewu Key, and the result does not need a local Files bundle. Adding it to Library creates another relationship to the existing record; downloading or attaching a file creates a resource relationship.</p>
+
+          <h2>Add an author result to Library</h2>
+          <ol class="steps">
+            <li><strong>Select the publication and choose <span class="ui">Add to Library</span>.</strong> This opens the Library destination chooser without removing the author from view.</li>
+            <li><strong>Choose the target Library folder.</strong> The selected placement becomes the durable organizational path for the shared paper record.</li>
+            <li><strong>Complete the add.</strong> The action becomes <span class="ui">Show in Library</span>, which reveals the managed paper later.</li>
+          </ol>
+          <p>The author-publication relationship and canonical identity remain intact. Adding a placement does not automatically download a PDF, and a paper already managed elsewhere is reused rather than duplicated.</p>
 
           <h2>Remove a monitored author</h2>
           <p>Deleting an author from Author Monitor removes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.</p>

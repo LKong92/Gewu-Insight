@@ -608,6 +608,48 @@ class UserGuideTests(unittest.TestCase):
         ]:
             self.assertIn(phrase, publications)
 
+    def test_user_manual_documents_library_and_monitor_add_workflows(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+
+        organize = soup.find("article", id="organize").get_text(" ", strip=True)
+        for phrase in [
+            "Move an entire Space into Library",
+            "Move Space to Library",
+            "Destination in My Library",
+            "does not create duplicate paper records",
+        ]:
+            self.assertIn(phrase, organize)
+
+        imports = soup.find("article", id="import-files").get_text(" ", strip=True)
+        for phrase in [
+            "Add a paper by DOI, arXiv ID, URL, or title",
+            "Review and confirm the resolved match",
+            "reuses the canonical paper",
+            "does not automatically download a PDF",
+        ]:
+            self.assertIn(phrase, imports)
+
+        monitor_phrases = {
+            "journal-monitor": [
+                "Add a Journal result to Library",
+                "Choose the target Library folder",
+                "preserves its source and run provenance",
+            ],
+            "subject-monitor": [
+                "Add a Subject result to Library",
+                "preserves the matched subject, score, terms, and discovery provenance",
+            ],
+            "author-monitor": [
+                "Add an author result to Library",
+                "author-publication relationship and canonical identity remain intact",
+            ],
+        }
+        for topic_id, phrases in monitor_phrases.items():
+            topic_text = soup.find("article", id=topic_id).get_text(" ", strip=True)
+            for phrase in phrases:
+                self.assertIn(phrase, topic_text)
+            self.assertIn("does not automatically download a PDF", topic_text)
+
     def test_guide_is_offline_searchable_and_printable(self) -> None:
         html = ui_server.load_user_guide_html()
         self.assertIn('id="guideSearch"', html)
