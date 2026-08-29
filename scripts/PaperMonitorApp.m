@@ -1754,8 +1754,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     NSMenuItem *fieldSettingsItem = [settingMenu addItemWithTitle:@"Field Settings" action:@selector(openFieldSettings:) keyEquivalent:@""];
     fieldSettingsItem.target = self;
     [settingMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Web Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
+    NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Monitor Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
     clearCacheItem.target = self;
+    NSMenuItem *fontSizeSettingsItem = [settingMenu addItemWithTitle:@"Font Size" action:@selector(openFontSizeSettings:) keyEquivalent:@""];
+    fontSizeSettingsItem.target = self;
     settingMenuItem.submenu = settingMenu;
 
     NSMenuItem *helpMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -1920,6 +1922,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openQuickLookSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openQuickLookSettings && window.openQuickLookSettings()" completionHandler:nil];
+}
+
+- (void)openFontSizeSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openFontSizeSettings && window.openFontSizeSettings()" completionHandler:nil];
 }
 
 - (void)openLibraryLoader:(id)sender {
@@ -2228,7 +2234,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     request.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
     [[[NSURLSession sharedSession] dataTaskWithRequest:request
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSString *message = @"Could not clear the WebKit cache.";
+        NSString *message = @"Could not clear the monitor cache.";
         if (!error && data) {
             NSDictionary *payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
             if ([payload isKindOfClass:[NSDictionary class]]) {
@@ -2239,7 +2245,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             NSAlert *alert = [[NSAlert alloc] init];
-            alert.messageText = @"Web cache cleared";
+            alert.messageText = @"Monitor cache cleared";
             alert.informativeText = message;
             alert.alertStyle = error ? NSAlertStyleWarning : NSAlertStyleInformational;
             [alert addButtonWithTitle:@"OK"];

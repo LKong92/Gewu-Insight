@@ -60,14 +60,14 @@
       overflow: auto;
       background: var(--sidebar);
       border-right: 1px solid var(--sidebar-line);
-      padding: 16px 10px 20px;
+      padding: 14px 9px 18px;
     }
 
-    .product-mark { padding: 0 8px 12px; }
+    .product-mark { padding: 0 8px 10px; }
     .product-name { margin: 0; font-size: 17px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
     .product-name-cn { margin-top: 2px; color: var(--muted); font-size: 12px; }
 
-    .search-wrap { position: relative; margin: 0 2px 12px; }
+    .search-wrap { position: relative; margin: 0 2px 10px; }
     .search-icon {
       position: absolute;
       left: 10px;
@@ -105,40 +105,50 @@
     }
     .clear-search:hover { background: #e6e8eb; }
 
-    .nav-group { margin: 0 0 12px; }
+    .nav-group { margin: 0 0 6px; }
+    .nav-group:last-child { margin-bottom: 0; }
     .nav-group[hidden] { display: none; }
-    .nav-part { margin: 0 0 15px; }
+    .nav-part { margin: 0; }
+    .nav-part + .nav-part {
+      margin-top: 8px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(102, 112, 133, .16);
+    }
     .nav-part[hidden] { display: none; }
     .nav-part-title {
-      margin: 0 8px 7px;
-      color: #9aa3b0;
-      font-size: 9.5px;
+      margin: 0 8px 5px;
+      color: #8d97a6;
+      font-size: 9px;
+      line-height: 1.25;
       font-weight: 700;
-      letter-spacing: .09em;
+      letter-spacing: .08em;
       text-transform: uppercase;
     }
     .nav-heading {
-      margin: 0 8px 4px;
+      margin: 0 8px 2px;
       color: #667085;
-      font-size: 10.5px;
+      font-size: 9.5px;
+      line-height: 1.25;
       font-weight: 700;
-      letter-spacing: .075em;
+      letter-spacing: .065em;
       text-transform: uppercase;
     }
     .topic-link {
       display: block;
       width: 100%;
+      min-height: 26px;
       border: 0;
-      border-radius: 7px;
-      padding: 5px 8px;
+      border-radius: 6px;
+      padding: 3px 8px;
       background: transparent;
       color: #303846;
+      font-size: 13px;
       text-align: left;
-      line-height: 1.28;
+      line-height: 1.25;
       cursor: pointer;
     }
-    .topic-link:hover { background: rgba(0,0,0,.045); }
-    .topic-link.active { background: #dceaf9; color: #124f8d; font-weight: 600; }
+    .topic-link:hover { background: rgba(29, 36, 48, .055); }
+    .topic-link.active { background: #dce8f5; color: #173f68; font-weight: 600; }
     .topic-link[hidden] { display: none; }
     .no-results { display: none; padding: 8px 10px; color: var(--muted); font-size: 13px; }
 
@@ -615,7 +625,7 @@
             <h2 class="nav-heading">Reference</h2>
             <button class="topic-link" data-topic="keyboard">Keyboard Shortcuts</button>
             <button class="topic-link" data-topic="network-access">Publisher and Network Access</button>
-            <button class="topic-link" data-topic="startup">Startup and Web Cache</button>
+            <button class="topic-link" data-topic="startup">Startup, Monitor Cache, and Text Size</button>
             <button class="topic-link" data-topic="troubleshooting">Troubleshooting</button>
             <button class="topic-link" data-topic="storage-reference">Storage Reference</button>
           </section>
@@ -2233,7 +2243,7 @@
 
           <p>Together the three registers establish the product's visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#welcome">Welcome</a><a href="#personal-research-workspace">The Personal Research Workspace</a><a href="#startup">Startup and Web Cache</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#welcome">Welcome</a><a href="#personal-research-workspace">The Personal Research Workspace</a><a href="#startup">Startup, Monitor Cache, and Text Size</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="keyboard" data-group="Reference" data-title="Keyboard Shortcuts" data-keywords="command keys arrows quick look view loader preferences help">
@@ -2284,9 +2294,9 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#download-sync">Download and Sync Versions</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup and Web Cache" data-keywords="launch local server port 8765 could not start log clear web cache stale interface overlay">
+        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="launch local server port 8765 could not start log clear monitor cache stale interface overlay font size compact standard large larger extra large">
           <p class="topic-kicker">Reference</p>
-          <h1>Understand Startup and Web Cache</h1>
+          <h1>Manage Startup, Monitor Cache, and Text Size</h1>
           <p class="lead">The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.</p>
 
           <h2>Normal startup</h2>
@@ -2303,9 +2313,14 @@
           </ol>
 
           <h2>Clear a stale interface</h2>
-          <p>Choose <span class="ui">Setting &gt; Clear Web Cache</span> if the running window visibly uses old HTML, CSS, or JavaScript after an app update. This clears browser cache, not the SQLite database or managed PDFs.</p>
+          <p>Choose <span class="ui">Setting &gt; Clear Monitor Cache</span> if a monitor still shows stale downloaded images or rendered web assets after an app update. This clears disposable monitor presentation cache, not the SQLite database, saved paper records, or managed PDFs.</p>
 
-          <p>Web cache and macOS app identity are separate. Clearing Web Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt <span class="ui">Gewu Insight.app</span>. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.</p>
+          <p>Monitor cache and macOS app identity are separate. Clearing Monitor Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt <span class="ui">Gewu Insight.app</span>. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.</p>
+
+          <h2>Choose a comfortable text size</h2>
+          <p>Choose <span class="ui">Setting &gt; Font Size</span>, then select <span class="ui">Compact</span>, <span class="ui">Standard</span>, <span class="ui">Large</span>, <span class="ui">Larger</span>, or <span class="ui">Extra Large</span>. The workspace previews the choice immediately while keeping panel dimensions, icons, and window controls unchanged.</p>
+
+          <p><span class="ui">Cancel</span>, the Escape key, or clicking outside the sheet restores the previously saved size. Choose <span class="ui">Save</span> to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#troubleshooting">Troubleshooting</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
@@ -2359,7 +2374,7 @@
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#startup">Startup and Web Cache</a><a href="#network-access">Publisher and Network Access</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#startup">Startup, Monitor Cache, and Text Size</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="storage-reference" data-group="Reference" data-title="Storage Reference" data-keywords="paths data library spaces my publications associated files pdf sqlite reports JSON logs">

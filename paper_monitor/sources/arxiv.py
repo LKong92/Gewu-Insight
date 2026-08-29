@@ -54,7 +54,7 @@ ARXIV_SUBJECT_HIERARCHY = [
             )},
             {"code": "nucl-ex", "label": "Nuclear Experiment", "categories": _categories(("nucl-ex", "Nuclear Experiment"))},
             {"code": "nucl-th", "label": "Nuclear Theory", "categories": _categories(("nucl-th", "Nuclear Theory"))},
-            {"code": "physics", "label": "General Physics", "categories": _categories(
+            {"code": "physics", "label": "Physics", "categories": _categories(
                 ("physics.acc-ph", "Accelerator Physics"), ("physics.ao-ph", "Atmospheric and Oceanic Physics"),
                 ("physics.app-ph", "Applied Physics"), ("physics.atm-clus", "Atomic and Molecular Clusters"),
                 ("physics.atom-ph", "Atomic Physics"), ("physics.bio-ph", "Biological Physics"),

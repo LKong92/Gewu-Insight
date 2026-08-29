@@ -213,6 +213,7 @@ LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
 QUICK_LOOK_MODE_SETTING = "quick_look_mode"
+FONT_SIZE_SCALE_SETTING = "font_size_scale"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
 THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
@@ -236,6 +237,8 @@ DEFAULT_PDF_RENAME_TEMPLATE = "{author}_{year}_{title}"
 PDF_RENAME_TEMPLATE_TOKENS = {"author", "authors", "year", "title", "journal", "doi"}
 QUICK_LOOK_MODES = {"builtin_all", "hybrid", "native_all"}
 DEFAULT_QUICK_LOOK_MODE = "builtin_all"
+FONT_SIZE_SCALES = (90, 100, 110, 120, 130)
+DEFAULT_FONT_SIZE_SCALE = 100
 LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
 MY_PUBLICATIONS_LOCAL_COPY_ROOT = DEFAULT_MY_PUBLICATIONS_DIR
 SPACES_LOCAL_COPY_ROOT = DEFAULT_SPACES_DIR
@@ -621,6 +624,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/quick-look":
                 self.handle_get_quick_look_settings()
                 return
+            if parsed.path == "/api/settings/font-size":
+                self.handle_get_font_size_settings()
+                return
             if parsed.path == "/api/settings/citation":
                 self.handle_get_citation_settings()
                 return
@@ -775,6 +781,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_set_quick_look_settings(payload)
+                return
+            if parsed.path == "/api/settings/font-size":
+                self.handle_set_font_size_settings(payload)
                 return
             if parsed.path == "/api/settings/citation":
                 self.handle_set_citation_settings(payload)
@@ -3598,6 +3607,31 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             storage.set_setting(QUICK_LOOK_MODE_SETTING, mode)
             response = quick_look_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(response)
+
+    def handle_get_font_size_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            response = font_size_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(response)
+
+    def handle_set_font_size_settings(self, payload: dict[str, Any]) -> None:
+        try:
+            scale = int(payload.get("scale"))
+        except (TypeError, ValueError):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown font size")
+            return
+        if scale not in FONT_SIZE_SCALES:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown font size")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(FONT_SIZE_SCALE_SETTING, str(scale))
+            response = font_size_settings_payload(storage)
         finally:
             storage.close()
         self.send_json(response)
@@ -12861,6 +12895,24 @@ def quick_look_settings_payload(storage: Storage) -> dict[str, Any]:
         ),
         "default_mode": DEFAULT_QUICK_LOOK_MODE,
         "modes": sorted(QUICK_LOOK_MODES),
+    }
+
+
+def normalize_font_size_scale(value: Any) -> int:
+    try:
+        scale = int(str(value).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_FONT_SIZE_SCALE
+    return scale if scale in FONT_SIZE_SCALES else DEFAULT_FONT_SIZE_SCALE
+
+
+def font_size_settings_payload(storage: Storage) -> dict[str, Any]:
+    return {
+        "scale": normalize_font_size_scale(
+            storage.get_setting(FONT_SIZE_SCALE_SETTING, str(DEFAULT_FONT_SIZE_SCALE))
+        ),
+        "default_scale": DEFAULT_FONT_SIZE_SCALE,
+        "scales": list(FONT_SIZE_SCALES),
     }
 
 
@@ -31971,7 +32023,8 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode #citationSettingsBackdrop,
     .app.loader-window-mode #fieldSettingsBackdrop,
     .app.loader-window-mode #pdfRenameSettingsBackdrop,
-    .app.loader-window-mode #quickLookSettingsBackdrop {
+    .app.loader-window-mode #quickLookSettingsBackdrop,
+    .app.loader-window-mode #fontSizeSettingsBackdrop {
       display: none !important;
     }
     .app.loader-window-mode .main {
@@ -34202,6 +34255,53 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop" id="fontSizeSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="fontSizeSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="fontSizeSettingsTitle">Font Size</h2>
+              <p>Adjust text throughout Gewu Insight without enlarging panels, icons, or window controls.</p>
+            </div>
+            <button class="settings-modal-close" id="closeFontSizeSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Reading Size</strong><span>Applies throughout the workspace</span></div>
+              <div class="quick-look-mode-options" id="fontSizeScaleOptions">
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="font-size-scale" value="90">
+                  <span class="quick-look-mode-copy"><strong>Compact</strong><span>90% · Fits more text on screen.</span></span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="font-size-scale" value="100">
+                  <span class="quick-look-mode-copy"><strong>Standard</strong><span>100% · Uses the original interface size.</span></span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="font-size-scale" value="110">
+                  <span class="quick-look-mode-copy"><strong>Large</strong><span>110% · Adds a modest readability increase.</span></span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="font-size-scale" value="120">
+                  <span class="quick-look-mode-copy"><strong>Larger</strong><span>120% · Makes dense reading views easier to scan.</span></span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="font-size-scale" value="130">
+                  <span class="quick-look-mode-copy"><strong>Extra Large</strong><span>130% · Uses the largest supported text size.</span></span>
+                </label>
+              </div>
+              <div class="field-settings-note">
+                <span>Changes are previewed immediately. Cancel restores the saved size.</span>
+                <span class="field-settings-actions">
+                  <button class="smallbtn" id="resetFontSizeSettings" type="button">Restore Default</button>
+                  <button class="smallbtn" id="cancelFontSizeSettings" type="button">Cancel</button>
+                  <button class="smallbtn" id="saveFontSizeSettings" type="button">Save</button>
+                </span>
+              </div>
+              <div class="citation-settings-status" id="fontSizeSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop loader-backdrop" id="libraryLoaderBackdrop" aria-hidden="true">
         <section class="settings-modal loader-modal" role="dialog" aria-modal="false" aria-labelledby="libraryLoaderTitle">
           <div class="settings-modal-head">
@@ -34359,6 +34459,10 @@ INDEX_HTML = """<!doctype html>
       quickLookMode: "builtin_all",
       quickLookSettingsLoaded: false,
       quickLookSettingsPromise: null,
+      fontSizeScale: 100,
+      fontSizeSettingsLoaded: false,
+      fontSizeSettingsPromise: null,
+      fontSizeOriginalScale: null,
       preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
@@ -35008,6 +35112,81 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function normalizeFontSizeScale(value) {
+      const scale = Number(value);
+      return [90, 100, 110, 120, 130].includes(scale) ? scale : 100;
+    }
+
+    function scaledFontSizeValue(value, factor) {
+      const match = String(value || "").trim().match(/^([0-9]*[.]?[0-9]+)px$/i);
+      if (!match) return "";
+      return `${Math.round(Number(match[1]) * factor * 100) / 100}px`;
+    }
+
+    function collectFontSizeOverrideRules(ruleList, factor) {
+      let css = "";
+      Array.from(ruleList || []).forEach((rule) => {
+        if (rule.type === 1) {
+          const scaled = scaledFontSizeValue(rule.style?.getPropertyValue("font-size"), factor);
+          if (scaled && rule.selectorText) css += `${rule.selectorText}{font-size:${scaled}!important;}`;
+          return;
+        }
+        if ((rule.type === 4 || rule.type === 12) && rule.cssRules) {
+          const nested = collectFontSizeOverrideRules(rule.cssRules, factor);
+          if (!nested) return;
+          css += rule.type === 4
+            ? `@media ${rule.conditionText}{${nested}}`
+            : `@supports ${rule.conditionText}{${nested}}`;
+        }
+      });
+      return css;
+    }
+
+    function applyFontSizeScale(value) {
+      const scale = normalizeFontSizeScale(value);
+      let style = document.getElementById("appFontSizeOverrides");
+      if (!style) {
+        style = document.createElement("style");
+        style.id = "appFontSizeOverrides";
+        document.head.appendChild(style);
+      }
+      style.textContent = "";
+      document.documentElement.dataset.fontSizeScale = String(scale);
+      state.fontSizeScale = scale;
+      if (scale === 100) return scale;
+      const factor = scale / 100;
+      let css = "";
+      Array.from(document.styleSheets).forEach((sheet) => {
+        if (sheet.ownerNode === style) return;
+        try {
+          css += collectFontSizeOverrideRules(sheet.cssRules, factor);
+        } catch (_) {
+          // Cross-origin stylesheets cannot be inspected; the bundled UI stylesheet remains available.
+        }
+      });
+      style.textContent = css;
+      return scale;
+    }
+
+    function applyFontSizeSettings(settings = {}) {
+      state.fontSizeSettingsLoaded = true;
+      return {scale: applyFontSizeScale(settings.scale)};
+    }
+
+    async function loadFontSizeSettings(options = {}) {
+      if (!options.force && state.fontSizeSettingsLoaded) return {scale: state.fontSizeScale};
+      if (!options.force && state.fontSizeSettingsPromise) return state.fontSizeSettingsPromise;
+      state.fontSizeSettingsPromise = (async () => {
+        const data = await fetchJson("/api/settings/font-size");
+        return applyFontSizeSettings(data || {});
+      })();
+      try {
+        return await state.fontSizeSettingsPromise;
+      } finally {
+        state.fontSizeSettingsPromise = null;
+      }
+    }
+
     function quickLookUsesNativeForPaper(paper) {
       const mode = normalizeQuickLookMode(state.quickLookMode);
       if (mode === "native_all") return true;
@@ -35583,7 +35762,8 @@ INDEX_HTML = """<!doctype html>
     async function loadLibrary(options = {}) {
       await Promise.all([
         loadFieldSettings({render: false}),
-        loadQuickLookSettings({refreshPreview: false})
+        loadQuickLookSettings({refreshPreview: false}),
+        loadFontSizeSettings()
       ]);
       state.mode = "library";
       setPrimaryView("library");
@@ -53179,6 +53359,81 @@ INDEX_HTML = """<!doctype html>
       saveQuickLookSettings("builtin_all");
     }
 
+    function renderFontSizeSettingsSelection(scale = state.fontSizeScale) {
+      const normalized = normalizeFontSizeScale(scale);
+      document.querySelectorAll('input[name="font-size-scale"]').forEach((input) => {
+        input.checked = Number(input.value) === normalized;
+      });
+    }
+
+    async function openFontSizeSettings() {
+      const backdrop = $("fontSizeSettingsBackdrop");
+      if (!backdrop) return;
+      state.fontSizeOriginalScale = state.fontSizeScale;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
+      $("fontSizeSettingsStatus").textContent = "Loading font size settings...";
+      $("fontSizeSettingsStatus").className = "citation-settings-status";
+      try {
+        await loadFontSizeSettings({force: true});
+        state.fontSizeOriginalScale = state.fontSizeScale;
+        renderFontSizeSettingsSelection();
+        $("fontSizeSettingsStatus").textContent = "Choose a size. Changes are previewed immediately.";
+      } catch (error) {
+        $("fontSizeSettingsStatus").textContent = error.message || "Could not load font size settings";
+        $("fontSizeSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function closeFontSizeSettings(options = {}) {
+      if (options.restore !== false && state.fontSizeOriginalScale !== null) {
+        applyFontSizeScale(state.fontSizeOriginalScale);
+      }
+      state.fontSizeOriginalScale = null;
+      $("fontSizeSettingsBackdrop")?.classList.remove("open");
+      $("fontSizeSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    function selectedFontSizeScaleFromDialog() {
+      return normalizeFontSizeScale(document.querySelector('input[name="font-size-scale"]:checked')?.value);
+    }
+
+    function previewFontSizeSetting(value) {
+      const scale = applyFontSizeScale(value);
+      renderFontSizeSettingsSelection(scale);
+      $("fontSizeSettingsStatus").textContent = `Previewing ${scale}%. Save to keep this size.`;
+      $("fontSizeSettingsStatus").className = "citation-settings-status";
+    }
+
+    async function saveFontSizeSettings() {
+      const scale = selectedFontSizeScaleFromDialog();
+      $("fontSizeSettingsStatus").textContent = "Saving font size...";
+      $("fontSizeSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/font-size", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({scale})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save font size");
+        applyFontSizeSettings(data || {});
+        renderFontSizeSettingsSelection();
+        state.fontSizeOriginalScale = null;
+        $("fontSizeSettingsStatus").textContent = "Font size saved.";
+        $("fontSizeSettingsStatus").className = "citation-settings-status ok";
+        closeFontSizeSettings({restore: false});
+      } catch (error) {
+        $("fontSizeSettingsStatus").textContent = error.message || "Could not save font size";
+        $("fontSizeSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function resetFontSizeSettings() {
+      previewFontSizeSetting(100);
+    }
+
     async function openPdfRenameSettings() {
       const backdrop = $("pdfRenameSettingsBackdrop");
       if (!backdrop) return;
@@ -55620,6 +55875,16 @@ INDEX_HTML = """<!doctype html>
     });
     $("saveQuickLookSettings").addEventListener("click", () => saveQuickLookSettings());
     $("resetQuickLookSettings").addEventListener("click", resetQuickLookSettings);
+    $("closeFontSizeSettings").addEventListener("click", () => closeFontSizeSettings());
+    $("fontSizeSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("fontSizeSettingsBackdrop")) closeFontSizeSettings();
+    });
+    $("cancelFontSizeSettings").addEventListener("click", () => closeFontSizeSettings());
+    $("saveFontSizeSettings").addEventListener("click", saveFontSizeSettings);
+    $("resetFontSizeSettings").addEventListener("click", resetFontSizeSettings);
+    document.querySelectorAll('input[name="font-size-scale"]').forEach((input) => {
+      input.addEventListener("change", () => previewFontSizeSetting(input.value));
+    });
     $("closePdfRenameSettings").addEventListener("click", closePdfRenameSettings);
     $("pdfRenameSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("pdfRenameSettingsBackdrop")) closePdfRenameSettings();
@@ -55711,6 +55976,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeQuickLookSettings();
+        return;
+      }
+      if ($("fontSizeSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFontSizeSettings();
         return;
       }
       if ($("pdfRenameSettingsBackdrop").classList.contains("open")) {
@@ -55896,6 +56167,7 @@ INDEX_HTML = """<!doctype html>
     window.openArxivSettings = openArxivSettings;
     window.openFieldSettings = openFieldSettings;
     window.openQuickLookSettings = openQuickLookSettings;
+    window.openFontSizeSettings = openFontSizeSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;

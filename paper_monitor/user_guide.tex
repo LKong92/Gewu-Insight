@@ -40,8 +40,17 @@
 \setlength{\parskip}{3pt plus .8pt minus .5pt}
 \setstretch{1.01}
 \setlist{topsep=2.5pt,itemsep=1.25pt,parsep=.5pt,leftmargin=5.5mm}
-\setcounter{secnumdepth}{0}
-\setcounter{tocdepth}{2}
+% Number the reader-facing hierarchy, but stop before implementation-detail
+% subsections.  Each part owns its chapter sequence, so the visible chapter
+% labels are 1-1, 1-2, 2-1, 3-1, ... instead of one global counter.
+\setcounter{secnumdepth}{1}
+\setcounter{tocdepth}{1}
+\makeatletter
+\@addtoreset{chapter}{part}
+\makeatother
+\renewcommand{\thechapter}{\arabic{part}-\arabic{chapter}}
+\renewcommand{\thesection}{\thechapter.\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
 \renewcommand{\arraystretch}{1.16}
 \setlength{\tabcolsep}{3.5pt}
 \setlength{\LTpre}{4pt}
@@ -65,10 +74,11 @@
 \setkomafont{subsection}{\sffamily\bfseries\color{GewuInk}\fontsize{11.8}{14}\selectfont}
 \setkomafont{subsubsection}{\sffamily\bfseries\color{GewuInk}\fontsize{10.5}{12.5}\selectfont}
 \renewcommand*{\partformat}{\partname~\thepart\autodot\enskip}
-\RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex]{chapter}
-\RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex]{section}
+\RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex,tocnumwidth=3.8em]{chapter}
+\RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex,tocnumwidth=5.2em]{section}
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{subsection}
-\renewcommand*{\chapterformat}{\color{GewuBlue}\rule[-2pt]{1.7mm}{23pt}\hspace{3mm}}
+\renewcommand*{\chapterformat}{\color{GewuBlue}\rule[-2pt]{1.7mm}{23pt}\hspace{3mm}\thechapter\enskip}
+\renewcommand*{\sectionformat}{\thesection\enskip}
 \pretocmd{\section}{\Needspace{5\baselineskip}}{}{}
 \pretocmd{\subsection}{\Needspace{4\baselineskip}}{}{}
 \pretocmd{\subsubsection}{\Needspace{3\baselineskip}}{}{}
@@ -149,21 +159,19 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 \RaggedRight
 \part{Orientation}\label{part-1}
 
-\chapter{Start Here}\label{chapter-1}
-
-\section{Welcome}\label{welcome}
+\chapter{Welcome}\label{welcome}
 
 \begin{GewuLead}
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-\subsection{Why this workspace exists}\label{why-this-workspace-exists}
+\section{Why this workspace exists}\label{why-this-workspace-exists}
 
 Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author\textquotesingle s profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.
 
 Gewu Insight is designed to keep those fragments connected. It treats discovery, identity, files, versions, organization, reading state, and provenance as parts of one continuing research process. The aim is not to accumulate the largest possible list. The aim is to preserve enough context that a useful paper remains understandable and usable months or years after it was first found.
 
-\subsection{Why the name 格物洞见}\label{why-the-name-ux683cux7269ux6d1eux89c1}
+\section{Why the name 格物洞见}\label{why-the-name-ux683cux7269ux6d1eux89c1}
 
 The name recalls the Chinese idea of \textbf{格物致知}: approaching things closely enough to understand their underlying order. In this practical research setting, \emph{gewu}---the investigation of things---means continuously examining the research object, its sources, authors, versions, files, relationships, and changing state.
 
@@ -191,7 +199,7 @@ The Chinese name is part of the product idea, not a decorative translation of th
 Keep research objects visible, evidence traceable, and insight cumulative.{让研究对象保持可见，让证据保持可追，让洞见能够积累。}
 \end{quote}
 
-\subsection{Five design commitments}\label{five-design-commitments}
+\section{Five design commitments}\label{five-design-commitments}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -218,7 +226,7 @@ Principle & What it means \\
 The durable workspace is local, while supported discovery, metadata, profile, and download features may require network access and remain subject to source, publisher, and institutional availability. Verify uncertain matches and versions; the app does not bypass access controls.
 \end{quote}
 
-\subsection{Cross-platform core, platform-specific integration}\label{cross-platform-core-platform-specific-integration}
+\section{Cross-platform core, platform-specific integration}\label{cross-platform-core-platform-specific-integration}
 
 Gewu Insight separates its portable Python, SQLite, and web-interface core from the native desktop layer. Paper identity, database migrations, monitor state, resource relationships, and most interface logic are designed without making macOS the definition of the product.
 
@@ -245,11 +253,11 @@ Planned Windows release & Windows support is planned to begin as an experimental
 This guide does not claim that a supported Windows package is available today. Instructions that name Finder, Preview, Quick Look, the Dock, or macOS Trash describe the currently tested macOS integration. Equivalent Windows instructions should be added when the experimental Windows package exists and has been verified.
 \end{quote}
 
-\subsection{What this guide covers}\label{what-this-guide-covers}
+\section{What this guide covers}\label{what-this-guide-covers}
 
 This guide follows the work you do in the app: put papers into the Library, organize them, manage publication versions and attachments, review new literature, and keep the database and files safe. It describes the current interface rather than the history of the project.
 
-\subsection{What Gewu Insight is---and is not}\label{what-gewu-insight-isand-is-not}
+\section{What Gewu Insight is---and is not}\label{what-gewu-insight-isand-is-not}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -269,7 +277,7 @@ A system that records evidence and assists repeatable work. & A black-box rankin
 \GewuTableEnd
 }
 
-\subsection{Five areas of the app}\label{five-areas-of-the-app}
+\section{Five areas of the app}\label{five-areas-of-the-app}
 
 \begin{itemize}
 \tightlist
@@ -285,7 +293,7 @@ A system that records evidence and assists repeatable work. & A black-box rankin
   \textbf{Author Monitor} --- monitored researchers, profile-linked discovery, and newly found work.
 \end{itemize}
 
-\subsection{One continuous research loop}\label{one-continuous-research-loop}
+\section{One continuous research loop}\label{one-continuous-research-loop}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -333,7 +341,7 @@ What you save, read, classify, and follow becomes context for the next cycle; th
 SQLite is the source of truth for Gewu Insight. Do not replace, rebuild, or edit the database by hand. Use the app to move, classify, or delete managed items.
 \end{quote}
 
-\subsection{Choose a path through this guide}\label{choose-a-path-through-this-guide}
+\section{Choose a path through this guide}\label{choose-a-path-through-this-guide}
 
 This is one comprehensive manual with three complementary reading paths. The \textbf{operational path} explains how to use the app; the \textbf{concept and architecture path} explains why the workspace is organized this way; and the \textbf{technical reference path} documents storage, database, network, migration, and troubleshooting details. They remain together so visible behavior, product principles, and implementation constraints do not drift apart.
 
@@ -356,21 +364,21 @@ Prepare an upgrade or move to another Mac & Read \hyperref[backup-migrate]{Back 
 \GewuTableEnd
 }
 
-\subsection{Open this guide again}\label{open-this-guide-again}
+\section{Open this guide again}\label{open-this-guide-again}
 
 Choose \textbf{Help \textgreater{} User Guide}. The guide opens in its own window and works without an internet connection.
 
-\subsection{See also}\label{see-also}
+\section{See also}\label{see-also}
 
 \hyperref[guided-tour]{Guided Tour} · \hyperref[first-session]{Your First Session} · \hyperref[system-overview]{System Architecture at a Glance} · \hyperref[storage-model]{How Gewu Insight Stores Files}
 
-\section{Guided Tour}\label{guided-tour}
+\chapter{Guided Tour}\label{guided-tour}
 
 \begin{GewuLead}
 The top chooses a work mode; the panes move from context on the left to the active object and its evidence; the bottom preserves navigation and progress without reshaping the workspace.
 \end{GewuLead}
 
-\subsection{Read the interface as a sentence}\label{read-the-interface-as-a-sentence}
+\section{Read the interface as a sentence}\label{read-the-interface-as-a-sentence}
 
 Gewu Insight uses a consistent left-to-right grammar. The exact number of panes changes with the task, but their meaning remains stable: choose a research context, narrow it to an object, inspect its evidence, then act. This lets a dense workspace remain predictable without hiding the underlying files and relationships.
 
@@ -414,7 +422,7 @@ Role
 The bottom edge is reserved for progress, breadcrumbs, and view controls so background work does not repeatedly resize the main content.
 \end{GewuCaption}
 
-\subsection{The Library window}\label{the-library-window}
+\section{The Library window}\label{the-library-window}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -435,7 +443,7 @@ Area & Purpose \\
 \GewuTableEnd
 }
 
-\subsection{Follow selection from broad to specific}\label{follow-selection-from-broad-to-specific}
+\section{Follow selection from broad to specific}\label{follow-selection-from-broad-to-specific}
 
 A selected item does not always mean ``open this file.'' In a folder column, selection establishes the next level of context. In the item column, it identifies the active paper or standalone file. In Paper Files, it identifies one resource inside the active paper bundle. Paper Details then describes the shared work rather than merely repeating the selected filename.
 
@@ -457,7 +465,7 @@ A Monitor result & Its discovery evidence, report, and available actions. & Addi
 \GewuTableEnd
 }
 
-\subsection{Tabs across the top}\label{tabs-across-the-top}
+\section{Tabs across the top}\label{tabs-across-the-top}
 
 Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.
 
@@ -480,7 +488,7 @@ Area & Primary question & Typical next action \\
 \GewuTableEnd
 }
 
-\subsection{Watch one paper move through the workspace}\label{watch-one-paper-move-through-the-workspace}
+\section{Watch one paper move through the workspace}\label{watch-one-paper-move-through-the-workspace}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -504,7 +512,7 @@ Element & Role \\
 These states can overlap. A cataloged Monitor result may have no local file, and a downloaded file does not have to belong to a Library folder immediately.
 \end{GewuCaption}
 
-\subsection{Resize a pane}\label{resize-a-pane}
+\section{Resize a pane}\label{resize-a-pane}
 
 \begin{enumerate}
 \tightlist
@@ -522,7 +530,7 @@ These states can overlap. A cataloged Monitor result may have no local file, and
 The right-side Paper Details area scrolls independently. A long author list or citation section does not move the Library columns.
 \end{quote}
 
-\subsection{Recognize stable and temporary state}\label{recognize-stable-and-temporary-state}
+\section{Recognize stable and temporary state}\label{recognize-stable-and-temporary-state}
 
 Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource role, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.
 
@@ -532,17 +540,17 @@ Selection highlight, keyboard focus, an open menu, and the current scroll positi
 Before moving, deleting, or attaching an item, confirm which pane has focus and which paper is shown in Paper Details. The same file-like name can represent a paper placement, a resource inside Paper Files, or a standalone imported file.
 \end{quote}
 
-\subsection{See also}\label{see-also-1}
+\section{See also}\label{see-also-1}
 
 \hyperref[library-layout]{Library Layout} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[keyboard]{Keyboard Shortcuts}
 
-\section{Your First Session}\label{first-session}
+\chapter{Your First Session}\label{first-session}
 
 \begin{GewuLead}
 Start with one paper, confirm its identity and context, then inspect or add a local file when the work is file-backed.
 \end{GewuLead}
 
-\subsection{Choose your starting route}\label{choose-your-starting-route}
+\section{Choose your starting route}\label{choose-your-starting-route}
 
 You do not need to prepare a perfect record before beginning. Start from the strongest evidence you already have, then let the paper object become richer over time.
 
@@ -569,7 +577,7 @@ A useful result in Journal, Subject, or Author Monitor & Select the result and c
 Folder Loader and ordinary file import are designed to preserve the external source rather than silently reorganize it. The managed copy and the source path can both remain part of the provenance.
 \end{quote}
 
-\subsection{Add and inspect a paper}\label{add-and-inspect-a-paper}
+\section{Add and inspect a paper}\label{add-and-inspect-a-paper}
 
 \begin{enumerate}
 \tightlist
@@ -589,7 +597,7 @@ Folder Loader and ordinary file import are designed to preserve the external sou
 \textbf{Result.} The paper now has a cataloged paper record, a stable Gewu Key, and a Library placement. It may have no local file; that cataloged-only state is valid. A file resource exists only after a file is imported, downloaded, or attached.
 \end{GewuResult}
 
-\subsection{Understand what may now exist}\label{understand-what-may-now-exist}
+\section{Understand what may now exist}\label{understand-what-may-now-exist}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -631,7 +639,7 @@ Role
 A cataloged-only paper legitimately has the first two objects and no local file. A file-backed paper also has resource metadata and real bytes. These objects cooperate, but they are not interchangeable.
 \end{GewuCaption}
 
-\subsection{Verify the identity before enriching it}\label{verify-the-identity-before-enriching-it}
+\section{Verify the identity before enriching it}\label{verify-the-identity-before-enriching-it}
 
 \begin{enumerate}
 \tightlist
@@ -645,7 +653,7 @@ A cataloged-only paper legitimately has the first two objects and no local file.
   \textbf{Keep uncertainty visible.} It is safer to leave a field empty than to confirm a plausible but wrong identifier.
 \end{enumerate}
 
-\subsection{Complete the first Paper Files bundle}\label{complete-the-first-paper-files-bundle}
+\section{Complete the first Paper Files bundle}\label{complete-the-first-paper-files-bundle}
 
 A cataloged-only paper may have no local file, and nothing is missing merely because Paper Files is empty. Continue with these steps after you import, download, or attach a file and the paper becomes file-backed.
 
@@ -679,11 +687,11 @@ Principle & What it means \\
 \GewuTableEnd
 }
 
-\subsection{Optional: verify shared identity}\label{optional-verify-shared-identity}
+\section{Optional: verify shared identity}\label{optional-verify-shared-identity}
 
 Copy the paper to a second Library folder, then select it there. The title, Gewu Key, Paper Files, and metadata should remain the same because the second folder contains another placement for the shared paper---not an unrelated duplicate. Delete only the extra placement when you are finished with the check.
 
-\subsection{Next useful actions}\label{next-useful-actions}
+\section{Next useful actions}\label{next-useful-actions}
 
 \begin{itemize}
 \tightlist
@@ -697,7 +705,7 @@ Copy the paper to a second Library folder, then select it there. The title, Gewu
   Back up the project before a large import or migration.
 \end{itemize}
 
-\subsection{Finish with a safe baseline}\label{finish-with-a-safe-baseline}
+\section{Finish with a safe baseline}\label{finish-with-a-safe-baseline}
 
 Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is current, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.
 
@@ -725,21 +733,19 @@ Principle & What it means \\
 Before a major import, upgrade, or migration, quit Gewu Insight and back up both the SQLite database and the managed file roots. A database-only copy lacks some bytes; a files-only copy lacks the relationships and state that make the workspace intelligible.
 \end{quote}
 
-\subsection{See also}\label{see-also-2}
+\section{See also}\label{see-also-2}
 
 \hyperref[import-files]{Add Papers and Files} · \hyperref[paper-details]{Use Paper Details} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
 
 \part{Product Concepts and Architecture}\label{part-2}
 
-\chapter{Understand the System}\label{chapter-30}
-
-\section{System Architecture at a Glance}\label{system-overview}
+\chapter{System Architecture at a Glance}\label{system-overview}
 
 \begin{GewuLead}
 Gewu Insight is a local research system that coordinates structured state, visible files, and a personal workspace. It is not simply a web page placed in front of a folder.
 \end{GewuLead}
 
-\subsection{How the parts cooperate}\label{how-the-parts-cooperate}
+\section{How the parts cooperate}\label{how-the-parts-cooperate}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -767,7 +773,7 @@ The interface sends an intention to the local service. The service validates it 
 
 The desktop window presents a local interface served from the project on the current computer. In today\textquotesingle s primary release, a macOS shell supplies Finder, Preview, Quick Look, Dock, and native drag-and-drop integration. The Python, SQLite, and web-interface core is designed to support other desktop shells without changing the meaning of the research data. Network sources contribute evidence and downloadable material, but the durable workspace stays local.
 
-\subsection{What each persistent layer answers}\label{what-each-persistent-layer-answers}
+\section{What each persistent layer answers}\label{what-each-persistent-layer-answers}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -792,7 +798,7 @@ System relationship
 Persistent research workspace = structured SQLite state + visible research files, coordinated by the local application.
 \end{quote}
 
-\subsection{Why this separation matters}\label{why-this-separation-matters}
+\section{Why this separation matters}\label{why-this-separation-matters}
 
 A paper can appear in a Monitor, the Library, a Space, and My Publications without becoming four unrelated papers. It can also acquire a DOI after first arriving as an arXiv preprint, or acquire a publication PDF while retaining earlier versions. The database preserves continuity across those changes; visible files preserve user ownership and inspectability.
 
@@ -802,17 +808,17 @@ A paper can appear in a Monitor, the Library, a Space, and My Publications witho
 This guide uses \textbf{Personal Research Workspace} for the on-screen projection and \textbf{Visible Research Files} for assets visible to the native filesystem. These are explanatory terms, not menu names. Together they form the visible workspace, but they serve different roles.
 \end{quote}
 
-\subsection{See also}\label{see-also-3}
+\section{See also}\label{see-also-3}
 
 \hyperref[persistent-paper-object]{The Persistent Paper Object} · \hyperref[sqlite-core]{Why SQLite Is the Core} · \hyperref[visible-research-files]{Visible Research Files}
 
-\section{The Persistent Paper Object}\label{persistent-paper-object}
+\chapter{The Persistent Paper Object}\label{persistent-paper-object}
 
 \begin{GewuLead}
 Gewu Insight treats a scholarly work as an object that persists through discovery, publication, file changes, and personal organization---not as a temporary search result or a single PDF.
 \end{GewuLead}
 
-\subsection{One identity can accumulate evidence}\label{one-identity-can-accumulate-evidence}
+\section{One identity can accumulate evidence}\label{one-identity-can-accumulate-evidence}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -839,7 +845,7 @@ Identifiers help resolve and enrich a paper, while the Gewu Key provides continu
 
 The central record uses an internal paper identity. A DOI or arXiv identifier is important evidence attached to that identity, but neither is a safe universal primary key: an early preprint may have no DOI, an imported PDF may initially have no reliable identifier, and an incorrect identifier may later be corrected.
 
-\subsection{Do not collapse four different things}\label{do-not-collapse-four-different-things}
+\section{Do not collapse four different things}\label{do-not-collapse-four-different-things}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -865,7 +871,7 @@ System relationship
 Paper record {\symbolfont ≠} workspace placement {\symbolfont ≠} resource record {\symbolfont ≠} physical file.
 \end{quote}
 
-\subsection{What happens when the same paper is found again}\label{what-happens-when-the-same-paper-is-found-again}
+\section{What happens when the same paper is found again}\label{what-happens-when-the-same-paper-is-found-again}
 
 Journal, Subject, and Author Monitor can encounter the same work from different directions. Identity resolution is designed to reuse one shared paper record and add source or context relationships. Copying a paper to another Library folder likewise creates another placement rather than a second independent identity. Its metadata, Gewu Key, versions, and attachments remain shared.
 
@@ -875,7 +881,7 @@ A network observation can be transient while acquisition is running. Once a resu
 
 Gewu Insight also uses the same catalog and resource infrastructure for an imported standalone file whose scholarly identity is not yet known. In that case, the catalog record preserves the file and its relationships while later identification can enrich it.
 
-\subsection{Identity corrections should preserve continuity}\label{identity-corrections-should-preserve-continuity}
+\section{Identity corrections should preserve continuity}\label{identity-corrections-should-preserve-continuity}
 
 Editing a DOI or arXiv identifier changes evidence on the existing paper. It should not silently make an unrelated second paper, rename every file, or discard your folder placements and read history. When evidence conflicts, inspect the title, authors, venue, and files before confirming the correction.
 
@@ -885,17 +891,17 @@ Editing a DOI or arXiv identifier changes evidence on the existing paper. It sho
 Similar titles are not proof of identity, and matching filenames are not proof that two resources are the same. Use identifiers, metadata, file fingerprints, and provenance together.
 \end{quote}
 
-\subsection{See also}\label{see-also-4}
+\section{See also}\label{see-also-4}
 
 \hyperref[identifiers]{Edit DOI and arXiv Identifiers} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[personal-research-workspace]{The Personal Research Workspace}
 
-\section{Why SQLite Is the Core}\label{sqlite-core}
+\chapter{Why SQLite Is the Core}\label{sqlite-core}
 
 \begin{GewuLead}
 SQLite is the source of truth for Gewu Insight because it preserves the identity, relationships, resource registry, and operational memory that neither a filename nor an exported report can express.
 \end{GewuLead}
 
-\subsection{Four families of structured state}\label{four-families-of-structured-state}
+\section{Four families of structured state}\label{four-families-of-structured-state}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -922,11 +928,11 @@ Table names and schema versions can evolve; these four responsibilities are the 
 
 The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what role and version they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.
 
-\subsection{Why a folder scan is not an equivalent database}\label{why-a-folder-scan-is-not-an-equivalent-database}
+\section{Why a folder scan is not an equivalent database}\label{why-a-folder-scan-is-not-an-equivalent-database}
 
 Finder can show that \texttt{paper.pdf} exists. It cannot reliably say whether it is a Version of Record or a preprint, whether the same work is also in My Publications, whether a Monitor refresh completed with zero results, which external source produced the metadata, or which attachment should survive deletion of one shortcut. Those facts live in SQLite.
 
-\subsection{Transactions, relationships, and WAL}\label{transactions-relationships-and-wal}
+\section{Transactions, relationships, and WAL}\label{transactions-relationships-and-wal}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -948,7 +954,7 @@ Schema migration & Adds new structures and backfills required state during an up
 
 WAL improves normal concurrency; it is not a substitute for a coherent backup. Close Gewu Insight before copying its live database, and back up the managed files with it.
 
-\subsection{Durable preferences and shipped defaults}\label{durable-preferences-and-shipped-defaults}
+\section{Durable preferences and shipped defaults}\label{durable-preferences-and-shipped-defaults}
 
 Journal subscriptions are durable SQLite state as well. The database preserves which journals are enabled, their identifiers and source settings, and their display order. The journal catalog shipped with a newer app version is a set of defaults, not an instruction to overwrite your personal list.
 
@@ -960,11 +966,11 @@ On the first upgrade that introduces durable subscriptions, Gewu Insight seeds t
 SQLite transactions protect database state. A file move and its database update cannot be one native SQLite transaction, so the local service coordinates the steps and uses validation or compensating recovery when a filesystem operation fails.
 \end{quote}
 
-\subsection{Exports and provenance}\label{exports-and-provenance}
+\section{Exports and provenance}\label{exports-and-provenance}
 
 JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are derived artifacts. They can be regenerated, shared, or inspected, but editing them does not alter the source records. Raw source evidence may also be retained inside SQLite for provenance; this does not turn an external JSON export into a second source of truth.
 
-\subsection{Paper-level Monitor provenance}\label{paper-level-monitor-provenance}
+\section{Paper-level Monitor provenance}\label{paper-level-monitor-provenance}
 
 Journal Monitor stores more than a run-level success or failure. For every paper observed during a journal fetch, a normalized provenance relationship connects the canonical paper to the fetch run and the reporting source. The run supplies the journal, date window, status, and timing; the paper-level relationship records that this source observed this particular work.
 
@@ -976,7 +982,7 @@ Repeated observation of the same paper and source within one run updates the exi
 A provenance relationship does not by itself create a Library placement or a local PDF. It records how the work entered view. Organization and file acquisition remain separate, explicit actions.
 \end{quote}
 
-\subsection{What the app does during an upgrade}\label{what-the-app-does-during-an-upgrade}
+\section{What the app does during an upgrade}\label{what-the-app-does-during-an-upgrade}
 
 On startup, the storage layer reads the database schema version, checks for required tables and fields, applies additive migrations in order, ensures required roots exist, and backfills stable keys or resource records where older data needs them. A normal migration preserves paper identities, folder placements, monitored-journal choices, fetch provenance, and file paths. This is why a project upgrade should preserve the existing database and files rather than replace them with an empty database.
 
@@ -986,17 +992,17 @@ On startup, the storage layer reads the database schema version, checks for requ
 A seemingly small manual change can violate a relationship that is not visible in one table. Use the app for normal work and make a closed, complete backup before any diagnostic intervention.
 \end{quote}
 
-\subsection{See also}\label{see-also-5}
+\section{See also}\label{see-also-5}
 
 \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[storage-reference]{Storage Reference}
 
-\section{Visible Research Files}\label{visible-research-files}
+\chapter{Visible Research Files}\label{visible-research-files}
 
 \begin{GewuLead}
 Your PDFs and attachments remain real local files. Gewu Insight adds a resource model around them so several versions and related materials can belong to one paper without hiding them inside an opaque cloud library.
 \end{GewuLead}
 
-\subsection{One paper, one file bundle}\label{one-paper-one-file-bundle}
+\section{One paper, one file bundle}\label{one-paper-one-file-bundle}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -1022,7 +1028,7 @@ Element & Role \\
 The Paper Files pane presents this as a compact bundle rather than another Finder hierarchy.
 \end{GewuCaption}
 
-\subsection{Managed and linked resources}\label{managed-and-linked-resources}
+\section{Managed and linked resources}\label{managed-and-linked-resources}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -1044,7 +1050,7 @@ A resource can be managed while retaining a separate external source path as pro
 
 Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.
 
-\subsection{How the current file is resolved}\label{how-the-current-file-is-resolved}
+\section{How the current file is resolved}\label{how-the-current-file-is-resolved}
 
 An explicit preferred publication-version PDF takes precedence when it still exists. Otherwise, usable publication versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified publication PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.
 
@@ -1056,7 +1062,7 @@ Supplements and other attachments are never eligible to become current, even whe
 \textbf{First Published} means the publisher\textquotesingle s initially released file; \textbf{Version of Record} means the current formal record. The compact UI can present either under the broader label \textbf{Published Version}, while the resource registry retains the more specific role when it is known.
 \end{quote}
 
-\subsection{Fingerprints and annotations}\label{fingerprints-and-annotations}
+\section{Fingerprints and annotations}\label{fingerprints-and-annotations}
 
 When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers ``are these bytes identical?'' Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.
 
@@ -1064,7 +1070,7 @@ Gewu Insight counts user-created comments and markup---such as highlights, notes
 
 An exact duplicate can be reused instead of stored twice. A clean PDF and an annotated copy may have different exact hashes but the same content fingerprint; both can be retained when the annotation state is meaningful.
 
-\subsection{Why Finder and the UI do not look identical}\label{why-finder-and-the-ui-do-not-look-identical}
+\section{Why Finder and the UI do not look identical}\label{why-finder-and-the-ui-do-not-look-identical}
 
 The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore appear as a current file in the visible topic folder while its previous versions and attachments live under a mirrored Associated Files path. Paper Files deliberately groups those resources by role instead of showing every physical directory level.
 
@@ -1074,11 +1080,11 @@ The filesystem must expose practical paths and folders; the UI must expose the m
 Do not manually move or rename managed resources in Finder. The bytes may still exist, but the saved path and live workspace can disagree. Use an app-supported move, repair, or restore; do not assume a restart will rediscover an arbitrary manual move.
 \end{quote}
 
-\subsection{See also}\label{see-also-6}
+\section{See also}\label{see-also-6}
 
 \hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
 
-\section{The Personal Research Workspace}\label{personal-research-workspace}
+\chapter{The Personal Research Workspace}\label{personal-research-workspace}
 
 \begin{GewuLead}
 The five top-level areas are coordinated views over shared research objects. They are not five separate databases, and moving between them does not reset a paper\textquotesingle s identity.
@@ -1109,19 +1115,19 @@ Element & Role \\
 The same paper can participate in several contexts. Each context adds meaning; it does not require an unrelated duplicate record.
 \end{GewuCaption}
 
-\subsection{Views are relational projections}\label{views-are-relational-projections}
+\section{Views are relational projections}\label{views-are-relational-projections}
 
 A Library folder answers ``where do I organize this?'' My Publications answers ``how does this relate to my authorship?'' Author Monitor answers ``how does this relate to this researcher?'' These are different relationships to the same possible work. The interface queries those relationships and projects the relevant controls, status, and files for the current task.
 
-\subsection{Library placements and shortcuts}\label{library-placements-and-shortcuts}
+\section{Library placements and shortcuts}\label{library-placements-and-shortcuts}
 
 A paper can have more than one Library placement. Copying it to another folder reuses the shared identity and resources. A shortcut tab is another entry point to a Library location, not another paper collection. A Space is an independent organizational root, but papers placed there can still reuse the same identity model.
 
-\subsection{Discovery does not require immediate file management}\label{discovery-does-not-require-immediate-file-management}
+\section{Discovery does not require immediate file management}\label{discovery-does-not-require-immediate-file-management}
 
 A Monitor result may remain a discovery relationship with metadata and status but no local Paper Files. The UI can hide the internal Gewu Key in a discovery context even when a shared paper record already exists. Downloading or attaching a file creates a resource relationship; adding the paper to Library creates a managed placement. Neither action should manufacture a second work merely because the user entered from another tab.
 
-\subsection{Why the same action can have different scope}\label{why-the-same-action-can-have-different-scope}
+\section{Why the same action can have different scope}\label{why-the-same-action-can-have-different-scope}
 
 Removing an author from Author Monitor removes that monitored-author relationship. Removing a shortcut removes an entry point. Moving a Library placement changes organization. Deleting a managed resource changes the paper\textquotesingle s file bundle. The selected view supplies scope, while SQLite preserves what remains shared.
 
@@ -1131,11 +1137,11 @@ Removing an author from Author Monitor removes that monitored-author relationshi
 The UI shows a personal map of a shared object graph. It is ``visible'' because you can navigate and act on it, but SQLite---not pixels on the screen---preserves the graph.
 \end{quote}
 
-\subsection{See also}\label{see-also-7}
+\section{See also}\label{see-also-7}
 
 \hyperref[organize]{Folders, Shortcuts, and Spaces} · \hyperref[my-publications]{My Publications} · \hyperref[state-and-scope]{State, Scope, and Safe Change}
 
-\section{From Discovery to Durable Memory}\label{research-loop}
+\chapter{From Discovery to Durable Memory}\label{research-loop}
 
 \begin{GewuLead}
 Gewu Insight connects monitoring, identity resolution, version handling, and personal organization into one repeatable research loop.
@@ -1163,7 +1169,7 @@ Element & Role \\
 The loop is continuous because a work can acquire better evidence, a new publication version, or a new personal context later.
 \end{GewuCaption}
 
-\subsection{A paper can change without losing its history}\label{a-paper-can-change-without-losing-its-history}
+\section{A paper can change without losing its history}\label{a-paper-can-change-without-losing-its-history}
 
 \begin{enumerate}
 \tightlist
@@ -1181,7 +1187,7 @@ The loop is continuous because a work can acquire better evidence, a new publica
   \textbf{Resolve without erasing.} The publication PDF becomes current; the preprint and its provenance remain in Versions.
 \end{enumerate}
 
-\subsection{Operational state is part of scientific memory}\label{operational-state-is-part-of-scientific-memory}
+\section{Operational state is part of scientific memory}\label{operational-state-is-part-of-scientific-memory}
 
 A result count alone is ambiguous. The app distinguishes work that was never attempted from work that completed with no results, partially completed, failed, or entered a cooldown before retry. It also remembers imports, downloads, metadata refreshes, source tasks, and read state so the next action can be informed rather than blindly repeated.
 
@@ -1203,7 +1209,7 @@ Cooldown or retry scheduled & A remote service asked the app to wait or a transi
 \GewuTableEnd
 }
 
-\subsection{Background work should not seize the foreground}\label{background-work-should-not-seize-the-foreground}
+\section{Background work should not seize the foreground}\label{background-work-should-not-seize-the-foreground}
 
 Fetches, metadata refreshes, and imports report progress in reserved status areas and save their state. You should still be able to browse already stored material. Where callers share an online service, service-specific pacing, locks, cooldowns, and retry policies coordinate their requests. These controls reduce unnecessary traffic; they cannot guarantee that a publisher will never rate-limit or block a network address.
 
@@ -1213,17 +1219,17 @@ Fetches, metadata refreshes, and imports report progress in reserved status area
 Gewu Insight preserves the consequences of what you monitor, save, read, ignore, classify, and publish. It does not silently replace your research judgment with an invisible global keyword filter.
 \end{quote}
 
-\subsection{See also}\label{see-also-8}
+\section{See also}\label{see-also-8}
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor} · \hyperref[author-monitor]{Author Monitor}
 
-\section{State, Scope, and Safe Change}\label{state-and-scope}
+\chapter{State, Scope, and Safe Change}\label{state-and-scope}
 
 \begin{GewuLead}
 A safe local research workspace changes only the object and relationship you intended while preserving shared identity, resources, provenance, and recoverable state.
 \end{GewuLead}
 
-\subsection{Eight invariants behind normal operations}\label{eight-invariants-behind-normal-operations}
+\section{Eight invariants behind normal operations}\label{eight-invariants-behind-normal-operations}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -1247,7 +1253,7 @@ Principle & What it means \\
 \GewuTableEnd
 }
 
-\subsection{Read an action by its scope}\label{read-an-action-by-its-scope}
+\section{Read an action by its scope}\label{read-an-action-by-its-scope}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -1269,11 +1275,11 @@ Delete an associated file & That resource relationship and its managed file, sub
 \GewuTableEnd
 }
 
-\subsection{Recovery is part of the design}\label{recovery-is-part-of-the-design}
+\section{Recovery is part of the design}\label{recovery-is-part-of-the-design}
 
 Recycle keeps ordinary removals recoverable. Import batches and operation status provide evidence about what ran. Resource paths, hashes, and provenance help diagnose missing or duplicate files. The app can migrate older storage structure forward, but migration is not a reason to discard the previous database or original files.
 
-\subsection{Back up one coherent research asset}\label{back-up-one-coherent-research-asset}
+\section{Back up one coherent research asset}\label{back-up-one-coherent-research-asset}
 
 A reliable backup contains the SQLite database and the managed file roots from the same closed application state. Copying only the database preserves descriptions without every artifact; copying only folders preserves bytes without all identities, relationships, classifications, and operation history. A portable desktop copy is useful for sharing visible folder material, but it is not automatically a complete live-workspace backup.
 
@@ -1283,13 +1289,13 @@ A reliable backup contains the SQLite database and the managed file roots from t
 Quit Gewu Insight, preserve the entire project data set, verify the backup can be read, then update the software in place. Do not create a fresh empty database and attempt to reconstruct the workspace from export files.
 \end{quote}
 
-\subsection{See also}\label{see-also-9}
+\section{See also}\label{see-also-9}
 
 \hyperref[recycle]{Delete and Recover Items} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[troubleshooting]{Troubleshooting}
 
 \part{User Manual}\label{part-3}
 
-\chapter{Workspace Navigation}\label{chapter-68}
+\chapter{Workspace Navigation}\label{chapter-11}
 
 \section{Library Layout}\label{library-layout}
 
@@ -1504,7 +1510,7 @@ Control-click the folder contents and choose \textbf{Sort by Name} or \textbf{So
 
 \hyperref[library-layout]{Library Layout} · \hyperref[keyboard]{Keyboard Shortcuts}
 
-\chapter{Papers and Files}\label{chapter-88}
+\chapter{Papers and Files}\label{chapter-12}
 
 \section{Add Papers and Files}\label{import-files}
 
@@ -2008,7 +2014,7 @@ Use final deletion only inside Recycle. The confirmation summarizes how many pap
 
 \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
 
-\chapter{Import and Transfer}\label{chapter-133}
+\chapter{Import and Transfer}\label{chapter-13}
 
 \section{Use Folder Loader}\label{folder-loader}
 
@@ -2216,7 +2222,7 @@ Never migrate by copying only \texttt{paper\_monitor.sqlite} or only the visible
 
 \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[storage-reference]{Storage Reference} · \hyperref[troubleshooting]{Troubleshooting}
 
-\chapter{My Publications}\label{chapter-149}
+\chapter{My Publications}\label{chapter-14}
 
 \section{My Publications}\label{my-publications}
 
@@ -2286,7 +2292,7 @@ Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf proje
 
 \hyperref[citation-settings]{Citation Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
 
-\chapter{Journal Monitor}\label{chapter-157}
+\chapter{Journal Monitor}\label{chapter-15}
 
 \section{Journal Monitor}\label{journal-monitor}
 
@@ -2376,7 +2382,7 @@ Per-paper status text and the bottom progress area make completed downloads and 
 
 \hyperref[subject-monitor]{Subject Monitor} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[import-files]{Add Papers and Files}
 
-\chapter{Subject Monitor}\label{chapter-167}
+\chapter{Subject Monitor}\label{chapter-16}
 
 \section{Subject Monitor}\label{subject-monitor}
 
@@ -2444,7 +2450,7 @@ Subject Monitor rejects Zenodo records during ingestion and when cached results 
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[network-access]{Publisher and Network Access}
 
-\chapter{Author Monitor}\label{chapter-174}
+\chapter{Author Monitor}\label{chapter-17}
 
 \section{Author Monitor}\label{author-monitor}
 
@@ -2500,7 +2506,7 @@ Google Scholar requests are paced and protected by a cooldown. Repeated manual r
 
 \hyperref[my-publications]{My Publications} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[privacy]{Local Data and Privacy}
 
-\chapter{Settings and Safety}\label{chapter-182}
+\chapter{Settings and Safety}\label{chapter-18}
 
 \section{Citation Settings}\label{citation-settings}
 
@@ -2849,9 +2855,7 @@ Optional service credentials belong only in Citation Settings or approved enviro
 
 \part{Product Identity}\label{part-4}
 
-\chapter{About Gewu Insight}\label{chapter-211}
-
-\section{Visual Identity and Cultural Elements}\label{visual-identity}
+\chapter{Visual Identity and Cultural Elements}\label{visual-identity}
 
 \begin{GewuLead}
 Gewu Insight uses three related marks---the calligraphic Chinese name, the app icon, and a seal-script watermark---to connect a contemporary research workspace with the longer Chinese tradition of examining things in order to form insight.
@@ -2859,7 +2863,7 @@ Gewu Insight uses three related marks---the calligraphic Chinese name, the app i
 
 The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.
 
-\subsection{The calligraphic name}\label{the-calligraphic-name}
+\chapter{The calligraphic name}\label{the-calligraphic-name}
 
 \begin{center}\includegraphics[width=0.84\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/branding/GewuAboutCalligraphy.png}\end{center}
 
@@ -2869,7 +2873,7 @@ The transparent production artwork used in the About panel. From left to right t
 
 This is a \textbf{祝枝山行草集字} composition: four separately documented historical character forms were assembled into one wordmark. It is therefore accurate to call it ``a collection of characters in the calligraphic style of Zhu Zhishan,'' but not ``a title written by Zhu Zhishan.'' No surviving single inscription titled {格物洞見} is being claimed.
 
-\subsubsection{How the four characters were assembled}\label{how-the-four-characters-were-assembled}
+\section{How the four characters were assembled}\label{how-the-four-characters-were-assembled}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -2897,9 +2901,9 @@ The selected glyphs were optically balanced into a common line: scale, spacing, 
 The character links above are retained as provenance for the design process. The source thumbnails do not state a clear open-reuse licence. They should not be treated as public-domain assets merely because they are viewable online. The assembled Gewu Insight product artwork is distributed under the repository\textquotesingle s all-rights-reserved notice.
 \end{quote}
 
-\subsection{The app icon and the seal-script watermark}\label{the-app-icon-and-the-seal-script-watermark}
+\chapter{The app icon and the seal-script watermark}\label{the-app-icon-and-the-seal-script-watermark}
 
-\subsubsection{The app icon}\label{the-app-icon}
+\section{The app icon}\label{the-app-icon}
 
 \begin{center}\includegraphics[width=0.18\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/gewu-insight-app-icon.png}\end{center}
 
@@ -2909,7 +2913,7 @@ The icon\textquotesingle s two blue-violet fields read simultaneously as an open
 This description is the product\textquotesingle s visual reading of the finished mark, not a claim that every interpretation was specified in an original design brief.
 \end{GewuCaption}
 
-\subsubsection{The seal-script watermark}\label{the-seal-script-watermark}
+\section{The seal-script watermark}\label{the-seal-script-watermark}
 
 \begin{center}\begin{tcolorbox}[enhanced,width=0.30\linewidth,colback=GewuSealPanel,colframe=GewuSealPanel,boxrule=0pt,arc=3mm,boxsep=0pt,left=4mm,right=4mm,top=4mm,bottom=4mm]\includegraphics[width=\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/branding/GewuSealGlyphs.png}\end{tcolorbox}\end{center}
 
@@ -2919,7 +2923,7 @@ The 2×2 motif is a digital rendering in \href{https://www.hanyi.com.cn/productd
 The mark is a light-line screen motif inspired by seal composition, not a photograph or facsimile of a historical carved seal. Typeface licensing remains separate from the product artwork.
 \end{GewuCaption}
 
-\subsection{Why the three marks are used differently}\label{why-the-three-marks-are-used-differently}
+\chapter{Why the three marks are used differently}\label{why-the-three-marks-are-used-differently}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -2940,15 +2944,13 @@ Mark & Role \\
 
 Together the three registers establish the product\textquotesingle s visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.
 
-\subsection{See also}\label{see-also-39}
+\section{See also}\label{see-also-39}
 
-\hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup and Web Cache}
+\hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup, Monitor Cache, and Text Size}
 
 \part{Technical and Operational Reference}\label{part-5}
 
-\chapter{Reference}\label{chapter-216}
-
-\section{Keyboard Shortcuts}\label{keyboard}
+\chapter{Keyboard Shortcuts}\label{keyboard}
 
 \begin{GewuLead}
 Use standard macOS editing commands throughout the app. The shortcuts below are specific to navigation and Gewu Insight commands.
@@ -2977,21 +2979,21 @@ Shortcut & Action \\
 \GewuTableEnd
 }
 
-\subsection{Paper Files mouse behavior}\label{paper-files-mouse-behavior}
+\section{Paper Files mouse behavior}\label{paper-files-mouse-behavior}
 
 Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.
 
-\subsection{See also}\label{see-also-40}
+\section{See also}\label{see-also-40}
 
 \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
 
-\section{Publisher and Network Access}\label{network-access}
+\chapter{Publisher and Network Access}\label{network-access}
 
 \begin{GewuLead}
 Publishers can rate-limit shared VPN addresses or automated-looking traffic. Gewu Insight reduces overlap and request rate, but it cannot remove a publisher block.
 \end{GewuLead}
 
-\subsection{If a publisher page is blocked}\label{if-a-publisher-page-is-blocked}
+\section{If a publisher page is blocked}\label{if-a-publisher-page-is-blocked}
 
 \begin{enumerate}
 \tightlist
@@ -3005,11 +3007,11 @@ Publishers can rate-limit shared VPN addresses or automated-looking traffic. Gew
   \textbf{Download only when authorized.} Add a legitimately obtained PDF with \textbf{Add File}.
 \end{enumerate}
 
-\subsection{Why figures may arrive later}\label{why-figures-may-arrive-later}
+\section{Why figures may arrive later}\label{why-figures-may-arrive-later}
 
 Figure and article-page retrieval is queued behind discovery work and uses caching. This reduces simultaneous RSS, page, and image requests to the same publisher. A paper can appear before its representative image.
 
-\subsection{Service rate limits}\label{service-rate-limits}
+\section{Service rate limits}\label{service-rate-limits}
 
 Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, cooldowns, or exponential backoff. Let the bottom status area settle before starting the same action again.
 
@@ -3019,23 +3021,23 @@ Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, 
 Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access control. Use your authorized browser session or attach a file you obtained legitimately.
 \end{quote}
 
-\subsection{See also}\label{see-also-41}
+\section{See also}\label{see-also-41}
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[download-sync]{Download and Sync Versions} · \hyperref[troubleshooting]{Troubleshooting}
 
-\section{Startup and Web Cache}\label{startup}
+\chapter{Startup, Monitor Cache, and Text Size}\label{startup}
 
 \begin{GewuLead}
 The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.
 \end{GewuLead}
 
-\subsection{Normal startup}\label{normal-startup}
+\section{Normal startup}\label{normal-startup}
 
 The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.
 
 The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.
 
-\subsection{If the app cannot start}\label{if-the-app-cannot-start}
+\section{If the app cannot start}\label{if-the-app-cannot-start}
 
 \begin{enumerate}
 \tightlist
@@ -3049,23 +3051,29 @@ The Dock tile, native startup panel, and in-window loading state use the icon pa
   \textbf{Preserve the database.} Do not delete SQLite as a startup fix.
 \end{enumerate}
 
-\subsection{Clear a stale interface}\label{clear-a-stale-interface}
+\section{Clear a stale interface}\label{clear-a-stale-interface}
 
-Choose \textbf{Setting \textgreater{} Clear Web Cache} if the running window visibly uses old HTML, CSS, or JavaScript after an app update. This clears browser cache, not the SQLite database or managed PDFs.
+Choose \textbf{Setting \textgreater{} Clear Monitor Cache} if a monitor still shows stale downloaded images or rendered web assets after an app update. This clears disposable monitor presentation cache, not the SQLite database, saved paper records, or managed PDFs.
 
-Web cache and macOS app identity are separate. Clearing Web Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt \textbf{Gewu Insight.app}. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.
+Monitor cache and macOS app identity are separate. Clearing Monitor Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt \textbf{Gewu Insight.app}. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.
 
-\subsection{See also}\label{see-also-42}
+\section{Choose a comfortable text size}\label{choose-a-comfortable-text-size}
+
+Choose \textbf{Setting \textgreater{} Font Size}, then select \textbf{Compact}, \textbf{Standard}, \textbf{Large}, \textbf{Larger}, or \textbf{Extra Large}. The workspace previews the choice immediately while keeping panel dimensions, icons, and window controls unchanged.
+
+\textbf{Cancel}, the Escape key, or clicking outside the sheet restores the previously saved size. Choose \textbf{Save} to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.
+
+\section{See also}\label{see-also-42}
 
 \hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
 
-\section{Troubleshooting}\label{troubleshooting}
+\chapter{Troubleshooting}\label{troubleshooting}
 
 \begin{GewuLead}
 Start with the visible status and the selected work. Avoid broad repair actions until you know whether the problem is network, metadata, database state, or a local path.
 \end{GewuLead}
 
-\subsection{A PDF cannot be found after a move}\label{a-pdf-cannot-be-found-after-a-move}
+\section{A PDF cannot be found after a move}\label{a-pdf-cannot-be-found-after-a-move}
 
 \begin{enumerate}
 \tightlist
@@ -3079,15 +3087,15 @@ Start with the visible status and the selected work. Avoid broad repair actions 
   Check Recycle before importing another copy.
 \end{enumerate}
 
-\subsection{Paper Files shows Missing File}\label{paper-files-shows-missing-file}
+\section{Paper Files shows Missing File}\label{paper-files-shows-missing-file}
 
 This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check \textbf{Show in Finder}, the corresponding \nolinkurl{data/Associated Files} bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the current PDF; explicitly typed attachments and current resources are intentionally retained for recovery.
 
-\subsection{Quick Look is slow on the first open}\label{quick-look-is-slow-on-the-first-open}
+\section{Quick Look is slow on the first open}\label{quick-look-is-slow-on-the-first-open}
 
 A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use \textbf{Open in Preview} to check whether the file itself is valid.
 
-\subsection{The wrong PDF is current}\label{the-wrong-pdf-is-current}
+\section{The wrong PDF is current}\label{the-wrong-pdf-is-current}
 
 \begin{enumerate}
 \tightlist
@@ -3099,31 +3107,31 @@ A large or previously unseen PDF may need an initial structural read and thumbna
   Choose \textbf{Use} for the desired PDF, or return to \textbf{Use Automatic Selection}.
 \end{enumerate}
 
-\subsection{A duplicate appears after download}\label{a-duplicate-appears-after-download}
+\section{A duplicate appears after download}\label{a-duplicate-appears-after-download}
 
 Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. If two rows are truly identical, keep the correct current file, then delete the non-current duplicate.
 
-\subsection{A monitor shows no papers}\label{a-monitor-shows-no-papers}
+\section{A monitor shows no papers}\label{a-monitor-shows-no-papers}
 
 Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.
 
-\subsection{A journal count and the visible cards disagree}\label{a-journal-count-and-the-visible-cards-disagree}
+\section{A journal count and the visible cards disagree}\label{a-journal-count-and-the-visible-cards-disagree}
 
 This is usually expected when \textbf{Field Filter} is active. Journal counts describe all stored papers for the selected journal and day; field choices narrow the visible cards. Clear or broaden the field selection before diagnosing a missing fetch.
 
-\subsection{A journal disappeared from the configured list}\label{a-journal-disappeared-from-the-configured-list}
+\section{A journal disappeared from the configured list}\label{a-journal-disappeared-from-the-configured-list}
 
 Open \textbf{Journal Settings} and inspect the disabled history before editing configuration files. Removing a journal disables its subscription but preserves previously collected papers and history. Add it again to restore monitoring. Because the subscription list is SQLite state, replacing source files should not be used as a journal-list repair.
 
-\subsection{LaTeX remains visible as source text}\label{latex-remains-visible-as-source-text}
+\section{LaTeX remains visible as source text}\label{latex-remains-visible-as-source-text}
 
 On a cold launch, allow the math renderer a moment to become ready. The active day should re-render automatically. If raw \texttt{\$...\$} text remains, check network availability for the renderer, then reload the same view once; switching calendar dates should not be required.
 
-\subsection{Folder Loader looks incomplete}\label{folder-loader-looks-incomplete}
+\section{Folder Loader looks incomplete}\label{folder-loader-looks-incomplete}
 
 Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.
 
-\subsection{A current file cannot be deleted}\label{a-current-file-cannot-be-deleted}
+\section{A current file cannot be deleted}\label{a-current-file-cannot-be-deleted}
 
 This is expected. Choose another version with \textbf{Use} first, or enable automatic selection, then delete the former non-current file.
 
@@ -3133,11 +3141,11 @@ This is expected. Choose another version with \textbf{Use} first, or enable auto
 Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.
 \end{quote}
 
-\subsection{See also}\label{see-also-43}
+\section{See also}\label{see-also-43}
 
-\hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup and Web Cache} · \hyperref[network-access]{Publisher and Network Access}
+\hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup, Monitor Cache, and Text Size} · \hyperref[network-access]{Publisher and Network Access}
 
-\section{Storage Reference}\label{storage-reference}
+\chapter{Storage Reference}\label{storage-reference}
 
 \begin{GewuLead}
 These paths describe the managed project layout. They are useful for backup and diagnosis, not for routine manual reorganization.
@@ -3168,11 +3176,11 @@ Location & Purpose \\
 
 Quick Look page thumbnails use a separate, automatically trimmed temporary cache. It is rebuildable preview data, not part of the Library, Associated Files, or the SQLite record, so it does not belong in a research backup.
 
-\subsection{Associated Files layout}\label{associated-files-layout}
+\section{Associated Files layout}\label{associated-files-layout}
 
 An associated bundle follows the managed scope and path, then a work-specific bundle. Its children separate \texttt{Versions}, \texttt{Supplements}, and \texttt{Files}. The exact physical name can change as the paper moves; the Gewu Key remains stable.
 
-\subsection{Database and exports}\label{database-and-exports}
+\section{Database and exports}\label{database-and-exports}
 
 SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are exports, diagnostics, or reading artifacts. Editing one of them does not edit the Library record.
 
@@ -3182,7 +3190,7 @@ SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF o
 Do not delete, rebuild, or ``clean'' the database because a generated JSON file looks stale. Diagnose the selected record and local path first.
 \end{quote}
 
-\subsection{See also}\label{see-also-44}
+\section{See also}\label{see-also-44}
 
 \hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy}
 

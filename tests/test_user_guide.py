@@ -506,7 +506,11 @@ class UserGuideTests(unittest.TestCase):
         startup_text = soup.find("article", id="startup").get_text(" ", strip=True)
         for phrase in [
             "Dock tile, native startup panel, and in-window loading state",
-            "Web cache and macOS app identity are separate",
+            "Monitor cache and macOS app identity are separate",
+            "Setting > Font Size",
+            "Compact",
+            "Extra Large",
+            "New app sessions apply the saved size automatically",
         ]:
             self.assertIn(phrase, startup_text)
 
@@ -650,9 +654,12 @@ class UserGuideTests(unittest.TestCase):
         source = tex_path.read_text(encoding="utf-8")
         self.assertIn("\\documentclass", source)
         self.assertIn("\\part{Orientation}", source)
-        self.assertIn("\\chapter{Start Here}", source)
+        self.assertIn("\\chapter{Welcome}", source)
+        self.assertIn("\\chapter{Guided Tour}", source)
+        self.assertIn("\\chapter{Your First Session}", source)
         self.assertIn("\\part{Product Concepts and Architecture}", source)
-        self.assertIn("\\chapter{Understand the System}", source)
+        self.assertIn("\\chapter{System Architecture at a Glance}", source)
+        self.assertIn("\\chapter{The Persistent Paper Object}", source)
         self.assertIn("\\part{User Manual}", source)
         self.assertIn("\\chapter{Workspace Navigation}", source)
         self.assertIn("\\chapter{Papers and Files}", source)
@@ -661,9 +668,10 @@ class UserGuideTests(unittest.TestCase):
         self.assertIn("\\chapter{Subject Monitor}", source)
         self.assertIn("\\chapter{Author Monitor}", source)
         self.assertIn("\\part{Product Identity}", source)
-        self.assertIn("\\chapter{About Gewu Insight}", source)
+        self.assertIn("\\chapter{Visual Identity and Cultural Elements}", source)
         self.assertIn("\\part{Technical and Operational Reference}", source)
-        self.assertIn("\\chapter{Reference}", source)
+        self.assertIn("\\chapter{Keyboard Shortcuts}", source)
+        self.assertIn("\\chapter{Storage Reference}", source)
         reader = PdfReader(str(pdf_path))
         self.assertGreater(len(reader.pages), 30)
         sample = " ".join((reader.pages[index].extract_text() or "") for index in [0, 1, len(reader.pages) - 1])

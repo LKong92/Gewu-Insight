@@ -52,6 +52,20 @@ PART_BY_GROUP = {
     "Reference": "Technical and Operational Reference",
 }
 
+# The PDF deliberately has two complementary hierarchy patterns:
+#
+# * Parts I, II, IV, and V promote each top-level guide topic to a numbered
+#   chapter (1-1, 2-1, 4-1, 5-1, ...).  Their internal headings become
+#   sections (1-1.1, 2-1.1, ...).
+# * Part III is the operational manual.  Its functional groups are numbered
+#   chapters (3-1, 3-2, ...), and the individual guide topics inside each
+#   group are numbered sections (3-1.1, 3-1.2, ...).
+#
+# Keep these rules here, rather than repairing the generated TeX by hand, so
+# every future PDF rebuild preserves the same document logic.
+TOPIC_AS_CHAPTER_GROUPS = {"Start Here", "Understand the System", "Reference"}
+SPLIT_TOPIC_HEADING_GROUPS = {"About Gewu Insight"}
+
 
 def app_version() -> tuple[str, str]:
     try:
@@ -72,9 +86,26 @@ def _new_tag(soup: BeautifulSoup, name: str, text: str | None = None, **attrs: s
     return tag
 
 
-def _promote_heading(tag: Tag) -> None:
-    levels = {"h2": "h4", "h3": "h5", "h4": "h6"}
-    tag.name = levels.get(tag.name, tag.name)
+def _retarget_copied_headings(root: Tag, *, mode: str) -> None:
+    headings: list[Tag] = []
+    if root.name in {"h2", "h3", "h4", "h5", "h6"}:
+        headings.append(root)
+    headings.extend(root.find_all(["h2", "h3", "h4", "h5", "h6"]))
+
+    for heading in headings:
+        original = heading.name
+        if mode == "topic-chapter":
+            levels = {"h2": "h3", "h3": "h4", "h4": "h5", "h5": "h6"}
+            heading.name = levels.get(original, original)
+        elif mode == "manual-group":
+            levels = {"h2": "h4", "h3": "h5", "h4": "h6"}
+            heading.name = levels.get(original, original)
+        elif mode == "split-topic":
+            # The visual-identity article contains several genuine chapter
+            # subjects in one in-app topic.  Preserve those h2 headings as
+            # chapters, while keeping its final See also block subordinate.
+            if original == "h2" and heading.get_text(" ", strip=True).casefold() == "see also":
+                heading.name = "h3"
 
 
 def _append_children(target: Tag, source: Tag) -> None:
@@ -120,13 +151,20 @@ def clean_guide_html() -> str:
             body.append(_new_tag(output, "h1", part, id=f"part-{len(body.find_all('h1')) + 1}"))
             current_part = part
             current_group = None
-        if group != current_group:
-            body.append(_new_tag(output, "h2", group, id=f"chapter-{len(body.find_all('h2')) + 1}"))
-            current_group = group
+        if group in TOPIC_AS_CHAPTER_GROUPS:
+            mode = "topic-chapter"
+        elif group in SPLIT_TOPIC_HEADING_GROUPS:
+            mode = "split-topic"
+        else:
+            mode = "manual-group"
+            if group != current_group:
+                body.append(_new_tag(output, "h2", group, id=f"chapter-{len(body.find_all('h2')) + 1}"))
+        current_group = group
 
         topic_id = str(article.get("id") or "topic")
         section = _new_tag(output, "section")
-        section.append(_new_tag(output, "h3", title, id=topic_id))
+        topic_heading = "h2" if mode in {"topic-chapter", "split-topic"} else "h3"
+        section.append(_new_tag(output, topic_heading, title, id=topic_id))
         for child in list(article.children):
             if isinstance(child, NavigableString):
                 if child.strip():
@@ -137,15 +175,12 @@ def clean_guide_html() -> str:
             classes = set(child.get("class") or [])
             if "topic-kicker" in classes or child.name == "h1":
                 continue
-            section.append(BeautifulSoup(str(child), "html.parser").find())
-        body.append(section)
-
-    for section in body.select("section"):
-        topic_heading = section.find("h3", recursive=False)
-        for heading in section.find_all(["h2", "h3", "h4", "h5", "h6"]):
-            if heading is topic_heading:
+            clone = BeautifulSoup(str(child), "html.parser").find()
+            if clone is None:
                 continue
-            _promote_heading(heading)
+            _retarget_copied_headings(clone, mode=mode)
+            section.append(clone)
+        body.append(section)
 
     for lead in body.select("p.lead"):
         lead.string = f"GEWULEADSTART{lead.get_text(' ', strip=True)}GEWULEADEND"
@@ -389,8 +424,17 @@ def latex_preamble(version: str, build: str) -> str:
 \setlength{{\parskip}}{{3pt plus .8pt minus .5pt}}
 \setstretch{{1.01}}
 \setlist{{topsep=2.5pt,itemsep=1.25pt,parsep=.5pt,leftmargin=5.5mm}}
-\setcounter{{secnumdepth}}{{0}}
-\setcounter{{tocdepth}}{{2}}
+% Number the reader-facing hierarchy, but stop before implementation-detail
+% subsections.  Each part owns its chapter sequence, so the visible chapter
+% labels are 1-1, 1-2, 2-1, 3-1, ... instead of one global counter.
+\setcounter{{secnumdepth}}{{1}}
+\setcounter{{tocdepth}}{{1}}
+\makeatletter
+\@addtoreset{{chapter}}{{part}}
+\makeatother
+\renewcommand{{\thechapter}}{{\arabic{{part}}-\arabic{{chapter}}}}
+\renewcommand{{\thesection}}{{\thechapter.\arabic{{section}}}}
+\renewcommand{{\thesubsection}}{{\thesection.\arabic{{subsection}}}}
 \renewcommand{{\arraystretch}}{{1.16}}
 \setlength{{\tabcolsep}}{{3.5pt}}
 \setlength{{\LTpre}}{{4pt}}
@@ -414,10 +458,11 @@ def latex_preamble(version: str, build: str) -> str:
 \setkomafont{{subsection}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{11.8}}{{14}}\selectfont}}
 \setkomafont{{subsubsection}}{{\sffamily\bfseries\color{{GewuInk}}\fontsize{{10.5}}{{12.5}}\selectfont}}
 \renewcommand*{{\partformat}}{{\partname~\thepart\autodot\enskip}}
-\RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex]{{chapter}}
-\RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex]{{section}}
+\RedeclareSectionCommand[beforeskip=2.1ex plus .4ex minus .2ex,afterskip=.85ex,tocnumwidth=3.8em]{{chapter}}
+\RedeclareSectionCommand[beforeskip=1.8ex plus .3ex minus .2ex,afterskip=.48ex,tocnumwidth=5.2em]{{section}}
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{{subsection}}
-\renewcommand*{{\chapterformat}}{{\color{{GewuBlue}}\rule[-2pt]{{1.7mm}}{{23pt}}\hspace{{3mm}}}}
+\renewcommand*{{\chapterformat}}{{\color{{GewuBlue}}\rule[-2pt]{{1.7mm}}{{23pt}}\hspace{{3mm}}\thechapter\enskip}}
+\renewcommand*{{\sectionformat}}{{\thesection\enskip}}
 \pretocmd{{\section}}{{\Needspace{{5\baselineskip}}}}{{}}{{}}
 \pretocmd{{\subsection}}{{\Needspace{{4\baselineskip}}}}{{}}{{}}
 \pretocmd{{\subsubsection}}{{\Needspace{{3\baselineskip}}}}{{}}{{}}

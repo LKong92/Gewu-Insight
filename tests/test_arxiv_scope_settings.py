@@ -51,6 +51,18 @@ class ArxivScopeSettingsTests(unittest.TestCase):
         self.assertIn("cs.AI", {item["code"] for item in scopes["computer_science/cs"]["categories"]})
         self.assertIn("math.AG", {item["code"] for item in scopes["mathematics/math"]["categories"]})
 
+    def test_physics_archive_is_named_physics_and_keeps_all_leaf_categories(self):
+        scopes = {scope["id"]: scope for scope in arxiv_scope_groups()}
+        physics_scope = scopes["physics/physics"]
+        category_codes = {item["code"] for item in physics_scope["categories"]}
+
+        self.assertEqual(physics_scope["primary_label"], "Physics")
+        self.assertEqual(physics_scope["group_label"], "Physics")
+        self.assertEqual(len(category_codes), 21)
+        self.assertIn("physics.acc-ph", category_codes)
+        self.assertIn("physics.gen-ph", category_codes)
+        self.assertIn("physics.optics", category_codes)
+
     def test_legacy_single_scope_is_read_without_mutating_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = Storage(Path(tmp) / "monitor.sqlite")
