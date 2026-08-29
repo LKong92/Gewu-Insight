@@ -32,6 +32,7 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -arch arm64 \
     -arch x86_64 \
     -framework Cocoa \
+    -framework Quartz \
     -framework WebKit \
     "$SOURCE" \
     -o "$OUTPUT"

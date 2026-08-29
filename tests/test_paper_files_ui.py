@@ -10,6 +10,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PaperFilesUiTests(unittest.TestCase):
+    def test_non_pdf_quick_look_prefers_native_bridge_and_keeps_browser_fallback(self) -> None:
+        quicklook = INDEX_HTML.split("function nativeQuickLookBridgeAvailable", 1)[1].split(
+            "async function openNativeTarget", 1
+        )[0]
+        self.assertIn("messageHandlers?.nativeQuickLook", quicklook)
+        self.assertIn('postNativeQuickLook(action, path)', quicklook)
+        self.assertIn('state.libraryQuickLookKind = "native-file"', quicklook)
+        self.assertIn('if (nativeQuickLookBridgeAvailable() && !options.forceInline)', quicklook)
+        self.assertIn("renderLibraryQuickLookFilePreview(paper, token)", quicklook)
+        self.assertIn('state.libraryQuickLookKind = "file"', quicklook)
+        self.assertIn("window.closeGewuInsightNativeQuickLookFromNative", INDEX_HTML)
+        self.assertIn("window.handleGewuInsightNativeQuickLookKey", INDEX_HTML)
+        self.assertIn('new KeyboardEvent("keydown"', INDEX_HTML)
+        self.assertIn('state.libraryQuickLookKind === "pdf"', INDEX_HTML)
+
     def test_shared_paper_details_show_gewu_key_without_repeating_title(self) -> None:
         metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
             "function libraryDetailFolderOccurrencesMarkup", 1

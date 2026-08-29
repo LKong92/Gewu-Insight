@@ -46993,6 +46993,31 @@ INDEX_HTML = """<!doctype html>
       return `/api/native-file-preview?path=${encodeURIComponent(path)}`;
     }
 
+    function nativeQuickLookBridgeAvailable() {
+      return Boolean(window.webkit?.messageHandlers?.nativeQuickLook);
+    }
+
+    function postNativeQuickLook(action, path = "") {
+      if (!nativeQuickLookBridgeAvailable()) return false;
+      try {
+        window.webkit.messageHandlers.nativeQuickLook.postMessage({action, path});
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function hideLibraryQuickLookOverlay() {
+      const overlay = $("libraryQuickLook");
+      const pages = $("libraryQuickLookPages");
+      if (overlay) {
+        overlay.classList.remove("open", "compact");
+        overlay.setAttribute("aria-hidden", "true");
+      }
+      if (pages) pages.innerHTML = "";
+      renderLibraryQuickLookThumbs(0);
+    }
+
     function libraryFileExtension(paper) {
       const explicit = String(paper?.file_extension || "").trim().replace(/^\./, "");
       if (explicit) return explicit.toLowerCase();
@@ -47026,7 +47051,7 @@ INDEX_HTML = """<!doctype html>
       if (button) button.hidden = !active;
       try {
         window.webkit?.messageHandlers?.pdfPreviewState?.postMessage({
-          active: Boolean(state.libraryQuickLookOpen)
+          active: Boolean(active && state.libraryQuickLookOpen)
         });
       } catch (error) {
         // The regular browser build has no native WebKit message bridge.
@@ -47143,13 +47168,41 @@ INDEX_HTML = """<!doctype html>
         if (options.openPlaceholder) showLibraryQuickLookPlaceholder({open: true});
         return;
       }
-      if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "file" && path === state.libraryQuickLookPath) {
+      if (
+        options.toggle
+        && state.libraryQuickLookOpen
+        && ["file", "native-file"].includes(state.libraryQuickLookKind)
+        && path === state.libraryQuickLookPath
+      ) {
         closeLibraryQuickLook({restoreFocus: true});
         return;
       }
       if (status && !options.silent) {
         status.textContent = "Previewing file";
         status.className = "library-detail-status";
+      }
+      if (nativeQuickLookBridgeAvailable() && !options.forceInline) {
+        const action = state.libraryQuickLookKind === "native-file" ? "update" : "open";
+        captureLibraryQuickLookReturnFocus();
+        state.libraryQuickLookOpen = true;
+        state.libraryQuickLookKind = "native-file";
+        state.libraryQuickLookRenderToken += 1;
+        state.libraryQuickLookPath = path;
+        state.libraryQuickLookUrl = "";
+        state.libraryQuickLookPage = 1;
+        state.libraryQuickLookPageCount = 1;
+        state.libraryQuickLookPdfHasFocus = false;
+        setNativePdfQuickLookActive(false);
+        hideLibraryQuickLookOverlay();
+        if (postNativeQuickLook(action, path)) {
+          if (status && !options.silent) {
+            status.textContent = "Quick Look open";
+            status.className = "library-detail-status ok";
+          }
+          reclaimLibraryQuickLookFocus();
+          return;
+        }
+        state.libraryQuickLookKind = "";
       }
       const overlay = $("libraryQuickLook");
       const title = $("libraryQuickLookTitle");
@@ -47577,6 +47630,10 @@ INDEX_HTML = """<!doctype html>
 
     function closeLibraryQuickLook(options = {}) {
       const returnFocus = state.libraryQuickLookReturnFocus;
+      const quickLookKind = state.libraryQuickLookKind;
+      if (quickLookKind === "native-file" && !options.nativeAlreadyClosed) {
+        postNativeQuickLook("close");
+      }
       state.libraryQuickLookOpen = false;
       state.libraryQuickLookReturnFocus = null;
       setNativePdfQuickLookActive(false);
@@ -47603,6 +47660,41 @@ INDEX_HTML = """<!doctype html>
     window.closeGewuInsightPreviewFromNative = () => {
       if (!state.libraryQuickLookOpen) return false;
       closeLibraryQuickLook({restoreFocus: true});
+      return true;
+    };
+
+    window.closeGewuInsightNativeQuickLookFromNative = () => {
+      if (!state.libraryQuickLookOpen || state.libraryQuickLookKind !== "native-file") return false;
+      closeLibraryQuickLook({restoreFocus: true, nativeAlreadyClosed: true});
+      return true;
+    };
+
+    window.handleGewuInsightNativeQuickLookKey = (key) => {
+      if (!state.libraryQuickLookOpen || state.libraryQuickLookKind !== "native-file") return false;
+      const normalizedKey = String(key || "");
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Escape"].includes(normalizedKey)) {
+        return false;
+      }
+      const target = document.activeElement && document.activeElement !== document.body
+        ? document.activeElement
+        : window;
+      target.dispatchEvent(new KeyboardEvent("keydown", {
+        key: normalizedKey,
+        bubbles: true,
+        cancelable: true
+      }));
+      return true;
+    };
+
+    window.handleGewuInsightNativeQuickLookFailure = () => {
+      if (!state.libraryQuickLookOpen || state.libraryQuickLookKind !== "native-file") return false;
+      const paper = selectedLibraryPaper();
+      const returnFocus = state.libraryQuickLookReturnFocus;
+      state.libraryQuickLookOpen = false;
+      state.libraryQuickLookKind = "";
+      state.libraryQuickLookPath = "";
+      state.libraryQuickLookReturnFocus = returnFocus;
+      if (paper) quickLookLibraryFile(paper, {silent: true, forceInline: true});
       return true;
     };
 
@@ -47696,6 +47788,7 @@ INDEX_HTML = """<!doctype html>
 
     function showLibraryQuickLookPlaceholder(options = {}) {
       if (!state.libraryQuickLookOpen && !options.open) return;
+      if (state.libraryQuickLookKind === "native-file") postNativeQuickLook("close");
       const overlay = $("libraryQuickLook");
       const title = $("libraryQuickLookTitle");
       const pages = $("libraryQuickLookPages");
@@ -47926,6 +48019,7 @@ INDEX_HTML = """<!doctype html>
         closeLibraryQuickLook({restoreFocus: true});
         return;
       }
+      if (state.libraryQuickLookKind === "native-file") postNativeQuickLook("close");
       const status = $("libraryDetailStatus");
       if (status && !options.silent) {
         status.textContent = "Previewing PDF";
@@ -48040,7 +48134,7 @@ INDEX_HTML = """<!doctype html>
       }
       const path = paperNativePath(paper);
       if (path && !libraryPaperIsPdfLike(paper)) {
-        if (state.libraryQuickLookKind === "file" && path === state.libraryQuickLookPath) return;
+        if (["file", "native-file"].includes(state.libraryQuickLookKind) && path === state.libraryQuickLookPath) return;
         quickLookLibraryFile(paper, {silent: true});
         return;
       }

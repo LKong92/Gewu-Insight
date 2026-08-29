@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <Quartz/Quartz.h>
 #import <WebKit/WebKit.h>
 #include <string.h>
 
@@ -341,7 +342,7 @@
 
 @end
 
-@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler>
+@interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler, QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) WKWebView *startupWebView;
@@ -372,11 +373,20 @@
 @property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
 @property(nonatomic) BOOL recoverTitlebarDoubleClickMiniaturize;
+@property(nonatomic, strong) NSURL *nativeQuickLookURL;
+@property(nonatomic) BOOL nativeQuickLookActive;
+@property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
+@property(nonatomic, strong) id nativeQuickLookKeyMonitor;
 - (void)toggleMainWindowFill;
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId;
 - (void)showPaperFileChooserWithPayload:(NSDictionary *)payload;
 - (void)dismissStartupOverlay;
+- (BOOL)showNativeQuickLookForPath:(NSString *)path;
+- (void)closeNativeQuickLookNotifyingWeb:(BOOL)notifyWeb;
+- (void)restoreMainWindowFocusForNativeQuickLook;
+- (void)installNativeQuickLookKeyMonitor;
+- (void)removeNativeQuickLookKeyMonitor;
 @end
 
 @implementation PaperMonitorDelegate
@@ -456,6 +466,13 @@
     }
     if (
         activeWindow == self.window
+        && self.nativeQuickLookActive
+    ) {
+        [self closeNativeQuickLookNotifyingWeb:YES];
+        return;
+    }
+    if (
+        activeWindow == self.window
         && [self.webView isKindOfClass:[GewuInsightWebView class]]
         && ((GewuInsightWebView *)self.webView).pdfQuickLookActive
     ) {
@@ -468,8 +485,118 @@
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self closeNativeQuickLookNotifyingWeb:NO];
     if (self.ownedServerTask && self.ownedServerTask.isRunning) {
         [self.ownedServerTask terminate];
+    }
+}
+
+- (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel *)panel {
+    return self.nativeQuickLookURL ? 1 : 0;
+}
+
+- (id<QLPreviewItem>)previewPanel:(QLPreviewPanel *)panel previewItemAtIndex:(NSInteger)index {
+    return index == 0 ? self.nativeQuickLookURL : nil;
+}
+
+- (BOOL)showNativeQuickLookForPath:(NSString *)path {
+    if (path.length == 0 || !path.isAbsolutePath) return NO;
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] || isDirectory) {
+        return NO;
+    }
+    self.nativeQuickLookURL = [NSURL fileURLWithPath:path isDirectory:NO];
+    self.nativeQuickLookActive = YES;
+    QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
+    panel.dataSource = self;
+    panel.delegate = self;
+    panel.hidesOnDeactivate = NO;
+    panel.becomesKeyOnlyIfNeeded = YES;
+    [panel reloadData];
+    [panel orderFront:nil];
+    [self installNativeQuickLookKeyMonitor];
+    [self restoreMainWindowFocusForNativeQuickLook];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self restoreMainWindowFocusForNativeQuickLook];
+    });
+    return YES;
+}
+
+- (void)restoreMainWindowFocusForNativeQuickLook {
+    if (!self.nativeQuickLookActive || !self.window || !self.webView) return;
+    [self.window makeKeyWindow];
+    [self.window makeFirstResponder:self.webView];
+}
+
+- (void)installNativeQuickLookKeyMonitor {
+    if (self.nativeQuickLookKeyMonitor) return;
+    __weak typeof(self) weakSelf = self;
+    self.nativeQuickLookKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^NSEvent *(NSEvent *event) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.nativeQuickLookActive) return event;
+            NSString *key = nil;
+            switch (event.keyCode) {
+                case 123: key = @"ArrowLeft"; break;
+                case 124: key = @"ArrowRight"; break;
+                case 125: key = @"ArrowDown"; break;
+                case 126: key = @"ArrowUp"; break;
+                case 49: key = @" "; break;
+                case 53: key = @"Escape"; break;
+                default: return event;
+            }
+            NSData *keyData = [NSJSONSerialization dataWithJSONObject:key options:NSJSONWritingFragmentsAllowed error:nil];
+            NSString *keyJSON = keyData
+                ? [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding]
+                : @"null";
+            NSString *script = [NSString stringWithFormat:
+                @"window.handleGewuInsightNativeQuickLookKey && window.handleGewuInsightNativeQuickLookKey(%@)",
+                keyJSON
+            ];
+            [strongSelf.webView evaluateJavaScript:script completionHandler:nil];
+            [strongSelf restoreMainWindowFocusForNativeQuickLook];
+            return nil;
+        }];
+}
+
+- (void)removeNativeQuickLookKeyMonitor {
+    if (!self.nativeQuickLookKeyMonitor) return;
+    [NSEvent removeMonitor:self.nativeQuickLookKeyMonitor];
+    self.nativeQuickLookKeyMonitor = nil;
+}
+
+- (void)closeNativeQuickLookNotifyingWeb:(BOOL)notifyWeb {
+    if (!self.nativeQuickLookActive && !self.nativeQuickLookURL) return;
+    self.nativeQuickLookClosingProgrammatically = YES;
+    self.nativeQuickLookActive = NO;
+    self.nativeQuickLookURL = nil;
+    [self removeNativeQuickLookKeyMonitor];
+    QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
+    [panel reloadData];
+    [panel orderOut:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.nativeQuickLookClosingProgrammatically = NO;
+    });
+    if (notifyWeb) {
+        [self.webView evaluateJavaScript:
+            @"window.closeGewuInsightNativeQuickLookFromNative && window.closeGewuInsightNativeQuickLookFromNative()"
+            completionHandler:nil];
+    }
+}
+
+- (void)previewPanelWillClose:(QLPreviewPanel *)panel {
+    if (self.nativeQuickLookClosingProgrammatically) {
+        self.nativeQuickLookClosingProgrammatically = NO;
+        return;
+    }
+    BOOL wasActive = self.nativeQuickLookActive || self.nativeQuickLookURL != nil;
+    self.nativeQuickLookActive = NO;
+    self.nativeQuickLookURL = nil;
+    [self removeNativeQuickLookKeyMonitor];
+    if (wasActive) {
+        [self.webView evaluateJavaScript:
+            @"window.closeGewuInsightNativeQuickLookFromNative && window.closeGewuInsightNativeQuickLookFromNative()"
+            completionHandler:nil];
     }
 }
 
@@ -483,6 +610,7 @@
     [userContentController addScriptMessageHandler:self name:@"paperFileChooser"];
     [userContentController addScriptMessageHandler:self name:@"libraryLoaderWindow"];
     [userContentController addScriptMessageHandler:self name:@"pdfPreviewState"];
+    [userContentController addScriptMessageHandler:self name:@"nativeQuickLook"];
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
     [userContentController addScriptMessageHandler:self name:@"appReady"];
     configuration.userContentController = userContentController;
@@ -576,6 +704,24 @@
             if ([value respondsToSelector:@selector(boolValue)]) active = [value boolValue];
         }
         ((GewuInsightWebView *)self.webView).pdfQuickLookActive = active;
+        return;
+    }
+    if ([message.name isEqualToString:@"nativeQuickLook"]) {
+        if (![message.body isKindOfClass:[NSDictionary class]]) return;
+        NSDictionary *payload = (NSDictionary *)message.body;
+        NSString *action = [payload[@"action"] isKindOfClass:[NSString class]] ? payload[@"action"] : @"";
+        NSString *path = [payload[@"path"] isKindOfClass:[NSString class]] ? payload[@"path"] : @"";
+        if ([action isEqualToString:@"close"]) {
+            [self closeNativeQuickLookNotifyingWeb:NO];
+            return;
+        }
+        if ([action isEqualToString:@"open"] || [action isEqualToString:@"update"]) {
+            if (![self showNativeQuickLookForPath:path]) {
+                [self.webView evaluateJavaScript:
+                    @"window.handleGewuInsightNativeQuickLookFailure && window.handleGewuInsightNativeQuickLookFailure()"
+                    completionHandler:nil];
+            }
+        }
         return;
     }
     if ([message.name isEqualToString:@"libraryLoaderWindow"]) {

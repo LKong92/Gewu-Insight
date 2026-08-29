@@ -190,6 +190,24 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('nativeReady.postMessage({status: "ready"});', INDEX_HTML)
         self.assertIn("requestAnimationFrame(() => requestAnimationFrame(finishAppStartup));", INDEX_HTML)
 
+    def test_non_pdf_library_preview_uses_macos_quick_look_without_replacing_pdf_preview(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+        build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()
+
+        self.assertIn("#import <Quartz/Quartz.h>", source)
+        self.assertIn("QLPreviewPanelDataSource", source)
+        self.assertIn('addScriptMessageHandler:self name:@"nativeQuickLook"', source)
+        self.assertIn('message.name isEqualToString:@"nativeQuickLook"', source)
+        self.assertIn("showNativeQuickLookForPath", source)
+        self.assertIn("addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown", source)
+        self.assertIn("handleGewuInsightNativeQuickLookKey", source)
+        self.assertIn("restoreMainWindowFocusForNativeQuickLook", source)
+        self.assertIn("panel.becomesKeyOnlyIfNeeded = YES", source)
+        self.assertIn("numberOfPreviewItemsInPreviewPanel", source)
+        self.assertIn("previewItemAtIndex", source)
+        self.assertIn("window.closeGewuInsightNativeQuickLookFromNative", source)
+        self.assertIn("-framework Quartz", build_script)
+
     def test_title_bar_double_click_requests_native_fill_toggle(self) -> None:
         drag_region = INDEX_HTML.split("function wireWindowDragRegion", 1)[1].split(
             '$("reportMode")', 1
