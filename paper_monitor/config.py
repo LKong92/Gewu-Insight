@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,17 +9,18 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("GEWU_DATA_ROOT") or (ROOT / "data")).expanduser().resolve()
 DEFAULT_CONFIG_PATH = ROOT / "config" / "journals.json"
-DEFAULT_DB_PATH = ROOT / "data" / "paper_monitor.sqlite"
+DEFAULT_DB_PATH = DATA_ROOT / "paper_monitor.sqlite"
 DEFAULT_DAILY_REPORT_DIR = ROOT / "reports" / "daily"
 DEFAULT_ANALYSIS_DIR = ROOT / "reports" / "analyses"
-DEFAULT_PDF_DIR = ROOT / "data" / "pdfs"
-DEFAULT_LIBRARY_IMPORT_DIR = ROOT / "data" / "library_imports"
-DEFAULT_LIBRARY_DIR = ROOT / "data" / "Library"
-DEFAULT_SPACES_DIR = ROOT / "data" / "Spaces"
-DEFAULT_MY_PUBLICATIONS_DIR = ROOT / "data" / "My Publications"
-DEFAULT_ASSOCIATED_FILES_DIR = ROOT / "data" / "Associated Files"
-DEFAULT_AUTHOR_PHOTO_DIR = ROOT / "data" / "author_photos"
+DEFAULT_PDF_DIR = DATA_ROOT / "pdfs"
+DEFAULT_LIBRARY_IMPORT_DIR = DATA_ROOT / "library_imports"
+DEFAULT_LIBRARY_DIR = DATA_ROOT / "Library"
+DEFAULT_SPACES_DIR = DATA_ROOT / "Spaces"
+DEFAULT_MY_PUBLICATIONS_DIR = DATA_ROOT / "My Publications"
+DEFAULT_ASSOCIATED_FILES_DIR = DATA_ROOT / "Associated Files"
+DEFAULT_AUTHOR_PHOTO_DIR = DATA_ROOT / "author_photos"
 
 
 @dataclass(frozen=True)

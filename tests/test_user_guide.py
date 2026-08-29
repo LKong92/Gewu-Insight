@@ -46,6 +46,18 @@ class UserGuideTests(unittest.TestCase):
         self.assertTrue(data.startswith(b"%PDF-"))
         handler.send_bytes.assert_called_once_with(data, content_type="application/pdf")
 
+    def test_user_guide_screenshot_route_serves_only_packaged_png_assets(self) -> None:
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.path = "/user-guide-assets/library-paper-files.png"
+        handler.send_bytes = MagicMock()
+
+        handler.do_GET()
+
+        image_path = ui_server.USER_GUIDE_SCREENSHOT_ROOT / "library-paper-files.png"
+        data = image_path.read_bytes()
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+        handler.send_bytes.assert_called_once_with(data, content_type="image/png")
+
     def test_user_guide_calligraphy_route_uses_the_packaged_brand_asset(self) -> None:
         handler = object.__new__(ui_server.PaperMonitorUiHandler)
         handler.path = "/api/about-calligraphy"
@@ -555,12 +567,27 @@ class UserGuideTests(unittest.TestCase):
         self.assertFalse(soup.select("video[src], audio[src], source[src]"))
         self.assertEqual(
             {image.get("src") for image in soup.select("img[src]")},
-            {"/api/about-calligraphy", "/api/app-icon", "/api/startup-brand-art"},
+            {
+                "/api/about-calligraphy",
+                "/api/app-icon",
+                "/api/startup-brand-art",
+                "/user-guide-assets/library-paper-files.png",
+                "/user-guide-assets/space-workspace.png",
+                "/user-guide-assets/my-publications.png",
+                "/user-guide-assets/journal-monitor.png",
+                "/user-guide-assets/subject-monitor.png",
+                "/user-guide-assets/author-monitor.png",
+            },
         )
+
+        screenshot_figures = soup.select("figure.guide-screenshot")
+        self.assertEqual(len(screenshot_figures), 6)
+        self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:
         release_script = (ROOT / "scripts" / "make_release.sh").read_text(encoding="utf-8")
         self.assertIn('copy_item "paper_monitor"', release_script)
+        self.assertIn('copy_item "assets"', release_script)
 
     def test_latex_manual_contains_the_complete_fixed_layout_guide(self) -> None:
         tex_path = ROOT / "paper_monitor" / "user_guide.tex"

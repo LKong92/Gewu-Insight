@@ -428,6 +428,29 @@
     .identity-rules strong { display: block; margin-bottom: 4px; font-size: 13px; }
     .identity-rules span { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
+    .guide-screenshot {
+      margin: 22px 0 28px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #f6f8fb;
+      box-shadow: 0 10px 26px rgba(27, 48, 73, .08);
+    }
+    .guide-screenshot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #fff;
+    }
+    .guide-screenshot figcaption {
+      padding: 10px 13px 11px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .guide-screenshot figcaption strong { color: var(--ink); }
+
     .see-also { margin-top: 42px; padding-top: 21px; border-top: 1px solid var(--line); }
     .see-also h2 { margin: 0 0 9px; color: var(--muted); font-size: 13px; letter-spacing: .03em; text-transform: uppercase; }
     .see-links { display: flex; flex-wrap: wrap; gap: 8px 18px; }
@@ -1169,6 +1192,11 @@
           <h1>Understand the Library Layout</h1>
           <p class="lead">The Library uses a Finder-style column view, but the database—not the visible folder alone—defines the paper and its relationships.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/library-paper-files.png" alt="Library column view with a selected paper, its Paper Files bundle, and Paper Details">
+            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its current PDF and earlier version appear together as one paper bundle. This and the following guide images use a disposable documentation profile populated through the same supported public discovery and profile interfaces as the app; the production database and credentials are not included.</figcaption>
+          </figure>
+
           <h2>Read the columns from left to right</h2>
           <ol>
             <li><strong>Source:</strong> the main Library, a shortcut, or a Space.</li>
@@ -1239,6 +1267,11 @@
           <p class="topic-kicker">Library</p>
           <h1>Organize Folders, Shortcuts, and Spaces</h1>
           <p class="lead">Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/space-workspace.png" alt="A Space with folders, papers, Paper Files, and Paper Details">
+            <figcaption><strong>A Space.</strong> Spaces use the same paper identity and Paper Files model as the Library while keeping an independent organizational root.</figcaption>
+          </figure>
 
           <h2>Choose the right structure</h2>
           <table class="plain-table">
@@ -1720,6 +1753,11 @@
           <h1>Use My Publications</h1>
           <p class="lead">My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/my-publications.png" alt="My Publications showing a documentation profile, publication table, and summary statistics">
+            <figcaption><strong>My Publications.</strong> A profile, managed publication list, citation columns, and authorship summary share one view. The person and metrics shown here are demonstration data, not a signed-in account.</figcaption>
+          </figure>
+
           <h2>Choose your profile</h2>
           <ol class="steps">
             <li><strong>Enter a name, optional affiliations, or an exact Google Scholar profile URL.</strong> For a name search, use <code>Name; affiliation A; affiliation B</code>.</li>
@@ -1731,6 +1769,7 @@
           <ul>
             <li>Use the identifier/title field and <span class="ui">Add</span> to add a DOI, arXiv record, supported identifier, or title.</li>
             <li>Choose <span class="ui">Refresh Metrics</span> to update citation services and PubMed data.</li>
+            <li><span class="ui">First as listed</span> is calculated automatically from the active profile name and the resolved author order, including the profile's English and Chinese name forms.</li>
             <li>Use <span class="ui">Co-1st</span>, <span class="ui">Co-corr.</span>, and <span class="ui">Rev.</span> in Paper Details to mark co-first authorship, corresponding authorship, and review/perspective papers. Leave Co-1st unchecked for a solo first-author paper. These manual roles are preserved during metric refresh.</li>
             <li>Use the star to highlight a paper. Star state is independent from citation refresh and export inclusion.</li>
             <li>Drag rows into a manual order when a curated sequence matters more than date or citation sorting.</li>
@@ -1758,6 +1797,11 @@
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Journal Monitor</h1>
           <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor with a selected date, journal groups, filters, and paper cards">
+            <figcaption><strong>Journal Monitor.</strong> Calendar, journal groups, field filters, and paper cards describe a stored day after a normal product fetch into the disposable documentation profile. Capturing the stored result does not make a new publisher request.</figcaption>
+          </figure>
 
           <h2>Refresh a date</h2>
           <ol class="steps">
@@ -1815,6 +1859,11 @@
           <h1>Use Subject Monitor</h1>
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with per-subject tabs, calendar counts, and matching paper cards">
+            <figcaption><strong>Subject Monitor.</strong> The active subject stays selected across dates, and the calendar counts belong to that subject rather than the total across every topic.</figcaption>
+          </figure>
+
           <h2>Create a subject</h2>
           <ol class="steps">
             <li><strong>Choose <span class="ui">Add Subject</span>.</strong></li>
@@ -1853,6 +1902,11 @@
           <p class="topic-kicker">Publications and Monitors</p>
           <h1>Use Author Monitor</h1>
           <p class="lead">Author Monitor follows researchers and separates a first-import baseline from newly discovered work.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/author-monitor.png" alt="Author Monitor with locally stored profile images and a selected author's publications">
+            <figcaption><strong>Author Monitor.</strong> Locally stored demonstration portraits keep the monitored-author list stable without contacting a profile site when the view opens.</figcaption>
+          </figure>
 
           <h2>Add an author</h2>
           <ol class="steps">

@@ -29,6 +29,12 @@ IMAGE_ROUTES = {
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
     "/api/app-icon": ROOT / "assets" / "gewu-insight-app-icon.png",
     "/api/startup-brand-art": ROOT / "assets" / "branding" / "GewuSealGlyphs.png",
+    "/user-guide-assets/library-paper-files.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-paper-files.png",
+    "/user-guide-assets/space-workspace.png": ROOT / "assets" / "user-guide" / "screenshots" / "space-workspace.png",
+    "/user-guide-assets/my-publications.png": ROOT / "assets" / "user-guide" / "screenshots" / "my-publications.png",
+    "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
+    "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
+    "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
 }
 
 
@@ -210,6 +216,22 @@ def clean_guide_html() -> str:
         equation.replace_with(quote)
 
     for figure in body.select("figure.wordmark-figure"):
+        replacement = _new_tag(output, "div")
+        image = figure.find("img")
+        if image is not None:
+            image_paragraph = _new_tag(output, "p")
+            image_paragraph.append(image.extract())
+            replacement.append(image_paragraph)
+        caption = figure.find("figcaption")
+        if caption is not None:
+            caption_paragraph = _new_tag(output, "p")
+            caption_paragraph.string = (
+                "GEWUCAPTIONSTART" + caption.get_text(" ", strip=True) + "GEWUCAPTIONEND"
+            )
+            replacement.append(caption_paragraph)
+        figure.replace_with(replacement)
+
+    for figure in body.select("figure.guide-screenshot"):
         replacement = _new_tag(output, "div")
         image = figure.find("img")
         if image is not None:
@@ -413,19 +435,20 @@ def latex_preamble(version: str, build: str) -> str:
 \begin{{document}}
 \begin{{titlepage}}
   \centering
-  \vspace*{{17mm}}
-  \includegraphics[width=31mm]{{{icon}}}\\[7mm]
-  {{\sffamily\bfseries\fontsize{{29}}{{33}}\selectfont\color{{GewuInk}} Gewu Insight}}\\[2.5mm]
-  \includegraphics[width=46mm]{{{calligraphy}}}\\[3mm]
-  {{\sffamily\color{{GewuMuted}}\large User Guide}}\\[1.5mm]
-  {{\sffamily\small\color{{GewuMuted}} Version {version} (Build {build})}}\\[11mm]
-  \begin{{minipage}}{{0.68\textwidth}}
-    \centering\sffamily\fontsize{{12}}{{16}}\selectfont\color{{GewuInk}}
+  \vspace*{{25mm}}
+  \includegraphics[width=36mm]{{{icon}}}\\[8mm]
+  {{\sffamily\bfseries\fontsize{{36}}{{40}}\selectfont\color{{GewuInk}} Gewu Insight}}\\[4mm]
+  \includegraphics[width=57mm]{{{calligraphy}}}\\[5mm]
+  {{\sffamily\color{{GewuMuted}}\fontsize{{15}}{{18}}\selectfont User Guide}}\\[2.5mm]
+  {{\sffamily\small\color{{GewuMuted}} Version {version} (Build {build})}}\\[19mm]
+  \begin{{minipage}}{{0.72\textwidth}}
+    \centering\sffamily\fontsize{{13}}{{18}}\selectfont\color{{GewuInk}}
     Your personal research workspace, keeping papers, evidence, and files connected over time.
   \end{{minipage}}
   \vfill
+  {{\color{{GewuRule}}\rule{{68mm}}{{0.45pt}}}}\\[7mm]
   {{\small\sffamily\color{{GewuMuted}}Designed and developed by Lingyuan Kong and Zhengran Wu,\\with coding assistance from OpenAI Codex.}}\\[4mm]
-  {{\footnotesize\sffamily\color{{GewuMuted}}Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.}}
+  {{\footnotesize\sffamily\color{{GewuMuted}}Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.}}\\[10mm]
 \end{{titlepage}}
 
 \chapter*{{About this manual}}
@@ -523,6 +546,12 @@ def prepare_latex_body(source: str) -> str:
     image_widths = {
         "GewuAboutCalligraphy.png": "0.84\\linewidth",
         "gewu-insight-app-icon.png": "0.18\\linewidth",
+        "library-paper-files.png": "0.96\\linewidth",
+        "space-workspace.png": "0.96\\linewidth",
+        "my-publications.png": "0.96\\linewidth",
+        "journal-monitor.png": "0.96\\linewidth",
+        "subject-monitor.png": "0.96\\linewidth",
+        "author-monitor.png": "0.96\\linewidth",
     }
     for filename, width in image_widths.items():
         pattern = re.compile(

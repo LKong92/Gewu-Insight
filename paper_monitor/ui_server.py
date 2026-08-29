@@ -374,6 +374,12 @@ def run_ui_server(
     db_path: Path = DEFAULT_DB_PATH,
     open_browser: bool = False,
 ) -> None:
+    documentation_mode = str(os.environ.get("GEWU_DOCUMENTATION_MODE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     credential_storage = Storage(db_path)
     try:
         raw_config = read_config_json()
@@ -392,18 +398,22 @@ def run_ui_server(
     prewarm_author_monitor_photo_cache(db_path)
     config = load_config(db_path=db_path)
     journals = configured_source_names(config)
-    threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
-    threading.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
-    threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
-    threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
-    threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
-    threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
-    threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
-    threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
+    if not documentation_mode:
+        threading.Thread(target=trim_webkit_network_cache_if_needed, daemon=True).start()
+        threading.Thread(target=trim_pdf_thumbnail_cache_if_needed, daemon=True).start()
+        threading.Thread(target=cleanup_monitor_pdf_cache_for_db, args=(db_path,), daemon=True).start()
+        threading.Thread(target=prewarm_configured_journal_logos, args=(db_path,), daemon=True).start()
+        threading.Thread(target=run_auto_journal_monitor_scheduler, args=(db_path,), daemon=True).start()
+        threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
+        threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
+        threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
+
+    documentation_mode_enabled = documentation_mode
 
     class Handler(PaperMonitorUiHandler):
         configured_db_path = db_path
         configured_journals = journals
+        documentation_mode = documentation_mode_enabled
 
     server = FastLocalThreadingHTTPServer((host, port), Handler)
     request_author_monitor_card_cache_build(db_path)
@@ -417,6 +427,7 @@ def run_ui_server(
 class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     configured_db_path: Path = DEFAULT_DB_PATH
     configured_journals: list[str] = []
+    documentation_mode = False
 
     server_version = "GewuInsightUI/0.1"
 
@@ -440,6 +451,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/user-guide":
                 self.send_text(load_user_guide_html(), content_type="text/html; charset=utf-8")
+                return
+            if parsed.path.startswith("/user-guide-assets/"):
+                asset_name = unquote(parsed.path.removeprefix("/user-guide-assets/")).strip()
+                asset_path = (USER_GUIDE_SCREENSHOT_ROOT / asset_name).resolve()
+                if (
+                    not asset_name
+                    or "/" in asset_name
+                    or "\\" in asset_name
+                    or not is_relative_to(asset_path, USER_GUIDE_SCREENSHOT_ROOT)
+                    or asset_path.suffix.lower() != ".png"
+                    or not asset_path.is_file()
+                ):
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "User Guide image was not found")
+                    return
+                self.send_bytes(asset_path.read_bytes(), content_type="image/png")
                 return
             if parsed.path == "/user-guide.pdf":
                 if not USER_GUIDE_PDF_PATH.is_file():
@@ -921,8 +947,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_report(self, query: dict[str, list[str]]) -> None:
         self.refresh_journals()
         selected = first(query, "date") or today_local().isoformat()
-        auto_fetch = first(query, "auto_fetch") != "0"
-        force_fetch = first(query, "force_fetch") == "1"
+        auto_fetch = first(query, "auto_fetch") != "0" and not self.documentation_mode
+        force_fetch = first(query, "force_fetch") == "1" and not self.documentation_mode
         requested_refresh_journal = clean_text(first(query, "refresh_journal") or "")
         refresh_journal = ""
         if requested_refresh_journal:
@@ -1033,6 +1059,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_arxiv_daily_refresh(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or datetime.now().astimezone().date().isoformat()
+        if self.documentation_mode:
+            self.send_json({"date": selected, "status": "skipped", "reason": "documentation_mode"})
+            return
         try:
             selected_date = date.fromisoformat(selected)
         except ValueError:
@@ -4634,8 +4663,10 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
 
     def handle_theme_report(self, query: dict[str, list[str]]) -> None:
         selected = first(query, "date") or today_local().isoformat()
-        auto_fetch = first(query, "auto_fetch") != "0"
-        force_fetch = first(query, "force_fetch") == "1" or first(query, "force") == "1"
+        auto_fetch = first(query, "auto_fetch") != "0" and not self.documentation_mode
+        force_fetch = (
+            first(query, "force_fetch") == "1" or first(query, "force") == "1"
+        ) and not self.documentation_mode
         try:
             selected_date = date.fromisoformat(selected)
         except ValueError:
@@ -4798,7 +4829,7 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
-            if not paper.get("image_url"):
+            if not paper.get("image_url") and not self.documentation_mode:
                 enriched = enrich_image_from_landing_page(dict(paper))
                 image_url = enriched.get("image_url") or ""
                 if image_url:
@@ -24275,6 +24306,7 @@ def is_relative_to(path: Path, root: Path) -> bool:
 
 USER_GUIDE_PATH = Path(__file__).with_name("user_guide.html")
 USER_GUIDE_PDF_PATH = Path(__file__).with_name("Gewu_Insight_User_Guide.pdf")
+USER_GUIDE_SCREENSHOT_ROOT = (ROOT / "assets" / "user-guide" / "screenshots").resolve()
 
 
 def load_user_guide_html() -> str:
@@ -24627,20 +24659,49 @@ INDEX_HTML = """<!doctype html>
     .theme-fetch-subject-row.err .theme-fetch-subject-status { color: var(--accent-2); }
     .theme-fetch-subject-row.live .theme-fetch-subject-status { color: var(--accent); }
     .arxiv-countdown {
-      border: 1px solid rgba(15, 107, 110, 0.24);
-      border-radius: 7px;
-      background: #f5fbfa;
-      padding: 12px 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
+      width: auto;
+      box-sizing: border-box;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      padding: 0;
+      display: inline-flex;
+      align-items: baseline;
+      justify-content: flex-start;
+      gap: 12px;
       color: var(--muted);
+      line-height: 1.2;
+      white-space: nowrap;
+      min-width: 0;
+      overflow: hidden;
     }
-    .arxiv-countdown-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-    .arxiv-countdown-main span { font-size: 13px; }
-    .arxiv-countdown-main strong { color: var(--accent); font-size: 20px; font-weight: 760; white-space: nowrap; }
-    .arxiv-countdown-detail { font-size: 12px; text-align: right; }
+    .arxiv-countdown-row-host {
+      display: none;
+      align-items: baseline;
+      justify-content: flex-end;
+      min-width: 0;
+      min-height: 20px;
+      padding: 0 8px 3px;
+      overflow: hidden;
+      color: #7d8797;
+    }
+    .arxiv-countdown-row-host.open { display: flex; }
+    .arxiv-countdown-main { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+    .arxiv-countdown-main span { font-size: 10.5px; }
+    .arxiv-countdown-main strong { color: var(--accent); font-size: 13px; font-weight: 740; white-space: nowrap; }
+    .arxiv-countdown-detail {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+      overflow: hidden;
+      font-size: 10px;
+      text-align: left;
+    }
+    .arxiv-countdown-detail span { white-space: nowrap; }
+    .arxiv-countdown-separator {
+      color: #b0b8c4;
+    }
     @keyframes fetchingPulse {
       0%, 100% { opacity: 0.35; transform: scale(0.86); }
       50% { opacity: 1; transform: scale(1); }
@@ -31512,6 +31573,7 @@ INDEX_HTML = """<!doctype html>
     .app.report-mode .report-column,
     .app.theme-mode .report-column {
       padding-right: 0;
+      grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
     }
     .app.report-mode .report-column > .toolbar,
     .app.theme-mode .report-column > .toolbar { grid-row: 1; }
@@ -31519,14 +31581,16 @@ INDEX_HTML = """<!doctype html>
     .app.theme-mode .report-column > .summary { grid-row: 2; }
     .app.report-mode .report-column > .report-tabs,
     .app.theme-mode .report-column > .report-tabs { grid-row: 3; }
+    .app.report-mode .report-column > .arxiv-countdown-row-host,
+    .app.theme-mode .report-column > .arxiv-countdown-row-host { grid-row: 4; }
     .app.report-mode .report-column > .fetch-progress-host,
-    .app.theme-mode .report-column > .fetch-progress-host { grid-row: 4; }
+    .app.theme-mode .report-column > .fetch-progress-host { grid-row: 5; }
     .app.report-mode .report-column > .monitor-status-host,
-    .app.theme-mode .report-column > .monitor-status-host { grid-row: 5; }
+    .app.theme-mode .report-column > .monitor-status-host { grid-row: 6; }
     .app.report-mode .report-column > .library-controls,
-    .app.theme-mode .report-column > .library-controls { grid-row: 6; }
+    .app.theme-mode .report-column > .library-controls { grid-row: 7; }
     .app.report-mode .report-column > .papers,
-    .app.theme-mode .report-column > .papers { grid-row: 7; }
+    .app.theme-mode .report-column > .papers { grid-row: 8; }
     .app.report-mode .brand,
     .app.theme-mode .brand {
       display: none;
@@ -31584,8 +31648,8 @@ INDEX_HTML = """<!doctype html>
     }
     .app.report-mode .arxiv-countdown,
     .app.theme-mode .arxiv-countdown {
-      border-color: rgba(31, 79, 122, 0.24);
-      background: #eef4fb;
+      border-color: transparent;
+      background: transparent;
     }
     .app.theme-mode .journal-toggle.theme-toggle.dragging,
     .app.theme-mode .journal-tab.subject-tab.dragging {
@@ -32595,6 +32659,7 @@ INDEX_HTML = """<!doctype html>
           </div>
           <div class="summary" id="summary"></div>
           <div class="report-tabs" id="reportTabs"></div>
+          <div class="arxiv-countdown-row-host" id="arxivCountdownHost" aria-live="off"></div>
           <div class="fetch-progress-host" id="fetchProgressHost"></div>
           <div class="monitor-status-host" id="monitorStatusHost"></div>
           <div class="library-controls" id="libraryControls">
@@ -33786,7 +33851,8 @@ INDEX_HTML = """<!doctype html>
 
     function clearMonitorStatusDisplay() {
       const root = $("monitorStatusHost");
-      if (root) root.innerHTML = "";
+      if (!root) return;
+      root.innerHTML = "";
     }
 
     function runtimeEmptyBrandArtMarkup(extraClass = "") {
@@ -37068,7 +37134,6 @@ INDEX_HTML = """<!doctype html>
       root.style.height = "";
       root.style.minHeight = "";
       clearMonitorStatusDisplay();
-      const statusRoot = $("monitorStatusHost");
       const fetchPending = reportFetchIsPending(state.selectedDate);
       if (fetchPending) {
         updateFetchProgressDisplay(state.selectedDate);
@@ -37105,7 +37170,7 @@ INDEX_HTML = """<!doctype html>
       }
       renderReportTabs(groups);
       const activeGroup = groups.find((group) => group.journal === state.activeReportJournal) || groups[0];
-      renderArxivUpdateCountdown(statusRoot, activeGroup?.journal || "");
+      renderArxivUpdateCountdown($("arxivCountdownHost"), activeGroup?.journal || "");
       const activePapers = activeGroup?.papers || [];
       requestKatexForPapers(activePapers);
       ensureReportPaperSelection(activePapers);
@@ -37883,6 +37948,8 @@ INDEX_HTML = """<!doctype html>
 
     function renderArxivUpdateCountdown(root, journal) {
       if (!root || journal !== "arXiv") return;
+      root.replaceChildren();
+      root.classList.add("open");
       const banner = document.createElement("div");
       banner.className = "arxiv-countdown";
       banner.innerHTML = `
@@ -37891,8 +37958,9 @@ INDEX_HTML = """<!doctype html>
           <strong data-role="arxiv-countdown-time">-- min</strong>
         </div>
         <div class="arxiv-countdown-detail">
-          <div data-role="arxiv-countdown-detail"></div>
-          <div data-role="arxiv-submit-detail"></div>
+          <span data-role="arxiv-countdown-detail"></span>
+          <span class="arxiv-countdown-separator" aria-hidden="true">·</span>
+          <span data-role="arxiv-submit-detail"></span>
         </div>
       `;
       root.appendChild(banner);
@@ -37922,9 +37990,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function stopArxivUpdateCountdown() {
-      if (!state.arxivCountdownTimer) return;
-      window.clearInterval(state.arxivCountdownTimer);
-      state.arxivCountdownTimer = null;
+      if (state.arxivCountdownTimer) {
+        window.clearInterval(state.arxivCountdownTimer);
+        state.arxivCountdownTimer = null;
+      }
+      const root = $("arxivCountdownHost");
+      if (root) {
+        root.classList.remove("open");
+        root.replaceChildren();
+      }
     }
 
     function markNoMatchDate(iso, value) {

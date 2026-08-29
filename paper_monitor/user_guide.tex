@@ -107,19 +107,20 @@
 \begin{document}
 \begin{titlepage}
   \centering
-  \vspace*{17mm}
-  \includegraphics[width=31mm]{/Users/lingyuan/PaperMonitor-20260516/assets/gewu-insight-app-icon.png}\\[7mm]
-  {\sffamily\bfseries\fontsize{29}{33}\selectfont\color{GewuInk} Gewu Insight}\\[2.5mm]
-  \includegraphics[width=46mm]{/Users/lingyuan/PaperMonitor-20260516/assets/branding/GewuAboutCalligraphy.png}\\[3mm]
-  {\sffamily\color{GewuMuted}\large User Guide}\\[1.5mm]
-  {\sffamily\small\color{GewuMuted} Version 0.1 (Build 673606679)}\\[11mm]
-  \begin{minipage}{0.68\textwidth}
-    \centering\sffamily\fontsize{12}{16}\selectfont\color{GewuInk}
+  \vspace*{25mm}
+  \includegraphics[width=36mm]{/Users/lingyuan/PaperMonitor-20260516/assets/gewu-insight-app-icon.png}\\[8mm]
+  {\sffamily\bfseries\fontsize{36}{40}\selectfont\color{GewuInk} Gewu Insight}\\[4mm]
+  \includegraphics[width=57mm]{/Users/lingyuan/PaperMonitor-20260516/assets/branding/GewuAboutCalligraphy.png}\\[5mm]
+  {\sffamily\color{GewuMuted}\fontsize{15}{18}\selectfont User Guide}\\[2.5mm]
+  {\sffamily\small\color{GewuMuted} Version 0.1 (Build 673606679)}\\[19mm]
+  \begin{minipage}{0.72\textwidth}
+    \centering\sffamily\fontsize{13}{18}\selectfont\color{GewuInk}
     Your personal research workspace, keeping papers, evidence, and files connected over time.
   \end{minipage}
   \vfill
+  {\color{GewuRule}\rule{68mm}{0.45pt}}\\[7mm]
   {\small\sffamily\color{GewuMuted}Designed and developed by Lingyuan Kong and Zhengran Wu,\\with coding assistance from OpenAI Codex.}\\[4mm]
-  {\footnotesize\sffamily\color{GewuMuted}Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.}
+  {\footnotesize\sffamily\color{GewuMuted}Copyright \textcopyright\ 2026 Lingyuan Kong and Zhengran Wu. All Rights Reserved.}\\[10mm]
 \end{titlepage}
 
 \chapter*{About this manual}
@@ -1271,6 +1272,12 @@ Quit Gewu Insight, preserve the entire project data set, verify the backup can b
 The Library uses a Finder-style column view, but the database---not the visible folder alone---defines the paper and its relationships.
 \end{GewuLead}
 
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
+
+\begin{GewuCaption}
+Library and Paper Files. The selected paper remains in the managed folder hierarchy while its current PDF and earlier version appear together as one paper bundle. This and the following guide images use a disposable documentation profile populated through the same supported public discovery and profile interfaces as the app; the production database and credentials are not included.
+\end{GewuCaption}
+
 \subsection{Read the columns from left to right}\label{read-the-columns-from-left-to-right}
 
 \begin{enumerate}
@@ -1382,6 +1389,12 @@ Single-click selects a Paper Files item. Double-click opens it. This prevents an
 \begin{GewuLead}
 Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.
 \end{GewuLead}
+
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/space-workspace.png}\end{center}
+
+\begin{GewuCaption}
+A Space. Spaces use the same paper identity and Paper Files model as the Library while keeping an independent organizational root.
+\end{GewuCaption}
 
 \subsection{Choose the right structure}\label{choose-the-right-structure}
 
@@ -2177,6 +2190,12 @@ Never migrate by copying only \texttt{paper\_monitor.sqlite} or only the visible
 My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.
 \end{GewuLead}
 
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/my-publications.png}\end{center}
+
+\begin{GewuCaption}
+My Publications. A profile, managed publication list, citation columns, and authorship summary share one view. The person and metrics shown here are demonstration data, not a signed-in account.
+\end{GewuCaption}
+
 \subsection{Choose your profile}\label{choose-your-profile}
 
 \begin{enumerate}
@@ -2197,6 +2216,8 @@ My Publications keeps a managed publication list, citation sources, author-role 
   Use the identifier/title field and \textbf{Add} to add a DOI, arXiv record, supported identifier, or title.
 \item
   Choose \textbf{Refresh Metrics} to update citation services and PubMed data.
+\item
+  \textbf{First as listed} is calculated automatically from the active profile name and the resolved author order, including the profile\textquotesingle s English and Chinese name forms.
 \item
   Use \textbf{Co-1st}, \textbf{Co-corr.}, and \textbf{Rev.} in Paper Details to mark co-first authorship, corresponding authorship, and review/perspective papers. Leave Co-1st unchecked for a solo first-author paper. These manual roles are preserved during metric refresh.
 \item
@@ -2236,6 +2257,12 @@ Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf proje
 \begin{GewuLead}
 Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.
 \end{GewuLead}
+
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/journal-monitor.png}\end{center}
+
+\begin{GewuCaption}
+Journal Monitor. Calendar, journal groups, field filters, and paper cards describe a stored day after a normal product fetch into the disposable documentation profile. Capturing the stored result does not make a new publisher request.
+\end{GewuCaption}
 
 \subsection{Refresh a date}\label{refresh-a-date}
 
@@ -2319,6 +2346,12 @@ Per-paper status text and the bottom progress area make completed downloads and 
 Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.
 \end{GewuLead}
 
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
+
+\begin{GewuCaption}
+Subject Monitor. The active subject stays selected across dates, and the calendar counts belong to that subject rather than the total across every topic.
+\end{GewuCaption}
+
 \subsection{Create a subject}\label{create-a-subject}
 
 \begin{enumerate}
@@ -2378,6 +2411,12 @@ Subject Monitor rejects Zenodo records during ingestion and when cached results 
 \begin{GewuLead}
 Author Monitor follows researchers and separates a first-import baseline from newly discovered work.
 \end{GewuLead}
+
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/author-monitor.png}\end{center}
+
+\begin{GewuCaption}
+Author Monitor. Locally stored demonstration portraits keep the monitored-author list stable without contacting a profile site when the view opens.
+\end{GewuCaption}
 
 \subsection{Add an author}\label{add-an-author}
 
