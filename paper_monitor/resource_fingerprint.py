@@ -11,6 +11,33 @@ from pypdf import PdfReader
 
 PDF_CONTENT_FINGERPRINT_VERSION = b"gewu-pdf-content-v1\0"
 
+# PDF uses the page ``/Annots`` array for much more than reader-created
+# annotations.  Publisher and arXiv PDFs commonly put hyperlinks and internal
+# navigation targets there.  Those structural objects must not make a freshly
+# downloaded paper look annotated in the UI.  Count only markup/comment types
+# that represent a reader-authored change to the document.
+USER_ANNOTATION_SUBTYPES = frozenset(
+    {
+        "/Text",
+        "/FreeText",
+        "/Line",
+        "/Square",
+        "/Circle",
+        "/Polygon",
+        "/PolyLine",
+        "/Highlight",
+        "/Underline",
+        "/Squiggly",
+        "/StrikeOut",
+        "/Stamp",
+        "/Caret",
+        "/Ink",
+        "/FileAttachment",
+        "/Sound",
+        "/Redact",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ResourceFingerprint:
@@ -68,6 +95,25 @@ def _digest_page_xobjects(digest: Any, page: Any) -> None:
         digest.update(payload)
 
 
+def _user_annotation_count(page: Any) -> int:
+    """Count reader-authored markup while ignoring links and UI structures."""
+
+    annotations = _resolved_pdf_object(page.get("/Annots"))
+    if annotations is None:
+        return 0
+    try:
+        entries = list(annotations)
+    except TypeError:
+        entries = [annotations]
+    count = 0
+    for entry in entries:
+        annotation = _resolved_pdf_object(entry)
+        subtype = str(annotation.get("/Subtype") or "") if hasattr(annotation, "get") else ""
+        if subtype in USER_ANNOTATION_SUBTYPES:
+            count += 1
+    return count
+
+
 def pdf_content_fingerprint(path: Path) -> tuple[str, int]:
     """Return an advisory page-content hash that deliberately excludes PDF annotations.
 
@@ -93,12 +139,7 @@ def pdf_content_fingerprint(path: Path) -> tuple[str, int]:
             digest.update(len(payload).to_bytes(8, "big"))
             digest.update(payload)
             _digest_page_xobjects(digest, page)
-            annotations = _resolved_pdf_object(page.get("/Annots"))
-            if annotations is not None:
-                try:
-                    annotation_count += len(annotations)
-                except TypeError:
-                    annotation_count += 1
+            annotation_count += _user_annotation_count(page)
         return digest.hexdigest(), annotation_count
     except Exception:
         return "", 0

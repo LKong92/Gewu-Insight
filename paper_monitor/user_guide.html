@@ -20,8 +20,8 @@
       --important: #fff7e8;
       --important-line: #e7a72d;
       --code: #f4f5f7;
-      --sidebar-width: 278px;
-      --content-width: 760px;
+      --sidebar-width: 248px;
+      --content-width: 740px;
     }
 
     * { box-sizing: border-box; }
@@ -60,14 +60,14 @@
       overflow: auto;
       background: var(--sidebar);
       border-right: 1px solid var(--sidebar-line);
-      padding: 22px 14px 28px;
+      padding: 16px 10px 20px;
     }
 
-    .product-mark { padding: 0 10px 16px; }
-    .product-name { margin: 0; font-size: 19px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
-    .product-name-cn { margin-top: 2px; color: var(--muted); font-size: 13px; }
+    .product-mark { padding: 0 8px 12px; }
+    .product-name { margin: 0; font-size: 17px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+    .product-name-cn { margin-top: 2px; color: var(--muted); font-size: 12px; }
 
-    .search-wrap { position: relative; margin: 0 4px 18px; }
+    .search-wrap { position: relative; margin: 0 2px 12px; }
     .search-icon {
       position: absolute;
       left: 10px;
@@ -80,7 +80,7 @@
     }
     #guideSearch {
       width: 100%;
-      height: 34px;
+      height: 30px;
       padding: 0 30px 0 31px;
       border: 1px solid #d4d7dc;
       border-radius: 8px;
@@ -105,12 +105,12 @@
     }
     .clear-search:hover { background: #e6e8eb; }
 
-    .nav-group { margin: 0 0 17px; }
+    .nav-group { margin: 0 0 12px; }
     .nav-group[hidden] { display: none; }
     .nav-heading {
-      margin: 0 10px 5px;
+      margin: 0 8px 4px;
       color: #667085;
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 700;
       letter-spacing: .075em;
       text-transform: uppercase;
@@ -120,7 +120,7 @@
       width: 100%;
       border: 0;
       border-radius: 7px;
-      padding: 6px 10px;
+      padding: 5px 8px;
       background: transparent;
       color: #303846;
       text-align: left;
@@ -137,11 +137,11 @@
       position: sticky;
       z-index: 5;
       top: 0;
-      height: 48px;
+      height: 44px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 28px;
+      padding: 0 20px;
       border-bottom: 1px solid rgba(229,231,235,.92);
       background: rgba(255,255,255,.92);
       backdrop-filter: blur(14px);
@@ -159,14 +159,14 @@
     }
     .toolbar-button:hover { background: var(--blue-soft); text-decoration: none; }
 
-    .article-wrap { width: min(calc(100% - 72px), var(--content-width)); margin: 0 auto; padding: 54px 0 76px; }
+    .article-wrap { width: min(calc(100% - 48px), var(--content-width)); margin: 0 auto; padding: 38px 0 56px; }
     .help-topic { display: none; scroll-margin-top: 64px; }
     .help-topic.active { display: block; }
     .topic-kicker { margin: 0 0 8px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .065em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: 34px; line-height: 1.16; letter-spacing: -.025em; }
-    .lead { margin: 14px 0 36px; color: #4d5868; font-size: 18px; line-height: 1.5; }
-    h2 { margin: 38px 0 13px; font-size: 22px; line-height: 1.25; letter-spacing: -.012em; }
-    h3 { margin: 25px 0 8px; font-size: 17px; line-height: 1.3; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.16; letter-spacing: -.025em; }
+    .lead { margin: 12px 0 28px; color: #4d5868; font-size: 16.5px; line-height: 1.48; }
+    h2 { margin: 30px 0 11px; font-size: 20px; line-height: 1.25; letter-spacing: -.012em; }
+    h3 { margin: 22px 0 7px; font-size: 16px; line-height: 1.3; }
     p { margin: 0 0 15px; }
     ul, ol { margin: 10px 0 18px; padding-left: 24px; }
     li { margin: 5px 0; }
@@ -472,7 +472,7 @@
     }
 
     @media (max-width: 900px) {
-      :root { --sidebar-width: 226px; }
+      :root { --sidebar-width: 214px; }
       .article-wrap { width: min(calc(100% - 42px), var(--content-width)); padding-top: 38px; }
       h1 { font-size: 29px; }
       .lead { font-size: 16px; }
@@ -540,7 +540,7 @@
           <button class="topic-link" data-topic="paper-details">Use Paper Details</button>
           <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
           <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
-          <button class="topic-link" data-topic="quick-look">Preview PDFs with Quick Look</button>
+          <button class="topic-link" data-topic="quick-look">Preview Files with Quick Look</button>
           <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
           <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
           <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
@@ -566,6 +566,7 @@
           <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
           <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
           <button class="topic-link" data-topic="field-settings">Field Settings</button>
+          <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
           <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
           <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
           <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
@@ -1056,6 +1057,8 @@
           <h2>Fingerprints and annotations</h2>
           <p>When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers “are these bytes identical?” Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.</p>
 
+          <p>Gewu Insight counts user-created comments and markup—such as highlights, notes, drawings, stamps, and form edits—as annotations. Structural PDF elements such as publisher hyperlinks, internal navigation links, and ordinary page actions do not make a freshly downloaded publisher or arXiv PDF <span class="ui">Annotated</span>.</p>
+
           <p>An exact duplicate can be reused instead of stored twice. A clean PDF and an annotated copy may have different exact hashes but the same content fingerprint; both can be retained when the annotation state is meaningful.</p>
 
           <h2>Why Finder and the UI do not look identical</h2>
@@ -1436,7 +1439,10 @@
             <li>Double-click a card to open it.</li>
             <li>Press <kbd>Space</kbd> to use Quick Look.</li>
             <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, current-file controls, type controls, add/sync actions, or deletion where allowed.</li>
+            <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected non-current resource after confirmation. This does not delete the parent paper or its other files.</li>
           </ul>
+
+          <p>The current primary file is protected from direct deletion. Choose another eligible publication version as current first, then delete the old non-current resource if it is no longer needed.</p>
 
           <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form.</p>
 
@@ -1445,22 +1451,24 @@
 
           <p>A missing attachment is not another copy of the current PDF merely because both rows have a similar name. Check <span class="ui">Show in Finder</span>, the paper's Associated Files bundle, and Recycle before deleting or importing anything. The current resource and explicitly typed attachments remain visible even when their paths need repair.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview PDFs with Quick Look</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="quick-look" data-group="Library" data-title="Preview PDFs with Quick Look" data-keywords="pdf preview quick look space thumbnails page count range streaming cache large file performance">
+        <article class="help-topic guide-topic" id="quick-look" data-group="Library" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance">
           <p class="topic-kicker">Library</p>
-          <h1>Preview PDFs with Quick Look</h1>
-          <p class="lead">Quick Look keeps the existing in-app PDF reading workflow while reducing the time between pressing Space and seeing the document.</p>
+          <h1>Preview Files with Quick Look</h1>
+          <p class="lead">Press Space to inspect the selected resource without changing its paper record. Quick Look can stay inside Gewu Insight, use the macOS system panel, or combine both approaches.</p>
 
           <h2>Open and follow a preview</h2>
           <ol class="steps">
-            <li><strong>Select a PDF in Paper Files.</strong> Press <kbd>Space</kbd> to open Quick Look.</li>
-            <li><strong>Move with <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> When Quick Look is open, the preview follows the selected Paper Files resource.</li>
+            <li><strong>Select a file in Library, a Space, or Paper Files.</strong> Press <kbd>Space</kbd> to open the configured Quick Look.</li>
+            <li><strong>Move with <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> When Quick Look is open, the preview follows the current Gewu Insight selection.</li>
             <li><strong>Press <kbd>Space</kbd> again.</strong> Close Quick Look and return keyboard focus to the same file.</li>
           </ol>
 
-          <h2>Read the loading sequence</h2>
+          <p>With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue moving through Library or Paper Files while the system panel follows the selection. Rapid navigation is serialized so an older preview request cannot replace a newer selection.</p>
+
+          <h2>Read the built-in PDF loading sequence</h2>
           <p>The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails begin after the main document is ready, so a large PDF can already be readable while the thumbnail strip is still filling in.</p>
 
           <p>On the first open, the app may still need to inspect the PDF and render thumbnail pages. Later opens can reuse stable local-file validators, remembered page information, and a bounded thumbnail cache. The cache is automatically trimmed and can always be rebuilt; it is not part of the paper record or a substitute for the PDF.</p>
@@ -1468,13 +1476,14 @@
           <h2>Choose Quick Look or Preview</h2>
           <table class="plain-table">
             <tr><th>Use</th><th>Best for</th></tr>
-            <tr><td><span class="ui">Quick Look</span></td><td>Fast inspection, keyboard comparison among versions, and page navigation without leaving Gewu Insight.</td></tr>
+            <tr><td><span class="ui">Built-in Quick Look</span></td><td>Fast PDF inspection, keyboard comparison among versions, and a preview that remains inside the workspace.</td></tr>
+            <tr><td><span class="ui">macOS Quick Look</span></td><td>System-native preview support for presentations, media, images, PDFs, and other formats supported by macOS.</td></tr>
             <tr><td><span class="ui">Open in Preview</span></td><td>Full macOS Preview tools, annotation, export, printing, and a separate reading window.</td></tr>
           </table>
 
           <div class="note"><span class="callout-title">Note</span>Previewing is read-only from Gewu Insight's perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change the PDF, its role, its current-file status, or the SQLite paper record.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look-settings">Quick Look Settings</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="versions-current" data-group="Library" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
@@ -1619,7 +1628,7 @@
           </ol>
 
           <h2>Delete permanently</h2>
-          <p>Use final deletion only inside Recycle. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved. Files that are no longer referenced are moved to the macOS Trash where possible.</p>
+          <p>Use final deletion only inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.</p>
 
           <div class="important"><span class="callout-title">Important</span><span class="ui">Delete All</span> affects every eligible item in the selected Recycle context. Back up first if you are uncertain.</div>
 
@@ -2021,6 +2030,33 @@
           <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Citation Settings</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="quick-look-settings" data-group="Settings and Safety" data-title="Quick Look Settings" data-keywords="quick look settings built-in macOS native hybrid all files PDFs presentations media images space preview">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Choose How Quick Look Opens Files</h1>
+          <p class="lead">Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look, or divide the work by file format.</p>
+
+          <h2>Open Quick Look Settings</h2>
+          <p>Choose <span class="ui">Setting &gt; Quick Look Settings</span>. The setting applies to Space-bar previews in both Library and Spaces. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.</p>
+
+          <table class="plain-table">
+            <tr><th>Mode</th><th>Behavior</th></tr>
+            <tr><td><span class="ui">Gewu Insight for all files</span></td><td>The default. Every preview stays inside the workspace. PDFs use the built-in reader; unsupported formats keep the built-in file card and <span class="ui">Open File</span> action.</td></tr>
+            <tr><td><span class="ui">Gewu Insight for PDFs, macOS for other files</span></td><td>PDFs use the built-in reader. Presentations, media, images, and other formats use the macOS Quick Look panel.</td></tr>
+            <tr><td><span class="ui">macOS Quick Look for all files</span></td><td>PDFs and every other format supported by macOS use the system Quick Look panel.</td></tr>
+          </table>
+
+          <h2>Choose a mode for your workflow</h2>
+          <ul>
+            <li>Use the default when you want one consistent, contained workspace and the optimized built-in PDF reader.</li>
+            <li>Use the mixed mode when PDFs are your main reading material but presentations, video, audio, and images should use native macOS preview support.</li>
+            <li>Use the all-native mode when system Quick Look compatibility matters more than keeping the preview embedded in Gewu Insight.</li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>When the macOS panel is used, keyboard focus remains in Gewu Insight so <kbd>↑</kbd> and <kbd>↓</kbd> continue changing the selected Library or Paper Files item instead of turning into page-navigation commands in the system panel.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#paper-files">Understand Paper Files</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">

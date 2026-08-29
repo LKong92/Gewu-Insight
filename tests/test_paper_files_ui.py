@@ -139,6 +139,23 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("library-resource-state", resources)
         self.assertNotIn("library-resource-row", resources)
 
+    def test_resource_cards_show_file_type_icons_and_right_align_metadata(self) -> None:
+        resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
+            "function libraryColumnFolderIds", 1
+        )[0]
+        self.assertIn("library-resource-icon-tile", resources)
+        self.assertIn("paper-file-icon file-type-icon", resources)
+        self.assertIn("/api/file-icon?ext=", resources)
+        self.assertIn(".paper-file-icon.file-type-icon {", INDEX_HTML)
+        self.assertIn("background-image: var(--file-icon-url);", INDEX_HTML)
+        resource_meta_css = INDEX_HTML.split(
+            ".library-resource-card .library-resource-meta {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("grid-column: 2 / 4;", resource_meta_css)
+        self.assertIn("grid-row: 2;", resource_meta_css)
+        self.assertIn("justify-content: flex-end;", resource_meta_css)
+        self.assertIn("text-align: right;", resource_meta_css)
+
     def test_empty_and_loading_file_states_share_a_compact_inline_component(self) -> None:
         resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
             "function libraryColumnFolderIds", 1

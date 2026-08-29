@@ -105,6 +105,7 @@ class UserGuideTests(unittest.TestCase):
             "Citation Settings",
             "arXiv Scope Settings",
             "Field Settings",
+            "Quick Look Settings",
             "Visual Identity and Cultural Elements",
             "Keyboard Shortcuts",
             "Back Up and Upgrade",
@@ -541,8 +542,39 @@ class UserGuideTests(unittest.TestCase):
             "Page count and other metadata load in parallel",
             "bounded thumbnail cache",
             "does not change the PDF",
+            "macOS Quick Look",
+            "keyboard focus",
         ]:
             self.assertIn(phrase, quick_look_text)
+
+        quick_look_settings = soup.find("article", id="quick-look-settings")
+        self.assertIsNotNone(quick_look_settings)
+        quick_look_settings_text = quick_look_settings.get_text(" ", strip=True)
+        for phrase in [
+            "Gewu Insight for all files",
+            "Gewu Insight for PDFs, macOS for other files",
+            "macOS Quick Look for all files",
+            "The default",
+            "keyboard focus remains in Gewu Insight",
+        ]:
+            self.assertIn(phrase, quick_look_settings_text)
+
+        for phrase in [
+            "remove only the selected non-current resource",
+            "does not delete the parent paper",
+            "current primary file is protected",
+        ]:
+            self.assertIn(phrase, paper_files_text)
+
+        visible_files_text = soup.find("article", id="visible-research-files").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "publisher hyperlinks",
+            "internal navigation links",
+            "do not make a freshly downloaded publisher or arXiv PDF",
+        ]:
+            self.assertIn(phrase, visible_files_text)
 
         author_text = soup.find("article", id="author-monitor").get_text(" ", strip=True)
         for phrase in [

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from pypdf import PdfReader, PdfWriter
-from pypdf.annotations import Text
+from pypdf.annotations import Link, Text
 
 from paper_monitor import ui_server
 from paper_monitor.storage import STORAGE_SCHEMA_VERSION, Storage
@@ -656,6 +656,70 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(updated["version_label"], "Published Version")
         self.assertEqual(int(updated["is_annotated"] or 0), 1)
         self.assertEqual(pdf.read_bytes(), original_bytes)
+
+    def test_fingerprint_refresh_clears_legacy_link_annotation_false_positive(self) -> None:
+        self.add_paper("publisher-link-false-positive")
+        pdf = self.root / "data" / "Library" / "Publisher.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        writer.add_annotation(
+            page_number=0,
+            annotation=Link(rect=(72, 700, 180, 724), url="https://doi.org/10.1000/example"),
+        )
+        with pdf.open("wb") as handle:
+            writer.write(handle)
+        self.storage.update_download_status(
+            "publisher-link-false-positive",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("publisher-link-false-positive")
+        self.storage.conn.execute(
+            "UPDATE resources SET annotation_count = 1, is_annotated = 1 WHERE id = ?",
+            (int(resource["id"]),),
+        )
+        self.storage.conn.commit()
+
+        refreshed = ui_server.refresh_paper_resource_fingerprints(
+            self.storage,
+            "publisher-link-false-positive",
+        )
+
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(int(refreshed[0]["annotation_count"] or 0), 0)
+        self.assertEqual(int(refreshed[0]["is_annotated"] or 0), 0)
+
+    def test_fingerprint_refresh_preserves_explicit_manual_annotated_mark(self) -> None:
+        self.add_paper("manual-annotated-refresh")
+        pdf = self.root / "data" / "Library" / "Manual.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(self.valid_pdf_bytes("manual annotation classification"))
+        self.storage.update_download_status(
+            "manual-annotated-refresh",
+            status="success",
+            main_pdf_path=str(pdf),
+            merged_pdf_path=str(pdf),
+        )
+        resource = self.storage.ensure_primary_pdf_resource("manual-annotated-refresh")
+        ui_server.update_paper_resource_role(
+            self.storage,
+            "manual-annotated-refresh",
+            int(resource["id"]),
+            "publication_version",
+            "version_of_record",
+            is_annotated=True,
+        )
+
+        refreshed = ui_server.refresh_paper_resource_fingerprints(
+            self.storage,
+            "manual-annotated-refresh",
+        )
+
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(int(refreshed[0]["annotation_count"] or 0), 0)
+        self.assertEqual(int(refreshed[0]["is_annotated"] or 0), 1)
 
     def test_current_default_pdf_cannot_be_reclassified_as_an_attachment(self) -> None:
         self.add_paper("primary-role-guard")

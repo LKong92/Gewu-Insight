@@ -1039,6 +1039,8 @@ Supplements and other attachments are never eligible to become current, even whe
 
 When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers ``are these bytes identical?'' Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.
 
+Gewu Insight counts user-created comments and markup---such as highlights, notes, drawings, stamps, and form edits---as annotations. Structural PDF elements such as publisher hyperlinks, internal navigation links, and ordinary page actions do not make a freshly downloaded publisher or arXiv PDF \textbf{Annotated}.
+
 An exact duplicate can be reused instead of stored twice. A clean PDF and an annotated copy may have different exact hashes but the same content fingerprint; both can be retained when the annotation state is meaningful.
 
 \subsection{Why Finder and the UI do not look identical}\label{why-finder-and-the-ui-do-not-look-identical}
@@ -1668,7 +1670,11 @@ Paper Files column & Paper Details panel & Contents \\
   Press \texttt{Space} to use Quick Look.
 \item
   Control-click for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, current-file controls, type controls, add/sync actions, or deletion where allowed.
+\item
+  Press \texttt{Delete} or \texttt{Backspace} while Paper Files has keyboard focus to remove only the selected non-current resource after confirmation. This does not delete the parent paper or its other files.
 \end{itemize}
+
+The current primary file is protected from direct deletion. Choose another eligible publication version as current first, then delete the old non-current resource if it is no longer needed.
 
 The Paper Details \textbf{Files} panel provides the same underlying bundle and classification controls in a compact form.
 
@@ -1680,12 +1686,12 @@ A missing attachment is not another copy of the current PDF merely because both 
 
 \subsection{See also}\label{see-also-17}
 
-\hyperref[quick-look]{Preview PDFs with Quick Look} · \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
 
-\section{Preview PDFs with Quick Look}\label{quick-look}
+\section{Preview Files with Quick Look}\label{quick-look}
 
 \begin{GewuLead}
-Quick Look keeps the existing in-app PDF reading workflow while reducing the time between pressing Space and seeing the document.
+Press Space to inspect the selected resource without changing its paper record. Quick Look can stay inside Gewu Insight, use the macOS system panel, or combine both approaches.
 \end{GewuLead}
 
 \subsection{Open and follow a preview}\label{open-and-follow-a-preview}
@@ -1693,14 +1699,16 @@ Quick Look keeps the existing in-app PDF reading workflow while reducing the tim
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Select a PDF in Paper Files.} Press \texttt{Space} to open Quick Look.
+  \textbf{Select a file in Library, a Space, or Paper Files.} Press \texttt{Space} to open the configured Quick Look.
 \item
-  \textbf{Move with \texttt{{\symbolfont ↑}} or \texttt{{\symbolfont ↓}}.} When Quick Look is open, the preview follows the selected Paper Files resource.
+  \textbf{Move with \texttt{{\symbolfont ↑}} or \texttt{{\symbolfont ↓}}.} When Quick Look is open, the preview follows the current Gewu Insight selection.
 \item
   \textbf{Press \texttt{Space} again.} Close Quick Look and return keyboard focus to the same file.
 \end{enumerate}
 
-\subsection{Read the loading sequence}\label{read-the-loading-sequence}
+With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue moving through Library or Paper Files while the system panel follows the selection. Rapid navigation is serialized so an older preview request cannot replace a newer selection.
+
+\subsection{Read the built-in PDF loading sequence}\label{read-the-built-in-pdf-loading-sequence}
 
 The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails begin after the main document is ready, so a large PDF can already be readable while the thumbnail strip is still filling in.
 
@@ -1718,7 +1726,8 @@ Use & Best for \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-\textbf{Quick Look} & Fast inspection, keyboard comparison among versions, and page navigation without leaving Gewu Insight. \\
+\textbf{Built-in Quick Look} & Fast PDF inspection, keyboard comparison among versions, and a preview that remains inside the workspace. \\
+\textbf{macOS Quick Look} & System-native preview support for presentations, media, images, PDFs, and other formats supported by macOS. \\
 \textbf{Open in Preview} & Full macOS Preview tools, annotation, export, printing, and a separate reading window. \\
 \end{longtable}
 \GewuTableEnd
@@ -1732,7 +1741,7 @@ Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening
 
 \subsection{See also}\label{see-also-18}
 
-\hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
+\hyperref[quick-look-settings]{Quick Look Settings} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
 
 \section{Choose Versions and the Current File}\label{versions-current}
 
@@ -1962,7 +1971,7 @@ Deleting a paper reference either removes only that reference or moves the last 
 
 \subsection{Delete permanently}\label{delete-permanently}
 
-Use final deletion only inside Recycle. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved. Files that are no longer referenced are moved to the macOS Trash where possible.
+Use final deletion only inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.
 
 \begin{quote}
 \textbf{Important}
@@ -2630,6 +2639,55 @@ Use \textbf{Restore Defaults} to return to the four-field default. Field Setting
 
 \hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Citation Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
 
+\section{Quick Look Settings}\label{quick-look-settings}
+
+\begin{GewuLead}
+Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look, or divide the work by file format.
+\end{GewuLead}
+
+\subsection{Open Quick Look Settings}\label{open-quick-look-settings}
+
+Choose \textbf{Setting \textgreater{} Quick Look Settings}. The setting applies to Space-bar previews in both Library and Spaces. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Mode & Behavior \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\textbf{Gewu Insight for all files} & The default. Every preview stays inside the workspace. PDFs use the built-in reader; unsupported formats keep the built-in file card and \textbf{Open File} action. \\
+\textbf{Gewu Insight for PDFs, macOS for other files} & PDFs use the built-in reader. Presentations, media, images, and other formats use the macOS Quick Look panel. \\
+\textbf{macOS Quick Look for all files} & PDFs and every other format supported by macOS use the system Quick Look panel. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+\subsection{Choose a mode for your workflow}\label{choose-a-mode-for-your-workflow}
+
+\begin{itemize}
+\tightlist
+\item
+  Use the default when you want one consistent, contained workspace and the optimized built-in PDF reader.
+\item
+  Use the mixed mode when PDFs are your main reading material but presentations, video, audio, and images should use native macOS preview support.
+\item
+  Use the all-native mode when system Quick Look compatibility matters more than keeping the preview embedded in Gewu Insight.
+\end{itemize}
+
+\begin{quote}
+\textbf{Note}
+
+When the macOS panel is used, keyboard focus remains in Gewu Insight so \texttt{{\symbolfont ↑}} and \texttt{{\symbolfont ↓}} continue changing the selected Library or Paper Files item instead of turning into page-navigation commands in the system panel.
+\end{quote}
+
+\subsection{See also}\label{see-also-35}
+
+\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+
 \section{Naming and PDF Rename Rules}\label{naming}
 
 \begin{GewuLead}
@@ -2678,7 +2736,7 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 Changing a Paper Files role or choosing \textbf{Use} does not rename that file. A rename occurs only through a naming or rename action.
 \end{quote}
 
-\subsection{See also}\label{see-also-35}
+\subsection{See also}\label{see-also-36}
 
 \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
 
@@ -2722,7 +2780,7 @@ When the same work appears in more than one Library folder, those locations can 
 Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.
 \end{quote}
 
-\subsection{See also}\label{see-also-36}
+\subsection{See also}\label{see-also-37}
 
 \hyperref[storage-reference]{Storage Reference} · \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[paper-files]{Understand Paper Files}
 
@@ -2754,7 +2812,7 @@ Metadata refresh, citation counts, journal/subject/author discovery, profile ima
 
 Optional service credentials belong only in Citation Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.
 
-\subsection{See also}\label{see-also-37}
+\subsection{See also}\label{see-also-38}
 
 \hyperref[citation-settings]{Citation Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
 
@@ -2849,7 +2907,7 @@ Mark & Role \\
 
 Together the three registers establish the product\textquotesingle s visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.
 
-\subsection{See also}\label{see-also-38}
+\subsection{See also}\label{see-also-39}
 
 \hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup and Web Cache}
 
@@ -2888,7 +2946,7 @@ Shortcut & Action \\
 
 Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.
 
-\subsection{See also}\label{see-also-39}
+\subsection{See also}\label{see-also-40}
 
 \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
 
@@ -2926,7 +2984,7 @@ Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, 
 Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access control. Use your authorized browser session or attach a file you obtained legitimately.
 \end{quote}
 
-\subsection{See also}\label{see-also-40}
+\subsection{See also}\label{see-also-41}
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[download-sync]{Download and Sync Versions} · \hyperref[troubleshooting]{Troubleshooting}
 
@@ -2962,7 +3020,7 @@ Choose \textbf{Setting \textgreater{} Clear Web Cache} if the running window vis
 
 Web cache and macOS app identity are separate. Clearing Web Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt \textbf{Gewu Insight.app}. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.
 
-\subsection{See also}\label{see-also-41}
+\subsection{See also}\label{see-also-42}
 
 \hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
 
@@ -3040,7 +3098,7 @@ This is expected. Choose another version with \textbf{Use} first, or enable auto
 Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.
 \end{quote}
 
-\subsection{See also}\label{see-also-42}
+\subsection{See also}\label{see-also-43}
 
 \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup and Web Cache} · \hyperref[network-access]{Publisher and Network Access}
 
@@ -3089,7 +3147,7 @@ SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF o
 Do not delete, rebuild, or ``clean'' the database because a generated JSON file looks stale. Diagnose the selected record and local path first.
 \end{quote}
 
-\subsection{See also}\label{see-also-43}
+\subsection{See also}\label{see-also-44}
 
 \hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy}
 

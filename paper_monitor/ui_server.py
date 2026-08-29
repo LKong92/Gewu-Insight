@@ -18331,7 +18331,11 @@ def download_arxiv_preprint_versions(
                             version_label = ?, version_date = ?, version_number = ?,
                             source_url = ?, sha256 = ?, content_sha256 = ?,
                             annotation_count = ?,
-                            is_annotated = CASE WHEN ? > 0 THEN 1 ELSE COALESCE(is_annotated, 0) END,
+                            is_annotated = CASE
+                                WHEN ? > 0 THEN 1
+                                WHEN COALESCE(annotation_count, 0) > 0 THEN 0
+                                ELSE COALESCE(is_annotated, 0)
+                            END,
                             missing_status = '', updated_at = ?
                         WHERE id = ? AND paper_id = ?
                         """,
@@ -21138,7 +21142,11 @@ def refresh_paper_resource_fingerprints(
             """
             UPDATE resources
             SET sha256 = ?, content_sha256 = ?, annotation_count = ?,
-                is_annotated = CASE WHEN ? > 0 THEN 1 ELSE COALESCE(is_annotated, 0) END,
+                is_annotated = CASE
+                    WHEN ? > 0 THEN 1
+                    WHEN COALESCE(annotation_count, 0) > 0 THEN 0
+                    ELSE COALESCE(is_annotated, 0)
+                END,
                 size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
             WHERE id = ? AND paper_id = ?
             """,
@@ -25757,27 +25765,75 @@ INDEX_HTML = """<!doctype html>
       max-height: 100%;
     }
     .library-file-preview-card {
-      width: min(440px, calc(100% - 36px));
+      width: min(460px, calc(100% - 40px));
       display: grid;
-      gap: 12px;
-      padding: 22px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
+      grid-template-columns: 46px minmax(0, 1fr);
+      gap: 0 14px;
+      padding: 18px;
+      border: 1px solid rgba(111, 125, 145, 0.18);
+      border-radius: 13px;
+      background: #f8f9fb;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07);
+    }
+    .library-file-preview-card-icon {
+      grid-row: 1 / span 3;
+      display: grid;
+      place-items: center;
+      width: 46px;
+      height: 54px;
+      border: 1px solid rgba(111, 125, 145, 0.16);
+      border-radius: 9px;
       background: #fff;
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+      color: #47627d;
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
-    .library-file-preview-card strong {
+    .library-file-preview-card-copy {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .library-file-preview-card-title {
       color: var(--ink);
-      font-size: 15px;
+      font-size: 14px;
+      font-weight: 720;
       overflow-wrap: anywhere;
     }
-    .library-file-preview-card span {
+    .library-file-preview-card-meta,
+    .library-file-preview-card-message {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1.4;
       overflow-wrap: anywhere;
     }
-    .library-file-preview-card button {
-      justify-self: start;
+    .library-file-preview-card-message { color: #526274; }
+    .library-file-preview-card-path {
+      grid-column: 1 / -1;
+      max-height: 60px;
+      overflow: auto;
+      margin-top: 14px;
+      padding: 8px 10px;
+      border: 1px solid rgba(111, 125, 145, 0.14);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.78);
+      color: #667085;
+      font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .library-file-preview-card-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 12px;
+    }
+    .library-file-preview-card-actions .action {
+      min-height: 30px;
+      border-radius: 8px;
+      padding: 0 12px;
+      font-size: 11px;
+      font-weight: 700;
     }
     .library-quicklook-placeholder {
       min-height: 100%;
@@ -27825,9 +27881,9 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-rows: auto auto auto auto minmax(0, 1fr);
       gap: 12px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
+      border: 1px solid rgba(111, 125, 145, 0.18);
+      border-radius: 12px;
+      background: #f3f4f6;
       padding: 14px;
       overflow: hidden;
     }
@@ -27849,13 +27905,15 @@ INDEX_HTML = """<!doctype html>
     }
     .loader-modal-body {
       min-height: 0;
-      padding: 14px;
+      padding: 16px;
       display: grid;
+      background: #f3f4f6;
     }
     .loader-modal .loader-panel {
       border: 0;
       border-radius: 0;
       padding: 0;
+      background: transparent;
       grid-template-rows: auto auto auto auto minmax(0, 1fr);
     }
     .loader-head {
@@ -27885,6 +27943,11 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(320px, 1fr) auto;
       gap: 10px;
       align-items: end;
+      padding: 13px 14px;
+      border: 1px solid rgba(111, 125, 145, 0.16);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
     }
     .loader-form .loader-path-control {
       display: grid;
@@ -27982,8 +28045,8 @@ INDEX_HTML = """<!doctype html>
       gap: 10px;
       align-items: center;
       border: 1px solid #e7ebf0;
-      border-radius: 8px;
-      background: linear-gradient(90deg, #fbfcfe 0%, #fff 35%, #fbfcfe 100%);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.78);
       padding: 8px 10px;
     }
     .loader-history label {
@@ -28016,6 +28079,7 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       color: var(--muted);
       font-size: 12px;
+      padding: 0 2px;
     }
     .loader-progress-track {
       grid-column: 1 / -1;
@@ -28050,7 +28114,7 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       overflow: auto;
       border: 1px solid #1f2937;
-      border-radius: 8px;
+      border-radius: 11px;
       background: #111827;
       color: #e5e7eb;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -28139,8 +28203,8 @@ INDEX_HTML = """<!doctype html>
       min-height: 0;
       overflow: auto;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fbfcfe;
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.82);
       padding: 12px;
       color: #344054;
       font-size: 12px;
@@ -28598,60 +28662,108 @@ INDEX_HTML = """<!doctype html>
       position: fixed;
       inset: 0;
       z-index: 300;
-      background: rgba(15, 23, 42, 0.22);
+      background: rgba(32, 42, 57, 0.28);
+      backdrop-filter: blur(1.5px);
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 24px;
     }
     .finder-drop-modal {
-      width: min(440px, 100%);
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fff;
-      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
-      padding: 16px;
+      width: min(430px, 100%);
+      border: 1px solid rgba(111, 125, 145, 0.2);
+      border-radius: 14px;
+      background: #f8f9fb;
+      box-shadow: 0 28px 80px rgba(15, 23, 42, 0.24);
+      padding: 0;
       color: var(--ink);
+      overflow: hidden;
     }
     .finder-drop-modal h2 {
-      margin: 0 0 8px;
-      font-size: 16px;
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.28;
       letter-spacing: 0;
     }
     .finder-drop-modal p {
-      margin: 0 0 12px;
+      margin: 0;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
+      line-height: 1.48;
+    }
+    .finder-drop-modal-head {
+      padding: 18px 19px 11px;
+    }
+    .finder-drop-modal-body {
+      display: grid;
+      gap: 10px;
+      padding: 0 19px 16px;
+    }
+    .finder-drop-modal > h2:first-child {
+      padding: 18px 19px 10px;
+    }
+    .finder-drop-modal > h2:first-child ~ p {
+      margin: 0 19px 10px;
+    }
+    .finder-drop-modal > h2:first-child ~ .author-homepage-field,
+    .finder-drop-modal > h2:first-child ~ .author-homepage-scholar-source,
+    .finder-drop-modal > h2:first-child ~ .author-homepage-status {
+      margin-left: 19px;
+      margin-right: 19px;
+    }
+    .finder-drop-modal > h2:first-child ~ .finder-drop-actions {
+      margin-top: 16px;
+    }
+    .finder-drop-summary {
+      padding: 10px 11px;
+      border: 1px solid rgba(111, 125, 145, 0.14);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.7);
+      color: #526274;
+      font-size: 11px;
+      line-height: 1.46;
+    }
+    .finder-drop-summary strong {
+      color: #344054;
+      font-weight: 720;
+    }
+    .finder-drop-note {
+      color: #667085;
+      font-size: 11px;
       line-height: 1.45;
     }
     .finder-drop-paths {
-      max-height: 112px;
+      max-height: 104px;
       overflow: auto;
-      border: 1px solid var(--line);
+      border: 1px solid rgba(111, 125, 145, 0.16);
       border-radius: 8px;
-      background: #fbfcfe;
-      padding: 8px;
+      background: rgba(255, 255, 255, 0.82);
+      padding: 8px 9px;
       color: #475467;
-      font-size: 12px;
-      line-height: 1.35;
+      font-size: 10px;
+      line-height: 1.42;
       word-break: break-all;
     }
+    .finder-drop-paths > div + div { margin-top: 5px; }
     .finder-drop-actions {
       display: flex;
       justify-content: flex-end;
       gap: 8px;
-      margin-top: 14px;
+      margin-top: 0;
+      padding: 12px 16px 14px;
+      border-top: 1px solid rgba(111, 125, 145, 0.14);
+      background: rgba(245, 246, 248, 0.92);
     }
     .finder-drop-actions button {
-      min-height: 32px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: #fff;
+      min-height: 31px;
+      border: 1px solid rgba(111, 125, 145, 0.2);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
       color: var(--ink);
-      padding: 0 12px;
+      padding: 0 14px;
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 12px;
+      font-weight: 680;
     }
     .finder-drop-actions button.primary {
       border-color: var(--accent);
@@ -29747,7 +29859,19 @@ INDEX_HTML = """<!doctype html>
       border-radius: 5px;
     }
     .paper-file-row:hover { background: #f0f1f3; }
-    .paper-file-icon { width: 20px; height: 20px; }
+    .paper-file-icon {
+      width: 20px;
+      height: 20px;
+      display: block;
+      flex: 0 0 auto;
+    }
+    .paper-file-icon.file-type-icon {
+      background-image: var(--file-icon-url);
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
+      filter: drop-shadow(0 1px 0 rgba(15, 23, 42, 0.08));
+    }
     .paper-file-copy { min-width: 0; }
     .paper-file-name {
       display: block;
@@ -29898,6 +30022,7 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       display: grid;
       grid-template-columns: 34px minmax(0, 1fr) auto;
+      grid-template-rows: auto auto;
       align-items: center;
       gap: 8px;
       border: 1px solid #dfe5ec;
@@ -29927,6 +30052,8 @@ INDEX_HTML = """<!doctype html>
     }
     .library-resource-card:disabled { color: #9a6262; cursor: default; }
     .library-resource-icon-tile {
+      grid-column: 1;
+      grid-row: 1 / span 2;
       width: 32px;
       height: 32px;
       display: grid;
@@ -29935,8 +30062,13 @@ INDEX_HTML = """<!doctype html>
       background: #edf1f5;
     }
     .library-resource-card .paper-file-icon { width: 21px; height: 21px; }
-    .library-resource-card .library-resource-copy { min-width: 0; }
+    .library-resource-card .library-resource-copy {
+      min-width: 0;
+      display: contents;
+    }
     .library-resource-card .library-resource-name {
+      grid-column: 2;
+      grid-row: 1;
       display: block;
       overflow: hidden;
       font-size: 11px;
@@ -29945,13 +30077,19 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .library-resource-card .library-resource-meta {
+      grid-column: 2 / 4;
+      grid-row: 2;
+      width: 100%;
+      min-width: 0;
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       gap: 3px;
       overflow: hidden;
       margin-top: 3px;
       color: #7b8491;
       font-size: 9px;
+      text-align: right;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -29962,6 +30100,8 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .library-resource-state {
+      grid-column: 3;
+      grid-row: 1;
       align-self: start;
       border-radius: 8px;
       background: #dce9f5;
@@ -31999,10 +32139,10 @@ INDEX_HTML = """<!doctype html>
     .citation-settings-status.ok { color: #137333; }
     .citation-settings-status.err { color: #b42318; }
     .settings-modal.preferences-modal {
-      width: min(660px, calc(100vw - 44px));
+      width: min(680px, calc(100vw - 44px));
       border: 1px solid rgba(111, 125, 145, 0.22);
       border-radius: 14px;
-      background: #f7f8fa;
+      background: #f3f4f6;
       box-shadow: 0 26px 72px rgba(26, 38, 56, 0.22);
       overflow: hidden;
     }
@@ -32011,9 +32151,9 @@ INDEX_HTML = """<!doctype html>
       top: 0;
       z-index: 2;
       align-items: center;
-      padding: 17px 20px 14px;
+      padding: 16px 20px 13px;
       border-bottom: 1px solid rgba(111, 125, 145, 0.16);
-      background: rgba(247, 248, 250, 0.96);
+      background: rgba(243, 244, 246, 0.96);
       backdrop-filter: blur(16px);
     }
     .preferences-modal .settings-modal-head h2 {
@@ -32042,19 +32182,18 @@ INDEX_HTML = """<!doctype html>
     .preferences-modal .settings-modal-body {
       max-height: calc(100vh - 150px);
       overflow: auto;
-      padding: 4px 20px 18px;
+      padding: 16px 18px 18px;
     }
     .preferences-modal .citation-source-setting {
-      padding: 14px 0;
-      border: 0;
-      border-bottom: 1px solid rgba(111, 125, 145, 0.14);
-      border-radius: 0;
-      background: transparent;
+      padding: 14px 15px;
+      border: 1px solid rgba(111, 125, 145, 0.16);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.025);
     }
-    .preferences-modal .citation-source-setting:last-child { border-bottom: 0; }
-    .preferences-modal .citation-source-setting + .citation-source-setting { margin-top: 0; }
-    .preferences-modal .citation-source-setting-head { margin-bottom: 6px; }
-    .preferences-modal .citation-source-setting-head strong { font-size: 13px; }
+    .preferences-modal .citation-source-setting + .citation-source-setting { margin-top: 9px; }
+    .preferences-modal .citation-source-setting-head { margin-bottom: 5px; }
+    .preferences-modal .citation-source-setting-head strong { font-size: 12px; }
     .preferences-modal .citation-source-setting-head span { font-size: 11px; }
     .preferences-modal .citation-source-setting p { margin-bottom: 9px; font-size: 11px; }
     .preferences-modal .search,
@@ -32206,6 +32345,387 @@ INDEX_HTML = """<!doctype html>
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.92);
     }
+
+    /*
+     * Unified macOS utility-window language.
+     *
+     * Settings are intentionally rendered as quiet inset lists rather than a
+     * stack of web-style cards.  Alerts use the same materials, but retain a
+     * stronger information hierarchy and explicit destructive action.
+     */
+    .settings-backdrop {
+      padding: 22px;
+      background: rgba(45, 48, 54, 0.18);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    .settings-modal,
+    .settings-modal.preferences-modal {
+      width: min(610px, calc(100vw - 44px));
+      max-height: calc(100vh - 54px);
+      overflow: hidden;
+      border: 1px solid rgba(60, 60, 67, 0.22);
+      border-radius: 12px;
+      outline: none;
+      background: #ececee;
+      box-shadow:
+        0 20px 52px rgba(0, 0, 0, 0.20),
+        0 1px 1px rgba(0, 0, 0, 0.10);
+    }
+    .settings-modal.library-nav-modal { width: min(760px, calc(100vw - 44px)); }
+    .settings-modal.arxiv-scope-modal { width: min(700px, calc(100vw - 44px)); }
+    .settings-modal-head,
+    .preferences-modal .settings-modal-head {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      min-height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 42px 8px;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.18);
+      background: rgba(246, 246, 247, 0.94);
+      backdrop-filter: blur(18px) saturate(1.15);
+      -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    }
+    .settings-modal-head > div,
+    .preferences-modal .settings-modal-head > div {
+      min-width: 0;
+      text-align: center;
+    }
+    .settings-modal-head h2,
+    .preferences-modal .settings-modal-head h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.006em;
+    }
+    .settings-modal-head p,
+    .preferences-modal .settings-modal-head p {
+      max-width: 520px;
+      margin: 2px 0 0;
+      color: #6e6e73;
+      font-size: 10.5px;
+      line-height: 1.32;
+    }
+    .settings-modal-close,
+    .preferences-modal .settings-modal-close {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      width: 13px;
+      min-width: 13px;
+      height: 13px;
+      min-height: 13px;
+      transform: translateY(-50%);
+      overflow: hidden;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 50%;
+      outline: none;
+      background: #ff5f57;
+      box-shadow: none;
+      color: transparent;
+      font-size: 0;
+      font-weight: 700;
+      line-height: 1;
+      cursor: default;
+    }
+    .settings-modal-close::after,
+    .preferences-modal .settings-modal-close::after {
+      content: "×";
+      position: absolute;
+      inset: -1px 0 0;
+      display: grid;
+      place-items: center;
+      color: transparent;
+      font-size: 9px;
+      line-height: 1;
+    }
+    .settings-modal-close:hover,
+    .preferences-modal .settings-modal-close:hover {
+      background: #ff5f57;
+      color: transparent;
+    }
+    .settings-modal-close:hover::after,
+    .preferences-modal .settings-modal-close:hover::after { color: rgba(82, 0, 0, 0.72); }
+    .settings-modal-close:focus,
+    .preferences-modal .settings-modal-close:focus {
+      outline: none;
+      box-shadow: none;
+    }
+    .settings-modal-close:focus-visible,
+    .preferences-modal .settings-modal-close:focus-visible {
+      box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.24);
+    }
+    .settings-modal-body,
+    .preferences-modal .settings-modal-body {
+      max-height: calc(100vh - 100px);
+      overflow: auto;
+      padding: 12px 14px 14px;
+      background: #ececee;
+    }
+    .preferences-modal .citation-source-setting {
+      margin: 0;
+      padding: 10px 12px;
+      border: 0;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.13);
+      border-radius: 0;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: none;
+    }
+    .preferences-modal .citation-source-setting:first-child {
+      border-radius: 8px 8px 0 0;
+    }
+    .preferences-modal .citation-source-setting:last-child {
+      border-bottom: 0;
+      border-radius: 0 0 8px 8px;
+    }
+    .preferences-modal .citation-source-setting:only-child {
+      border-bottom: 0;
+      border-radius: 8px;
+    }
+    .preferences-modal .citation-source-setting + .citation-source-setting { margin-top: 0; }
+    .preferences-modal .citation-source-setting-head { margin-bottom: 4px; }
+    .preferences-modal .citation-source-setting-head strong {
+      color: #1d1d1f;
+      font-size: 11.5px;
+      font-weight: 650;
+    }
+    .preferences-modal .citation-source-setting-head span {
+      color: #77777d;
+      font-size: 10px;
+    }
+    .preferences-modal .citation-source-setting p {
+      margin: 0 0 8px;
+      color: #6e6e73;
+      font-size: 10.5px;
+      line-height: 1.38;
+    }
+    .preferences-modal .search,
+    .preferences-modal input[type="text"],
+    .preferences-modal input[type="password"],
+    .preferences-modal select,
+    .library-nav-form select,
+    .library-nav-form input,
+    .settings-modal.loader-modal .loader-form input,
+    .settings-modal.loader-modal .loader-form select {
+      min-height: 28px;
+      border: 1px solid rgba(60, 60, 67, 0.24);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.035);
+      color: #1d1d1f;
+      font-size: 11px;
+    }
+    .preferences-modal .smallbtn,
+    .settings-modal .smallbtn,
+    .theme-dialog-actions .smallbtn {
+      min-height: 28px;
+      border: 1px solid rgba(60, 60, 67, 0.20);
+      border-radius: 6px;
+      background: #f7f7f8;
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+      color: #2c2c2e;
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+    .preferences-modal .smallbtn:hover,
+    .settings-modal .smallbtn:hover,
+    .theme-dialog-actions .smallbtn:hover { background: #e4e4e6; }
+    .preferences-modal .smallbtn.primary,
+    .settings-modal .smallbtn.primary,
+    .theme-dialog-actions .smallbtn.primary {
+      border-color: #0a72d8;
+      background: #0a72d8;
+      color: #fff;
+    }
+    .preferences-modal .smallbtn.primary:hover,
+    .settings-modal .smallbtn.primary:hover,
+    .theme-dialog-actions .smallbtn.primary:hover { background: #0868c6; }
+    .citation-settings-status {
+      min-height: 15px;
+      margin-top: 6px;
+      color: #77777d;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+    .pdf-rename-preview {
+      min-height: 28px;
+      border: 0;
+      border-radius: 6px;
+      background: rgba(118, 118, 128, 0.10);
+      padding: 6px 8px;
+      color: #48484a;
+      font-size: 10.5px;
+    }
+    .arxiv-scope-tree {
+      gap: 0;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+    .arxiv-scope-primary {
+      overflow: visible;
+      border: 0;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.13);
+      border-radius: 0;
+      background: transparent;
+    }
+    .arxiv-scope-primary:last-child { border-bottom: 0; }
+    .arxiv-scope-primary-title {
+      padding: 8px 10px 6px;
+      border: 0;
+      color: #3a3a3c;
+      font-size: 10.5px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .arxiv-scope-groups { gap: 0 8px; padding: 0 5px 5px; }
+    .arxiv-scope-option,
+    .field-settings-option {
+      min-height: 28px;
+      padding: 3px 5px;
+      border-radius: 5px;
+      color: #3a3a3c;
+      font-size: 10.5px;
+    }
+    .arxiv-scope-option:hover,
+    .field-settings-option:hover { background: rgba(0, 122, 255, 0.08); }
+    .field-settings-grid {
+      gap: 0 12px;
+      margin-top: 7px;
+      padding: 5px;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+    .quick-look-mode-options {
+      gap: 0;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+    .quick-look-mode-option {
+      gap: 8px;
+      padding: 8px 10px;
+      border: 0;
+      border-bottom: 1px solid rgba(60, 60, 67, 0.13);
+      border-radius: 0;
+      background: transparent;
+    }
+    .quick-look-mode-option:last-child { border-bottom: 0; }
+    .quick-look-mode-option:hover { background: rgba(60, 60, 67, 0.045); }
+    .quick-look-mode-option:has(input:checked) {
+      border-color: rgba(60, 60, 67, 0.13);
+      background: rgba(0, 122, 255, 0.09);
+    }
+    .quick-look-mode-copy strong { color: #1d1d1f; font-size: 11px; }
+    .quick-look-mode-copy span { color: #6e6e73; font-size: 10px; line-height: 1.35; }
+    .field-settings-note {
+      margin-top: 9px;
+      color: #6e6e73;
+      font-size: 10px;
+    }
+    .library-nav-folder-picker {
+      border-color: rgba(60, 60, 67, 0.18);
+      border-radius: 7px;
+    }
+
+    /* Loader is a macOS utility window, not a branded modal card. */
+    .settings-modal.loader-modal {
+      border: 1px solid rgba(60, 60, 67, 0.22);
+      border-radius: 12px;
+      background: #ececee;
+      box-shadow: 0 20px 52px rgba(0, 0, 0, 0.20);
+    }
+    .settings-modal.loader-modal .settings-modal-head {
+      min-height: 46px;
+      padding: 9px 42px 8px;
+      background: rgba(246, 246, 247, 0.94);
+    }
+    .settings-modal.loader-modal .settings-modal-head h2 { font-size: 14px; }
+    .settings-modal.loader-modal .settings-modal-head p { font-size: 10.5px; }
+    .settings-modal.loader-modal .loader-panel { gap: 8px; }
+    .settings-modal.loader-modal .loader-history,
+    .settings-modal.loader-modal .loader-target-pill {
+      border-color: rgba(60, 60, 67, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.78);
+      box-shadow: none;
+    }
+
+    /* macOS-style alert sheets: compact hierarchy, flat message, inset paths. */
+    .finder-drop-modal-backdrop {
+      background: rgba(45, 48, 54, 0.18);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    .finder-drop-modal {
+      width: min(470px, 100%);
+      border: 1px solid rgba(60, 60, 67, 0.22);
+      border-radius: 12px;
+      outline: none;
+      background: #f7f7f8;
+      box-shadow: 0 18px 46px rgba(0, 0, 0, 0.19), 0 1px 1px rgba(0, 0, 0, 0.10);
+    }
+    .finder-drop-modal h2 { font-size: 14px; line-height: 1.28; }
+    .finder-drop-modal p { color: #636366; font-size: 11px; line-height: 1.42; }
+    .finder-drop-modal-head { padding: 15px 17px 8px; }
+    .finder-drop-modal-body { gap: 8px; padding: 0 17px 13px; }
+    .finder-drop-modal > h2:first-child { padding: 15px 17px 8px; }
+    .finder-drop-modal > h2:first-child ~ p { margin: 0 17px 8px; }
+    .finder-drop-summary {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #636366;
+      font-size: 11px;
+      line-height: 1.44;
+    }
+    .finder-drop-summary strong { color: #3a3a3c; font-weight: 650; }
+    .finder-drop-note { color: #737378; font-size: 10.5px; line-height: 1.4; }
+    .finder-drop-paths {
+      max-height: 96px;
+      border: 1px solid rgba(60, 60, 67, 0.16);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.84);
+      padding: 7px 8px;
+      color: #48484a;
+      font-size: 9.5px;
+      line-height: 1.4;
+    }
+    .finder-drop-actions {
+      gap: 7px;
+      padding: 10px 13px 12px;
+      border-top: 1px solid rgba(60, 60, 67, 0.14);
+      background: rgba(235, 235, 237, 0.58);
+    }
+    .finder-drop-actions button {
+      min-height: 28px;
+      border: 1px solid rgba(60, 60, 67, 0.20);
+      border-radius: 6px;
+      background: #f8f8f9;
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+      padding: 0 13px;
+      color: #2c2c2e;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .finder-drop-actions button.primary {
+      border-color: #0a72d8;
+      background: #0a72d8;
+      color: #fff;
+    }
+    .finder-drop-actions button.primary.danger {
+      border-color: #c62f2f;
+      background: #c62f2f;
+    }
+    .finder-drop-actions button:focus { outline: none; box-shadow: none; }
+    .finder-drop-actions button:focus-visible { box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.24); }
 
     /* Shared flat visual language for the primary reading surfaces. */
     .app {
@@ -35131,6 +35651,16 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function focusDialogSurface(backdrop) {
+      if (!backdrop) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && !backdrop.contains(active)) active.blur();
+      const surface = backdrop.querySelector(".settings-modal, .finder-drop-modal");
+      if (!(surface instanceof HTMLElement)) return;
+      if (!surface.hasAttribute("tabindex")) surface.setAttribute("tabindex", "-1");
+      window.requestAnimationFrame(() => surface.focus({preventScroll: true}));
+    }
+
     function openLibraryLoader() {
       if (!IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
         window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "open"});
@@ -35139,6 +35669,7 @@ INDEX_HTML = """<!doctype html>
       loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
+      focusDialogSurface($("libraryLoaderBackdrop"));
     }
 
     function closeLibraryLoader() {
@@ -37169,56 +37700,35 @@ INDEX_HTML = """<!doctype html>
       const metadataCount = Number(preview.metadata_paper_count || 0);
       const shortcutOnlyCount = Number(preview.shortcut_only_paper_count || 0);
       const orphanPaths = Array.isArray(preview.orphan_local_copy_paths) ? preview.orphan_local_copy_paths : [];
-      const pathRows = pathList.length
-        ? `
-            <p>The following local copy file${pathList.length === 1 ? "" : "s"} will be moved to macOS Trash:</p>
-            <div class="finder-drop-paths recycle-delete-paths">
-              ${pathList.map((path) => `<div><code>${escapeHtml(path)}</code></div>`).join("")}
-            </div>
-          `
-        : `<p>No local copy files were found, but ${metadataCount} paper record${metadataCount === 1 ? "" : "s"} and related metadata/source/resource records will be removed.</p>`;
-      const shortcutOnlyNote = shortcutOnlyCount
-        ? `<p>${shortcutOnlyCount} Recycle shortcut${shortcutOnlyCount === 1 ? "" : "s"} still used outside Recycle will only be removed from Recycle.</p>`
-        : "";
-      const orphanNote = orphanPaths.length
-        ? `<p>${orphanPaths.length} unlinked local file${orphanPaths.length === 1 ? "" : "s"} already left in the application Recycle folder will also be moved to macOS Trash.</p>`
-        : "";
-      return new Promise((resolve) => {
-        document.querySelector(".recycle-delete-confirm-backdrop")?.remove();
-        const backdrop = document.createElement("div");
-        backdrop.className = "finder-drop-modal-backdrop recycle-delete-confirm-backdrop";
-        backdrop.innerHTML = `
-          <div class="finder-drop-modal recycle-delete-confirm" role="dialog" aria-modal="true" aria-labelledby="recycleDeleteTitle">
-            <h2 id="recycleDeleteTitle">Delete ${escapeHtml(targetLabel)} permanently from Recycle?</h2>
-            <p>This will remove ${metadataCount} paper record${metadataCount === 1 ? "" : "s"} that are no longer used outside Recycle, including related metadata and source/resource records.</p>
-            ${pathRows}
-            ${orphanNote}
-            <p>Original imported source files outside Gewu Insight will not be touched.</p>
-            ${shortcutOnlyNote}
-            <div class="finder-drop-actions">
-              <button type="button" data-confirm="cancel">Cancel</button>
-              <button type="button" class="primary danger" data-confirm="delete">Delete</button>
-            </div>
-          </div>
-        `;
-        document.body.appendChild(backdrop);
-        const finish = (confirmed) => {
-          backdrop.remove();
-          window.removeEventListener("keydown", onKeyDown);
-          resolve(Boolean(confirmed));
-        };
-        const onKeyDown = (event) => {
-          if (event.key === "Escape") finish(false);
-          if (event.key === "Enter") finish(true);
-        };
-        backdrop.addEventListener("click", (event) => {
-          if (event.target === backdrop) finish(false);
-        });
-        backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
-        backdrop.querySelector('[data-confirm="delete"]')?.addEventListener("click", () => finish(true));
-        window.addEventListener("keydown", onKeyDown);
-        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
-      });
+      const lines = [
+        `Delete ${targetLabel} permanently?`,
+        "",
+        `${metadataCount} paper record${metadataCount === 1 ? "" : "s"} no longer used outside Recycle will be removed with related metadata and source/resource records.`
+      ];
+      if (pathList.length) {
+        lines.push(
+          "",
+          `Managed local cop${pathList.length === 1 ? "y" : "ies"} to move to macOS Trash:`,
+          ...pathList
+        );
+      } else {
+        lines.push("", "No managed local copy files were found.");
+      }
+      if (orphanPaths.length) {
+        lines.push(
+          "",
+          `${orphanPaths.length} unlinked local file${orphanPaths.length === 1 ? "" : "s"} already in the application Recycle folder will also move to macOS Trash:`,
+          ...orphanPaths
+        );
+      }
+      lines.push("", "Original imported source files outside Gewu Insight will not be touched.");
+      if (shortcutOnlyCount) {
+        lines.push(
+          "",
+          `${shortcutOnlyCount} shortcut${shortcutOnlyCount === 1 ? "" : "s"} still used outside Recycle will only be removed from Recycle.`
+        );
+      }
+      return Promise.resolve(window.confirm(lines.join("\\n")));
     }
 
     function libraryFolderContentCounts(folderId) {
@@ -41536,7 +42046,7 @@ INDEX_HTML = """<!doctype html>
       const backdrop = $("libraryNavBackdrop");
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
-      window.setTimeout(() => (isWorkspace ? $("librarySpaceName") : $("libraryNavFolderPicker"))?.focus(), 0);
+      focusDialogSurface(backdrop);
     }
 
     function closeLibraryNavigationDialog() {
@@ -47249,14 +47759,19 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryFilePreviewCard(root, paper, message = "") {
       const path = paperNativePath(paper || {});
       const size = fileSizeLabel(paper?.file_size_bytes);
+      const format = importedFileFormatLabel(paper);
+      const extension = (libraryFileExtension(paper) || "file").slice(0, 8);
       root.innerHTML = `
         <div class="library-file-preview">
           <div class="library-file-preview-card">
-            <strong>${publicationTitleMarkup(libraryFilePreviewTitle(paper))}</strong>
-            <span>${escapeHtml([importedFileFormatLabel(paper), size].filter(Boolean).join(" · "))}</span>
-            ${message ? `<span>${escapeHtml(message)}</span>` : ""}
-            <span>${escapeHtml(path)}</span>
-            ${path ? `<button class="action" type="button" data-open-native-preview>Open File</button>` : ""}
+            <span class="library-file-preview-card-icon" aria-hidden="true">${escapeHtml(extension)}</span>
+            <div class="library-file-preview-card-copy">
+              <div class="library-file-preview-card-title">${publicationTitleMarkup(libraryFilePreviewTitle(paper))}</div>
+              <div class="library-file-preview-card-meta">${escapeHtml([format, size].filter(Boolean).join(" · "))}</div>
+              ${message ? `<div class="library-file-preview-card-message">${escapeHtml(message)}</div>` : ""}
+            </div>
+            ${path ? `<div class="library-file-preview-card-path">${escapeHtml(path)}</div>` : ""}
+            ${path ? `<div class="library-file-preview-card-actions"><button class="action" type="button" data-open-native-preview>Open File</button></div>` : ""}
           </div>
         </div>
       `;
@@ -50994,7 +51509,7 @@ INDEX_HTML = """<!doctype html>
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       updateScholarCooldownControls();
-      window.setTimeout(() => $("authorMonitorQuery")?.focus(), 0);
+      focusDialogSurface(backdrop);
     }
 
     function closeAuthorMonitorDialog() {
@@ -51350,7 +51865,7 @@ INDEX_HTML = """<!doctype html>
         backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
         backdrop.querySelector('[data-confirm="backfill"]')?.addEventListener("click", () => finish(true));
         window.addEventListener("keydown", onKeyDown);
-        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
+        focusDialogSurface(backdrop);
       });
     }
 
@@ -51431,7 +51946,7 @@ INDEX_HTML = """<!doctype html>
         backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
         backdrop.querySelector('[data-confirm="remove"]')?.addEventListener("click", () => finish(true));
         window.addEventListener("keydown", onKeyDown);
-        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
+        focusDialogSurface(backdrop);
       });
     }
 
@@ -52559,6 +53074,7 @@ INDEX_HTML = """<!doctype html>
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
       $("fieldSettingsStatus").textContent = "Loading field settings...";
       $("fieldSettingsStatus").className = "citation-settings-status";
       try {
@@ -52615,6 +53131,7 @@ INDEX_HTML = """<!doctype html>
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
       $("quickLookSettingsStatus").textContent = "Loading Quick Look settings...";
       $("quickLookSettingsStatus").className = "citation-settings-status";
       try {
@@ -52667,6 +53184,7 @@ INDEX_HTML = """<!doctype html>
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
       $("pdfRenameSettingsStatus").textContent = "Loading PDF rename settings...";
       $("pdfRenameSettingsStatus").className = "citation-settings-status";
       try {
@@ -52682,8 +53200,6 @@ INDEX_HTML = """<!doctype html>
         $("pdfRenameSettingsStatus").textContent = error.message || "Could not load PDF rename settings";
         $("pdfRenameSettingsStatus").className = "citation-settings-status err";
       }
-      $("pdfRenameTemplateInput")?.focus({preventScroll: true});
-      $("pdfRenameTemplateInput")?.select?.();
     }
 
     function closePdfRenameSettings() {
@@ -52742,6 +53258,7 @@ INDEX_HTML = """<!doctype html>
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
       $("citationSettingsStatus").textContent = "Loading citation settings...";
       $("citationSettingsStatus").className = "citation-settings-status";
       $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
@@ -52772,7 +53289,6 @@ INDEX_HTML = """<!doctype html>
         $("semanticScholarCitationSettingsStatus").textContent = error.message || "Could not load Semantic Scholar settings";
         $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
       }
-      $("openalexKeyInput")?.focus({preventScroll: true});
     }
 
     function closeCitationSettings() {
@@ -52788,6 +53304,7 @@ INDEX_HTML = """<!doctype html>
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
       $("arxivSettingsStatus").textContent = "Loading arXiv subject archives...";
       $("arxivSettingsStatus").className = "citation-settings-status";
       try {
@@ -53290,7 +53807,7 @@ INDEX_HTML = """<!doctype html>
       updateThemeKeywordPromptButton();
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
-      window.setTimeout(() => $("themeGroupName")?.focus(), 0);
+      focusDialogSurface(backdrop);
     }
 
     function normalizedThemeSubjectName() {
@@ -53516,7 +54033,7 @@ INDEX_HTML = """<!doctype html>
         backdrop.querySelector('[data-confirm="cancel"]')?.addEventListener("click", () => finish(false));
         backdrop.querySelector('[data-confirm="delete"]')?.addEventListener("click", () => finish(true));
         window.addEventListener("keydown", onKeyDown);
-        backdrop.querySelector('[data-confirm="cancel"]')?.focus({preventScroll: true});
+        focusDialogSurface(backdrop);
       });
     }
 
