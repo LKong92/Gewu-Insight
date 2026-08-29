@@ -1275,7 +1275,7 @@ The Library uses a Finder-style column view, but the database---not the visible 
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
 
 \begin{GewuCaption}
-Library and Paper Files. The selected paper remains in the managed folder hierarchy while its current PDF and earlier version appear together as one paper bundle. This and the following guide images use a disposable documentation profile populated through the same supported public discovery and profile interfaces as the app; the production database and credentials are not included.
+Library and Paper Files. The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and article figure stay connected in the adjacent views.
 \end{GewuCaption}
 
 \subsection{Read the columns from left to right}\label{read-the-columns-from-left-to-right}
@@ -2193,7 +2193,7 @@ My Publications keeps a managed publication list, citation sources, author-role 
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/my-publications.png}\end{center}
 
 \begin{GewuCaption}
-My Publications. A profile, managed publication list, citation columns, and authorship summary share one view. The person and metrics shown here are demonstration data, not a signed-in account.
+My Publications. The active profile, DOI-resolved publication list, citation evidence, article figure, and authorship summary share one view.
 \end{GewuCaption}
 
 \subsection{Choose your profile}\label{choose-your-profile}
@@ -2261,7 +2261,7 @@ Journal Monitor collects papers for a selected publication date and lets you nar
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/journal-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Journal Monitor. Calendar, journal groups, field filters, and paper cards describe a stored day after a normal product fetch into the disposable documentation profile. Capturing the stored result does not make a new publisher request.
+Journal Monitor. Nature is selected for a stored publication date; the paper cards retain their metadata and loaded scientific figures while calendar, journal, and field controls remain available.
 \end{GewuCaption}
 
 \subsection{Refresh a date}\label{refresh-a-date}
@@ -2349,7 +2349,7 @@ Subject Monitor discovers papers for reusable topics. Each subject stores a name
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Subject Monitor. The active subject stays selected across dates, and the calendar counts belong to that subject rather than the total across every topic.
+Subject Monitor. Superconductivity remains the active subject, its calendar counts are subject-specific, and the refreshed result cards include matching evidence and available figures.
 \end{GewuCaption}
 
 \subsection{Create a subject}\label{create-a-subject}
@@ -2415,7 +2415,7 @@ Author Monitor follows researchers and separates a first-import baseline from ne
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/author-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Author Monitor. Locally stored demonstration portraits keep the monitored-author list stable without contacting a profile site when the view opens.
+Author Monitor. Hong Ding\textquotesingle s profile is selected; locally cached portraits keep the monitored-author list stable while the publication history and current paper details remain visible together.
 \end{GewuCaption}
 
 \subsection{Add an author}\label{add-an-author}
@@ -2514,7 +2514,121 @@ Credentials are local-only: store them in local SQLite or approved environment v
 
 \subsection{See also}\label{see-also-32}
 
-\hyperref[privacy]{Local Data and Privacy} · \hyperref[loader-maintenance]{Refresh an Imported Library} · \hyperref[network-access]{Publisher and Network Access}
+\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[field-settings]{Field Settings} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[network-access]{Publisher and Network Access}
+
+\section{arXiv Scope Settings}\label{arxiv-scope-settings}
+
+\begin{GewuLead}
+Choose one or more arXiv subject archives for discovery. Selections can span several research fields or combine several groups within one field.
+\end{GewuLead}
+
+\subsection{Open arXiv Scope Settings}\label{open-arxiv-scope-settings}
+
+Choose \textbf{Setting \textgreater{} arXiv Scope Settings}. The window lists every supported primary subject and its archive groups. Select at least one group, then choose \textbf{Save}.
+
+\subsection{Understand the hierarchy}\label{understand-the-hierarchy}
+
+The first level identifies a broad arXiv subject such as Physics, Computer Science, Mathematics, Economics, Electrical Engineering and Systems Science, Quantitative Biology, Quantitative Finance, or Statistics. Each checkbox represents an archive group beneath that subject. For example, \textbf{Physics \textgreater{} Condensed Matter} includes all \texttt{cond-mat.*} leaf categories.
+
+You may select several groups under Physics, or combine groups across primary subjects. Categories shared by more than one scope are fetched only once.
+
+\subsection{Default and saved behavior}\label{default-and-saved-behavior}
+
+\begin{itemize}
+\tightlist
+\item
+  The default selection is only \textbf{Physics \textgreater{} Condensed Matter}.
+\item
+  \textbf{Restore Defaults} changes the selection in the window; choose \textbf{Save} to apply it.
+\item
+  Saving changes future arXiv refresh coverage and rebuilds the available \textbf{Preprint Filter} categories.
+\item
+  Previously saved papers remain in SQLite. Changing scopes never deletes earlier discoveries.
+\end{itemize}
+
+\begin{quote}
+\textbf{Note}
+
+The category checkboxes in Journal Monitor are display filters. They do not narrow the discovery scope selected here.
+\end{quote}
+
+\subsection{See also}\label{see-also-33}
+
+\hyperref[journal-monitor]{Journal Monitor} · \hyperref[field-settings]{Field Settings} · \hyperref[citation-settings]{Citation Settings} · \hyperref[network-access]{Publisher and Network Access}
+
+\section{Field Settings}\label{field-settings}
+
+\begin{GewuLead}
+Gewu Insight keeps a detailed canonical field classification while letting each workspace decide which fields deserve their own visible filter.
+\end{GewuLead}
+
+\subsection{Open Field Settings}\label{open-field-settings}
+
+Choose \textbf{Setting \textgreater{} Field Settings}. Select a field to show it as a separate filter and label. Clear it to collect that field under \textbf{Other Fields}.
+
+\subsection{Default organization}\label{default-organization}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+\begin{minipage}[b]{\linewidth}\raggedright
+Shown separately by default
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Grouped under Other Fields by default
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\begin{minipage}[t]{\linewidth}\raggedright
+Physics\\
+Quantum Information\\
+Materials Science\\
+Chemistry\strut
+\end{minipage} & \begin{minipage}[t]{\linewidth}\raggedright
+Astronomy \& Astrophysics\\
+Particle \& Nuclear Physics\\
+Mathematics\\
+Computer Science\\
+Biology \& Medicine\\
+Statistics\\
+Economics \& Finance\\
+Electrical Engineering\\
+Earth \& Environmental Science\\
+Social Sciences\\
+Unclassified records\strut
+\end{minipage} \\
+\end{longtable}
+\GewuTableEnd
+}
+
+\subsection{How the visible filters behave}\label{how-the-visible-filters-behave}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Other Fields} appears immediately above \textbf{All Fields}.
+\item
+  \textbf{All Fields} is always the final choice and includes every classified paper.
+\item
+  Changing this setting updates field filters, counts, badges, and Paper Details across Journal Monitor, Subject Monitor, Library, My Publications, and Author Monitor.
+\item
+  The setting changes presentation, not evidence. Canonical field assignments remain in SQLite and become visible again if a field is later selected.
+\end{itemize}
+
+\begin{quote}
+\textbf{Note}
+
+Use \textbf{Restore Defaults} to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in \textbf{arXiv Scope Settings}.
+\end{quote}
+
+\subsection{See also}\label{see-also-34}
+
+\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Citation Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
 
 \section{Naming and PDF Rename Rules}\label{naming}
 
@@ -2564,7 +2678,7 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 Changing a Paper Files role or choosing \textbf{Use} does not rename that file. A rename occurs only through a naming or rename action.
 \end{quote}
 
-\subsection{See also}\label{see-also-33}
+\subsection{See also}\label{see-also-35}
 
 \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
 
@@ -2608,7 +2722,7 @@ When the same work appears in more than one Library folder, those locations can 
 Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.
 \end{quote}
 
-\subsection{See also}\label{see-also-34}
+\subsection{See also}\label{see-also-36}
 
 \hyperref[storage-reference]{Storage Reference} · \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[paper-files]{Understand Paper Files}
 
@@ -2640,7 +2754,7 @@ Metadata refresh, citation counts, journal/subject/author discovery, profile ima
 
 Optional service credentials belong only in Citation Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.
 
-\subsection{See also}\label{see-also-35}
+\subsection{See also}\label{see-also-37}
 
 \hyperref[citation-settings]{Citation Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
 
@@ -2735,7 +2849,7 @@ Mark & Role \\
 
 Together the three registers establish the product\textquotesingle s visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.
 
-\subsection{See also}\label{see-also-36}
+\subsection{See also}\label{see-also-38}
 
 \hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup and Web Cache}
 
@@ -2774,7 +2888,7 @@ Shortcut & Action \\
 
 Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.
 
-\subsection{See also}\label{see-also-37}
+\subsection{See also}\label{see-also-39}
 
 \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
 
@@ -2812,7 +2926,7 @@ Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, 
 Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access control. Use your authorized browser session or attach a file you obtained legitimately.
 \end{quote}
 
-\subsection{See also}\label{see-also-38}
+\subsection{See also}\label{see-also-40}
 
 \hyperref[journal-monitor]{Journal Monitor} · \hyperref[download-sync]{Download and Sync Versions} · \hyperref[troubleshooting]{Troubleshooting}
 
@@ -2848,7 +2962,7 @@ Choose \textbf{Setting \textgreater{} Clear Web Cache} if the running window vis
 
 Web cache and macOS app identity are separate. Clearing Web Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt \textbf{Gewu Insight.app}. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.
 
-\subsection{See also}\label{see-also-39}
+\subsection{See also}\label{see-also-41}
 
 \hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
 
@@ -2926,7 +3040,7 @@ This is expected. Choose another version with \textbf{Use} first, or enable auto
 Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.
 \end{quote}
 
-\subsection{See also}\label{see-also-40}
+\subsection{See also}\label{see-also-42}
 
 \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup and Web Cache} · \hyperref[network-access]{Publisher and Network Access}
 
@@ -2975,7 +3089,7 @@ SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF o
 Do not delete, rebuild, or ``clean'' the database because a generated JSON file looks stale. Diagnose the selected record and local path first.
 \end{quote}
 
-\subsection{See also}\label{see-also-41}
+\subsection{See also}\label{see-also-43}
 
 \hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy}
 

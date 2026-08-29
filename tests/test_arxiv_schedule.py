@@ -139,6 +139,37 @@ class ArxivScheduleTests(unittest.TestCase):
 
         self.assertEqual(request.call_count, 2)
 
+    def test_latest_listing_cache_and_url_are_scoped_by_archive(self):
+        arxiv.ARXIV_LATEST_LISTING_CACHE.clear()
+        response = SimpleNamespace(text=LATEST_LISTING_HTML)
+        with patch.object(arxiv, "request_with_retries", return_value=response) as request:
+            arxiv.fetch_latest_arxiv_listing(local_tz=ZoneInfo("Asia/Shanghai"), archive="cond-mat")
+            arxiv.fetch_latest_arxiv_listing(local_tz=ZoneInfo("Asia/Shanghai"), archive="quant-ph")
+            arxiv.fetch_latest_arxiv_listing(local_tz=ZoneInfo("Asia/Shanghai"), archive="quant-ph")
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].args[1], "https://arxiv.org/list/cond-mat/new")
+        self.assertEqual(request.call_args_list[1].args[1], "https://arxiv.org/list/quant-ph/new")
+
+    def test_subject_hierarchy_defaults_to_physics_condensed_matter(self):
+        primary, group = arxiv.arxiv_subject_group("", "")
+
+        self.assertEqual(primary["code"], "physics")
+        self.assertEqual(group["code"], "cond-mat")
+        self.assertIn("cond-mat.supr-con", arxiv.arxiv_categories_for_subject("physics", "cond-mat"))
+        self.assertEqual(
+            arxiv.arxiv_display_categories_for_subject("physics", "cond-mat"),
+            ["cond-mat.mes-hall", "cond-mat.str-el", "cond-mat.supr-con"],
+        )
+
+    def test_subject_hierarchy_supports_other_primary_and_secondary_scopes(self):
+        primary, group = arxiv.arxiv_subject_group("computer_science", "cs")
+
+        self.assertEqual(primary["label"], "Computer Science")
+        self.assertEqual(group["label"], "Computer Science")
+        self.assertIn("cs.AI", arxiv.arxiv_categories_for_subject("computer_science", "cs"))
+        self.assertEqual(arxiv.arxiv_archive_for_categories(["cs.AI", "cs.LG"]), "cs")
+
     def test_subject_query_filters_the_shared_latest_listing_without_export_api(self):
         _listing_date, papers = arxiv.parse_arxiv_latest_listing(
             LATEST_LISTING_HTML,

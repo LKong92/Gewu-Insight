@@ -11,6 +11,58 @@ Gewu Insight is not only an RSS reader, a PDF folder, or five unrelated pages.
 It is a personal research information infrastructure in which discovery becomes
 durable, file-backed, and auditable.
 
+<p align="center">
+  <img src="assets/gewu-insight-app-icon.png" width="112" alt="Gewu Insight app icon">
+</p>
+
+## A workspace built around the research object
+
+The interface keeps organization, evidence, and discovery close together. A
+paper can move from a monitor into the Library, retain its source provenance,
+gain identifiers and file versions, appear in a Space or My Publications, and
+still resolve to the same persistent paper object.
+
+<p align="center">
+  <img src="assets/user-guide/screenshots/library-paper-files.png" width="920" alt="Gewu Insight Library with Paper Files">
+</p>
+
+<p align="center"><em>The Library presents real folders and files while Paper Files keeps the current publication, earlier versions, and attachments connected.</em></p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/user-guide/screenshots/space-workspace.png" alt="A Gewu Insight Space">
+      <br><strong>Spaces</strong><br>
+      Independent visible workspaces reuse the same paper identities and file
+      relationships without duplicating the underlying research object.
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/user-guide/screenshots/my-publications.png" alt="My Publications in Gewu Insight">
+      <br><strong>My Publications</strong><br>
+      Personal authorship roles, citation evidence, ordering, comments, and
+      exports stay connected to the shared paper record.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="assets/user-guide/screenshots/journal-monitor.png" alt="Journal Monitor in Gewu Insight">
+      <br><strong>Journal Monitor</strong><br>
+      Browse venue and arXiv updates by date, source, field, and journal while
+      preserving paper-level provenance.
+    </td>
+    <td width="50%" valign="top">
+      <img src="assets/user-guide/screenshots/subject-monitor.png" alt="Subject Monitor in Gewu Insight">
+      <br><strong>Subject Monitor</strong><br>
+      Follow reusable research topics with subject-specific calendar counts,
+      explicit refresh state, and durable results.
+    </td>
+  </tr>
+</table>
+
+The complete illustrated workflow—including Author Monitor, file versions,
+portable export, backup, settings, and keyboard navigation—is available in the
+[offline User Guide PDF](paper_monitor/Gewu_Insight_User_Guide.pdf).
+
 ## Platform support
 
 Gewu Insight separates a portable Python, SQLite, and web-interface core from
@@ -302,6 +354,9 @@ arXiv, scholarly profiles, feeds, and publisher pages where supported.
   paywalls, CAPTCHA, browser verification, or access controls.
 - OpenAlex, Semantic Scholar, and NASA ADS credentials can be managed in
   Citation Settings.
+- arXiv discovery coverage is managed separately in **Setting > arXiv Scope
+  Settings**. One or more archive groups can be selected across primary
+  subjects; the default is Physics > Condensed Matter.
 - Credentials are local configuration. Do not write keys into source code,
   logs, tests, commits, screenshots, or issue reports.
 

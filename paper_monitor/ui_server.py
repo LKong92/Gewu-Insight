@@ -69,7 +69,27 @@ from .monitor import fetch_one_arxiv_preprint_source, run_journal_monitor
 from .pdf_utils import is_valid_pdf_bytes, is_valid_pdf_file, merge_pdfs
 from .reporting import section_badge_background, section_color
 from .sources.ads import fetch_ads_record_by_identifier, test_ads_token
-from .sources.arxiv import ARXIV_DEFAULT_CATEGORIES, ARXIV_JOURNAL_NAME, fetch_arxiv_by_id, fetch_arxiv_by_ids, fetch_arxiv_condensed_matter, latest_ready_arxiv_announcement, local_arxiv_announcement_days, strip_arxiv_version, wait_for_arxiv_rate_limit
+from .sources.arxiv import (
+    ARXIV_DEFAULT_CATEGORIES,
+    ARXIV_JOURNAL_NAME,
+    DEFAULT_ARXIV_SCOPE_IDS,
+    DEFAULT_ARXIV_PRIMARY_SUBJECT,
+    DEFAULT_ARXIV_SECONDARY_SUBJECT,
+    arxiv_categories_for_scopes,
+    arxiv_display_categories_for_scopes,
+    arxiv_scope_groups,
+    arxiv_scope_id,
+    arxiv_subject_group,
+    arxiv_subject_hierarchy_payload,
+    normalize_arxiv_scope_ids,
+    fetch_arxiv_by_id,
+    fetch_arxiv_by_ids,
+    fetch_arxiv_condensed_matter,
+    latest_ready_arxiv_announcement,
+    local_arxiv_announcement_days,
+    strip_arxiv_version,
+    wait_for_arxiv_rate_limit,
+)
 from .sources.crossref import fetch_crossref_topic, normalize_crossref_item, search_crossref_works
 from .sources.openalex import (
     OPENALEX_AUTHOR_EXCLUDED_SOURCE_NAMES,
@@ -274,6 +294,32 @@ AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING = "auto_arxiv_monitor_last_announce
 AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING = "auto_arxiv_monitor_last_attempt"
 AUTO_ARXIV_MONITOR_STATUS_SETTING = "auto_arxiv_monitor_status"
 AUTO_ARXIV_METADATA_RETRY_SETTING = "auto_arxiv_metadata_retry_state"
+ARXIV_PRIMARY_SUBJECT_SETTING = "arxiv_primary_subject"
+ARXIV_SECONDARY_SUBJECT_SETTING = "arxiv_secondary_subject"
+ARXIV_SCOPE_GROUPS_SETTING = "arxiv_scope_groups_v1"
+FIELD_STANDALONE_SETTING = "field_standalone_codes_v1"
+FIELD_DEFINITIONS = (
+    ("physics", "Physics"),
+    ("quantum_information", "Quantum Information"),
+    ("astronomy_astrophysics", "Astronomy & Astrophysics"),
+    ("particle_nuclear_physics", "Particle & Nuclear Physics"),
+    ("materials", "Materials Science"),
+    ("chemistry", "Chemistry"),
+    ("mathematics", "Mathematics"),
+    ("computer_science", "Computer Science"),
+    ("biology_medicine", "Biology & Medicine"),
+    ("statistics", "Statistics"),
+    ("economics_finance", "Economics & Finance"),
+    ("electrical_engineering", "Electrical Engineering"),
+    ("earth_environmental_science", "Earth & Environmental Science"),
+    ("social_sciences", "Social Sciences"),
+)
+DEFAULT_STANDALONE_FIELDS = (
+    "physics",
+    "quantum_information",
+    "materials",
+    "chemistry",
+)
 AUTO_ARXIV_MONITOR_STARTUP_DELAY_SECONDS = 15
 AUTO_ARXIV_MONITOR_POLL_SECONDS = 60
 AUTO_ARXIV_MONITOR_RETRY_SECONDS = 15 * 60
@@ -572,6 +618,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/citation":
                 self.handle_get_citation_settings()
                 return
+            if parsed.path == "/api/settings/arxiv":
+                self.handle_get_arxiv_settings()
+                return
+            if parsed.path == "/api/settings/fields":
+                self.handle_get_field_settings()
+                return
             if parsed.path == "/api/my-publications":
                 self.handle_my_publications(parse_qs(parsed.query))
                 return
@@ -717,6 +769,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/citation":
                 self.handle_set_citation_settings(payload)
+                return
+            if parsed.path == "/api/settings/arxiv":
+                self.handle_set_arxiv_settings(payload)
+                return
+            if parsed.path == "/api/settings/fields":
+                self.handle_set_field_settings(payload)
                 return
             if parsed.path == "/api/cache/clear-web":
                 self.handle_clear_web_cache(payload)
@@ -1100,7 +1158,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     storage=fetch_storage,
                     start_date=selected_date,
                     end_date=selected_date,
-                    categories=ARXIV_DEFAULT_CATEGORIES,
+                    categories=configured_arxiv_categories(fetch_storage),
                     force_latest=selected_date >= today_local(),
                     require_latest_listing=selected_date >= today_local(),
                 )
@@ -3530,6 +3588,80 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             "openalex": openalex,
             "semantic_scholar": semantic_scholar,
         })
+
+    def handle_get_arxiv_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            payload = arxiv_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json({"arxiv": payload})
+
+    def handle_get_field_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            payload = field_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json({"field_settings": payload})
+
+    def handle_set_field_settings(self, payload: dict[str, Any]) -> None:
+        requested = payload.get("standalone_fields")
+        if not isinstance(requested, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "standalone_fields must be a list")
+            return
+        requested_values = [clean_text(str(value)) for value in requested]
+        known = {code for code, _label in FIELD_DEFINITIONS}
+        unknown = sorted({value for value in requested_values if value and value not in known})
+        if unknown:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, f"Unknown field: {unknown[0]}")
+            return
+        standalone = normalize_standalone_fields(requested_values)
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(
+                FIELD_STANDALONE_SETTING,
+                json.dumps(standalone, ensure_ascii=False),
+            )
+            response = field_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json({"field_settings": response})
+
+    def handle_set_arxiv_settings(self, payload: dict[str, Any]) -> None:
+        requested = payload.get("scope_ids")
+        if not isinstance(requested, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "scope_ids must be a list")
+            return
+        requested_values = [clean_text(str(value)) for value in requested if clean_text(str(value))]
+        normalized = normalize_arxiv_scope_ids(requested_values)
+        if not normalized:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Select at least one arXiv subject group")
+            return
+        if set(normalized) != set(requested_values):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose valid arXiv subject groups")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(ARXIV_SCOPE_GROUPS_SETTING, json.dumps(normalized, ensure_ascii=False))
+            # Mirror the first scope for older app bundles that still understand
+            # only one primary/secondary pair.
+            first_primary, first_secondary = normalized[0].split("/", 1)
+            storage.set_setting(ARXIV_PRIMARY_SUBJECT_SETTING, first_primary)
+            storage.set_setting(ARXIV_SECONDARY_SUBJECT_SETTING, first_secondary)
+            # A different archive has its own announcement state. Keep previously
+            # fetched papers, but let the scheduler assess the new scope afresh.
+            for key in (
+                AUTO_ARXIV_MONITOR_LAST_ANNOUNCEMENT_SETTING,
+                AUTO_ARXIV_MONITOR_LAST_ATTEMPT_SETTING,
+                AUTO_ARXIV_MONITOR_STATUS_SETTING,
+                AUTO_ARXIV_METADATA_RETRY_SETTING,
+            ):
+                storage.set_setting(key, "")
+            response = arxiv_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json({"arxiv": response})
 
     def handle_set_citation_settings(self, payload: dict[str, Any]) -> None:
         provider = clean_text(str(payload.get("provider") or "ads")).lower()
@@ -8134,7 +8266,7 @@ def fetch_missing_sources_for_date(
                 storage=storage,
                 start_date=selected_date,
                 end_date=selected_date,
-                categories=ARXIV_DEFAULT_CATEGORIES,
+                categories=configured_arxiv_categories(storage),
                 require_latest_listing=selected_date >= today_local(),
             )
             match_local_arxiv_for_all_subjects(storage, selected_date)
@@ -8181,6 +8313,89 @@ def json_setting(storage: Storage, key: str, default: Any) -> Any:
     except (TypeError, ValueError, json.JSONDecodeError):
         return default
     return value
+
+
+def normalize_standalone_fields(values: Any) -> list[str]:
+    known = {code for code, _label in FIELD_DEFINITIONS}
+    requested = values if isinstance(values, list) else []
+    selected = {clean_text(str(value)) for value in requested}
+    return [code for code, _label in FIELD_DEFINITIONS if code in selected and code in known]
+
+
+def field_settings_payload(storage: Storage) -> dict[str, Any]:
+    stored = json_setting(storage, FIELD_STANDALONE_SETTING, None)
+    standalone = normalize_standalone_fields(stored)
+    if stored is None:
+        standalone = list(DEFAULT_STANDALONE_FIELDS)
+    return {
+        "fields": [
+            {
+                "code": code,
+                "label": label,
+                "standalone": code in standalone,
+                "default_standalone": code in DEFAULT_STANDALONE_FIELDS,
+            }
+            for code, label in FIELD_DEFINITIONS
+        ],
+        "standalone_fields": standalone,
+        "default_standalone_fields": list(DEFAULT_STANDALONE_FIELDS),
+        "special_fields": [
+            {"code": "other", "label": "Other Fields"},
+            {"code": "all", "label": "All Fields"},
+        ],
+    }
+
+
+def configured_arxiv_scope_ids(storage: Storage) -> list[str]:
+    stored = json_setting(storage, ARXIV_SCOPE_GROUPS_SETTING, None)
+    if stored is not None:
+        normalized = normalize_arxiv_scope_ids(stored)
+        return normalized or list(DEFAULT_ARXIV_SCOPE_IDS)
+
+    # Read the original single-scope settings when upgrading an existing
+    # database. No write is performed here, so opening an older database is
+    # lossless and the first explicit Save creates the v1 multi-scope value.
+    requested_primary = clean_text(storage.get_setting(ARXIV_PRIMARY_SUBJECT_SETTING, ""))
+    requested_secondary = clean_text(storage.get_setting(ARXIV_SECONDARY_SUBJECT_SETTING, ""))
+    if requested_primary and requested_secondary:
+        primary, group = arxiv_subject_group(requested_primary, requested_secondary)
+        if str(primary["code"]) == requested_primary and str(group["code"]) == requested_secondary:
+            return [arxiv_scope_id(requested_primary, requested_secondary)]
+    return list(DEFAULT_ARXIV_SCOPE_IDS)
+
+
+def arxiv_settings_payload(storage: Storage) -> dict[str, Any]:
+    selected_scope_ids = configured_arxiv_scope_ids(storage)
+    selected_set = set(selected_scope_ids)
+    scopes = arxiv_scope_groups()
+    selected_scopes = [scope for scope in scopes if scope["id"] in selected_set]
+    first_scope = selected_scopes[0]
+    categories_by_code: dict[str, dict[str, str]] = {}
+    for scope in selected_scopes:
+        for item in scope["categories"]:
+            categories_by_code.setdefault(str(item["code"]), dict(item))
+    categories = list(categories_by_code.values())
+    return {
+        # Keep the original fields for old web bundles during an in-place app
+        # upgrade. New clients use selected_scope_ids and selected_scopes.
+        "primary_subject": first_scope["primary_code"],
+        "primary_label": first_scope["primary_label"],
+        "secondary_subject": first_scope["group_code"],
+        "secondary_label": first_scope["group_label"],
+        "selected_scope_ids": selected_scope_ids,
+        "default_scope_ids": list(DEFAULT_ARXIV_SCOPE_IDS),
+        "selected_scopes": selected_scopes,
+        "categories": categories,
+        "fetch_categories": arxiv_categories_for_scopes(selected_scope_ids),
+        "display_default_categories": arxiv_display_categories_for_scopes(selected_scope_ids),
+        "hierarchy": arxiv_subject_hierarchy_payload(),
+    }
+
+
+def configured_arxiv_categories(storage: Storage) -> list[str]:
+    payload = arxiv_settings_payload(storage)
+    categories = [clean_text(str(code)) for code in payload["fetch_categories"]]
+    return [code for code in categories if code] or list(ARXIV_DEFAULT_CATEGORIES)
 
 
 def run_auto_journal_monitor_once(db_path: Path, run_date: date) -> None:
@@ -8485,7 +8700,7 @@ def run_auto_arxiv_monitor_once(db_path: Path, now: datetime | None = None) -> d
                 storage=storage,
                 start_date=target_date,
                 end_date=target_date,
-                categories=ARXIV_DEFAULT_CATEGORIES,
+                categories=configured_arxiv_categories(storage),
                 require_latest_listing=True,
             )
             if int(result.get("saved") or 0) > 0:
@@ -9387,7 +9602,7 @@ def monitor_paper_to_api(
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "fields": fields,
-        "discipline": "other" if fields == ["other"] else "physical",
+        "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
         "preprint_id": preprint_identifier(paper, raw=raw),
         "preprint_category": preprint_primary_category(paper, raw=raw),
@@ -24248,6 +24463,47 @@ FIELD_KEYWORDS = {
         "electrochemical",
         "battery",
     ],
+    "astronomy_astrophysics": [
+        "astronomy", "astrophysics", "cosmology", "galaxy", "galaxies",
+        "stellar", "exoplanet", "black hole", "gravitational wave",
+    ],
+    "particle_nuclear_physics": [
+        "particle physics", "nuclear physics", "high energy physics", "hadron",
+        "quark", "neutrino", "collider", "higgs boson", "quantum chromodynamics",
+    ],
+    "mathematics": [
+        "mathematics", "mathematical theorem", "algebraic geometry", "number theory",
+        "differential geometry", "topology theorem",
+    ],
+    "computer_science": [
+        "computer science", "machine learning", "deep learning", "neural network",
+        "artificial intelligence", "software engineering", "computer vision",
+        "natural language processing", "database system",
+    ],
+    "biology_medicine": [
+        "biology", "biological", "medicine", "medical", "clinical", "cancer",
+        "cellular", "genome", "genetic", "protein", "rna", "dna", "neuroscience",
+    ],
+    "statistics": [
+        "statistics", "statistical inference", "bayesian inference", "causal inference",
+        "probability distribution", "stochastic process",
+    ],
+    "economics_finance": [
+        "economics", "economic", "finance", "financial", "market microstructure",
+        "asset pricing", "monetary policy",
+    ],
+    "electrical_engineering": [
+        "electrical engineering", "electronic engineering", "signal processing",
+        "communication system", "control system", "integrated circuit", "power system",
+    ],
+    "earth_environmental_science": [
+        "earth science", "environmental science", "geophysics", "geology", "climate",
+        "atmospheric", "oceanography", "ecosystem", "hydrology", "seismology",
+    ],
+    "social_sciences": [
+        "social science", "sociology", "political science", "psychology",
+        "education research", "anthropology", "public policy",
+    ],
 }
 
 
@@ -24258,37 +24514,138 @@ JOURNAL_FIELD_HINTS = {
     "nature photonics": ["physics"],
     "nature materials": ["materials"],
     "nature chemistry": ["chemistry"],
+    "nature astronomy": ["astronomy_astrophysics"],
+    "astrophysical journal": ["astronomy_astrophysics"],
+    "astronomy & astrophysics": ["astronomy_astrophysics"],
+    "physical review d": ["particle_nuclear_physics"],
+    "physical review c": ["particle_nuclear_physics"],
+    "journal of high energy physics": ["particle_nuclear_physics"],
+    "nature medicine": ["biology_medicine"],
+    "nature biotechnology": ["biology_medicine"],
+    "nature communications": [],
 }
 
 
+def _flatten_field_metadata(value: Any, *, depth: int = 0) -> list[str]:
+    if depth > 3:
+        return []
+    if isinstance(value, str):
+        return [clean_text(value)] if clean_text(value) else []
+    if isinstance(value, list):
+        output: list[str] = []
+        for item in value[:40]:
+            output.extend(_flatten_field_metadata(item, depth=depth + 1))
+        return output
+    if isinstance(value, dict):
+        output = []
+        for key in ("name", "display_name", "displayName", "category", "field", "label", "topic"):
+            if key in value:
+                output.extend(_flatten_field_metadata(value.get(key), depth=depth + 1))
+        return output
+    return []
+
+
+def _provider_field_text(paper: dict[str, Any], raw: dict[str, Any]) -> str:
+    values: list[str] = []
+    for source in (raw, parse_semantic_scholar_json(paper)):
+        if not isinstance(source, dict):
+            continue
+        for key in (
+            "fieldsOfStudy", "fields_of_study", "s2FieldsOfStudy", "concepts",
+            "topics", "primary_topic", "category", "categories", "subject",
+            "subjects", "discipline", "disciplines",
+        ):
+            values.extend(_flatten_field_metadata(source.get(key)))
+        semantic = source.get("semantic_scholar")
+        if isinstance(semantic, dict):
+            for key in ("fieldsOfStudy", "s2FieldsOfStudy", "topics"):
+                values.extend(_flatten_field_metadata(semantic.get(key)))
+    return "\n".join(value for value in values if value).lower()
+
+
+def _arxiv_category_fields(categories: Iterable[str]) -> list[str]:
+    fields: list[str] = []
+    for raw_category in categories:
+        category = clean_text(str(raw_category)).lower()
+        if not category:
+            continue
+        if category.startswith("astro-ph"):
+            fields.append("astronomy_astrophysics")
+        elif category.startswith(("hep-", "nucl-")):
+            fields.append("particle_nuclear_physics")
+        elif category == "quant-ph":
+            fields.extend(("quantum_information", "physics"))
+        elif category.startswith("cond-mat"):
+            fields.append("physics")
+            if category == "cond-mat.mtrl-sci":
+                fields.append("materials")
+        elif category.startswith("math"):
+            fields.append("mathematics")
+            if category == "math-ph":
+                fields.append("physics")
+        elif category.startswith("cs."):
+            fields.append("computer_science")
+        elif category.startswith("stat."):
+            fields.append("statistics")
+        elif category.startswith(("econ.", "q-fin.")):
+            fields.append("economics_finance")
+        elif category.startswith("q-bio."):
+            fields.append("biology_medicine")
+        elif category.startswith("eess."):
+            fields.append("electrical_engineering")
+        elif category.startswith("physics."):
+            fields.append("physics")
+            if category in {"physics.geo-ph", "physics.ao-ph"}:
+                fields.append("earth_environmental_science")
+            elif category == "physics.med-ph":
+                fields.append("biology_medicine")
+            elif category == "physics.soc-ph":
+                fields.append("social_sciences")
+            elif category == "physics.data-an":
+                fields.append("statistics")
+            elif category == "physics.comp-ph":
+                fields.append("computer_science")
+            elif category == "physics.chem-ph":
+                fields.append("chemistry")
+    return list(dict.fromkeys(fields))
+
+
 def classify_fields(paper: dict[str, Any]) -> list[str]:
+    raw = parse_raw_json(paper)
+    categories = preprint_categories(paper, raw=raw)
+    category_fields = _arxiv_category_fields(categories)
     journal = (paper.get("journal") or "").lower()
-    hinted = JOURNAL_FIELD_HINTS.get(journal)
-    if hinted:
-        return hinted
     title = (paper.get("title") or "").lower()
-    if any(keyword in title for keyword in NON_PHYSICAL_TITLE_KEYWORDS):
-        return ["other"]
-    text = f"{title}\n{paper.get('abstract') or ''}\n{paper.get('publisher_section') or ''}".lower()
-    if sum(1 for keyword in NON_PHYSICAL_KEYWORDS if keyword in text) >= 2:
-        return ["other"]
-    fields = [
+    provider_text = _provider_field_text(paper, raw)
+    text = (
+        f"{title}\n{paper.get('abstract') or ''}\n{paper.get('publisher_section') or ''}"
+        f"\n{provider_text}"
+    ).lower()
+    fields = list(category_fields)
+    fields.extend(JOURNAL_FIELD_HINTS.get(journal) or [])
+    fields.extend(
         field
         for field, keywords in FIELD_KEYWORDS.items()
         if any(keyword in text for keyword in keywords)
-    ]
-    if journal == ARXIV_JOURNAL_NAME.lower():
-        categories = preprint_categories(paper)
-        if any(category.startswith("cond-mat") for category in categories):
-            fields.insert(0, "physics")
-        if "cond-mat.mtrl-sci" in categories:
-            fields.append("materials")
-        fields = list(dict.fromkeys(fields))
-    return fields or ["other"]
+    )
+    fields = list(dict.fromkeys(fields))
+    # Astronomy and high-energy/nuclear physics are canonical peer fields in
+    # the UI, rather than sublabels that should also inherit the broad Physics
+    # badge.  Provider text often contains the word "physics", so suppress that
+    # generic keyword hit whenever a specific archive-backed field is known.
+    if {"astronomy_astrophysics", "particle_nuclear_physics"}.intersection(fields):
+        fields = [field for field in fields if field != "physics"]
+    known_order = [code for code, _label in FIELD_DEFINITIONS]
+    ordered = [field for field in known_order if field in fields]
+    return ordered or ["other"]
 
 
 def classify_discipline(paper: dict[str, Any]) -> str:
-    return "other" if classify_fields(paper) == ["other"] else "physical"
+    physical_fields = {
+        "physics", "quantum_information", "astronomy_astrophysics",
+        "particle_nuclear_physics", "materials", "chemistry",
+    }
+    return "physical" if physical_fields.intersection(classify_fields(paper)) else "other"
 
 
 def first(query: dict[str, list[str]], key: str) -> str | None:
@@ -24722,10 +25079,23 @@ INDEX_HTML = """<!doctype html>
     .filters { display: flex; flex-direction: column; gap: 8px; }
     .theme-sidebar-filter,
     .theme-sidebar-fetch { display: none; }
-    .app.theme-mode .theme-sidebar-filter,
+    .app.theme-mode .theme-sidebar-filter { display: flex; }
     .app.theme-mode .theme-sidebar-fetch { display: none; }
     .app.theme-mode .journal-sidebar-filter { display: none; }
     .theme-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .theme-sidebar-filter .filter-title {
+      padding-left: 2px;
+      color: #687386;
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0.025em;
+      text-transform: uppercase;
+    }
+    #themeFilters {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
     .theme-add-btn {
       width: 28px;
       min-width: 28px;
@@ -24739,20 +25109,54 @@ INDEX_HTML = """<!doctype html>
       line-height: 1;
     }
     .theme-add-btn:hover { border-color: var(--accent); color: var(--accent); }
-    .journal-toggle.theme-toggle {
+    .theme-toggle {
+      display: grid;
+      grid-template-columns: 12px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      width: 100%;
+      min-height: 31px;
+      border: 0;
+      border-radius: 6px;
+      padding: 4px 8px 4px 5px;
+      background: transparent;
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
       cursor: grab;
       -webkit-user-select: none;
       user-select: none;
       transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, opacity 120ms ease;
     }
-    .journal-toggle.theme-toggle:active { cursor: grabbing; }
-    .journal-toggle.theme-toggle.dragging {
+    .theme-toggle:hover { background: rgba(31, 79, 122, 0.055); }
+    .theme-toggle.active {
+      background: #e7f0fa;
+      color: #173f68;
+    }
+    .theme-toggle .journal-drag-handle { color: #b1bdca; }
+    .theme-toggle-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 560;
+    }
+    .theme-toggle-count {
+      color: #758196;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .theme-toggle.active .theme-toggle-count { color: #38658f; }
+    .theme-toggle:active { cursor: grabbing; }
+    .theme-toggle.dragging {
       opacity: 0.48;
       border-color: var(--accent);
       background: #f3fbfb;
     }
-    .journal-toggle.theme-toggle.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
-    .journal-toggle.theme-toggle.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
+    .theme-toggle.drag-over-before { box-shadow: inset 0 3px 0 var(--accent); }
+    .theme-toggle.drag-over-after { box-shadow: inset 0 -3px 0 var(--accent); }
     .library-context-menu.theme-context-menu {
       z-index: 120;
     }
@@ -31380,6 +31784,7 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode .internal-browser,
     .app.loader-window-mode .library-quicklook,
     .app.loader-window-mode #citationSettingsBackdrop,
+    .app.loader-window-mode #fieldSettingsBackdrop,
     .app.loader-window-mode #pdfRenameSettingsBackdrop {
       display: none !important;
     }
@@ -31480,6 +31885,37 @@ INDEX_HTML = """<!doctype html>
     .citation-token-row button {
       flex: 0 0 auto;
     }
+    .citation-scope-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .citation-scope-field {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .citation-scope-field select {
+      width: 100%;
+      min-width: 0;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 28px 0 9px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    @media (max-width: 680px) {
+      .citation-scope-row { grid-template-columns: 1fr; }
+      .citation-scope-row .smallbtn { justify-self: start; }
+    }
     .pdf-rename-template-box {
       display: grid;
       gap: 8px;
@@ -31516,6 +31952,189 @@ INDEX_HTML = """<!doctype html>
     }
     .citation-settings-status.ok { color: #137333; }
     .citation-settings-status.err { color: #b42318; }
+    .settings-modal.preferences-modal {
+      width: min(660px, calc(100vw - 44px));
+      border: 1px solid rgba(111, 125, 145, 0.22);
+      border-radius: 14px;
+      background: #f7f8fa;
+      box-shadow: 0 26px 72px rgba(26, 38, 56, 0.22);
+      overflow: hidden;
+    }
+    .preferences-modal .settings-modal-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      align-items: center;
+      padding: 17px 20px 14px;
+      border-bottom: 1px solid rgba(111, 125, 145, 0.16);
+      background: rgba(247, 248, 250, 0.96);
+      backdrop-filter: blur(16px);
+    }
+    .preferences-modal .settings-modal-head h2 {
+      font-size: 17px;
+      font-weight: 760;
+    }
+    .preferences-modal .settings-modal-head p {
+      max-width: 520px;
+      margin-top: 3px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .preferences-modal .settings-modal-close {
+      width: 26px;
+      min-width: 26px;
+      height: 26px;
+      min-height: 26px;
+      border: 0;
+      border-radius: 50%;
+      background: #e5e8ec;
+      color: #667085;
+      font-size: 17px;
+      line-height: 1;
+    }
+    .preferences-modal .settings-modal-close:hover { background: #dce1e7; color: #344054; }
+    .preferences-modal .settings-modal-body {
+      max-height: calc(100vh - 150px);
+      overflow: auto;
+      padding: 4px 20px 18px;
+    }
+    .preferences-modal .citation-source-setting {
+      padding: 14px 0;
+      border: 0;
+      border-bottom: 1px solid rgba(111, 125, 145, 0.14);
+      border-radius: 0;
+      background: transparent;
+    }
+    .preferences-modal .citation-source-setting:last-child { border-bottom: 0; }
+    .preferences-modal .citation-source-setting + .citation-source-setting { margin-top: 0; }
+    .preferences-modal .citation-source-setting-head { margin-bottom: 6px; }
+    .preferences-modal .citation-source-setting-head strong { font-size: 13px; }
+    .preferences-modal .citation-source-setting-head span { font-size: 11px; }
+    .preferences-modal .citation-source-setting p { margin-bottom: 9px; font-size: 11px; }
+    .preferences-modal .search,
+    .preferences-modal input[type="text"],
+    .preferences-modal input[type="password"],
+    .preferences-modal select {
+      border-color: rgba(111, 125, 145, 0.24);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: none;
+    }
+    .preferences-modal .smallbtn {
+      min-height: 31px;
+      border-color: rgba(111, 125, 145, 0.2);
+      border-radius: 8px;
+      background: #e7eaee;
+      color: #344054;
+      font-size: 11px;
+      font-weight: 680;
+    }
+    .preferences-modal .smallbtn:hover { background: #dfe4e9; }
+    .settings-modal.arxiv-scope-modal { width: min(720px, calc(100vw - 44px)); }
+    .arxiv-scope-tree {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .arxiv-scope-primary {
+      overflow: hidden;
+      border: 1px solid rgba(111, 125, 145, 0.18);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.62);
+    }
+    .arxiv-scope-primary-title {
+      padding: 8px 10px 7px;
+      border-bottom: 1px solid rgba(111, 125, 145, 0.12);
+      color: #344054;
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: 0.02em;
+    }
+    .arxiv-scope-groups {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 2px 8px;
+      padding: 5px;
+    }
+    .arxiv-scope-option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      min-height: 31px;
+      padding: 4px 6px;
+      border-radius: 7px;
+      color: #344054;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .arxiv-scope-option:hover { background: rgba(31, 79, 122, 0.06); }
+    .arxiv-scope-option input { margin: 0; }
+    .arxiv-scope-option small { color: #98a2b3; font-size: 9px; }
+    .field-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 5px 14px;
+      margin-top: 8px;
+    }
+    .field-settings-option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-height: 32px;
+      padding: 4px 6px;
+      border-radius: 7px;
+      color: #344054;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .field-settings-option:hover { background: rgba(31, 79, 122, 0.06); }
+    .field-settings-option input { margin: 0; }
+    .field-settings-note {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .field-settings-actions { display: flex; gap: 7px; flex: 0 0 auto; }
+    @media (max-width: 620px) {
+      .field-settings-grid { grid-template-columns: 1fr; }
+      .arxiv-scope-groups { grid-template-columns: 1fr; }
+      .field-settings-note { align-items: flex-start; flex-direction: column; }
+    }
+
+    /* Loader uses the same quiet, flat surfaces as the current Library UI. */
+    .settings-modal.loader-modal {
+      border-color: rgba(111, 125, 145, 0.2);
+      border-radius: 14px;
+      background: #f7f8fa;
+      box-shadow: 0 26px 72px rgba(26, 38, 56, 0.2);
+    }
+    .settings-modal.loader-modal .settings-modal-head {
+      padding: 15px 18px 12px;
+      border-bottom-color: rgba(111, 125, 145, 0.15);
+      background: #f7f8fa;
+    }
+    .settings-modal.loader-modal .settings-modal-head h2 { font-size: 17px; }
+    .settings-modal.loader-modal .settings-modal-head p { font-size: 12px; }
+    .settings-modal.loader-modal .loader-panel { background: transparent; }
+    .settings-modal.loader-modal .loader-history,
+    .settings-modal.loader-modal .loader-target-pill {
+      border-color: rgba(111, 125, 145, 0.16);
+      background: rgba(255, 255, 255, 0.72);
+      box-shadow: none;
+    }
+    .settings-modal.loader-modal .loader-form input,
+    .settings-modal.loader-modal .loader-form select {
+      border-color: rgba(111, 125, 145, 0.22);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.92);
+    }
 
     /* Shared flat visual language for the primary reading surfaces. */
     .app {
@@ -31604,6 +32223,15 @@ INDEX_HTML = """<!doctype html>
       padding-top: 14px;
       border-top: 1px solid rgba(95, 107, 124, 0.18);
     }
+    .app.theme-mode .sidebar > .filters.theme-sidebar-filter {
+      width: var(--monitor-calendar-width);
+      flex: 0 0 auto;
+      align-self: flex-start;
+      gap: 7px;
+      margin: 2px 0 0;
+      padding-top: 14px;
+      border-top: 1px solid rgba(95, 107, 124, 0.18);
+    }
     .app.report-mode #journalFilters,
     .app.report-mode #preprintFilters,
     .app.report-mode #subjectFilters,
@@ -31651,7 +32279,7 @@ INDEX_HTML = """<!doctype html>
       border-color: transparent;
       background: transparent;
     }
-    .app.theme-mode .journal-toggle.theme-toggle.dragging,
+    .app.theme-mode .theme-toggle.dragging,
     .app.theme-mode .journal-tab.subject-tab.dragging {
       background: #eef4fb;
     }
@@ -32586,13 +33214,6 @@ INDEX_HTML = """<!doctype html>
           <button class="view-switch" id="sideAuthorMode" type="button">Author Monitor</button>
         </div>
       </div>
-      <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
-        <div class="theme-filter-head">
-          <div class="filter-title">Subject Filter</div>
-          <button class="theme-add-btn" id="addThemeGroup" type="button" title="Add subject">+</button>
-        </div>
-        <div id="themeFilters"></div>
-      </div>
       <div class="monthbar">
         <button class="iconbtn" id="prevMonth" title="Previous month">‹</button>
         <strong id="monthLabel"></strong>
@@ -32600,6 +33221,13 @@ INDEX_HTML = """<!doctype html>
       </div>
       <div class="calendar" id="calendar"></div>
       <div class="monitor-sidebar-summary" id="monitorSidebarSummary" aria-live="polite"></div>
+      <div class="filters theme-sidebar-filter" id="themeSidebarFilter">
+        <div class="theme-filter-head">
+          <div class="filter-title">Subjects</div>
+          <button class="theme-add-btn" id="addThemeGroup" type="button" title="Add subject">+</button>
+        </div>
+        <div id="themeFilters" aria-label="Monitored subjects"></div>
+      </div>
       <div class="filters journal-sidebar-filter">
         <div class="filter-title">Journal Filter</div>
         <div id="journalFilters"></div>
@@ -32809,7 +33437,7 @@ INDEX_HTML = """<!doctype html>
         </section>
       </div>
       <div class="settings-backdrop" id="citationSettingsBackdrop" aria-hidden="true">
-        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
           <div class="settings-modal-head">
             <div>
               <h2 id="citationSettingsTitle">Citation Settings</h2>
@@ -32858,8 +33486,60 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop" id="arxivSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal arxiv-scope-modal" role="dialog" aria-modal="true" aria-labelledby="arxivSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="arxivSettingsTitle">arXiv Scope Settings</h2>
+              <p>Select one or more subject archives for Journal Monitor discovery. Groups can be combined across research fields.</p>
+            </div>
+            <button class="settings-modal-close" id="closeArxivSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Subject Archives</strong><span id="arxivScopeSummary">Physics · Condensed Matter</span></div>
+              <p>Every leaf category in a checked group is fetched. The arXiv category checkboxes in Journal Monitor remain display filters and do not change discovery coverage.</p>
+              <div class="arxiv-scope-tree" id="arxivScopeOptions"></div>
+              <div class="field-settings-note">
+                <span>Default: Physics · Condensed Matter.</span>
+                <span class="field-settings-actions">
+                  <button class="smallbtn" id="resetArxivSettings" type="button">Restore Defaults</button>
+                  <button class="smallbtn" id="saveArxivSettings" type="button">Save</button>
+                </span>
+              </div>
+              <div class="citation-settings-status" id="arxivSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="settings-backdrop" id="fieldSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="fieldSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="fieldSettingsTitle">Field Settings</h2>
+              <p>Choose which canonical research fields appear as separate filters. Every unchecked field remains searchable under Other Fields.</p>
+            </div>
+            <button class="settings-modal-close" id="closeFieldSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Standalone Fields</strong><span>Other Fields and All Fields stay visible</span></div>
+              <p>Classification is preserved in SQLite. This setting changes presentation only, so it can be changed later without re-fetching papers.</p>
+              <div class="field-settings-grid" id="fieldSettingsOptions"></div>
+              <div class="field-settings-note">
+                <span>Default: Physics, Quantum Information, Materials Science, and Chemistry.</span>
+                <span class="field-settings-actions">
+                  <button class="smallbtn" id="resetFieldSettings" type="button">Restore Defaults</button>
+                  <button class="smallbtn" id="saveFieldSettings" type="button">Save</button>
+                </span>
+              </div>
+              <div class="citation-settings-status" id="fieldSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop" id="pdfRenameSettingsBackdrop" aria-hidden="true">
-        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="pdfRenameSettingsTitle">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="pdfRenameSettingsTitle">
           <div class="settings-modal-head">
             <div>
               <h2 id="pdfRenameSettingsTitle">PDF Rename Settings</h2>
@@ -32955,7 +33635,7 @@ INDEX_HTML = """<!doctype html>
     const ARXIV_SELECTED_CATEGORIES_STORAGE_KEY = "daiqo-arxiv-selected-categories";
     const AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id";
     const PREPRINT_JOURNALS = new Set(["arXiv"]);
-    const ARXIV_CATEGORIES = [
+    let ARXIV_CATEGORIES = [
       ["cond-mat.dis-nn", "Disordered Systems"],
       ["cond-mat.mes-hall", "Mesoscale and Nanoscale Physics"],
       ["cond-mat.mtrl-sci", "Materials Science"],
@@ -32966,7 +33646,7 @@ INDEX_HTML = """<!doctype html>
       ["cond-mat.str-el", "Strongly Correlated Electrons"],
       ["cond-mat.supr-con", "Superconductivity"]
     ];
-    const DEFAULT_ARXIV_CATEGORIES = [
+    let DEFAULT_ARXIV_CATEGORIES = [
       "cond-mat.mes-hall",
       "cond-mat.str-el",
       "cond-mat.supr-con"
@@ -32980,10 +33660,31 @@ INDEX_HTML = """<!doctype html>
     const FIELD_LABELS = {
       "physics": "Physics",
       "quantum_information": "Quantum Information",
-      "materials": "Materials",
+      "astronomy_astrophysics": "Astronomy & Astrophysics",
+      "particle_nuclear_physics": "Particle & Nuclear Physics",
+      "materials": "Materials Science",
       "chemistry": "Chemistry",
-      "all": "All Fields",
-      "other": "Other Fields"
+      "mathematics": "Mathematics",
+      "computer_science": "Computer Science",
+      "biology_medicine": "Biology & Medicine",
+      "statistics": "Statistics",
+      "economics_finance": "Economics & Finance",
+      "electrical_engineering": "Electrical Engineering",
+      "earth_environmental_science": "Earth & Environmental Science",
+      "social_sciences": "Social Sciences",
+      "other": "Other Fields",
+      "all": "All Fields"
+    };
+    const DEFAULT_FIELD_SETTINGS = {
+      fields: Object.entries(FIELD_LABELS)
+        .filter(([code]) => !["other", "all"].includes(code))
+        .map(([code, label]) => ({
+          code,
+          label,
+          default_standalone: ["physics", "quantum_information", "materials", "chemistry"].includes(code)
+        })),
+      standalone_fields: ["physics", "quantum_information", "materials", "chemistry"],
+      default_standalone_fields: ["physics", "quantum_information", "materials", "chemistry"]
     };
     let themeDragGesture = null;
     let katexLoading = false;
@@ -33011,6 +33712,12 @@ INDEX_HTML = """<!doctype html>
       journalHistory: [],
       selectedJournals: new Set(),
       selectedPreprintCategories: new Set(loadStoredPreprintCategories() ?? DEFAULT_ARXIV_CATEGORIES),
+      arxivSettings: null,
+      arxivSettingsLoaded: false,
+      arxivSettingsPromise: null,
+      fieldSettings: DEFAULT_FIELD_SETTINGS,
+      fieldSettingsLoaded: false,
+      fieldSettingsPromise: null,
       preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
@@ -33466,8 +34173,175 @@ INDEX_HTML = """<!doctype html>
       return `${state.viewYear}-${String(state.viewMonth).padStart(2, "0")}`;
     }
 
+    function selectedArxivScopeIdsFromDialog() {
+      return [...document.querySelectorAll('#arxivScopeOptions input[type="checkbox"]:checked')]
+        .map((input) => String(input.value || ""))
+        .filter(Boolean);
+    }
+
+    function arxivScopeSummary(arxiv = state.arxivSettings || {}, selectedIds = null) {
+      const selected = new Set(selectedIds || arxiv.selected_scope_ids || []);
+      const labels = [];
+      (arxiv.hierarchy || []).forEach((primary) => {
+        (primary.groups || []).forEach((group) => {
+          const id = `${primary.code}/${group.code}`;
+          if (selected.has(id)) labels.push(`${primary.label} · ${group.label}`);
+        });
+      });
+      if (!labels.length) return "No subject groups selected";
+      if (labels.length <= 2) return labels.join("; ");
+      return `${labels.length} subject groups selected`;
+    }
+
+    function renderArxivScopeOptions(arxiv = state.arxivSettings || {}) {
+      const root = $("arxivScopeOptions");
+      if (!root) return;
+      const selected = new Set(arxiv.selected_scope_ids || []);
+      root.innerHTML = (arxiv.hierarchy || []).map((primary) => `
+        <section class="arxiv-scope-primary">
+          <div class="arxiv-scope-primary-title">${escapeHtml(primary.label || primary.code || "")}</div>
+          <div class="arxiv-scope-groups">
+            ${(primary.groups || []).map((group) => {
+              const id = `${primary.code}/${group.code}`;
+              const categoryCount = Array.isArray(group.categories) ? group.categories.length : 0;
+              return `<label class="arxiv-scope-option">
+                <input type="checkbox" value="${escapeAttr(id)}" ${selected.has(id) ? "checked" : ""}>
+                <span>${escapeHtml(group.label || group.code || "")}</span>
+                <small>${categoryCount}</small>
+              </label>`;
+            }).join("")}
+          </div>
+        </section>
+      `).join("");
+      root.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        input.addEventListener("change", () => {
+          const summary = $("arxivScopeSummary");
+          if (summary) summary.textContent = arxivScopeSummary(arxiv, selectedArxivScopeIdsFromDialog());
+        });
+      });
+      const summary = $("arxivScopeSummary");
+      if (summary) summary.textContent = arxivScopeSummary(arxiv);
+    }
+
+    function applyArxivSettings(arxiv = {}, options = {}) {
+      if (!Array.isArray(arxiv.categories) || !arxiv.categories.length) return;
+      state.arxivSettings = arxiv;
+      ARXIV_CATEGORIES = arxiv.categories
+        .map((item) => [String(item.code || ""), String(item.label || item.code || "")])
+        .filter(([code]) => code);
+      DEFAULT_ARXIV_CATEGORIES = (arxiv.display_default_categories || [])
+        .map((value) => String(value || ""))
+        .filter(Boolean);
+      const known = new Set(ARXIV_CATEGORIES.map(([code]) => code));
+      const retained = options.resetSelection
+        ? []
+        : [...state.selectedPreprintCategories].filter((code) => known.has(code));
+      state.selectedPreprintCategories = new Set(retained.length ? retained : DEFAULT_ARXIV_CATEGORIES);
+      saveSelectedPreprintCategories();
+      state.arxivSettingsLoaded = true;
+      renderArxivScopeOptions(arxiv);
+    }
+
+    async function loadArxivSettings(options = {}) {
+      if (!options.force && state.arxivSettingsLoaded) return state.arxivSettings;
+      if (!options.force && state.arxivSettingsPromise) return state.arxivSettingsPromise;
+      state.arxivSettingsPromise = (async () => {
+        const data = await fetchJson("/api/settings/arxiv");
+        applyArxivSettings(data.arxiv || {});
+        return state.arxivSettings;
+      })();
+      try {
+        return await state.arxivSettingsPromise;
+      } finally {
+        state.arxivSettingsPromise = null;
+      }
+    }
+
+    function canonicalFieldDefinitions() {
+      const fields = Array.isArray(state.fieldSettings?.fields) && state.fieldSettings.fields.length
+        ? state.fieldSettings.fields
+        : DEFAULT_FIELD_SETTINGS.fields;
+      return fields
+        .map((field) => ({
+          code: String(field?.code || ""),
+          label: String(field?.label || FIELD_LABELS[field?.code] || field?.code || "")
+        }))
+        .filter((field) => field.code && !["other", "all"].includes(field.code));
+    }
+
+    function standaloneFieldCodes() {
+      const known = new Set(canonicalFieldDefinitions().map((field) => field.code));
+      return new Set((state.fieldSettings?.standalone_fields || DEFAULT_FIELD_SETTINGS.standalone_fields)
+        .map((value) => String(value || ""))
+        .filter((value) => known.has(value)));
+    }
+
+    function fieldFilterOptions() {
+      const standalone = standaloneFieldCodes();
+      return canonicalFieldDefinitions()
+        .filter((field) => standalone.has(field.code))
+        .map((field) => [field.code, field.label])
+        .concat([["other", FIELD_LABELS.other], ["all", FIELD_LABELS.all]]);
+    }
+
+    function normalizeSelectedFieldsAfterSettings() {
+      const visible = new Set(fieldFilterOptions().map(([code]) => code));
+      const next = [...state.selectedFields].filter((field) => visible.has(field));
+      if (!next.length) {
+        const defaults = ["physics", "quantum_information", "materials"]
+          .filter((field) => visible.has(field));
+        state.selectedFields = new Set(defaults.length ? defaults : ["all"]);
+      } else {
+        state.selectedFields = new Set(next);
+      }
+    }
+
+    function applyFieldSettings(settings = {}, options = {}) {
+      const fields = Array.isArray(settings.fields) && settings.fields.length
+        ? settings.fields
+        : DEFAULT_FIELD_SETTINGS.fields;
+      fields.forEach((field) => {
+        const code = String(field?.code || "");
+        if (code && field?.label) FIELD_LABELS[code] = String(field.label);
+      });
+      state.fieldSettings = {
+        ...DEFAULT_FIELD_SETTINGS,
+        ...settings,
+        fields,
+        standalone_fields: Array.isArray(settings.standalone_fields)
+          ? settings.standalone_fields.map((value) => String(value || "")).filter(Boolean)
+          : DEFAULT_FIELD_SETTINGS.standalone_fields
+      };
+      state.fieldSettingsLoaded = true;
+      normalizeSelectedFieldsAfterSettings();
+      if (options.render !== false) {
+        renderSubjectFilters();
+        renderFilters();
+        renderReport();
+        if (state.mode === "theme") renderThemeMonitor();
+        if (state.mode === "author") renderAuthorMonitor();
+        if (state.mode === "my-publications") renderMyPublications();
+      }
+      return state.fieldSettings;
+    }
+
+    async function loadFieldSettings(options = {}) {
+      if (!options.force && state.fieldSettingsLoaded) return state.fieldSettings;
+      if (!options.force && state.fieldSettingsPromise) return state.fieldSettingsPromise;
+      state.fieldSettingsPromise = (async () => {
+        const data = await fetchJson("/api/settings/fields");
+        return applyFieldSettings(data.field_settings || {}, options);
+      })();
+      try {
+        return await state.fieldSettingsPromise;
+      } finally {
+        state.fieldSettingsPromise = null;
+      }
+    }
+
     async function loadMonth(options = {}) {
       if (state.mode === "theme") return loadThemeMonth(options);
+      await Promise.all([loadArxivSettings(), loadFieldSettings({render: false})]);
       const cacheKey = currentMonthCacheKey();
       if (!options.force && state.monthLoaded && state.monthCacheKey === cacheKey) {
         state.counts = state.reportCounts;
@@ -34026,6 +34900,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadLibrary(options = {}) {
+      await loadFieldSettings({render: false});
       state.mode = "library";
       setPrimaryView("library");
       if (options.root) {
@@ -34056,6 +34931,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadMyPublications() {
+      await loadFieldSettings({render: false});
       rememberLibraryLocation();
       state.mode = "library";
       state.libraryTab = "my-publications";
@@ -36692,14 +37568,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderSubjectFilters() {
-      const options = [
-        ["physics", FIELD_LABELS.physics],
-        ["quantum_information", FIELD_LABELS.quantum_information],
-        ["materials", FIELD_LABELS.materials],
-        ["chemistry", FIELD_LABELS.chemistry],
-        ["all", FIELD_LABELS.all],
-        ["other", FIELD_LABELS.other]
-      ];
+      const options = fieldFilterOptions();
       const root = $("subjectFilters");
       root.innerHTML = "";
       options.forEach(([value, label]) => {
@@ -36925,13 +37794,18 @@ INDEX_HTML = """<!doctype html>
 
     function paperMatchesField(paper, value) {
       if (value === "all") return true;
+      return paperFieldValues(paper).includes(value);
+    }
+
+    function rawPaperFieldValues(paper) {
       const fields = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : [paper.discipline || "other"];
-      return fields.includes(value);
+      return [...new Set(fields.filter((field) => field && field !== "all"))];
     }
 
     function paperFieldValues(paper) {
-      const fields = Array.isArray(paper.fields) && paper.fields.length ? paper.fields : [paper.discipline || "other"];
-      return [...new Set(fields.filter((field) => field && field !== "all"))];
+      const standalone = standaloneFieldCodes();
+      const presented = rawPaperFieldValues(paper).map((field) => standalone.has(field) ? field : "other");
+      return [...new Set(presented.length ? presented : ["other"])];
     }
 
     function monitorPaperSignature(papers, mode = state.mode) {
@@ -49786,6 +50660,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openAuthorMonitor() {
+      await loadFieldSettings({render: false});
       state.mode = "author";
       closeLibraryQuickLook();
       closeAnalysis();
@@ -51389,6 +52264,73 @@ INDEX_HTML = """<!doctype html>
       return `<blockquote class="citation-context context-${escapeAttr(slug)}"><strong>${escapeHtml(label)}</strong>${inlineMarkdown(text)}</blockquote>`;
     }
 
+    function renderFieldSettingsOptions() {
+      const root = $("fieldSettingsOptions");
+      if (!root) return;
+      const standalone = standaloneFieldCodes();
+      root.innerHTML = canonicalFieldDefinitions().map((field) => `
+        <label class="field-settings-option">
+          <input type="checkbox" value="${escapeAttr(field.code)}" ${standalone.has(field.code) ? "checked" : ""}>
+          <span>${escapeHtml(field.label)}</span>
+        </label>
+      `).join("");
+    }
+
+    function selectedStandaloneFieldsFromDialog() {
+      return [...document.querySelectorAll('#fieldSettingsOptions input[type="checkbox"]:checked')]
+        .map((input) => String(input.value || ""))
+        .filter(Boolean);
+    }
+
+    async function openFieldSettings() {
+      const backdrop = $("fieldSettingsBackdrop");
+      if (!backdrop) return;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      $("fieldSettingsStatus").textContent = "Loading field settings...";
+      $("fieldSettingsStatus").className = "citation-settings-status";
+      try {
+        await loadFieldSettings({force: true, render: false});
+        renderFieldSettingsOptions();
+        $("fieldSettingsStatus").textContent = "Unchecked fields are grouped under Other Fields; All Fields always remains last.";
+      } catch (error) {
+        $("fieldSettingsStatus").textContent = error.message || "Could not load field settings";
+        $("fieldSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function closeFieldSettings() {
+      $("fieldSettingsBackdrop")?.classList.remove("open");
+      $("fieldSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    async function saveFieldSettings(standaloneOverride = null) {
+      const standaloneFields = standaloneOverride || selectedStandaloneFieldsFromDialog();
+      $("fieldSettingsStatus").textContent = "Saving field settings...";
+      $("fieldSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/fields", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({standalone_fields: standaloneFields})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save field settings");
+        applyFieldSettings(data.field_settings || {});
+        renderFieldSettingsOptions();
+        $("fieldSettingsStatus").textContent = "Field presentation saved. Existing paper classifications were preserved.";
+        $("fieldSettingsStatus").className = "citation-settings-status ok";
+      } catch (error) {
+        $("fieldSettingsStatus").textContent = error.message || "Could not save field settings";
+        $("fieldSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function resetFieldSettings() {
+      const defaults = state.fieldSettings?.default_standalone_fields || DEFAULT_FIELD_SETTINGS.default_standalone_fields;
+      saveFieldSettings([...defaults]);
+    }
+
     async function openPdfRenameSettings() {
       const backdrop = $("pdfRenameSettingsBackdrop");
       if (!backdrop) return;
@@ -51508,6 +52450,77 @@ INDEX_HTML = """<!doctype html>
       $("adsTokenInput").value = "";
       $("openalexKeyInput").value = "";
       $("semanticScholarKeyInput").value = "";
+    }
+
+    async function openArxivSettings() {
+      const backdrop = $("arxivSettingsBackdrop");
+      if (!backdrop) return;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      $("arxivSettingsStatus").textContent = "Loading arXiv subject archives...";
+      $("arxivSettingsStatus").className = "citation-settings-status";
+      try {
+        await loadArxivSettings({force: true});
+        renderArxivScopeOptions(state.arxivSettings || {});
+        $("arxivSettingsStatus").textContent = "Checked groups are combined for future arXiv discovery.";
+      } catch (error) {
+        $("arxivSettingsStatus").textContent = error.message || "Could not load arXiv settings";
+        $("arxivSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function closeArxivSettings() {
+      $("arxivSettingsBackdrop")?.classList.remove("open");
+      $("arxivSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    async function saveArxivSettings(scopeOverride = null) {
+      const scopeIds = scopeOverride || selectedArxivScopeIdsFromDialog();
+      if (!scopeIds.length) {
+        $("arxivSettingsStatus").textContent = "Select at least one arXiv subject group.";
+        $("arxivSettingsStatus").className = "citation-settings-status err";
+        return;
+      }
+      $("arxivSettingsStatus").textContent = "Saving arXiv discovery scope...";
+      $("arxivSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/arxiv", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({scope_ids: scopeIds})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save arXiv settings");
+        applyArxivSettings(data.arxiv || {}, {resetSelection: true});
+        state.monthLoaded = false;
+        state.reportCache = {};
+        state.reportCacheOrder = [];
+        state.noMatchDates = new Set();
+        renderPreprintFilters();
+        if (state.mode === "report") {
+          await loadMonth({force: true});
+          delete state.reportCache[state.selectedDate];
+          await loadReport();
+        }
+        renderArxivScopeOptions(data.arxiv || {});
+        $("arxivSettingsStatus").textContent = "arXiv scopes saved. Existing papers were kept; the new selection is used on the next refresh.";
+        $("arxivSettingsStatus").className = "citation-settings-status ok";
+      } catch (error) {
+        $("arxivSettingsStatus").textContent = error.message || "Could not save arXiv settings";
+        $("arxivSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function resetArxivSettings() {
+      const defaults = state.arxivSettings?.default_scope_ids || ["physics/cond-mat"];
+      const selected = new Set(defaults);
+      document.querySelectorAll('#arxivScopeOptions input[type="checkbox"]').forEach((input) => {
+        input.checked = selected.has(String(input.value || ""));
+      });
+      const summary = $("arxivScopeSummary");
+      if (summary) summary.textContent = arxivScopeSummary(state.arxivSettings || {}, defaults);
+      $("arxivSettingsStatus").textContent = "Default selection restored in this window. Choose Save to apply it.";
+      $("arxivSettingsStatus").className = "citation-settings-status";
     }
 
     function updateCitationSettingsUi(ads) {
@@ -52263,7 +53276,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function startThemeDragGesture(event, key, label) {
-      if (event.button !== 0 || event.target.closest?.("input, button")) return;
+      if (event.button !== 0 || event.target.closest?.("input, .theme-add-btn")) return;
       themeDragGesture = {
         key,
         label,
@@ -52535,6 +53548,7 @@ INDEX_HTML = """<!doctype html>
 
     async function loadThemeMonth(options = {}) {
       try {
+        await loadFieldSettings({render: false});
         await ensureThemeGroupsLoaded();
         const groupParam = selectedThemeGroupParam();
         const cacheKey = `${state.viewYear}-${String(state.viewMonth).padStart(2, "0")}|${groupParam}`;
@@ -52817,77 +53831,39 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = "";
       const themeFilterGroups = state.themeGroupsLoaded ? state.themeGroups : [];
       if (!themeFilterGroups.length) {
-        root.innerHTML = `<div class="empty">No subjects configured.</div>`;
+        root.innerHTML = `<div class="monitor-status-message">No subjects configured.</div>`;
         return;
       }
       themeFilterGroups.forEach((group) => {
         const key = group.key;
         const labelText = group.name || key;
-        const label = document.createElement("label");
-        label.className = "journal-toggle theme-toggle";
-        label.draggable = false;
-        label.dataset.themeKey = key;
-        label.title = (group.queries || []).join(", ");
-        label.innerHTML = `<input type="checkbox" ${state.selectedThemeGroups.has(key) ? "checked" : ""}>
-          <span>${escapeHtml(labelText)}</span><b>${counts[key] || 0}</b>`;
-        label.querySelector("input").addEventListener("change", async (event) => {
-	          if (event.target.checked) state.selectedThemeGroups.add(key);
-	          else state.selectedThemeGroups.delete(key);
-	          if (!state.selectedThemeGroups.size) state.selectedThemeGroups.add(key);
-	          state.themeGroup = selectedThemeGroupParam();
-	          saveSelectedThemeGroups();
-	          await loadThemeMonth({force: true}).catch((error) => handleMonthLoadFailure(error));
-          await loadThemeReportForDate(state.selectedDate).catch((error) => handleThemeLoadFailure(error, state.selectedDate));
-        });
-        label.addEventListener("contextmenu", (event) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `theme-toggle${key === state.activeThemeGroupKey ? " active" : ""}`;
+        button.dataset.themeKey = key;
+        button.title = (group.queries || []).join(", ") || labelText;
+        button.setAttribute("aria-current", key === state.activeThemeGroupKey ? "true" : "false");
+        button.innerHTML = `
+          <span class="journal-drag-handle" aria-hidden="true">⠿</span>
+          <span class="theme-toggle-label">${escapeHtml(labelText)}</span>
+          <span class="theme-toggle-count">${counts[key] || 0}</span>
+        `;
+        button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
           event.stopPropagation();
           showThemeContextMenu(event, group);
         });
-        label.addEventListener("mousedown", (event) => startThemeDragGesture(event, key, label));
-        label.addEventListener("click", (event) => {
-          if (!state.themeSuppressNextClick) return;
-          event.preventDefault();
-          event.stopPropagation();
-          state.themeSuppressNextClick = false;
-        }, true);
-        label.addEventListener("dragstart", (event) => {
-          if (event.target.closest?.("input")) {
+        button.addEventListener("mousedown", (event) => startThemeDragGesture(event, key, button));
+        button.addEventListener("click", (event) => {
+          if (state.themeSuppressNextClick) {
             event.preventDefault();
+            event.stopPropagation();
+            state.themeSuppressNextClick = false;
             return;
           }
-          hideThemeContextMenu();
-          state.themeDragKey = key;
-          label.classList.add("dragging");
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("text/plain", key);
+          selectThemeSubject(key, {focusPapers: false});
         });
-        label.addEventListener("dragover", (event) => {
-          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
-          if (!dragKey || dragKey === key) return;
-          event.preventDefault();
-          const rect = label.getBoundingClientRect();
-          const after = event.clientY > rect.top + rect.height / 2;
-          label.classList.toggle("drag-over-before", !after);
-          label.classList.toggle("drag-over-after", after);
-        });
-        label.addEventListener("dragleave", () => {
-          label.classList.remove("drag-over-before", "drag-over-after");
-        });
-        label.addEventListener("drop", (event) => {
-          const dragKey = state.themeDragKey || event.dataTransfer.getData("text/plain");
-          if (!dragKey || dragKey === key) return;
-          event.preventDefault();
-          const rect = label.getBoundingClientRect();
-          const after = event.clientY > rect.top + rect.height / 2;
-          clearThemeDragMarkers();
-          moveThemeGroup(dragKey, key, after);
-        });
-        label.addEventListener("dragend", () => {
-          state.themeDragKey = "";
-          clearThemeDragMarkers();
-        });
-        root.appendChild(label);
+        root.appendChild(button);
       });
     }
 
@@ -52931,6 +53907,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openThemeMonitor() {
+      await loadFieldSettings({render: false});
       const returnViewport = state.monitorReturnViewports.theme;
       state.mode = "theme";
       state.reportSelectedPaperId = state.monitorSelectedPaperIds.theme || "";
@@ -53087,6 +54064,22 @@ INDEX_HTML = """<!doctype html>
       }));
     }
 
+    function selectThemeSubject(key, options = {}) {
+      const groups = groupedThemePapers();
+      const entry = groups.find((group) => group.key === key);
+      if (!entry) return false;
+      state.primaryKeyboardLayer = "content";
+      syncPrimaryKeyboardLayer({focus: false});
+      state.monitorKeyboardPanes.theme = "papers";
+      setActiveThemeGroupKey(entry.key);
+      state.reportSelectedPaperId = entry.papers[0]?.paper_id || "";
+      state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
+      renderThemeMonitor();
+      revealActiveReportTab({smooth: true});
+      if (options.focusPapers !== false) focusMonitorPaperSelection("theme");
+      return true;
+    }
+
     function renderThemeTabs(groups) {
       const root = $("reportTabs");
       root.innerHTML = "";
@@ -53112,14 +54105,7 @@ INDEX_HTML = """<!doctype html>
         `;
         button.addEventListener("click", () => {
           if (state.themeSuppressNextClick) return;
-          state.primaryKeyboardLayer = "content";
-          syncPrimaryKeyboardLayer({focus: false});
-          state.monitorKeyboardPanes.theme = "papers";
-          setActiveThemeGroupKey(entry.key);
-          state.reportSelectedPaperId = entry.papers[0]?.paper_id || "";
-          state.monitorSelectedPaperIds.theme = state.reportSelectedPaperId;
-          renderThemeMonitor();
-          focusMonitorPaperSelection("theme");
+          selectThemeSubject(entry.key);
         });
         button.addEventListener("contextmenu", (event) => {
           event.preventDefault();
@@ -53225,6 +54211,7 @@ INDEX_HTML = """<!doctype html>
       const groups = groupedThemePapers(visiblePapers);
       const currentGroup = groups.find((group) => group.key === state.activeThemeGroupKey);
       if (!currentGroup) setActiveThemeGroupKey(groups[0]?.key || "", {renderCalendar: false});
+      renderThemeFilters();
       renderThemeTabs(groups);
       const activeGroup = groups.find((group) => group.key === state.activeThemeGroupKey) || groups[0] || null;
       const activePapers = activeGroup?.papers || [];
@@ -53767,6 +54754,18 @@ INDEX_HTML = """<!doctype html>
     $("citationSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("citationSettingsBackdrop")) closeCitationSettings();
     });
+    $("closeArxivSettings").addEventListener("click", closeArxivSettings);
+    $("arxivSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("arxivSettingsBackdrop")) closeArxivSettings();
+    });
+    $("saveArxivSettings").addEventListener("click", () => saveArxivSettings());
+    $("resetArxivSettings").addEventListener("click", resetArxivSettings);
+    $("closeFieldSettings").addEventListener("click", closeFieldSettings);
+    $("fieldSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("fieldSettingsBackdrop")) closeFieldSettings();
+    });
+    $("saveFieldSettings").addEventListener("click", () => saveFieldSettings());
+    $("resetFieldSettings").addEventListener("click", resetFieldSettings);
     $("closePdfRenameSettings").addEventListener("click", closePdfRenameSettings);
     $("pdfRenameSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("pdfRenameSettingsBackdrop")) closePdfRenameSettings();
@@ -53846,6 +54845,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeCitationSettings();
+        return;
+      }
+      if ($("fieldSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFieldSettings();
         return;
       }
       if ($("pdfRenameSettingsBackdrop").classList.contains("open")) {
@@ -54027,6 +55032,8 @@ INDEX_HTML = """<!doctype html>
     window.updateNativeFinderDropTarget = updateNativeFinderDropTarget;
     window.clearNativeFinderDropTarget = clearLibraryFinderDropTarget;
     window.openCitationSettings = openCitationSettings;
+    window.openArxivSettings = openArxivSettings;
+    window.openFieldSettings = openFieldSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;

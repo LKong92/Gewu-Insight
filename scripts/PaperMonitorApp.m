@@ -1543,8 +1543,12 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [settingMenu addItem:namingRuleMenuItem];
     NSMenuItem *pdfRenameSettingsItem = [settingMenu addItemWithTitle:@"PDF Rename Settings" action:@selector(openPdfRenameSettings:) keyEquivalent:@""];
     pdfRenameSettingsItem.target = self;
+    NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
+    arxivSettingsItem.target = self;
     NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
     citationSettingsItem.target = self;
+    NSMenuItem *fieldSettingsItem = [settingMenu addItemWithTitle:@"Field Settings" action:@selector(openFieldSettings:) keyEquivalent:@""];
+    fieldSettingsItem.target = self;
     [settingMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *clearCacheItem = [settingMenu addItemWithTitle:@"Clear Web Cache" action:@selector(clearWebCache:) keyEquivalent:@""];
     clearCacheItem.target = self;
@@ -1696,6 +1700,14 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openCitationSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openCitationSettings && window.openCitationSettings()" completionHandler:nil];
+}
+
+- (void)openArxivSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openArxivSettings && window.openArxivSettings()" completionHandler:nil];
+}
+
+- (void)openFieldSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openFieldSettings && window.openFieldSettings()" completionHandler:nil];
 }
 
 - (void)openPdfRenameSettings:(id)sender {

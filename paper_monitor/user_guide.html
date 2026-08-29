@@ -564,6 +564,8 @@
         <section class="nav-group">
           <h2 class="nav-heading">Settings and Safety</h2>
           <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
+          <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
+          <button class="topic-link" data-topic="field-settings">Field Settings</button>
           <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
           <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
           <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
@@ -1194,7 +1196,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/library-paper-files.png" alt="Library column view with a selected paper, its Paper Files bundle, and Paper Details">
-            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its current PDF and earlier version appear together as one paper bundle. This and the following guide images use a disposable documentation profile populated through the same supported public discovery and profile interfaces as the app; the production database and credentials are not included.</figcaption>
+            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and article figure stay connected in the adjacent views.</figcaption>
           </figure>
 
           <h2>Read the columns from left to right</h2>
@@ -1754,8 +1756,8 @@
           <p class="lead">My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/my-publications.png" alt="My Publications showing a documentation profile, publication table, and summary statistics">
-            <figcaption><strong>My Publications.</strong> A profile, managed publication list, citation columns, and authorship summary share one view. The person and metrics shown here are demonstration data, not a signed-in account.</figcaption>
+            <img src="/user-guide-assets/my-publications.png" alt="My Publications showing the active profile, resolved publication table, and authorship summary">
+            <figcaption><strong>My Publications.</strong> The active profile, DOI-resolved publication list, citation evidence, article figure, and authorship summary share one view.</figcaption>
           </figure>
 
           <h2>Choose your profile</h2>
@@ -1800,7 +1802,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor with a selected date, journal groups, filters, and paper cards">
-            <figcaption><strong>Journal Monitor.</strong> Calendar, journal groups, field filters, and paper cards describe a stored day after a normal product fetch into the disposable documentation profile. Capturing the stored result does not make a new publisher request.</figcaption>
+            <figcaption><strong>Journal Monitor.</strong> Nature is selected for a stored publication date; the paper cards retain their metadata and loaded scientific figures while calendar, journal, and field controls remain available.</figcaption>
           </figure>
 
           <h2>Refresh a date</h2>
@@ -1861,7 +1863,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with per-subject tabs, calendar counts, and matching paper cards">
-            <figcaption><strong>Subject Monitor.</strong> The active subject stays selected across dates, and the calendar counts belong to that subject rather than the total across every topic.</figcaption>
+            <figcaption><strong>Subject Monitor.</strong> Superconductivity remains the active subject, its calendar counts are subject-specific, and the refreshed result cards include matching evidence and available figures.</figcaption>
           </figure>
 
           <h2>Create a subject</h2>
@@ -1905,7 +1907,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/author-monitor.png" alt="Author Monitor with locally stored profile images and a selected author's publications">
-            <figcaption><strong>Author Monitor.</strong> Locally stored demonstration portraits keep the monitored-author list stable without contacting a profile site when the view opens.</figcaption>
+            <figcaption><strong>Author Monitor.</strong> Hong Ding's profile is selected; locally cached portraits keep the monitored-author list stable while the publication history and current paper details remain visible together.</figcaption>
           </figure>
 
           <h2>Add an author</h2>
@@ -1963,7 +1965,62 @@
 
           <div class="important"><span class="callout-title">Important</span>Credentials are local-only: store them in local SQLite or approved environment variables. Do not place keys in source files, logs, exported reports, tests, or Git.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#privacy">Local Data and Privacy</a><a href="#loader-maintenance">Refresh an Imported Library</a><a href="#network-access">Publisher and Network Access</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#field-settings">Field Settings</a><a href="#privacy">Local Data and Privacy</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="arxiv-scope-settings" data-group="Settings and Safety" data-title="arXiv Scope Settings" data-keywords="arXiv archive scope multi select primary subject secondary group Physics Condensed Matter Computer Science Mathematics Economics EESS Quantitative Biology Finance Statistics categories discovery">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Choose arXiv Discovery Scopes</h1>
+          <p class="lead">Choose one or more arXiv subject archives for discovery. Selections can span several research fields or combine several groups within one field.</p>
+
+          <h2>Open arXiv Scope Settings</h2>
+          <p>Choose <span class="ui">Setting &gt; arXiv Scope Settings</span>. The window lists every supported primary subject and its archive groups. Select at least one group, then choose <span class="ui">Save</span>.</p>
+
+          <h2>Understand the hierarchy</h2>
+          <p>The first level identifies a broad arXiv subject such as Physics, Computer Science, Mathematics, Economics, Electrical Engineering and Systems Science, Quantitative Biology, Quantitative Finance, or Statistics. Each checkbox represents an archive group beneath that subject. For example, <span class="ui">Physics &gt; Condensed Matter</span> includes all <code>cond-mat.*</code> leaf categories.</p>
+          <p>You may select several groups under Physics, or combine groups across primary subjects. Categories shared by more than one scope are fetched only once.</p>
+
+          <h2>Default and saved behavior</h2>
+          <ul>
+            <li>The default selection is only <span class="ui">Physics &gt; Condensed Matter</span>.</li>
+            <li><span class="ui">Restore Defaults</span> changes the selection in the window; choose <span class="ui">Save</span> to apply it.</li>
+            <li>Saving changes future arXiv refresh coverage and rebuilds the available <span class="ui">Preprint Filter</span> categories.</li>
+            <li>Previously saved papers remain in SQLite. Changing scopes never deletes earlier discoveries.</li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>The category checkboxes in Journal Monitor are display filters. They do not narrow the discovery scope selected here.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#field-settings">Field Settings</a><a href="#citation-settings">Citation Settings</a><a href="#network-access">Publisher and Network Access</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="field-settings" data-group="Settings and Safety" data-title="Field Settings" data-keywords="field settings discipline classification standalone other fields all fields physics quantum information materials chemistry astronomy astrophysics particle nuclear mathematics computer science biology medicine statistics economics finance electrical engineering earth environmental social sciences">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Choose Which Research Fields Appear Separately</h1>
+          <p class="lead">Gewu Insight keeps a detailed canonical field classification while letting each workspace decide which fields deserve their own visible filter.</p>
+
+          <h2>Open Field Settings</h2>
+          <p>Choose <span class="ui">Setting &gt; Field Settings</span>. Select a field to show it as a separate filter and label. Clear it to collect that field under <span class="ui">Other Fields</span>.</p>
+
+          <h2>Default organization</h2>
+          <table class="plain-table">
+            <tr><th>Shown separately by default</th><th>Grouped under Other Fields by default</th></tr>
+            <tr>
+              <td>Physics<br>Quantum Information<br>Materials Science<br>Chemistry</td>
+              <td>Astronomy &amp; Astrophysics<br>Particle &amp; Nuclear Physics<br>Mathematics<br>Computer Science<br>Biology &amp; Medicine<br>Statistics<br>Economics &amp; Finance<br>Electrical Engineering<br>Earth &amp; Environmental Science<br>Social Sciences<br>Unclassified records</td>
+            </tr>
+          </table>
+
+          <h2>How the visible filters behave</h2>
+          <ul>
+            <li><span class="ui">Other Fields</span> appears immediately above <span class="ui">All Fields</span>.</li>
+            <li><span class="ui">All Fields</span> is always the final choice and includes every classified paper.</li>
+            <li>Changing this setting updates field filters, counts, badges, and Paper Details across Journal Monitor, Subject Monitor, Library, My Publications, and Author Monitor.</li>
+            <li>The setting changes presentation, not evidence. Canonical field assignments remain in SQLite and become visible again if a field is later selected.</li>
+          </ul>
+
+          <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
+
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Citation Settings</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">

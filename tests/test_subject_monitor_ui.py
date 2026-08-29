@@ -26,6 +26,36 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('moveThemeGroup', render_tabs)
         self.assertLess(render_tabs.index('subject-add-tab'), render_tabs.index('groups.forEach'))
 
+    def test_subject_sidebar_lists_the_active_subject_below_the_calendar(self):
+        sidebar = INDEX_HTML.split('id="monitorSidebarSummary"', 1)[1].split(
+            'class="filters journal-sidebar-filter"', 1
+        )[0]
+        filters = INDEX_HTML.split('function renderThemeFilters', 1)[1].split(
+            'function defaultThemeFromDate', 1
+        )[0]
+        selection = INDEX_HTML.split('function selectThemeSubject', 1)[1].split(
+            'function renderThemeTabs', 1
+        )[0]
+        tabs = INDEX_HTML.split('function renderThemeTabs', 1)[1].split(
+            'function activeThemePapers', 1
+        )[0]
+        monitor = INDEX_HTML.split('function renderThemeMonitor', 1)[1].split(
+            'function themeLastFetchLabel', 1
+        )[0]
+
+        self.assertIn('id="themeSidebarFilter"', sidebar)
+        self.assertIn('<div class="filter-title">Subjects</div>', sidebar)
+        self.assertIn('aria-label="Monitored subjects"', sidebar)
+        self.assertIn('key === state.activeThemeGroupKey ? " active" : ""', filters)
+        self.assertIn('aria-current', filters)
+        self.assertIn('theme-toggle-count', filters)
+        self.assertIn('selectThemeSubject(key, {focusPapers: false})', filters)
+        self.assertNotIn('type="checkbox"', filters)
+        self.assertIn('setActiveThemeGroupKey(entry.key)', selection)
+        self.assertIn('renderThemeMonitor()', selection)
+        self.assertIn('selectThemeSubject(entry.key)', tabs)
+        self.assertIn('renderThemeFilters()', monitor)
+
     def test_subject_selection_survives_empty_dates_and_calendar_uses_active_subject(self):
         calendar_day = INDEX_HTML.split('function updateCalendarDayButton', 1)[1].split(
             'function renderCalendar', 1
@@ -269,7 +299,7 @@ class SubjectMonitorUiTests(unittest.TestCase):
         self.assertIn('updateThemeFetchProgressDisplay(state.selectedDate)', theme_render)
         self.assertNotIn('root.insertAdjacentHTML("beforeend", themeFetchProgressMarkup', theme_render)
         self.assertNotIn('renderLateArrivalsBanner(statusRoot)', journal_render)
-        self.assertIn('renderArxivUpdateCountdown(statusRoot', journal_render)
+        self.assertIn('renderArxivUpdateCountdown($("arxivCountdownHost")', journal_render)
         self.assertIn('renderMonitorPaperList(root, activePapers, "report")', journal_render)
 
     def test_monitor_empty_states_are_compact_and_watermark_uses_the_full_paper_surface(self):
@@ -295,7 +325,7 @@ class SubjectMonitorUiTests(unittest.TestCase):
         watermark_css = INDEX_HTML.split('.papers > .runtime-branded-empty {', 1)[1].split('}', 1)[0]
         self.assertIn('position: absolute;', watermark_css)
         self.assertIn('inset: 0;', watermark_css)
-        self.assertIn('.app.theme-mode .report-column > .papers { grid-row: 7; }', INDEX_HTML)
+        self.assertIn('.app.theme-mode .report-column > .papers { grid-row: 8; }', INDEX_HTML)
 
     def test_legacy_empty_states_are_globally_compact_without_affecting_progress_panels(self):
         empty_css = INDEX_HTML.split('.empty {', 1)[1].split('}', 1)[0]

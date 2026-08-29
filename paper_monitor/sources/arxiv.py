@@ -17,19 +17,221 @@ from ..time_utils import local_timezone
 
 
 ARXIV_JOURNAL_NAME = "arXiv"
-ARXIV_CONDENSED_MATTER_CATEGORIES = [
-    {"code": "cond-mat.dis-nn", "label": "Disordered Systems and Neural Networks"},
-    {"code": "cond-mat.mes-hall", "label": "Mesoscale and Nanoscale Physics"},
-    {"code": "cond-mat.mtrl-sci", "label": "Materials Science"},
-    {"code": "cond-mat.other", "label": "Other Condensed Matter"},
-    {"code": "cond-mat.quant-gas", "label": "Quantum Gases"},
-    {"code": "cond-mat.soft", "label": "Soft Condensed Matter"},
-    {"code": "cond-mat.stat-mech", "label": "Statistical Mechanics"},
-    {"code": "cond-mat.str-el", "label": "Strongly Correlated Electrons"},
-    {"code": "cond-mat.supr-con", "label": "Superconductivity"},
+DEFAULT_ARXIV_PRIMARY_SUBJECT = "physics"
+DEFAULT_ARXIV_SECONDARY_SUBJECT = "cond-mat"
+DEFAULT_ARXIV_SCOPE_IDS = ("physics/cond-mat",)
+
+
+def _categories(*items: tuple[str, str]) -> list[dict[str, str]]:
+    return [{"code": code, "label": label} for code, label in items]
+
+
+ARXIV_SUBJECT_HIERARCHY = [
+    {
+        "code": "physics", "label": "Physics", "groups": [
+            {"code": "astro-ph", "label": "Astrophysics", "categories": _categories(
+                ("astro-ph.CO", "Cosmology and Nongalactic Astrophysics"), ("astro-ph.EP", "Earth and Planetary Astrophysics"),
+                ("astro-ph.GA", "Astrophysics of Galaxies"), ("astro-ph.HE", "High Energy Astrophysical Phenomena"),
+                ("astro-ph.IM", "Instrumentation and Methods for Astrophysics"), ("astro-ph.SR", "Solar and Stellar Astrophysics"),
+            )},
+            {"code": "cond-mat", "label": "Condensed Matter", "categories": _categories(
+                ("cond-mat.dis-nn", "Disordered Systems and Neural Networks"), ("cond-mat.mes-hall", "Mesoscale and Nanoscale Physics"),
+                ("cond-mat.mtrl-sci", "Materials Science"), ("cond-mat.other", "Other Condensed Matter"),
+                ("cond-mat.quant-gas", "Quantum Gases"), ("cond-mat.soft", "Soft Condensed Matter"),
+                ("cond-mat.stat-mech", "Statistical Mechanics"), ("cond-mat.str-el", "Strongly Correlated Electrons"),
+                ("cond-mat.supr-con", "Superconductivity"),
+            )},
+            {"code": "gr-qc", "label": "General Relativity and Quantum Cosmology", "categories": _categories(("gr-qc", "General Relativity and Quantum Cosmology"))},
+            {"code": "hep-ex", "label": "High Energy Physics - Experiment", "categories": _categories(("hep-ex", "High Energy Physics - Experiment"))},
+            {"code": "hep-lat", "label": "High Energy Physics - Lattice", "categories": _categories(("hep-lat", "High Energy Physics - Lattice"))},
+            {"code": "hep-ph", "label": "High Energy Physics - Phenomenology", "categories": _categories(("hep-ph", "High Energy Physics - Phenomenology"))},
+            {"code": "hep-th", "label": "High Energy Physics - Theory", "categories": _categories(("hep-th", "High Energy Physics - Theory"))},
+            {"code": "math-ph", "label": "Mathematical Physics", "categories": _categories(("math-ph", "Mathematical Physics"))},
+            {"code": "nlin", "label": "Nonlinear Sciences", "categories": _categories(
+                ("nlin.AO", "Adaptation and Self-Organizing Systems"), ("nlin.CD", "Chaotic Dynamics"),
+                ("nlin.CG", "Cellular Automata and Lattice Gases"), ("nlin.PS", "Pattern Formation and Solitons"),
+                ("nlin.SI", "Exactly Solvable and Integrable Systems"),
+            )},
+            {"code": "nucl-ex", "label": "Nuclear Experiment", "categories": _categories(("nucl-ex", "Nuclear Experiment"))},
+            {"code": "nucl-th", "label": "Nuclear Theory", "categories": _categories(("nucl-th", "Nuclear Theory"))},
+            {"code": "physics", "label": "General Physics", "categories": _categories(
+                ("physics.acc-ph", "Accelerator Physics"), ("physics.ao-ph", "Atmospheric and Oceanic Physics"),
+                ("physics.app-ph", "Applied Physics"), ("physics.atm-clus", "Atomic and Molecular Clusters"),
+                ("physics.atom-ph", "Atomic Physics"), ("physics.bio-ph", "Biological Physics"),
+                ("physics.chem-ph", "Chemical Physics"), ("physics.class-ph", "Classical Physics"),
+                ("physics.comp-ph", "Computational Physics"), ("physics.data-an", "Data Analysis, Statistics and Probability"),
+                ("physics.flu-dyn", "Fluid Dynamics"), ("physics.gen-ph", "General Physics"),
+                ("physics.geo-ph", "Geophysics"), ("physics.hist-ph", "History and Philosophy of Physics"),
+                ("physics.ins-det", "Instrumentation and Detectors"), ("physics.med-ph", "Medical Physics"),
+                ("physics.optics", "Optics"), ("physics.plasm-ph", "Plasma Physics"),
+                ("physics.pop-ph", "Popular Physics"), ("physics.soc-ph", "Physics and Society"),
+                ("physics.space-ph", "Space Physics"),
+            )},
+            {"code": "quant-ph", "label": "Quantum Physics", "categories": _categories(("quant-ph", "Quantum Physics"))},
+        ],
+    },
+    {"code": "computer_science", "label": "Computer Science", "groups": [
+        {"code": "cs", "label": "Computer Science", "categories": _categories(
+            ("cs.AI", "Artificial Intelligence"), ("cs.AR", "Hardware Architecture"), ("cs.CC", "Computational Complexity"),
+            ("cs.CE", "Computational Engineering, Finance, and Science"), ("cs.CG", "Computational Geometry"),
+            ("cs.CL", "Computation and Language"), ("cs.CR", "Cryptography and Security"), ("cs.CV", "Computer Vision and Pattern Recognition"),
+            ("cs.CY", "Computers and Society"), ("cs.DB", "Databases"), ("cs.DC", "Distributed, Parallel, and Cluster Computing"),
+            ("cs.DL", "Digital Libraries"), ("cs.DM", "Discrete Mathematics"), ("cs.DS", "Data Structures and Algorithms"),
+            ("cs.ET", "Emerging Technologies"), ("cs.FL", "Formal Languages and Automata Theory"), ("cs.GL", "General Literature"),
+            ("cs.GR", "Graphics"), ("cs.GT", "Computer Science and Game Theory"), ("cs.HC", "Human-Computer Interaction"),
+            ("cs.IR", "Information Retrieval"), ("cs.IT", "Information Theory"), ("cs.LG", "Machine Learning"),
+            ("cs.LO", "Logic in Computer Science"), ("cs.MA", "Multiagent Systems"), ("cs.MM", "Multimedia"),
+            ("cs.MS", "Mathematical Software"), ("cs.NA", "Numerical Analysis"), ("cs.NE", "Neural and Evolutionary Computing"),
+            ("cs.NI", "Networking and Internet Architecture"), ("cs.OH", "Other Computer Science"), ("cs.OS", "Operating Systems"),
+            ("cs.PF", "Performance"), ("cs.PL", "Programming Languages"), ("cs.RO", "Robotics"),
+            ("cs.SC", "Symbolic Computation"), ("cs.SD", "Sound"), ("cs.SE", "Software Engineering"),
+            ("cs.SI", "Social and Information Networks"), ("cs.SY", "Systems and Control"),
+        )},
+    ]},
+    {"code": "economics", "label": "Economics", "groups": [
+        {"code": "econ", "label": "Economics", "categories": _categories(("econ.EM", "Econometrics"), ("econ.GN", "General Economics"), ("econ.TH", "Theoretical Economics"))},
+    ]},
+    {"code": "eess", "label": "Electrical Engineering and Systems Science", "groups": [
+        {"code": "eess", "label": "Electrical Engineering and Systems Science", "categories": _categories(
+            ("eess.AS", "Audio and Speech Processing"), ("eess.IV", "Image and Video Processing"),
+            ("eess.SP", "Signal Processing"), ("eess.SY", "Systems and Control"),
+        )},
+    ]},
+    {"code": "mathematics", "label": "Mathematics", "groups": [
+        {"code": "math", "label": "Mathematics", "categories": _categories(
+            ("math.AC", "Commutative Algebra"), ("math.AG", "Algebraic Geometry"), ("math.AP", "Analysis of PDEs"),
+            ("math.AT", "Algebraic Topology"), ("math.CA", "Classical Analysis and ODEs"), ("math.CO", "Combinatorics"),
+            ("math.CT", "Category Theory"), ("math.CV", "Complex Variables"), ("math.DG", "Differential Geometry"),
+            ("math.DS", "Dynamical Systems"), ("math.FA", "Functional Analysis"), ("math.GM", "General Mathematics"),
+            ("math.GN", "General Topology"), ("math.GR", "Group Theory"), ("math.GT", "Geometric Topology"),
+            ("math.HO", "History and Overview"), ("math.IT", "Information Theory"), ("math.KT", "K-Theory and Homology"),
+            ("math.LO", "Logic"), ("math.MG", "Metric Geometry"), ("math.MP", "Mathematical Physics"),
+            ("math.NA", "Numerical Analysis"), ("math.NT", "Number Theory"), ("math.OA", "Operator Algebras"),
+            ("math.OC", "Optimization and Control"), ("math.PR", "Probability"), ("math.QA", "Quantum Algebra"),
+            ("math.RA", "Rings and Algebras"), ("math.RT", "Representation Theory"), ("math.SG", "Symplectic Geometry"),
+            ("math.SP", "Spectral Theory"), ("math.ST", "Statistics Theory"),
+        )},
+    ]},
+    {"code": "q_bio", "label": "Quantitative Biology", "groups": [
+        {"code": "q-bio", "label": "Quantitative Biology", "categories": _categories(
+            ("q-bio.BM", "Biomolecules"), ("q-bio.CB", "Cell Behavior"), ("q-bio.GN", "Genomics"),
+            ("q-bio.MN", "Molecular Networks"), ("q-bio.NC", "Neurons and Cognition"), ("q-bio.OT", "Other Quantitative Biology"),
+            ("q-bio.PE", "Populations and Evolution"), ("q-bio.QM", "Quantitative Methods"),
+            ("q-bio.SC", "Subcellular Processes"), ("q-bio.TO", "Tissues and Organs"),
+        )},
+    ]},
+    {"code": "q_fin", "label": "Quantitative Finance", "groups": [
+        {"code": "q-fin", "label": "Quantitative Finance", "categories": _categories(
+            ("q-fin.CP", "Computational Finance"), ("q-fin.EC", "Economics"), ("q-fin.GN", "General Finance"),
+            ("q-fin.MF", "Mathematical Finance"), ("q-fin.PM", "Portfolio Management"), ("q-fin.PR", "Pricing of Securities"),
+            ("q-fin.RM", "Risk Management"), ("q-fin.ST", "Statistical Finance"), ("q-fin.TR", "Trading and Market Microstructure"),
+        )},
+    ]},
+    {"code": "statistics", "label": "Statistics", "groups": [
+        {"code": "stat", "label": "Statistics", "categories": _categories(
+            ("stat.AP", "Applications"), ("stat.CO", "Computation"), ("stat.ME", "Methodology"),
+            ("stat.ML", "Machine Learning"), ("stat.OT", "Other Statistics"), ("stat.TH", "Statistics Theory"),
+        )},
+    ]},
 ]
+
+
+def arxiv_subject_group(primary_subject: str, secondary_subject: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    primary = next((item for item in ARXIV_SUBJECT_HIERARCHY if item["code"] == primary_subject), None)
+    if primary is None:
+        primary = next(item for item in ARXIV_SUBJECT_HIERARCHY if item["code"] == DEFAULT_ARXIV_PRIMARY_SUBJECT)
+    group = next((item for item in primary["groups"] if item["code"] == secondary_subject), None)
+    if group is None:
+        preferred = DEFAULT_ARXIV_SECONDARY_SUBJECT if primary["code"] == DEFAULT_ARXIV_PRIMARY_SUBJECT else ""
+        group = next((item for item in primary["groups"] if item["code"] == preferred), primary["groups"][0])
+    return primary, group
+
+
+def arxiv_scope_id(primary_subject: str, secondary_subject: str) -> str:
+    return f"{primary_subject}/{secondary_subject}"
+
+
+def arxiv_scope_groups() -> list[dict[str, Any]]:
+    scopes: list[dict[str, Any]] = []
+    for primary in ARXIV_SUBJECT_HIERARCHY:
+        for group in primary["groups"]:
+            scopes.append({
+                "id": arxiv_scope_id(str(primary["code"]), str(group["code"])),
+                "primary_code": str(primary["code"]),
+                "primary_label": str(primary["label"]),
+                "group_code": str(group["code"]),
+                "group_label": str(group["label"]),
+                "categories": copy.deepcopy(group["categories"]),
+            })
+    return scopes
+
+
+def normalize_arxiv_scope_ids(scope_ids: Any) -> list[str]:
+    requested = scope_ids if isinstance(scope_ids, (list, tuple, set)) else []
+    selected = {str(value).strip() for value in requested if str(value).strip()}
+    return [scope["id"] for scope in arxiv_scope_groups() if scope["id"] in selected]
+
+
+def arxiv_categories_for_scopes(scope_ids: Any) -> list[str]:
+    selected = set(normalize_arxiv_scope_ids(scope_ids))
+    categories: list[str] = []
+    seen: set[str] = set()
+    for scope in arxiv_scope_groups():
+        if scope["id"] not in selected:
+            continue
+        for item in scope["categories"]:
+            code = str(item["code"])
+            if code not in seen:
+                categories.append(code)
+                seen.add(code)
+    return categories
+
+
+def arxiv_display_categories_for_scopes(scope_ids: Any) -> list[str]:
+    selected = normalize_arxiv_scope_ids(scope_ids)
+    categories = arxiv_categories_for_scopes(selected)
+    if selected == list(DEFAULT_ARXIV_SCOPE_IDS):
+        preferred = ["cond-mat.mes-hall", "cond-mat.str-el", "cond-mat.supr-con"]
+        return [code for code in preferred if code in categories]
+    return categories
+
+
+def arxiv_categories_for_subject(primary_subject: str, secondary_subject: str) -> list[str]:
+    _primary, group = arxiv_subject_group(primary_subject, secondary_subject)
+    return [str(item["code"]) for item in group["categories"]]
+
+
+def arxiv_display_categories_for_subject(primary_subject: str, secondary_subject: str) -> list[str]:
+    categories = arxiv_categories_for_subject(primary_subject, secondary_subject)
+    if secondary_subject == "cond-mat":
+        preferred = ["cond-mat.mes-hall", "cond-mat.str-el", "cond-mat.supr-con"]
+        return [code for code in preferred if code in categories]
+    return categories
+
+
+def arxiv_subject_hierarchy_payload() -> list[dict[str, Any]]:
+    return copy.deepcopy(ARXIV_SUBJECT_HIERARCHY)
+
+
+def arxiv_archive_for_categories(categories: list[str]) -> str:
+    selected = [str(code) for code in categories if code]
+    if not selected:
+        return DEFAULT_ARXIV_SECONDARY_SUBJECT
+    code = selected[0]
+    prefix = code.split(".", 1)[0]
+    archives = {group["code"] for primary in ARXIV_SUBJECT_HIERARCHY for group in primary["groups"]}
+    return prefix if prefix in archives else code
+
+
+ARXIV_CONDENSED_MATTER_CATEGORIES = arxiv_subject_group("physics", "cond-mat")[1]["categories"]
 ARXIV_CONDENSED_MATTER_CODES = [item["code"] for item in ARXIV_CONDENSED_MATTER_CATEGORIES]
-ARXIV_DISPLAY_DEFAULT_CATEGORIES = ["cond-mat.mes-hall", "cond-mat.supr-con"]
+ARXIV_ALL_CATEGORY_CODES = {
+    item["code"]
+    for primary in ARXIV_SUBJECT_HIERARCHY
+    for group in primary["groups"]
+    for item in group["categories"]
+}
+ARXIV_DISPLAY_DEFAULT_CATEGORIES = arxiv_display_categories_for_subject("physics", "cond-mat")
 ARXIV_DEFAULT_CATEGORIES = ARXIV_CONDENSED_MATTER_CODES
 ARXIV_API_TIMEOUT = 25
 ARXIV_API_MAX_RETRIES = 2
@@ -57,7 +259,7 @@ def fetch_arxiv_condensed_matter(
     force_latest: bool = False,
     require_latest_listing: bool = False,
 ) -> list[dict[str, Any]]:
-    selected_categories = [code for code in (categories or ARXIV_DEFAULT_CATEGORIES) if code in ARXIV_CONDENSED_MATTER_CODES]
+    selected_categories = [code for code in (categories or ARXIV_DEFAULT_CATEGORIES) if code in ARXIV_ALL_CATEGORY_CODES]
     listing_error: Exception | None = None
     try:
         listing = fetch_latest_arxiv_listing_for_window(
@@ -282,7 +484,12 @@ def fetch_latest_arxiv_listing_for_window(
     local_tz: tzinfo | None = None,
     force: bool = False,
 ) -> list[dict[str, Any]] | None:
-    listing_date, papers = fetch_latest_arxiv_listing(local_tz=local_tz, force=force)
+    archive = arxiv_archive_for_categories(categories)
+    listing_date, papers = fetch_latest_arxiv_listing(
+        local_tz=local_tz,
+        force=force,
+        archive=archive,
+    )
     if listing_date is None:
         raise RuntimeError("arXiv latest listing did not include its listing date")
     target_tz = local_tz or local_timezone()
@@ -302,37 +509,39 @@ def fetch_latest_arxiv_listing(
     *,
     local_tz: tzinfo | None = None,
     force: bool = False,
+    archive: str = DEFAULT_ARXIV_SECONDARY_SUBJECT,
 ) -> tuple[date | None, list[dict[str, Any]]]:
     target_tz = local_tz or local_timezone()
-    cache_key = str(getattr(target_tz, "key", target_tz))
+    archive = clean_text(archive)
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", archive):
+        raise ValueError("Invalid arXiv archive")
+    cache_key = f"{getattr(target_tz, 'key', target_tz)}:{archive}"
     with ARXIV_LATEST_LISTING_LOCK:
-        cached_at = float(ARXIV_LATEST_LISTING_CACHE.get("fetched_at") or 0.0)
+        cached_entries = ARXIV_LATEST_LISTING_CACHE.setdefault("entries", {})
+        cached = cached_entries.get(cache_key) or {}
+        cached_at = float(cached.get("fetched_at") or 0.0)
         if (
             not force
-            and ARXIV_LATEST_LISTING_CACHE.get("timezone") == cache_key
+            and cached_at > 0
             and time.monotonic() - cached_at < ARXIV_LATEST_LISTING_CACHE_SECONDS
         ):
-            return ARXIV_LATEST_LISTING_CACHE.get("listing_date"), [
-                copy.deepcopy(paper) for paper in ARXIV_LATEST_LISTING_CACHE.get("papers") or []
+            return cached.get("listing_date"), [
+                copy.deepcopy(paper) for paper in cached.get("papers") or []
             ]
         response = request_with_retries(
             "GET",
-            ARXIV_LATEST_LISTING_URL,
+            f"https://arxiv.org/list/{archive}/new",
             params={"skip": 0, "show": 2000},
             headers={"Accept": "text/html,application/xhtml+xml"},
             timeout=ARXIV_API_TIMEOUT,
             max_retries=ARXIV_API_MAX_RETRIES,
         )
         listing_date, papers = parse_arxiv_latest_listing(response.text, local_tz=target_tz)
-        ARXIV_LATEST_LISTING_CACHE.clear()
-        ARXIV_LATEST_LISTING_CACHE.update(
-            {
-                "fetched_at": time.monotonic(),
-                "timezone": cache_key,
-                "listing_date": listing_date,
-                "papers": papers,
-            }
-        )
+        cached_entries[cache_key] = {
+            "fetched_at": time.monotonic(),
+            "listing_date": listing_date,
+            "papers": papers,
+        }
         return listing_date, [copy.deepcopy(paper) for paper in papers]
 
 

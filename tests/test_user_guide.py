@@ -103,6 +103,8 @@ class UserGuideTests(unittest.TestCase):
             "Subject Monitor",
             "Author Monitor",
             "Citation Settings",
+            "arXiv Scope Settings",
+            "Field Settings",
             "Visual Identity and Cultural Elements",
             "Keyboard Shortcuts",
             "Back Up and Upgrade",
@@ -114,6 +116,24 @@ class UserGuideTests(unittest.TestCase):
 
         self.assertNotIn("Development History", visible_text)
         self.assertNotIn("benchmark", visible_text.lower())
+
+    def test_field_settings_topic_documents_default_visible_and_grouped_fields(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        article = soup.find("article", id="field-settings")
+        self.assertIsNotNone(article)
+        text = article.get_text(" ", strip=True)
+        for phrase in (
+            "Physics",
+            "Quantum Information",
+            "Materials Science",
+            "Chemistry",
+            "Astronomy & Astrophysics",
+            "Particle & Nuclear Physics",
+            "Other Fields",
+            "All Fields",
+            "Restore Defaults",
+        ):
+            self.assertIn(phrase, text)
 
     def test_visual_identity_chapter_documents_assets_sources_and_usage(self) -> None:
         soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
@@ -183,6 +203,7 @@ class UserGuideTests(unittest.TestCase):
             "subject-monitor",
             "author-monitor",
             "citation-settings",
+            "arxiv-scope-settings",
             "naming",
             "storage-model",
             "privacy",
