@@ -47675,14 +47675,18 @@ INDEX_HTML = """<!doctype html>
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Escape"].includes(normalizedKey)) {
         return false;
       }
-      const target = document.activeElement && document.activeElement !== document.body
-        ? document.activeElement
-        : window;
-      target.dispatchEvent(new KeyboardEvent("keydown", {
+      handleGewuInsightWindowKeydown({
         key: normalizedKey,
-        bubbles: true,
-        cancelable: true
-      }));
+        target: document.body,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        repeat: false,
+        preventDefault() {},
+        stopPropagation() {},
+        stopImmediatePropagation() {}
+      });
       return true;
     };
 
@@ -54909,7 +54913,7 @@ INDEX_HTML = """<!doctype html>
     $("openLibraryQuickLookInPreview").addEventListener("click", openLibraryQuickLookInPreview);
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
-    window.addEventListener("keydown", (event) => {
+    function handleGewuInsightWindowKeydown(event) {
       if (handlePreviewCloseShortcut(event)) return;
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;
@@ -54980,7 +54984,8 @@ INDEX_HTML = """<!doctype html>
       hideLibraryTabContextMenu();
       hideMyPublicationContextMenu();
       closeAnalysis();
-    }, true);
+    }
+    window.addEventListener("keydown", handleGewuInsightWindowKeydown, true);
     window.addEventListener("click", (event) => {
       if (state.mode !== "author" || !state.authorMonitorConferenceExpanded) return;
       const target = event.target;

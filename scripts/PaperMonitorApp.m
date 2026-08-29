@@ -377,6 +377,10 @@
 @property(nonatomic) BOOL nativeQuickLookActive;
 @property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
 @property(nonatomic, strong) id nativeQuickLookKeyMonitor;
+@property(nonatomic) BOOL nativeQuickLookKeyDispatchInFlight;
+@property(nonatomic, copy) NSString *nativeQuickLookPendingKey;
+@property(nonatomic) NSInteger nativeQuickLookKeyDispatchGeneration;
+@property(nonatomic) BOOL nativeQuickLookReloadScheduled;
 - (void)toggleMainWindowFill;
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId;
@@ -387,6 +391,8 @@
 - (void)restoreMainWindowFocusForNativeQuickLook;
 - (void)installNativeQuickLookKeyMonitor;
 - (void)removeNativeQuickLookKeyMonitor;
+- (void)dispatchNativeQuickLookKey:(NSString *)key;
+- (void)scheduleNativeQuickLookReload;
 @end
 
 @implementation PaperMonitorDelegate
@@ -505,6 +511,7 @@
     if (![[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] || isDirectory) {
         return NO;
     }
+    BOOL wasActive = self.nativeQuickLookActive;
     self.nativeQuickLookURL = [NSURL fileURLWithPath:path isDirectory:NO];
     self.nativeQuickLookActive = YES;
     QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
@@ -512,14 +519,34 @@
     panel.delegate = self;
     panel.hidesOnDeactivate = NO;
     panel.becomesKeyOnlyIfNeeded = YES;
-    [panel reloadData];
-    [panel orderFront:nil];
+    if (!wasActive || !panel.isVisible) {
+        [panel reloadData];
+        [panel orderFront:nil];
+    } else {
+        [self scheduleNativeQuickLookReload];
+    }
     [self installNativeQuickLookKeyMonitor];
     [self restoreMainWindowFocusForNativeQuickLook];
     dispatch_async(dispatch_get_main_queue(), ^{
         [self restoreMainWindowFocusForNativeQuickLook];
     });
     return YES;
+}
+
+- (void)scheduleNativeQuickLookReload {
+    if (self.nativeQuickLookReloadScheduled) return;
+    self.nativeQuickLookReloadScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.nativeQuickLookReloadScheduled = NO;
+        if (!strongSelf.nativeQuickLookActive || !strongSelf.nativeQuickLookURL) return;
+        QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
+        [panel reloadData];
+        if (!panel.isVisible) [panel orderFront:nil];
+        [strongSelf restoreMainWindowFocusForNativeQuickLook];
+    });
 }
 
 - (void)restoreMainWindowFocusForNativeQuickLook {
@@ -545,18 +572,41 @@
                 case 53: key = @"Escape"; break;
                 default: return event;
             }
-            NSData *keyData = [NSJSONSerialization dataWithJSONObject:key options:NSJSONWritingFragmentsAllowed error:nil];
-            NSString *keyJSON = keyData
-                ? [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding]
-                : @"null";
-            NSString *script = [NSString stringWithFormat:
-                @"window.handleGewuInsightNativeQuickLookKey && window.handleGewuInsightNativeQuickLookKey(%@)",
-                keyJSON
-            ];
-            [strongSelf.webView evaluateJavaScript:script completionHandler:nil];
+            [strongSelf dispatchNativeQuickLookKey:key];
             [strongSelf restoreMainWindowFocusForNativeQuickLook];
             return nil;
         }];
+}
+
+- (void)dispatchNativeQuickLookKey:(NSString *)key {
+    if (!self.nativeQuickLookActive || key.length == 0) return;
+    if (self.nativeQuickLookKeyDispatchInFlight) {
+        self.nativeQuickLookPendingKey = key;
+        return;
+    }
+    self.nativeQuickLookKeyDispatchInFlight = YES;
+    NSInteger generation = self.nativeQuickLookKeyDispatchGeneration;
+    NSData *keyData = [NSJSONSerialization dataWithJSONObject:key options:NSJSONWritingFragmentsAllowed error:nil];
+    NSString *keyJSON = keyData
+        ? [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding]
+        : @"null";
+    NSString *script = [NSString stringWithFormat:
+        @"window.handleGewuInsightNativeQuickLookKey && window.handleGewuInsightNativeQuickLookKey(%@)",
+        keyJSON
+    ];
+    __weak typeof(self) weakSelf = self;
+    [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || generation != strongSelf.nativeQuickLookKeyDispatchGeneration) return;
+            strongSelf.nativeQuickLookKeyDispatchInFlight = NO;
+            NSString *pendingKey = error ? nil : strongSelf.nativeQuickLookPendingKey;
+            strongSelf.nativeQuickLookPendingKey = nil;
+            if (!strongSelf.nativeQuickLookActive) return;
+            [strongSelf restoreMainWindowFocusForNativeQuickLook];
+            if (pendingKey.length) [strongSelf dispatchNativeQuickLookKey:pendingKey];
+        });
+    }];
 }
 
 - (void)removeNativeQuickLookKeyMonitor {
@@ -570,6 +620,9 @@
     self.nativeQuickLookClosingProgrammatically = YES;
     self.nativeQuickLookActive = NO;
     self.nativeQuickLookURL = nil;
+    self.nativeQuickLookKeyDispatchGeneration += 1;
+    self.nativeQuickLookKeyDispatchInFlight = NO;
+    self.nativeQuickLookPendingKey = nil;
     [self removeNativeQuickLookKeyMonitor];
     QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
     [panel reloadData];
@@ -592,6 +645,9 @@
     BOOL wasActive = self.nativeQuickLookActive || self.nativeQuickLookURL != nil;
     self.nativeQuickLookActive = NO;
     self.nativeQuickLookURL = nil;
+    self.nativeQuickLookKeyDispatchGeneration += 1;
+    self.nativeQuickLookKeyDispatchInFlight = NO;
+    self.nativeQuickLookPendingKey = nil;
     [self removeNativeQuickLookKeyMonitor];
     if (wasActive) {
         [self.webView evaluateJavaScript:

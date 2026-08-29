@@ -22,7 +22,13 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('state.libraryQuickLookKind = "file"', quicklook)
         self.assertIn("window.closeGewuInsightNativeQuickLookFromNative", INDEX_HTML)
         self.assertIn("window.handleGewuInsightNativeQuickLookKey", INDEX_HTML)
-        self.assertIn('new KeyboardEvent("keydown"', INDEX_HTML)
+        self.assertIn("handleGewuInsightWindowKeydown({", INDEX_HTML)
+        self.assertIn('target: document.body', INDEX_HTML)
+        self.assertNotIn('new KeyboardEvent("keydown"', INDEX_HTML)
+        self.assertIn(
+            'window.addEventListener("keydown", handleGewuInsightWindowKeydown, true)',
+            INDEX_HTML,
+        )
         self.assertIn('state.libraryQuickLookKind === "pdf"', INDEX_HTML)
 
     def test_shared_paper_details_show_gewu_key_without_repeating_title(self) -> None:
