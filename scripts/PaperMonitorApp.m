@@ -1745,6 +1745,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     [settingMenu addItem:namingRuleMenuItem];
     NSMenuItem *pdfRenameSettingsItem = [settingMenu addItemWithTitle:@"PDF Rename Settings" action:@selector(openPdfRenameSettings:) keyEquivalent:@""];
     pdfRenameSettingsItem.target = self;
+    NSMenuItem *quickLookSettingsItem = [settingMenu addItemWithTitle:@"Quick Look Settings" action:@selector(openQuickLookSettings:) keyEquivalent:@""];
+    quickLookSettingsItem.target = self;
     NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
     arxivSettingsItem.target = self;
     NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Citation Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
@@ -1914,6 +1916,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openPdfRenameSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openPdfRenameSettings && window.openPdfRenameSettings()" completionHandler:nil];
+}
+
+- (void)openQuickLookSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openQuickLookSettings && window.openQuickLookSettings()" completionHandler:nil];
 }
 
 - (void)openLibraryLoader:(id)sender {

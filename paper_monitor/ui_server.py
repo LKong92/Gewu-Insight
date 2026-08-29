@@ -212,6 +212,7 @@ LIBRARY_UNSORTED_FOLDER_NAME = "unsorted"
 LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
+QUICK_LOOK_MODE_SETTING = "quick_look_mode"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
 THEME_DELETED_GROUPS_SETTING = "theme_deleted_groups"
@@ -233,6 +234,8 @@ LIBRARY_NAMING_RULES = {"title", "citation"}
 DEFAULT_LIBRARY_NAMING_RULE = "citation"
 DEFAULT_PDF_RENAME_TEMPLATE = "{author}_{year}_{title}"
 PDF_RENAME_TEMPLATE_TOKENS = {"author", "authors", "year", "title", "journal", "doi"}
+QUICK_LOOK_MODES = {"builtin_all", "hybrid", "native_all"}
+DEFAULT_QUICK_LOOK_MODE = "builtin_all"
 LIBRARY_LOCAL_COPY_ROOT = DEFAULT_LIBRARY_DIR
 MY_PUBLICATIONS_LOCAL_COPY_ROOT = DEFAULT_MY_PUBLICATIONS_DIR
 SPACES_LOCAL_COPY_ROOT = DEFAULT_SPACES_DIR
@@ -615,6 +618,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/pdf-rename":
                 self.handle_get_pdf_rename_settings()
                 return
+            if parsed.path == "/api/settings/quick-look":
+                self.handle_get_quick_look_settings()
+                return
             if parsed.path == "/api/settings/citation":
                 self.handle_get_citation_settings()
                 return
@@ -766,6 +772,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/pdf-rename":
                 self.handle_set_pdf_rename_settings(payload)
+                return
+            if parsed.path == "/api/settings/quick-look":
+                self.handle_set_quick_look_settings(payload)
                 return
             if parsed.path == "/api/settings/citation":
                 self.handle_set_citation_settings(payload)
@@ -3571,6 +3580,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             "preview": pdf_rename_preview_for_template(template),
             "tokens": sorted(PDF_RENAME_TEMPLATE_TOKENS),
         })
+
+    def handle_get_quick_look_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            payload = quick_look_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(payload)
+
+    def handle_set_quick_look_settings(self, payload: dict[str, Any]) -> None:
+        mode = str(payload.get("mode") or "").strip().lower()
+        if mode not in QUICK_LOOK_MODES:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown Quick Look mode")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(QUICK_LOOK_MODE_SETTING, mode)
+            response = quick_look_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(response)
 
     def handle_get_citation_settings(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -12817,6 +12847,21 @@ def normalize_pdf_rename_template(template: str) -> str:
 
 def pdf_rename_template(storage: Storage) -> str:
     return normalize_pdf_rename_template(storage.get_setting(PDF_RENAME_TEMPLATE_SETTING, DEFAULT_PDF_RENAME_TEMPLATE))
+
+
+def normalize_quick_look_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in QUICK_LOOK_MODES else DEFAULT_QUICK_LOOK_MODE
+
+
+def quick_look_settings_payload(storage: Storage) -> dict[str, Any]:
+    return {
+        "mode": normalize_quick_look_mode(
+            storage.get_setting(QUICK_LOOK_MODE_SETTING, DEFAULT_QUICK_LOOK_MODE)
+        ),
+        "default_mode": DEFAULT_QUICK_LOOK_MODE,
+        "modes": sorted(QUICK_LOOK_MODES),
+    }
 
 
 def pdf_rename_preview_for_template(template: str) -> str:
@@ -31785,7 +31830,8 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode .library-quicklook,
     .app.loader-window-mode #citationSettingsBackdrop,
     .app.loader-window-mode #fieldSettingsBackdrop,
-    .app.loader-window-mode #pdfRenameSettingsBackdrop {
+    .app.loader-window-mode #pdfRenameSettingsBackdrop,
+    .app.loader-window-mode #quickLookSettingsBackdrop {
       display: none !important;
     }
     .app.loader-window-mode .main {
@@ -32091,6 +32137,31 @@ INDEX_HTML = """<!doctype html>
     }
     .field-settings-option:hover { background: rgba(31, 79, 122, 0.06); }
     .field-settings-option input { margin: 0; }
+    .quick-look-mode-options {
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .quick-look-mode-option {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: start;
+      gap: 9px;
+      padding: 9px 10px;
+      border: 1px solid rgba(111, 125, 145, 0.16);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.62);
+      cursor: pointer;
+    }
+    .quick-look-mode-option:hover { background: rgba(255, 255, 255, 0.88); }
+    .quick-look-mode-option:has(input:checked) {
+      border-color: rgba(31, 79, 122, 0.38);
+      background: rgba(226, 238, 250, 0.72);
+    }
+    .quick-look-mode-option input { margin: 2px 0 0; }
+    .quick-look-mode-copy { display: grid; gap: 2px; }
+    .quick-look-mode-copy strong { color: #344054; font-size: 12px; }
+    .quick-look-mode-copy span { color: var(--muted); font-size: 11px; line-height: 1.4; }
     .field-settings-note {
       display: flex;
       align-items: center;
@@ -33564,6 +33635,53 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop" id="quickLookSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="quickLookSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="quickLookSettingsTitle">Quick Look Settings</h2>
+              <p>Choose how Space-bar previews open in Library and Spaces.</p>
+            </div>
+            <button class="settings-modal-close" id="closeQuickLookSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Preview Method</strong><span>Applies to local files</span></div>
+              <div class="quick-look-mode-options" id="quickLookModeOptions">
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="quick-look-mode" value="builtin_all">
+                  <span class="quick-look-mode-copy">
+                    <strong>Gewu Insight for all files</strong>
+                    <span>Keeps every preview inside the workspace. Unsupported formats retain the built-in file card and Open File action.</span>
+                  </span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="quick-look-mode" value="hybrid">
+                  <span class="quick-look-mode-copy">
+                    <strong>Gewu Insight for PDFs, macOS for other files</strong>
+                    <span>Uses the built-in PDF reader and macOS Quick Look for presentations, media, images, and other formats.</span>
+                  </span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="quick-look-mode" value="native_all">
+                  <span class="quick-look-mode-copy">
+                    <strong>macOS Quick Look for all files</strong>
+                    <span>Uses the system Quick Look panel for PDFs and every other supported format.</span>
+                  </span>
+                </label>
+              </div>
+              <div class="field-settings-note">
+                <span>Default: Gewu Insight for all files.</span>
+                <span class="field-settings-actions">
+                  <button class="smallbtn" id="resetQuickLookSettings" type="button">Restore Default</button>
+                  <button class="smallbtn" id="saveQuickLookSettings" type="button">Save</button>
+                </span>
+              </div>
+              <div class="citation-settings-status" id="quickLookSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop loader-backdrop" id="libraryLoaderBackdrop" aria-hidden="true">
         <section class="settings-modal loader-modal" role="dialog" aria-modal="false" aria-labelledby="libraryLoaderTitle">
           <div class="settings-modal-head">
@@ -33718,6 +33836,9 @@ INDEX_HTML = """<!doctype html>
       fieldSettings: DEFAULT_FIELD_SETTINGS,
       fieldSettingsLoaded: false,
       fieldSettingsPromise: null,
+      quickLookMode: "builtin_all",
+      quickLookSettingsLoaded: false,
+      quickLookSettingsPromise: null,
       preprintFiltersExpanded: false,
       selectedFields: new Set(["physics", "materials", "quantum_information"]),
       counts: {},
@@ -34339,6 +34460,46 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function normalizeQuickLookMode(value) {
+      const mode = String(value || "").trim().toLowerCase();
+      return ["builtin_all", "hybrid", "native_all"].includes(mode) ? mode : "builtin_all";
+    }
+
+    function applyQuickLookSettings(settings = {}, options = {}) {
+      state.quickLookMode = normalizeQuickLookMode(settings.mode);
+      state.quickLookSettingsLoaded = true;
+      if (options.refreshPreview !== false && state.libraryQuickLookOpen) {
+        refreshLibraryQuickLookForSelection({force: true});
+      }
+      return {mode: state.quickLookMode};
+    }
+
+    async function loadQuickLookSettings(options = {}) {
+      if (!options.force && state.quickLookSettingsLoaded) return {mode: state.quickLookMode};
+      if (!options.force && state.quickLookSettingsPromise) return state.quickLookSettingsPromise;
+      state.quickLookSettingsPromise = (async () => {
+        const data = await fetchJson("/api/settings/quick-look");
+        return applyQuickLookSettings(data || {}, options);
+      })();
+      try {
+        return await state.quickLookSettingsPromise;
+      } finally {
+        state.quickLookSettingsPromise = null;
+      }
+    }
+
+    function quickLookUsesNativeForPaper(paper) {
+      const mode = normalizeQuickLookMode(state.quickLookMode);
+      if (mode === "native_all") return true;
+      if (mode !== "hybrid") return false;
+      return !libraryPaperIsPdfLike(paper);
+    }
+
+    function desiredQuickLookKind(paper) {
+      if (nativeQuickLookBridgeAvailable() && quickLookUsesNativeForPaper(paper)) return "native-file";
+      return paper?.merged_pdf_path ? "pdf" : "file";
+    }
+
     async function loadMonth(options = {}) {
       if (state.mode === "theme") return loadThemeMonth(options);
       await Promise.all([loadArxivSettings(), loadFieldSettings({render: false})]);
@@ -34900,7 +35061,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadLibrary(options = {}) {
-      await loadFieldSettings({render: false});
+      await Promise.all([
+        loadFieldSettings({render: false}),
+        loadQuickLookSettings({refreshPreview: false})
+      ]);
       state.mode = "library";
       setPrimaryView("library");
       if (options.root) {
@@ -47181,7 +47345,10 @@ INDEX_HTML = """<!doctype html>
         status.textContent = "Previewing file";
         status.className = "library-detail-status";
       }
-      if (nativeQuickLookBridgeAvailable() && !options.forceInline) {
+      const useNativeQuickLook = nativeQuickLookBridgeAvailable()
+        && !options.forceInline
+        && (options.forceNative || quickLookUsesNativeForPaper(paper));
+      if (useNativeQuickLook) {
         const action = state.libraryQuickLookKind === "native-file" ? "update" : "open";
         captureLibraryQuickLookReturnFocus();
         state.libraryQuickLookOpen = true;
@@ -47204,6 +47371,7 @@ INDEX_HTML = """<!doctype html>
         }
         state.libraryQuickLookKind = "";
       }
+      if (state.libraryQuickLookKind === "native-file") postNativeQuickLook("close");
       const overlay = $("libraryQuickLook");
       const title = $("libraryQuickLookTitle");
       const pages = $("libraryQuickLookPages");
@@ -48019,6 +48187,10 @@ INDEX_HTML = """<!doctype html>
 
     function quickLookLibraryPdf(paper, options = {}) {
       if (!paper?.merged_pdf_path) return;
+      if (!options.forceInline && (options.forceNative || quickLookUsesNativeForPaper(paper))) {
+        quickLookLibraryFile(paper, {...options, forceNative: true});
+        return;
+      }
       if (options.toggle && state.libraryQuickLookOpen && state.libraryQuickLookKind === "pdf" && paper.merged_pdf_path === state.libraryQuickLookPath) {
         closeLibraryQuickLook({restoreFocus: true});
         return;
@@ -48124,7 +48296,7 @@ INDEX_HTML = """<!doctype html>
       window.addEventListener("pointerup", stop);
     }
 
-    function refreshLibraryQuickLookForSelection() {
+    function refreshLibraryQuickLookForSelection(options = {}) {
       if (!state.libraryQuickLookOpen) return;
       const paper = selectedLibraryPaper();
       if (!paper) {
@@ -48132,13 +48304,15 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       if (paper.merged_pdf_path) {
-        if (state.libraryQuickLookKind === "pdf" && paper.merged_pdf_path === state.libraryQuickLookPath) return;
+        const desiredKind = desiredQuickLookKind(paper);
+        if (!options.force && state.libraryQuickLookKind === desiredKind && paper.merged_pdf_path === state.libraryQuickLookPath) return;
         quickLookLibraryPdf(paper, {silent: true});
         return;
       }
       const path = paperNativePath(paper);
       if (path && !libraryPaperIsPdfLike(paper)) {
-        if (["file", "native-file"].includes(state.libraryQuickLookKind) && path === state.libraryQuickLookPath) return;
+        const desiredKind = desiredQuickLookKind(paper);
+        if (!options.force && state.libraryQuickLookKind === desiredKind && path === state.libraryQuickLookPath) return;
         quickLookLibraryFile(paper, {silent: true});
         return;
       }
@@ -52429,6 +52603,65 @@ INDEX_HTML = """<!doctype html>
       saveFieldSettings([...defaults]);
     }
 
+    function renderQuickLookSettingsSelection(mode = state.quickLookMode) {
+      const normalized = normalizeQuickLookMode(mode);
+      document.querySelectorAll('input[name="quick-look-mode"]').forEach((input) => {
+        input.checked = input.value === normalized;
+      });
+    }
+
+    async function openQuickLookSettings() {
+      const backdrop = $("quickLookSettingsBackdrop");
+      if (!backdrop) return;
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      $("quickLookSettingsStatus").textContent = "Loading Quick Look settings...";
+      $("quickLookSettingsStatus").className = "citation-settings-status";
+      try {
+        await loadQuickLookSettings({force: true, refreshPreview: false});
+        renderQuickLookSettingsSelection();
+        $("quickLookSettingsStatus").textContent = "Choose how Space-bar previews open in Library and Spaces.";
+      } catch (error) {
+        $("quickLookSettingsStatus").textContent = error.message || "Could not load Quick Look settings";
+        $("quickLookSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function closeQuickLookSettings() {
+      $("quickLookSettingsBackdrop")?.classList.remove("open");
+      $("quickLookSettingsBackdrop")?.setAttribute("aria-hidden", "true");
+    }
+
+    function selectedQuickLookModeFromDialog() {
+      return normalizeQuickLookMode(document.querySelector('input[name="quick-look-mode"]:checked')?.value);
+    }
+
+    async function saveQuickLookSettings(modeOverride = null) {
+      const mode = normalizeQuickLookMode(modeOverride || selectedQuickLookModeFromDialog());
+      $("quickLookSettingsStatus").textContent = "Saving Quick Look settings...";
+      $("quickLookSettingsStatus").className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/quick-look", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({mode})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save Quick Look settings");
+        applyQuickLookSettings(data || {});
+        renderQuickLookSettingsSelection();
+        $("quickLookSettingsStatus").textContent = "Quick Look preference saved.";
+        $("quickLookSettingsStatus").className = "citation-settings-status ok";
+      } catch (error) {
+        $("quickLookSettingsStatus").textContent = error.message || "Could not save Quick Look settings";
+        $("quickLookSettingsStatus").className = "citation-settings-status err";
+      }
+    }
+
+    function resetQuickLookSettings() {
+      saveQuickLookSettings("builtin_all");
+    }
+
     async function openPdfRenameSettings() {
       const backdrop = $("pdfRenameSettingsBackdrop");
       if (!backdrop) return;
@@ -54864,6 +55097,12 @@ INDEX_HTML = """<!doctype html>
     });
     $("saveFieldSettings").addEventListener("click", () => saveFieldSettings());
     $("resetFieldSettings").addEventListener("click", resetFieldSettings);
+    $("closeQuickLookSettings").addEventListener("click", closeQuickLookSettings);
+    $("quickLookSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("quickLookSettingsBackdrop")) closeQuickLookSettings();
+    });
+    $("saveQuickLookSettings").addEventListener("click", () => saveQuickLookSettings());
+    $("resetQuickLookSettings").addEventListener("click", resetQuickLookSettings);
     $("closePdfRenameSettings").addEventListener("click", closePdfRenameSettings);
     $("pdfRenameSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("pdfRenameSettingsBackdrop")) closePdfRenameSettings();
@@ -54949,6 +55188,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeFieldSettings();
+        return;
+      }
+      if ($("quickLookSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeQuickLookSettings();
         return;
       }
       if ($("pdfRenameSettingsBackdrop").classList.contains("open")) {
@@ -55133,6 +55378,7 @@ INDEX_HTML = """<!doctype html>
     window.openCitationSettings = openCitationSettings;
     window.openArxivSettings = openArxivSettings;
     window.openFieldSettings = openFieldSettings;
+    window.openQuickLookSettings = openQuickLookSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;
     window.openMetadataRefreshWindow = openMetadataRefreshWindow;

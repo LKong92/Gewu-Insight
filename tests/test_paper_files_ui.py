@@ -10,14 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PaperFilesUiTests(unittest.TestCase):
-    def test_non_pdf_quick_look_prefers_native_bridge_and_keeps_browser_fallback(self) -> None:
+    def test_non_pdf_quick_look_uses_the_selected_engine_and_keeps_browser_fallback(self) -> None:
         quicklook = INDEX_HTML.split("function nativeQuickLookBridgeAvailable", 1)[1].split(
             "async function openNativeTarget", 1
         )[0]
         self.assertIn("messageHandlers?.nativeQuickLook", quicklook)
         self.assertIn('postNativeQuickLook(action, path)', quicklook)
         self.assertIn('state.libraryQuickLookKind = "native-file"', quicklook)
-        self.assertIn('if (nativeQuickLookBridgeAvailable() && !options.forceInline)', quicklook)
+        self.assertIn("const useNativeQuickLook = nativeQuickLookBridgeAvailable()", quicklook)
+        self.assertIn("options.forceNative || quickLookUsesNativeForPaper(paper)", quicklook)
+        self.assertIn("if (useNativeQuickLook)", quicklook)
         self.assertIn("renderLibraryQuickLookFilePreview(paper, token)", quicklook)
         self.assertIn('state.libraryQuickLookKind = "file"', quicklook)
         self.assertIn("window.closeGewuInsightNativeQuickLookFromNative", INDEX_HTML)
