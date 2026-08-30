@@ -30180,12 +30180,15 @@ INDEX_HTML = """<!doctype html>
     .paper-file-row {
       min-width: 0;
       display: grid;
-      grid-template-columns: 22px minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 3px;
+      grid-template-columns: 22px minmax(0, 1fr);
+      align-items: start;
+      column-gap: 7px;
+      row-gap: 5px;
+      padding: 7px 4px;
+      border-bottom: 1px solid #eceef1;
       border-radius: 5px;
     }
+    .paper-file-row:last-child { border-bottom: 0; }
     .paper-file-row:hover { background: #f0f1f3; }
     .paper-file-icon {
       width: 20px;
@@ -30200,7 +30203,11 @@ INDEX_HTML = """<!doctype html>
       background-size: contain;
       filter: drop-shadow(0 1px 0 rgba(15, 23, 42, 0.08));
     }
-    .paper-file-copy { min-width: 0; }
+    .paper-file-copy {
+      grid-column: 2;
+      min-width: 0;
+      align-self: center;
+    }
     .paper-file-name {
       display: block;
       width: 100%;
@@ -30218,24 +30225,73 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .paper-file-name:disabled { color: #9a6262; cursor: default; }
-    .paper-file-meta {
+    .paper-file-properties {
+      grid-column: 1 / 3;
+      min-width: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+      gap: 4px;
+    }
+    .paper-file-property {
+      min-width: 0;
+      min-height: 32px;
+      display: grid;
+      align-content: center;
+      gap: 1px;
+      border-radius: 5px;
+      background: #f2f4f7;
+      padding: 4px 6px;
+    }
+    .paper-file-property.is-file-type {
+      background: #edf3f9;
+    }
+    .paper-file-property-label {
+      color: #8a95a4;
+      font-size: 7.5px;
+      font-weight: 760;
+      letter-spacing: .025em;
+      line-height: 1.1;
+    }
+    .paper-file-property.is-file-type .paper-file-property-label {
+      color: #607b96;
+    }
+    .paper-file-footer {
+      grid-column: 1 / 3;
       min-width: 0;
       display: flex;
       align-items: center;
-      gap: 3px;
-      margin-top: 1px;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .paper-file-file-meta {
       color: #7b8491;
       font-size: 9px;
+      line-height: 1.2;
     }
     .paper-file-version-picker {
       position: relative;
       display: inline-flex;
       align-items: center;
+      justify-content: space-between;
       gap: 3px;
       color: #6f7a8a;
-      font-size: 9px;
+      font-size: 9.5px;
       line-height: 1.2;
       cursor: pointer;
+    }
+    .paper-file-property .paper-file-version-picker {
+      width: 100%;
+      min-width: 0;
+      color: #536173;
+      font-weight: 620;
+    }
+    .paper-file-property.is-file-type .paper-file-version-picker {
+      color: #294b6d;
+      font-weight: 720;
+    }
+    .paper-file-property .paper-file-version-picker > span:first-child {
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .paper-file-version-picker:hover,
     .paper-file-version-picker:focus-within {
@@ -30261,7 +30317,14 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .paper-file-version-select:disabled { cursor: wait; }
-    .paper-file-actions { display: flex; align-items: center; gap: 3px; }
+    .paper-file-actions {
+      min-width: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 3px;
+    }
     .paper-file-actions .action { min-height: 22px; padding: 2px 6px; font-size: 9px; }
     .paper-file-actions .delete-paper-file { color: #8a3f46; }
     .paper-file-actions .delete-paper-file:hover { background: #f0dfe1; }
@@ -40792,7 +40855,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="quicklook-paper-resource">Quick Look</button>
           <button type="button" data-action="reveal-paper-resource">Show in Finder</button>
           <div class="library-menu-separator" role="separator"></div>
-          <button type="button" data-action="prefer-paper-resource">Make Default</button>
+          <button type="button" data-action="prefer-paper-resource">Set as Default</button>
           <button type="button" data-action="auto-paper-resource">Use Automatic Selection</button>
           <label class="paper-resource-context-role" data-paper-resource-role-row>
             <span>Change File Type</span><span class="paper-resource-context-role-arrow" aria-hidden="true">›</span>
@@ -44478,14 +44541,21 @@ INDEX_HTML = """<!doctype html>
         <div class="paper-file-row" data-paper-file-id="${Number(file.id || 0)}">
           <span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')"></span>
           <span class="paper-file-copy">
-            <button class="paper-file-name" type="button" data-action="open-paper-file" data-file-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"} title="${escapeAttr(file.local_path || name)}">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</button>
-            <span class="paper-file-meta">${typeControl}<span aria-hidden="true">·</span>${annotationControl}<span aria-hidden="true">·</span>${sourceControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
+            <button class="paper-file-name" type="button" data-action="open-paper-file" data-file-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"} title="${escapeAttr(file.local_path || name)}">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default" title="Used for Open in Preview and paper preview">Default</span>` : ""}</button>
           </span>
-          <span class="paper-file-actions">
-            ${file.exists && file.file_type !== "invalid_file" && !file.is_default ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}">Make Default</button>` : ""}
-            ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file">Auto</button>` : ""}
-            ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show</button>` : ""}
-            ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
+          <span class="paper-file-properties">
+            <span class="paper-file-property is-file-type"><span class="paper-file-property-label">File type</span>${typeControl}</span>
+            <span class="paper-file-property"><span class="paper-file-property-label">Annotation</span>${annotationControl}</span>
+            <span class="paper-file-property"><span class="paper-file-property-label">Source</span>${sourceControl}</span>
+          </span>
+          <span class="paper-file-footer">
+            <span class="paper-file-file-meta">${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true"> · </span>')}</span>
+            <span class="paper-file-actions">
+              ${file.exists && file.file_type !== "invalid_file" && !file.is_default ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}" title="Use this file for Open in Preview and paper preview">Set as Default</button>` : ""}
+              ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file" title="Let Gewu Insight choose the default from file type">Use Automatic Selection</button>` : ""}
+              ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show in Finder</button>` : ""}
+              ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
+            </span>
           </span>
         </div>
       `;

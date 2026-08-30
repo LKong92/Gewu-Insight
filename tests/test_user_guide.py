@@ -405,10 +405,22 @@ class UserGuideTests(unittest.TestCase):
             "Paper-level Monitor provenance",
             "canonical paper",
             "fetch run",
-            "Repeated observation",
+            "Normalized paper-source observations are the authority",
+            "first-seen and last-seen times",
+            "cannot erase an earlier Journal, Subject, or Author observation",
+            "compatibility projections",
             "Discovery is not storage",
         ]:
             self.assertIn(phrase, sqlite_text)
+
+        persistent_paper_text = soup.find(
+            "article", id="persistent-paper-object"
+        ).get_text(" ", strip=True)
+        for phrase in [
+            "quarantined as an identity conflict",
+            "instead of overwriting the saved paper or forcing a merge",
+        ]:
+            self.assertIn(phrase, persistent_paper_text)
 
         visible_files_text = soup.find(
             "article", id="visible-research-files"
@@ -440,6 +452,7 @@ class UserGuideTests(unittest.TestCase):
             "temporary file",
             "existing valid file remains untouched",
             "skipped operation does not relabel the existing file",
+            "does not create a Paper Files row until a download actually succeeds",
         ]:
             self.assertIn(phrase, download_text)
 
@@ -492,6 +505,16 @@ class UserGuideTests(unittest.TestCase):
         ]:
             self.assertIn(phrase, navigation_text)
 
+        guided_tour_text = soup.find("article", id="guided-tour").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "genuinely blank part of the title bar",
+            "an app tab, the Library search field, or another top control",
+            "does not change the window size",
+        ]:
+            self.assertIn(phrase, guided_tour_text)
+
         journal_text = soup.find("article", id="journal-monitor").get_text(" ", strip=True)
         for phrase in [
             "enabled list, disabled history",
@@ -506,6 +529,10 @@ class UserGuideTests(unittest.TestCase):
         startup_text = soup.find("article", id="startup").get_text(" ", strip=True)
         for phrase in [
             "Dock tile, native startup panel, and in-window loading state",
+            "up to 120 seconds",
+            "Automatic local-server recovery",
+            "launcher starts it again",
+            "stale sheet is dismissed automatically",
             "Monitor cache and macOS app identity are separate",
             "Setting > Font Size",
             "Compact",
@@ -532,11 +559,26 @@ class UserGuideTests(unittest.TestCase):
 
         paper_files_text = soup.find("article", id="paper-files").get_text(" ", strip=True)
         for phrase in [
+            "their own rows so their values do not collide",
+            "adaptive property grid",
+            "narrow panels wrap them",
+            "Set as Default",
+            "Use Automatic Selection",
             "Understand a Missing File row",
             "SQLite still has a resource record",
             "older untyped migration alias",
         ]:
             self.assertIn(phrase, paper_files_text)
+
+        versions_text = soup.find("article", id="versions-current").get_text(
+            " ", strip=True
+        )
+        for phrase in [
+            "recognized publisher host or a publisher-specific acquisition path",
+            "generic web download with no stronger evidence remains Other",
+            "Internal migration or ingestion markers are never user-facing source details",
+        ]:
+            self.assertIn(phrase, versions_text)
 
         quick_look = soup.find("article", id="quick-look")
         self.assertIsNotNone(quick_look)
@@ -582,6 +624,10 @@ class UserGuideTests(unittest.TestCase):
 
         author_text = soup.find("article", id="author-monitor").get_text(" ", strip=True)
         for phrase in [
+            "Understand profile and publication sources",
+            "automatically falls back to Semantic Scholar",
+            "automatic publication refresh remains unavailable",
+            "remain distinct evidence",
             "saved locally",
             "does not need to reopen SQLite or contact the image host for every row",
             "manual photo takes precedence",

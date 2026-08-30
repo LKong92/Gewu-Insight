@@ -417,9 +417,12 @@ class PaperFilesVNextTests(unittest.TestCase):
             "Preprint server",
             "Institutional repository",
             "User import",
-            "Make Default",
+            "Set as Default",
+            "Use Automatic Selection",
+            "Show in Finder",
         ):
             self.assertIn(label, ui_server.INDEX_HTML)
+        self.assertNotIn("Make Default", ui_server.INDEX_HTML)
         for banned in (
             "Version of Record",
             "First Published Version",

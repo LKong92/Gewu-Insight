@@ -14,7 +14,7 @@
 - Library, Shortcut, Space, My Publications, Journal Monitor, Subject Monitor, and Author Monitor share canonical paper identities and stable Gewu Keys.
 - Paper Files is one flat peer list. File type, annotation state, and file source are independent normalized properties.
 - Supported file types are Preprint, Accepted manuscript, Published version, Corrected published version, Correction notice, Supplementary material, Peer review file, Other, Unknown, and Invalid file.
-- Automatic Default priority is corrected published > published > accepted manuscript > preprint. Any existing valid file can be chosen manually; a manual Default is sticky until Auto is selected.
+- Automatic Default priority is corrected published > published > accepted manuscript > preprint. Any existing valid file can be chosen manually; a manual Default is sticky until Use Automatic Selection is selected.
 - Exact SHA-256 duplicates are reused. Clean and annotated peers may coexist even when their content fingerprints match.
 - Invalid or unreadable PDFs are rejected at ingress. Migrated invalid audit records remain visible but cannot become Default.
 - Physical primary paths remain a filesystem-compatibility detail; choosing Default does not move, rename, or rewrite a file.
@@ -45,15 +45,16 @@
 
 ## User Guide
 
-- `paper_monitor/user_guide.html`, generated `paper_monitor/user_guide.tex`, and `paper_monitor/Gewu_Insight_User_Guide.pdf` describe the same flat Paper Files and Default/Auto model.
-- The fixed-layout guide currently has 73 visually checked pages with consistent numbering and section transitions.
+- `paper_monitor/user_guide.html`, generated `paper_monitor/user_guide.tex`, and `paper_monitor/Gewu_Insight_User_Guide.pdf` describe the same flat Paper Files and Set as Default/Use Automatic Selection model.
+- The guide also documents normalized cross-Monitor provenance, identity-conflict quarantine, the compact three-row Paper Files metadata layout, the adaptive Paper Details file-property grid, evidence-based source labels, ResearchGate publication-provider fallback, title-bar double-click boundaries, and launcher migration/recovery behavior.
+- The fixed-layout guide currently has 74 visually checked pages with consistent numbering and section transitions.
 
 ## Verification
 
 - Python compile check passes.
-- Full product suite passes: 611 tests.
+- Full product suite passes: 615 tests.
 - A read-only backup of the formal database migrates to schema 14 with zero foreign-key errors.
-- The formal App was rebuilt and reopened from the original path. A controlled server `SIGTERM` recovered automatically without a residual failure sheet; repeated local health probes passed and the live page exposed the new Paper Files controls.
+- The formal App was rebuilt and reopened from the original path. Local health passed, the running Paper Details Files panel exposed the adaptive layout and clarified actions without overlap, the live Help route exposed the aligned guide, and the packaged fixed-layout PDF matches the generated product PDF.
 
 ## Current caveats
 

@@ -469,6 +469,8 @@ A Monitor result & Its discovery evidence, report, and available actions. & Addi
 
 Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.
 
+On macOS, double-click only a genuinely blank part of the title bar when you want to zoom or restore the window. Double-clicking an app tab, the Library search field, or another top control is treated as interaction with that control and does not change the window size.
+
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
 \begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.19\textwidth}>{\RaggedRight\arraybackslash}p{0.29\textwidth}>{\RaggedRight\arraybackslash}p{0.36\textwidth}@{}}
@@ -666,7 +668,7 @@ A cataloged-only paper may have no local file, and nothing is missing merely bec
 \item
   \textbf{Add related material if you have it.} Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.
 \item
-  \textbf{Check the default file.} \textbf{Open in Preview} and Library preview use the resolved default when applicable. Selecting \textbf{Make Default} changes preference without renaming the resource.
+  \textbf{Check the default file.} \textbf{Open in Preview} and Library preview use the resolved default when applicable. Selecting \textbf{Set as Default} changes preference without renaming the resource.
 \item
   \textbf{Reveal one file in Finder.} Choose \textbf{Show in Finder} and confirm the real managed file exists where the database expects it.
 \end{enumerate}
@@ -875,7 +877,7 @@ Paper record {\symbolfont ≠} workspace placement {\symbolfont ≠} resource re
 
 Journal, Subject, and Author Monitor can encounter the same work from different directions. Identity resolution is designed to reuse one shared paper record and add source or context relationships. Copying a paper to another Library folder likewise creates another placement rather than a second independent identity. Its metadata, Gewu Key, versions, and attachments remain shared.
 
-When the available evidence is insufficient or contradictory, separate candidates can remain until their identifiers or metadata are corrected. The shared-object model is the resolution target; it does not justify merging uncertain works merely because their titles look similar.
+When the available evidence is insufficient or contradictory, separate candidates can remain until their identifiers or metadata are corrected. A major DOI, title, author, or venue contradiction is quarantined as an identity conflict instead of overwriting the saved paper or forcing a merge. The shared-object model is the resolution target; it does not justify merging uncertain works merely because their titles look similar.
 
 A network observation can be transient while acquisition is running. Once a result is cataloged as a shared paper record, it has a Gewu Key even if a particular Monitor view does not display that key. A Monitor result may still have no local Paper Files because no file has been downloaded or attached; adding it to Library creates a visible placement rather than inventing a new scholarly identity.
 
@@ -972,9 +974,11 @@ JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are derived artifacts. They c
 
 \section{Paper-level Monitor provenance}\label{paper-level-monitor-provenance}
 
-Journal Monitor stores more than a run-level success or failure. For every paper observed during a journal fetch, a normalized provenance relationship connects the canonical paper to the fetch run and the reporting source. The run supplies the journal, date window, status, and timing; the paper-level relationship records that this source observed this particular work.
+Normalized paper-source observations are the authority for how a canonical paper was encountered. Each observation identifies a source kind, provider name, and stable source key, and keeps first-seen and last-seen times. The same paper and effective source update one observation instead of increasing the provenance count indefinitely.
 
-Repeated observation of the same paper and source within one run updates the existing relationship instead of creating a duplicate. A later run remains separately traceable. Subject and Author Monitor relationships can point to that same canonical paper, so three discovery routes add context without manufacturing three scholarly identities.
+Journal Monitor also connects each observed paper to the relevant fetch run. The run supplies the journal, requested date window, status, and timing; the paper-level observation records that the reporting source saw this particular work. Subject and Author Monitor relationships can point to the same canonical paper, so three discovery routes add context without manufacturing three scholarly identities.
+
+A bibliographic metadata refresh can add a newly proven source, but it cannot erase an earlier Journal, Subject, or Author observation. Display counts and the older raw-source list are compatibility projections of the normalized observations rather than an independent truth. When two paper identities are safely merged, their source observations move to the surviving canonical paper and duplicate observations converge.
 
 \begin{quote}
 \textbf{Discovery is not storage}
@@ -1705,7 +1709,7 @@ A paper is one work record that can own several PDFs and related files. Paper Fi
 
 \subsection{Two views of the same flat bundle}\label{two-views-of-the-same-flat-bundle}
 
-The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each row carries three independent facts: \textbf{file type}, \textbf{annotation state}, and \textbf{source}. A small \textbf{Default} marker identifies the file selected for the paper.
+The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each compact card puts the filename first, then gives \textbf{File type}, \textbf{Annotation}, and \textbf{Source} their own rows so their values do not collide or disappear at narrow pane widths. File type is first because it determines whether the file is a preprint, accepted manuscript, published version, correction, supplement, or another resource. A small \textbf{Default} marker identifies the file selected for the paper.
 
 \subsection{Select, open, or act on a file}\label{select-open-or-act-on-a-file}
 
@@ -1723,9 +1727,9 @@ The dedicated Paper Files column and the compact Files panel inside Paper Detail
   Press \texttt{Delete} or \texttt{Backspace} while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.
 \end{itemize}
 
-The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing \textbf{Make Default} changes the preferred row without moving, renaming, or rewriting that file.
+The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing \textbf{Set as Default} makes that resource the file used by \textbf{Open in Preview} and paper preview without moving, renaming, or rewriting it. If you set it manually, \textbf{Use Automatic Selection} returns control to the file-type priority rule.
 
-The Paper Details \textbf{Files} panel provides the same underlying bundle and classification controls in a compact form.
+The Paper Details \textbf{Files} panel provides the same underlying bundle and classification controls in a compact form. When expanded, each file uses a separate filename row, an adaptive property grid for \textbf{File type}, \textbf{Annotation}, and \textbf{Source}, then a footer for file size and actions. Wide panels keep the three properties side by side; narrow panels wrap them instead of letting labels or buttons overlap. \textbf{Show in Finder} reveals the physical file.
 
 \subsection{Understand a Missing File row}\label{understand-a-missing-file-row}
 
@@ -1804,7 +1808,7 @@ The automatic order is \textbf{Corrected published version}, \textbf{Published v
 
 \subsection{Automatic and manual eligibility}\label{automatic-and-manual-eligibility}
 
-Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Auto}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
+Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Use Automatic Selection}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
 
 \subsection{Choose a file manually}\label{choose-a-file-manually}
 
@@ -1815,7 +1819,7 @@ Only the four publication types above participate in automatic selection. You ma
 \item
   \textbf{Select the file you want.}
 \item
-  \textbf{Choose \textbf{Make Default}.}
+  \textbf{Choose \textbf{Set as Default}.} This file will be used by \textbf{Open in Preview} and paper preview.
 \end{enumerate}
 
 \begin{GewuResult}
@@ -1824,7 +1828,7 @@ Only the four publication types above participate in automatic selection. You ma
 
 \subsection{Return to automatic selection}\label{return-to-automatic-selection}
 
-Control-click a Paper Files card and choose \textbf{Auto}. Gewu Insight evaluates the eligible file types again.
+Choose \textbf{Use Automatic Selection} for a manually selected default. Gewu Insight evaluates the eligible file types again.
 
 \subsection{Classify files without collapsing annotation state}\label{classify-files-without-collapsing-annotation-state}
 
@@ -1841,6 +1845,8 @@ Use the three small controls on a row. File type uses exactly these labels:
 \end{itemize}
 
 Annotation state is selected independently as \textbf{Annotated}, \textbf{Unannotated}, or \textbf{Unknown}. Source is independently recorded as \textbf{Publisher}, \textbf{Preprint server}, \textbf{Institutional repository}, \textbf{User import}, \textbf{Other}, or \textbf{Unknown}. Manual type and annotation choices survive later fingerprint rescans.
+
+\textbf{Publisher} is used only when a recognized publisher host or a publisher-specific acquisition path provides that evidence. arXiv, bioRxiv, and medRxiv are shown as \textbf{Preprint server}; repository hosts remain \textbf{Institutional repository}; ordinary local additions are \textbf{User import}; and a generic web download with no stronger evidence remains \textbf{Other}. A real host can appear after the source label when useful. Internal migration or ingestion markers are never user-facing source details, and choosing a different source clears a stale provider detail rather than appending it to the new choice.
 
 \begin{quote}
 \textbf{Note}
@@ -1933,6 +1939,8 @@ A response is not accepted merely because it begins with \texttt{\%PDF-}. Struct
 \subsection{Classification follows the file that actually arrived}\label{classification-follows-the-file-that-actually-arrived}
 
 A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference, First Release, or accepted preview remains an accepted manuscript. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.
+
+A PDF URL stored in bibliographic metadata is only a retrieval lead. It does not create a Paper Files row until a download actually succeeds, the returned bytes pass validation, and a local resource is registered.
 
 If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved classification itself is wrong.
 
@@ -2520,6 +2528,12 @@ Author Monitor. Hong Ding\textquotesingle s profile is selected; locally cached 
   \textbf{Confirm the correct person.} The initial result set becomes the baseline rather than a batch of unread ``new'' papers.
 \end{enumerate}
 
+\subsection{Understand profile and publication sources}\label{understand-profile-and-publication-sources}
+
+A Google Scholar profile is refreshed through Google Scholar and follows the shared Scholar pacing and cooldown. A ResearchGate URL identifies the public profile, but its publication list is matched separately to a publication-data author. Gewu Insight uses OpenAlex for that match when it is configured and automatically falls back to Semantic Scholar when OpenAlex is unavailable. Confirm the proposed person rather than assuming similar names are identical.
+
+If no publication-data match can be verified, the ResearchGate profile and homepage can still be saved, but automatic publication refresh remains unavailable until a match is supplied. The profile source, publication metadata provider, and per-paper citation source remain distinct evidence; a fallback does not silently turn the ResearchGate profile into a different author identity.
+
 \subsection{Review updates}\label{review-updates}
 
 Later refreshes can mark newly discovered publications as unread. Use the \textbf{New} filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.
@@ -2828,7 +2842,7 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 \begin{quote}
 \textbf{Note}
 
-Changing a Paper Files property or choosing \textbf{Make Default} does not rename that file. A rename occurs only through a naming or rename action.
+Changing a Paper Files property or choosing \textbf{Set as Default} does not rename that file. A rename occurs only through a naming or rename action.
 \end{quote}
 
 \subsection{See also}\label{see-also-36}
@@ -3093,7 +3107,15 @@ The macOS app starts a local UI server, waits for the Library bootstrap, and the
 
 The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.
 
+The first launch after an additive database upgrade can take longer because the existing SQLite records are migrated and older provenance or file metadata is backfilled. The native launcher allows up to 120 seconds for this preparation. Keep the single startup panel open rather than launching a second copy; the migration preserves the existing database and managed files.
+
 The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.
+
+\section{Automatic local-server recovery}\label{automatic-local-server-recovery}
+
+If the local UI server exits unexpectedly while the macOS window remains open, the launcher starts it again. The window rechecks local health and reloads the workspace when the service becomes ready. A startup-failure sheet is nonblocking; if the server recovers after that sheet appears, the stale sheet is dismissed automatically instead of continuing to interrupt a healthy workspace.
+
+A brief reload during recovery does not mean the SQLite database was rebuilt or that another copy of Gewu Insight should be opened. If repeated recovery never reaches a healthy Library view, use the launcher log steps below.
 
 \section{If the app cannot start}\label{if-the-app-cannot-start}
 
@@ -3104,7 +3126,9 @@ The Dock tile, native startup panel, and in-window loading state use the icon pa
 \item
   \textbf{Open the launcher log.} Check \nolinkurl{logs/paper_monitor_launcher.log} for the first error.
 \item
-  \textbf{Start the app again once.} Avoid opening several copies while the first is still preparing.
+  \textbf{Allow the first startup to finish.} After an upgrade, wait through the migration window before treating the preparation panel as a failure.
+\item
+  \textbf{Start the app again once if recovery does not complete.} Avoid opening several copies while the first is still preparing.
 \item
   \textbf{Preserve the database.} Do not delete SQLite as a startup fix.
 \end{enumerate}
@@ -3162,7 +3186,7 @@ A large or previously unseen PDF may need an initial structural read and thumbna
 \item
   Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.
 \item
-  Choose \textbf{Make Default} for the desired valid file, or choose \textbf{Auto} to resume automatic selection.
+  Choose \textbf{Set as Default} for the desired valid file, or choose \textbf{Use Automatic Selection} to resume automatic selection.
 \end{enumerate}
 
 \section{A duplicate appears after download}\label{a-duplicate-appears-after-download}
@@ -3191,7 +3215,7 @@ Open the live or previous Loader log and the result guide. Confirm the metadata 
 
 \section{A default file cannot be deleted}\label{a-default-file-cannot-be-deleted}
 
-Choose another valid file with \textbf{Make Default} first, or choose \textbf{Auto}; then delete the former non-default file. An \textbf{Invalid File} remains an audit record and is never eligible to become default.
+Choose another valid file with \textbf{Set as Default} first, or choose \textbf{Use Automatic Selection}; then delete the former non-default file. An \textbf{Invalid File} remains an audit record and is never eligible to become default.
 
 \begin{quote}
 \textbf{Important}

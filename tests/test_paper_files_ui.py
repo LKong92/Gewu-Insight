@@ -375,6 +375,26 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('source_detail: sourceChanged ? ""', INDEX_HTML)
         self.assertIn("font-size: 9px;", INDEX_HTML)
 
+    def test_paper_details_files_panel_has_responsive_properties_and_clear_actions(self) -> None:
+        panel = INDEX_HTML.split("function paperFileRowMarkup", 1)[1].split(
+            "function surfaceInlineStatusMarkup", 1
+        )[0]
+        for phrase in (
+            'class="paper-file-properties"',
+            'class="paper-file-property is-file-type"',
+            'class="paper-file-property-label">File type',
+            'class="paper-file-property-label">Annotation',
+            'class="paper-file-property-label">Source',
+            'class="paper-file-footer"',
+            "Set as Default",
+            "Use Automatic Selection",
+            "Show in Finder",
+            "Used for Open in Preview and paper preview",
+        ):
+            self.assertIn(phrase, panel)
+        self.assertNotIn('class="paper-file-meta"', panel)
+        self.assertIn("grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));", INDEX_HTML)
+
     def test_add_file_and_files_panel_drop_import_before_classification(self) -> None:
         panel = INDEX_HTML.split("function paperFilesPanelMarkup", 1)[1].split(
             "async function loadPaperFiles", 1

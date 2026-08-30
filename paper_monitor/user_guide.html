@@ -749,7 +749,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#system-overview">System Architecture at a Glance</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="guided-tour" data-group="Start Here" data-title="Guided Tour" data-keywords="tabs panes sidebar calendar filters details status bottom layout visual grammar context collection evidence action discovery memory">
+        <article class="help-topic guide-topic" id="guided-tour" data-group="Start Here" data-title="Guided Tour" data-keywords="tabs panes sidebar calendar filters details status bottom layout visual grammar context collection evidence action discovery memory title bar double click zoom">
           <p class="topic-kicker">Start Here</p>
           <h1>Take a Guided Tour</h1>
           <p class="lead">The top chooses a work mode; the panes move from context on the left to the active object and its evidence; the bottom preserves navigation and progress without reshaping the workspace.</p>
@@ -789,6 +789,8 @@
 
           <h2>Tabs across the top</h2>
           <p>Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.</p>
+
+          <p>On macOS, double-click only a genuinely blank part of the title bar when you want to zoom or restore the window. Double-clicking an app tab, the Library search field, or another top control is treated as interaction with that control and does not change the window size.</p>
 
           <table class="plain-table">
             <tr><th>Area</th><th>Primary question</th><th>Typical next action</th></tr>
@@ -880,7 +882,7 @@
             <li><strong>Open the <span class="ui">Files</span> section.</strong> It starts collapsed in Paper Details so long file lists do not dominate the inspector.</li>
             <li><strong>Classify the available file.</strong> Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.</li>
             <li><strong>Add related material if you have it.</strong> Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.</li>
-            <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Make Default</span> changes preference without renaming the resource.</li>
+            <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Set as Default</span> changes preference without renaming the resource.</li>
             <li><strong>Reveal one file in Finder.</strong> Choose <span class="ui">Show in Finder</span> and confirm the real managed file exists where the database expects it.</li>
           </ol>
 
@@ -990,7 +992,7 @@
           <h2>What happens when the same paper is found again</h2>
           <p>Journal, Subject, and Author Monitor can encounter the same work from different directions. Identity resolution is designed to reuse one shared paper record and add source or context relationships. Copying a paper to another Library folder likewise creates another placement rather than a second independent identity. Its metadata, Gewu Key, versions, and attachments remain shared.</p>
 
-          <p>When the available evidence is insufficient or contradictory, separate candidates can remain until their identifiers or metadata are corrected. The shared-object model is the resolution target; it does not justify merging uncertain works merely because their titles look similar.</p>
+          <p>When the available evidence is insufficient or contradictory, separate candidates can remain until their identifiers or metadata are corrected. A major DOI, title, author, or venue contradiction is quarantined as an identity conflict instead of overwriting the saved paper or forcing a merge. The shared-object model is the resolution target; it does not justify merging uncertain works merely because their titles look similar.</p>
 
           <p>A network observation can be transient while acquisition is running. Once a result is cataloged as a shared paper record, it has a Gewu Key even if a particular Monitor view does not display that key. A Monitor result may still have no local Paper Files because no file has been downloaded or attached; adding it to Library creates a visible placement rather than inventing a new scholarly identity.</p>
 
@@ -1049,9 +1051,11 @@
           <p>JSON, HTML, Markdown, Word, LaTeX, and PDF outputs are derived artifacts. They can be regenerated, shared, or inspected, but editing them does not alter the source records. Raw source evidence may also be retained inside SQLite for provenance; this does not turn an external JSON export into a second source of truth.</p>
 
           <h2>Paper-level Monitor provenance</h2>
-          <p>Journal Monitor stores more than a run-level success or failure. For every paper observed during a journal fetch, a normalized provenance relationship connects the canonical paper to the fetch run and the reporting source. The run supplies the journal, date window, status, and timing; the paper-level relationship records that this source observed this particular work.</p>
+          <p>Normalized paper-source observations are the authority for how a canonical paper was encountered. Each observation identifies a source kind, provider name, and stable source key, and keeps first-seen and last-seen times. The same paper and effective source update one observation instead of increasing the provenance count indefinitely.</p>
 
-          <p>Repeated observation of the same paper and source within one run updates the existing relationship instead of creating a duplicate. A later run remains separately traceable. Subject and Author Monitor relationships can point to that same canonical paper, so three discovery routes add context without manufacturing three scholarly identities.</p>
+          <p>Journal Monitor also connects each observed paper to the relevant fetch run. The run supplies the journal, requested date window, status, and timing; the paper-level observation records that the reporting source saw this particular work. Subject and Author Monitor relationships can point to the same canonical paper, so three discovery routes add context without manufacturing three scholarly identities.</p>
+
+          <p>A bibliographic metadata refresh can add a newly proven source, but it cannot erase an earlier Journal, Subject, or Author observation. Display counts and the older raw-source list are compatibility projections of the normalized observations rather than an independent truth. When two paper identities are safely merged, their source observations move to the surviving canonical paper and duplicate observations converge.</p>
 
           <div class="note"><span class="callout-title">Discovery is not storage</span>A provenance relationship does not by itself create a Library placement or a local PDF. It records how the work entered view. Organization and file acquisition remain separate, explicit actions.</div>
 
@@ -1485,13 +1489,13 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Citation Settings</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector">
+        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector compact rows">
           <p class="topic-kicker">Library</p>
           <h1>Understand Paper Files</h1>
           <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
 
           <h2>Two views of the same flat bundle</h2>
-          <p>The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each row carries three independent facts: <span class="ui">file type</span>, <span class="ui">annotation state</span>, and <span class="ui">source</span>. A small <span class="ui">Default</span> marker identifies the file selected for the paper.</p>
+          <p>The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each compact card puts the filename first, then gives <span class="ui">File type</span>, <span class="ui">Annotation</span>, and <span class="ui">Source</span> their own rows so their values do not collide or disappear at narrow pane widths. File type is first because it determines whether the file is a preprint, accepted manuscript, published version, correction, supplement, or another resource. A small <span class="ui">Default</span> marker identifies the file selected for the paper.</p>
 
           <h2>Select, open, or act on a file</h2>
           <ul>
@@ -1502,9 +1506,9 @@
             <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.</li>
           </ul>
 
-          <p>The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing <span class="ui">Make Default</span> changes the preferred row without moving, renaming, or rewriting that file.</p>
+          <p>The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing <span class="ui">Set as Default</span> makes that resource the file used by <span class="ui">Open in Preview</span> and paper preview without moving, renaming, or rewriting it. If you set it manually, <span class="ui">Use Automatic Selection</span> returns control to the file-type priority rule.</p>
 
-          <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form.</p>
+          <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form. When expanded, each file uses a separate filename row, an adaptive property grid for <span class="ui">File type</span>, <span class="ui">Annotation</span>, and <span class="ui">Source</span>, then a footer for file size and actions. Wide panels keep the three properties side by side; narrow panels wrap them instead of letting labels or buttons overlap. <span class="ui">Show in Finder</span> reveals the physical file.</p>
 
           <h2>Understand a Missing File row</h2>
           <p><span class="ui">Missing File</span> means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper's live canonical file.</p>
@@ -1555,18 +1559,18 @@
           <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, Unknown, and Invalid file never become the automatic default.</p>
 
           <h2>Automatic and manual eligibility</h2>
-          <p>Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as <span class="ui">Invalid file</span>. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Auto</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
+          <p>Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as <span class="ui">Invalid file</span>. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Use Automatic Selection</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
 
           <h2>Choose a file manually</h2>
           <ol class="steps">
             <li><strong>Enter Paper Files or expand <span class="ui">Files</span>.</strong></li>
             <li><strong>Select the file you want.</strong></li>
-            <li><strong>Choose <span class="ui">Make Default</span>.</strong></li>
+            <li><strong>Choose <span class="ui">Set as Default</span>.</strong> This file will be used by <span class="ui">Open in Preview</span> and paper preview.</li>
           </ol>
           <p class="result">The selected file becomes the manual default. Its existing filename and physical location are preserved.</p>
 
           <h2>Return to automatic selection</h2>
-          <p>Control-click a Paper Files card and choose <span class="ui">Auto</span>. Gewu Insight evaluates the eligible file types again.</p>
+          <p>Choose <span class="ui">Use Automatic Selection</span> for a manually selected default. Gewu Insight evaluates the eligible file types again.</p>
 
           <h2>Classify files without collapsing annotation state</h2>
           <p>Use the three small controls on a row. File type uses exactly these labels:</p>
@@ -1577,6 +1581,8 @@
           </ul>
 
           <p>Annotation state is selected independently as <span class="ui">Annotated</span>, <span class="ui">Unannotated</span>, or <span class="ui">Unknown</span>. Source is independently recorded as <span class="ui">Publisher</span>, <span class="ui">Preprint server</span>, <span class="ui">Institutional repository</span>, <span class="ui">User import</span>, <span class="ui">Other</span>, or <span class="ui">Unknown</span>. Manual type and annotation choices survive later fingerprint rescans.</p>
+
+          <p><span class="ui">Publisher</span> is used only when a recognized publisher host or a publisher-specific acquisition path provides that evidence. arXiv, bioRxiv, and medRxiv are shown as <span class="ui">Preprint server</span>; repository hosts remain <span class="ui">Institutional repository</span>; ordinary local additions are <span class="ui">User import</span>; and a generic web download with no stronger evidence remains <span class="ui">Other</span>. A real host can appear after the source label when useful. Internal migration or ingestion markers are never user-facing source details, and choosing a different source clears a stale provider detail rather than appending it to the new choice.</p>
 
           <div class="note"><span class="callout-title">Note</span>Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.</div>
 
@@ -1635,6 +1641,8 @@
 
           <h2>Classification follows the file that actually arrived</h2>
           <p>A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference, First Release, or accepted preview remains an accepted manuscript. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.</p>
+
+          <p>A PDF URL stored in bibliographic metadata is only a retrieval lead. It does not create a Paper Files row until a download actually succeeds, the returned bytes pass validation, and a local resource is registered.</p>
 
           <p>If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved classification itself is wrong.</p>
 
@@ -2001,6 +2009,11 @@
             <li><strong>Confirm the correct person.</strong> The initial result set becomes the baseline rather than a batch of unread “new” papers.</li>
           </ol>
 
+          <h2>Understand profile and publication sources</h2>
+          <p>A Google Scholar profile is refreshed through Google Scholar and follows the shared Scholar pacing and cooldown. A ResearchGate URL identifies the public profile, but its publication list is matched separately to a publication-data author. Gewu Insight uses OpenAlex for that match when it is configured and automatically falls back to Semantic Scholar when OpenAlex is unavailable. Confirm the proposed person rather than assuming similar names are identical.</p>
+
+          <p>If no publication-data match can be verified, the ResearchGate profile and homepage can still be saved, but automatic publication refresh remains unavailable until a match is supplied. The profile source, publication metadata provider, and per-paper citation source remain distinct evidence; a fallback does not silently turn the ResearchGate profile into a different author identity.</p>
+
           <h2>Review updates</h2>
           <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.</p>
 
@@ -2168,7 +2181,7 @@
             <li><strong>Verify the result in the Library and Finder.</strong></li>
           </ol>
 
-          <div class="note"><span class="callout-title">Note</span>Changing a Paper Files property or choosing <span class="ui">Make Default</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
+          <div class="note"><span class="callout-title">Note</span>Changing a Paper Files property or choosing <span class="ui">Set as Default</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose File Types and the Default File</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
         </article>
@@ -2328,7 +2341,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#download-sync">Download and Sync Versions</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="launch local server port 8765 could not start log clear monitor cache stale interface overlay font size compact standard large larger extra large">
+        <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="launch local server port 8765 could not start log migration 120 seconds restart recovery failure sheet clear monitor cache stale interface overlay font size compact standard large larger extra large">
           <p class="topic-kicker">Reference</p>
           <h1>Manage Startup, Monitor Cache, and Text Size</h1>
           <p class="lead">The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.</p>
@@ -2336,13 +2349,21 @@
           <h2>Normal startup</h2>
           <p>The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.</p>
 
+          <p>The first launch after an additive database upgrade can take longer because the existing SQLite records are migrated and older provenance or file metadata is backfilled. The native launcher allows up to 120 seconds for this preparation. Keep the single startup panel open rather than launching a second copy; the migration preserves the existing database and managed files.</p>
+
           <p>The Dock tile, native startup panel, and in-window loading state use the icon packaged with the same app build. Startup has a native launch phase and a local-web bootstrap phase, but the visual handoff should not introduce a second icon frame or fall back to an older product mark.</p>
+
+          <h2>Automatic local-server recovery</h2>
+          <p>If the local UI server exits unexpectedly while the macOS window remains open, the launcher starts it again. The window rechecks local health and reloads the workspace when the service becomes ready. A startup-failure sheet is nonblocking; if the server recovers after that sheet appears, the stale sheet is dismissed automatically instead of continuing to interrupt a healthy workspace.</p>
+
+          <p>A brief reload during recovery does not mean the SQLite database was rebuilt or that another copy of Gewu Insight should be opened. If repeated recovery never reaches a healthy Library view, use the launcher log steps below.</p>
 
           <h2>If the app cannot start</h2>
           <ol class="steps">
             <li><strong>Quit any old Gewu Insight window.</strong> An earlier local server may still own port 8765.</li>
             <li><strong>Open the launcher log.</strong> Check <code>logs/paper_monitor_launcher.log</code> for the first error.</li>
-            <li><strong>Start the app again once.</strong> Avoid opening several copies while the first is still preparing.</li>
+            <li><strong>Allow the first startup to finish.</strong> After an upgrade, wait through the migration window before treating the preparation panel as a failure.</li>
+            <li><strong>Start the app again once if recovery does not complete.</strong> Avoid opening several copies while the first is still preparing.</li>
             <li><strong>Preserve the database.</strong> Do not delete SQLite as a startup fix.</li>
           </ol>
 
@@ -2382,7 +2403,7 @@
           <ol>
             <li>Open Paper Files and verify every file type.</li>
             <li>Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.</li>
-            <li>Choose <span class="ui">Make Default</span> for the desired valid file, or choose <span class="ui">Auto</span> to resume automatic selection.</li>
+            <li>Choose <span class="ui">Set as Default</span> for the desired valid file, or choose <span class="ui">Use Automatic Selection</span> to resume automatic selection.</li>
           </ol>
 
           <h2>A duplicate appears after download</h2>
@@ -2404,7 +2425,7 @@
           <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
 
           <h2>A default file cannot be deleted</h2>
-          <p>Choose another valid file with <span class="ui">Make Default</span> first, or choose <span class="ui">Auto</span>; then delete the former non-default file. An <span class="ui">Invalid File</span> remains an audit record and is never eligible to become default.</p>
+          <p>Choose another valid file with <span class="ui">Set as Default</span> first, or choose <span class="ui">Use Automatic Selection</span>; then delete the former non-default file. An <span class="ui">Invalid File</span> remains an audit record and is never eligible to become default.</p>
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
