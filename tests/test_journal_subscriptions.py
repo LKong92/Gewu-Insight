@@ -38,7 +38,7 @@ def write_config(path: Path, journals: list[dict]) -> None:
 
 
 class JournalSubscriptionStorageTests(unittest.TestCase):
-    def test_schema10_migrates_to_empty_schema11_subscription_table(self) -> None:
+    def test_schema10_migrates_to_current_subscription_table(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "monitor.sqlite"
             storage = Storage(db_path)
@@ -60,8 +60,8 @@ class JournalSubscriptionStorageTests(unittest.TestCase):
             finally:
                 migrated.close()
 
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 11)
-        self.assertEqual(version, 11)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 13)
+        self.assertEqual(version, 13)
         self.assertIsNotNone(table)
 
     def test_seed_runs_once_and_disabled_journal_is_not_reenabled(self) -> None:

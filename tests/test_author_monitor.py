@@ -2290,10 +2290,17 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertNotIn("position: absolute", scholar_css)
         self.assertIn("author-paper-scholar-citations", citation_row_markup)
 
-    def test_window_drag_region_never_covers_the_search_input(self):
+    def test_window_drag_region_only_handles_the_true_blank_surface(self):
         html = ui_server.INDEX_HTML
         drag_css = html.split(".window-drag-region {", 1)[1].split("}", 1)[0]
-        self.assertIn("right: 430px;", drag_css)
+        drag_handlers = html.split("function wireWindowDragRegion()", 1)[1].split(
+            '$("reportMode").addEventListener', 1
+        )[0]
+        self.assertIn("right: 0;", drag_css)
+        self.assertGreaterEqual(
+            drag_handlers.count("event.button !== 0 || event.target !== region"),
+            2,
+        )
 
     def test_author_profile_search_does_not_leave_stale_candidates_after_failure(self):
         html = ui_server.INDEX_HTML

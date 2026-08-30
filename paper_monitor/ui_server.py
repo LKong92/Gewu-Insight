@@ -16399,6 +16399,24 @@ def merge_refreshed_metadata(existing: dict[str, Any] | None, refreshed: dict[st
         merged["image_url"] = existing.get("image_url") or ""
     existing_raw = parse_raw_json(existing)
     refreshed_raw = merged.get("raw") if isinstance(merged.get("raw"), dict) else {}
+    source_list: list[str] = []
+    source_seen: set[str] = set()
+    existing_raw_sources = existing_raw.get("_paper_monitor_sources")
+    refreshed_raw_sources = refreshed_raw.get("_paper_monitor_sources")
+    for source in (
+        *(existing_raw_sources if isinstance(existing_raw_sources, list) else []),
+        *clean_text(existing.get("source") or "").split("+"),
+        *(refreshed_raw_sources if isinstance(refreshed_raw_sources, list) else []),
+        *clean_text(merged.get("source") or "").split("+"),
+    ):
+        if not isinstance(source, str):
+            continue
+        source_name = re.sub(r"[^a-z0-9._:-]+", "_", clean_text(str(source)).casefold()).strip("_")
+        if source_name and source_name not in source_seen:
+            source_seen.add(source_name)
+            source_list.append(source_name)
+    if source_list:
+        refreshed_raw["_paper_monitor_sources"] = source_list
     for key in [
         "ads", "arxiv_id", "versioned_arxiv_id", "preprint", "published_doi",
         "citation_versions", "google_scholar", "crossref", "pubmed", "pmid", "pmcid",

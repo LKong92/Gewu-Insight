@@ -648,7 +648,7 @@ class ThemeMonitorTest(unittest.TestCase):
         finally:
             ui_server.theme_source_fetchers = original_fetchers
 
-    def test_existing_local_theme_winner_does_not_add_a_duplicate_sighting(self):
+    def test_existing_local_theme_winner_adds_one_idempotent_subject_observation(self):
         import paper_monitor.ui_server as ui_server
 
         selected = date(2026, 6, 2)
@@ -705,7 +705,7 @@ class ThemeMonitorTest(unittest.TestCase):
                         theme_groups=groups,
                     )
 
-                    self.assertEqual(storage.get_paper("arxiv_local_winner")["source_count"], 1)
+                    self.assertEqual(storage.get_paper("arxiv_local_winner")["source_count"], 2)
                     self.assertIsNone(storage.get_paper("openalex_lower_quality"))
                     rows = storage.conn.execute(
                         """

@@ -14,7 +14,7 @@ from .text import is_placeholder_publication_title, normalize_publication_title,
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 11
+STORAGE_SCHEMA_VERSION = 13
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -76,6 +76,23 @@ CREATE TABLE IF NOT EXISTS papers (
 CREATE INDEX IF NOT EXISTS idx_papers_journal_date ON papers(journal, publication_date);
 CREATE INDEX IF NOT EXISTS idx_papers_doi ON papers(doi);
 CREATE INDEX IF NOT EXISTS idx_papers_download_status ON papers(download_status);
+
+CREATE TABLE IF NOT EXISTS paper_source_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  source_kind TEXT NOT NULL COLLATE NOCASE CHECK(TRIM(source_kind) != ''),
+  source_name TEXT NOT NULL COLLATE NOCASE CHECK(TRIM(source_name) != ''),
+  source_key TEXT NOT NULL DEFAULT '' COLLATE NOCASE,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  UNIQUE(paper_id, source_kind, source_name, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_source_observations_paper
+ON paper_source_observations(paper_id, first_seen_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_paper_source_observations_source
+ON paper_source_observations(source_kind, source_name, source_key);
 
 CREATE TABLE IF NOT EXISTS fetch_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -480,10 +497,12 @@ class Storage:
                 or not required_resource_columns.issubset(resource_columns)
                 or "journal_monitor_papers" not in existing_tables
                 or "journal_subscriptions" not in existing_tables
+                or "paper_source_observations" not in existing_tables
             )
             if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
                 self._ensure_schema_columns()
+                self._backfill_paper_source_observations()
                 self._ensure_library_root()
                 self._seed_library_from_existing_papers()
                 self.conn.execute(
@@ -1017,6 +1036,433 @@ class Storage:
             )
         self.conn.commit()
 
+    @staticmethod
+    def _normalize_source_name(value: Any) -> str:
+        normalized = re.sub(r"[^a-z0-9._:-]+", "_", str(value or "").strip().casefold())
+        return normalized.strip("_")
+
+    @classmethod
+    def _source_observation_from_token(cls, value: Any) -> dict[str, str] | None:
+        token = cls._normalize_source_name(value)
+        if not token:
+            return None
+        monitor_aliases = {
+            "author": "author",
+            "author_monitor": "author",
+            "journal": "journal",
+            "journal_monitor": "journal",
+            "subject": "subject",
+            "subject_monitor": "subject",
+            "theme": "subject",
+            "theme_monitor": "subject",
+        }
+        provider_names = {
+            "ads",
+            "aps_rss",
+            "arxiv",
+            "crossref",
+            "doi",
+            "google_scholar",
+            "local_aps_rss",
+            "local_arxiv",
+            "nasa_ads",
+            "openalex",
+            "pubmed",
+            "researchgate",
+            "semantic_scholar",
+        }
+        if token in monitor_aliases:
+            return {
+                "source_kind": "monitor",
+                "source_name": monitor_aliases[token],
+                "source_key": "",
+            }
+        return {
+            "source_kind": "provider" if token in provider_names else "source",
+            "source_name": token,
+            "source_key": "",
+        }
+
+    @staticmethod
+    def _paper_raw_dict(paper: dict[str, Any] | sqlite3.Row | None) -> dict[str, Any]:
+        if not paper:
+            return {}
+        if isinstance(paper, dict) and isinstance(paper.get("raw"), dict):
+            return dict(paper["raw"])
+        try:
+            raw = json.loads(str(paper["raw_json"] or "{}"))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    @classmethod
+    def _paper_source_tokens(cls, paper: dict[str, Any] | sqlite3.Row | None) -> list[str]:
+        if not paper:
+            return []
+        try:
+            source_value = paper["source"]
+        except (KeyError, TypeError, IndexError):
+            source_value = ""
+        raw = cls._paper_raw_dict(paper)
+        raw_sources = raw.get("_paper_monitor_sources")
+        candidates = [
+            *str(source_value or "").split("+"),
+            *(raw_sources if isinstance(raw_sources, list) else []),
+        ]
+        tokens: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            token = cls._normalize_source_name(candidate)
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return tokens
+
+    @classmethod
+    def _payload_source_observations(cls, paper: dict[str, Any]) -> list[dict[str, str]]:
+        observations: list[dict[str, str]] = []
+        for token in cls._paper_source_tokens(paper):
+            observation = cls._source_observation_from_token(token)
+            if observation:
+                observations.append(observation)
+        return observations
+
+    @staticmethod
+    def _stable_source_union(*groups: Iterable[Any]) -> list[str]:
+        values: list[str] = []
+        seen: set[str] = set()
+        for group in groups:
+            for item in group:
+                if not isinstance(item, str):
+                    continue
+                token = Storage._normalize_source_name(item)
+                if not token or token in seen:
+                    continue
+                seen.add(token)
+                values.append(token)
+        return values
+
+    def list_paper_source_observations(self, paper_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM paper_source_observations
+            WHERE paper_id = ?
+            ORDER BY first_seen_at ASC, id ASC
+            """,
+            (str(paper_id),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _sync_paper_source_projection(self, paper_id: str) -> None:
+        paper = self.conn.execute(
+            "SELECT source, source_count, raw_json FROM papers WHERE paper_id = ?",
+            (str(paper_id),),
+        ).fetchone()
+        if not paper:
+            return
+        raw = self._paper_raw_dict(paper)
+        raw_sources = raw.get("_paper_monitor_sources")
+        observation_rows = self.conn.execute(
+            """
+            SELECT source_name
+            FROM paper_source_observations
+            WHERE paper_id = ?
+            ORDER BY first_seen_at ASC, id ASC
+            """,
+            (str(paper_id),),
+        ).fetchall()
+        sources = self._stable_source_union(
+            raw_sources if isinstance(raw_sources, list) else [],
+            str(paper["source"] or "").split("+"),
+            [row["source_name"] for row in observation_rows],
+        )
+        if sources:
+            raw["_paper_monitor_sources"] = sources
+        observation_count = len(observation_rows)
+        source_count = max(1, int(paper["source_count"] or 1), observation_count)
+        self.conn.execute(
+            "UPDATE papers SET raw_json = ?, source_count = ? WHERE paper_id = ?",
+            (json.dumps(raw, ensure_ascii=False), source_count, str(paper_id)),
+        )
+
+    def record_paper_source_observations(
+        self,
+        paper_id: str,
+        observations: Iterable[dict[str, Any]],
+        *,
+        commit: bool = True,
+    ) -> int:
+        """Upsert stable provenance identities and keep their paper projection in sync.
+
+        ``source_kind`` separates app monitor observations from upstream providers
+        and legacy/free-form sources. ``source_name`` is the stable compatibility
+        token, while ``source_key`` optionally distinguishes durable sub-sources
+        without using fetch-run or time-window IDs that would defeat idempotency.
+        """
+        paper_id = str(paper_id or "").strip()
+        if not paper_id:
+            raise ValueError("paper_id is required for a source observation")
+        timestamp = now_iso()
+        normalized: dict[tuple[str, str, str], tuple[str, str]] = {}
+        for observation in observations:
+            source_kind = self._normalize_source_name(observation.get("source_kind") or "source")
+            source_name = self._normalize_source_name(observation.get("source_name"))
+            source_key = str(observation.get("source_key") or "").strip().casefold()
+            if not source_kind or not source_name:
+                continue
+            first_seen_at = str(observation.get("first_seen_at") or timestamp)
+            last_seen_at = str(observation.get("last_seen_at") or timestamp)
+            identity = (source_kind, source_name, source_key)
+            if identity in normalized:
+                previous_first, previous_last = normalized[identity]
+                normalized[identity] = (
+                    min(previous_first, first_seen_at),
+                    max(previous_last, last_seen_at),
+                )
+            else:
+                normalized[identity] = (first_seen_at, last_seen_at)
+        if not normalized:
+            return 0
+        existing_paper = self.conn.execute(
+            "SELECT source_count FROM papers WHERE paper_id = ?",
+            (paper_id,),
+        ).fetchone()
+        if not existing_paper:
+            raise KeyError(paper_id)
+        existing_rows = self.conn.execute(
+            """
+            SELECT source_kind, source_name, source_key
+            FROM paper_source_observations
+            WHERE paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchall()
+        existing_identities = {
+            (
+                self._normalize_source_name(row["source_kind"]),
+                self._normalize_source_name(row["source_name"]),
+                str(row["source_key"] or "").strip().casefold(),
+            )
+            for row in existing_rows
+        }
+        new_count = len(set(normalized) - existing_identities)
+        try:
+            self.conn.executemany(
+                """
+                INSERT INTO paper_source_observations (
+                  paper_id, source_kind, source_name, source_key,
+                  first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id, source_kind, source_name, source_key)
+                DO UPDATE SET
+                  first_seen_at = MIN(paper_source_observations.first_seen_at, excluded.first_seen_at),
+                  last_seen_at = MAX(paper_source_observations.last_seen_at, excluded.last_seen_at)
+                """,
+                [
+                    (paper_id, kind, name, key, seen[0], seen[1])
+                    for (kind, name, key), seen in normalized.items()
+                ],
+            )
+            row_count = int(
+                self.conn.execute(
+                    "SELECT COUNT(*) FROM paper_source_observations WHERE paper_id = ?",
+                    (paper_id,),
+                ).fetchone()[0]
+            )
+            previous_count = max(1, int(existing_paper["source_count"] or 1))
+            if not existing_identities and previous_count == 1:
+                source_count = max(previous_count, row_count)
+            else:
+                source_count = max(previous_count + new_count, row_count)
+            self.conn.execute(
+                "UPDATE papers SET source_count = ? WHERE paper_id = ?",
+                (source_count, paper_id),
+            )
+            self._sync_paper_source_projection(paper_id)
+            if commit:
+                self.conn.commit()
+        except Exception:
+            if commit:
+                self.conn.rollback()
+            raise
+        return new_count
+
+    def record_paper_source_observation(
+        self,
+        paper_id: str,
+        *,
+        source_kind: str,
+        source_name: str,
+        source_key: str = "",
+        first_seen_at: str = "",
+        last_seen_at: str = "",
+        commit: bool = True,
+    ) -> bool:
+        created = self.record_paper_source_observations(
+            paper_id,
+            [
+                {
+                    "source_kind": source_kind,
+                    "source_name": source_name,
+                    "source_key": source_key,
+                    "first_seen_at": first_seen_at,
+                    "last_seen_at": last_seen_at,
+                }
+            ],
+            commit=commit,
+        )
+        return bool(created)
+
+    def merge_paper_source_observations(
+        self,
+        source_paper_id: str,
+        target_paper_id: str,
+        *,
+        commit: bool = True,
+    ) -> int:
+        source_paper_id = str(source_paper_id)
+        target_paper_id = str(target_paper_id)
+        if source_paper_id == target_paper_id:
+            return 0
+        source = self.get_paper(source_paper_id)
+        if not source or not self.get_paper(target_paper_id):
+            raise KeyError(source_paper_id if not source else target_paper_id)
+        source_payload_observations = self._payload_source_observations(source)
+        try:
+            if source_payload_observations:
+                self.record_paper_source_observations(
+                    source_paper_id,
+                    source_payload_observations,
+                    commit=False,
+                )
+            rows = self.list_paper_source_observations(source_paper_id)
+            created = self.record_paper_source_observations(
+                target_paper_id,
+                rows,
+                commit=False,
+            ) if rows else 0
+            if commit:
+                self.conn.commit()
+        except Exception:
+            if commit:
+                self.conn.rollback()
+            raise
+        return created
+
+    def _backfill_paper_source_observations(self) -> None:
+        table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'paper_source_observations'"
+        ).fetchone()
+        if not table:
+            return
+        observations: dict[tuple[str, str, str, str], tuple[str, str]] = {}
+
+        def remember(
+            paper_id: Any,
+            source_kind: str,
+            source_name: str,
+            source_key: str,
+            first_seen_at: Any,
+            last_seen_at: Any,
+        ) -> None:
+            normalized_kind = self._normalize_source_name(source_kind)
+            normalized_name = self._normalize_source_name(source_name)
+            normalized_key = str(source_key or "").strip().casefold()
+            paper_key = str(paper_id or "").strip()
+            if not paper_key or not normalized_kind or not normalized_name:
+                return
+            first = str(first_seen_at or last_seen_at or now_iso())
+            last = str(last_seen_at or first)
+            identity = (paper_key, normalized_kind, normalized_name, normalized_key)
+            if identity in observations:
+                old_first, old_last = observations[identity]
+                observations[identity] = (min(old_first, first), max(old_last, last))
+            else:
+                observations[identity] = (first, last)
+
+        paper_rows = self.conn.execute(
+            "SELECT paper_id, source, first_seen_at, last_seen_at, raw_json FROM papers"
+        ).fetchall()
+        for row in paper_rows:
+            for token in self._paper_source_tokens(row):
+                observation = self._source_observation_from_token(token)
+                if observation:
+                    remember(
+                        row["paper_id"],
+                        observation["source_kind"],
+                        observation["source_name"],
+                        observation["source_key"],
+                        row["first_seen_at"],
+                        row["last_seen_at"],
+                    )
+
+        journal_rows = self.conn.execute(
+            """
+            SELECT paper_id, MIN(first_seen_at) AS first_seen_at,
+                   MAX(last_seen_at) AS last_seen_at
+            FROM journal_monitor_papers
+            GROUP BY paper_id
+            """
+        ).fetchall()
+        for row in journal_rows:
+            remember(row["paper_id"], "monitor", "journal", "", row["first_seen_at"], row["last_seen_at"])
+
+        theme_rows = self.conn.execute(
+            """
+            SELECT paper_id, MIN(observed_at) AS first_seen_at,
+                   MAX(observed_at) AS last_seen_at
+            FROM (
+              SELECT paper_id, fetched_at AS observed_at FROM theme_candidates
+              UNION ALL
+              SELECT paper_id, searched_at AS observed_at FROM theme_results
+            )
+            GROUP BY paper_id
+            """
+        ).fetchall()
+        for row in theme_rows:
+            remember(row["paper_id"], "monitor", "subject", "", row["first_seen_at"], row["last_seen_at"])
+
+        author_rows = self.conn.execute(
+            """
+            SELECT paper_id, MIN(first_seen_at) AS first_seen_at,
+                   MAX(last_seen_at) AS last_seen_at
+            FROM author_monitor_papers
+            GROUP BY paper_id
+            """
+        ).fetchall()
+        for row in author_rows:
+            remember(row["paper_id"], "monitor", "author", "", row["first_seen_at"], row["last_seen_at"])
+
+        if observations:
+            self.conn.executemany(
+                """
+                INSERT INTO paper_source_observations (
+                  paper_id, source_kind, source_name, source_key,
+                  first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id, source_kind, source_name, source_key)
+                DO UPDATE SET
+                  first_seen_at = MIN(paper_source_observations.first_seen_at, excluded.first_seen_at),
+                  last_seen_at = MAX(paper_source_observations.last_seen_at, excluded.last_seen_at)
+                """,
+                [
+                    (*identity, timestamps[0], timestamps[1])
+                    for identity, timestamps in observations.items()
+                ],
+            )
+        affected_paper_ids = {
+            str(row["paper_id"])
+            for row in self.conn.execute(
+                "SELECT DISTINCT paper_id FROM paper_source_observations"
+            ).fetchall()
+        }
+        for paper_id in sorted(affected_paper_ids):
+            self._sync_paper_source_projection(paper_id)
+
     def close(self) -> None:
         self.conn.close()
 
@@ -1034,8 +1480,19 @@ class Storage:
             payload["title"] = normalize_publication_title(payload.get("title"))
         payload.setdefault("first_seen_at", timestamp)
         payload["last_seen_at"] = timestamp
-        payload["raw_json"] = json.dumps(payload.get("raw") or {}, ensure_ascii=False)
+        incoming_raw = self._paper_raw_dict(payload)
+        incoming_sources = self._stable_source_union(
+            str(payload.get("source") or "").split("+"),
+            incoming_raw.get("_paper_monitor_sources")
+            if isinstance(incoming_raw.get("_paper_monitor_sources"), list)
+            else [],
+        )
+        if incoming_sources:
+            incoming_raw["_paper_monitor_sources"] = incoming_sources
+        payload["raw"] = incoming_raw
+        payload["raw_json"] = json.dumps(incoming_raw, ensure_ascii=False)
         payload["section_allowed"] = _bool_to_int(payload.get("section_allowed"))
+        source_observations = self._payload_source_observations(payload)
 
         if existing:
             merged = dict(existing)
@@ -1069,9 +1526,39 @@ class Storage:
                     continue
                 if value not in (None, "") and _is_blank_existing(key, merged.get(key)):
                     merged[key] = value
-            merged["source_count"] = int(existing["source_count"] or 1) + 1
+            existing_raw = self._paper_raw_dict(existing)
+            merged_raw = dict(incoming_raw) if replace_bibliographic_metadata or not existing_raw else dict(existing_raw)
+            existing_sources = (
+                existing_raw.get("_paper_monitor_sources")
+                if isinstance(existing_raw.get("_paper_monitor_sources"), list)
+                else []
+            )
+            merged_sources = self._stable_source_union(
+                existing_sources,
+                str(existing.get("source") or "").split("+"),
+                incoming_sources,
+            )
+            if merged_sources:
+                merged_raw["_paper_monitor_sources"] = merged_sources
+            merged["raw_json"] = json.dumps(merged_raw, ensure_ascii=False)
+            merged["source_count"] = max(1, int(existing["source_count"] or 1))
             merged["last_seen_at"] = timestamp
-            self._update_paper(merged, commit=commit)
+            try:
+                self._update_paper(merged, commit=False)
+                if source_observations:
+                    self.record_paper_source_observations(
+                        str(payload["paper_id"]),
+                        source_observations,
+                        commit=False,
+                    )
+                else:
+                    self._sync_paper_source_projection(str(payload["paper_id"]))
+                if commit:
+                    self.conn.commit()
+            except Exception:
+                if commit:
+                    self.conn.rollback()
+                raise
             return
 
         columns = [
@@ -1099,12 +1586,25 @@ class Storage:
         payload["storage_key"] = self.storage_key_for_paper_id(str(payload["paper_id"]))
         values = [payload.get(column) for column in columns]
         placeholders = ", ".join(["?"] * len(columns))
-        self.conn.execute(
-            f"INSERT INTO papers ({', '.join(columns)}) VALUES ({placeholders})",
-            values,
-        )
-        if commit:
-            self.conn.commit()
+        try:
+            self.conn.execute(
+                f"INSERT INTO papers ({', '.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
+            if source_observations:
+                self.record_paper_source_observations(
+                    str(payload["paper_id"]),
+                    source_observations,
+                    commit=False,
+                )
+            else:
+                self._sync_paper_source_projection(str(payload["paper_id"]))
+            if commit:
+                self.conn.commit()
+        except Exception:
+            if commit:
+                self.conn.rollback()
+            raise
 
     def merge_paper_missing_metadata(
         self,
@@ -1116,7 +1616,19 @@ class Storage:
         """Insert a paper or fill blanks without treating every cache refresh as a new source sighting."""
         existing = self.get_paper(str(paper.get("paper_id") or ""))
         if not existing:
-            self.upsert_paper(paper, commit=commit)
+            payload = dict(paper)
+            raw = self._paper_raw_dict(payload)
+            sources = self._stable_source_union(
+                raw.get("_paper_monitor_sources")
+                if isinstance(raw.get("_paper_monitor_sources"), list)
+                else [],
+                [source_name],
+            )
+            if sources:
+                raw["_paper_monitor_sources"] = sources
+            payload["raw"] = raw
+            payload["source"] = payload.get("source") or source_name
+            self.upsert_paper(payload, commit=commit)
             return True
 
         merged = dict(existing)
@@ -1154,28 +1666,38 @@ class Storage:
                 if key not in existing_raw and incoming_raw.get(key) not in (None, "", [], {}):
                     existing_raw[key] = incoming_raw[key]
 
-        source_tokens = [
-            token
-            for token in str(existing.get("source") or "").split("+")
-            if token
-        ]
+        source_tokens = [token for token in str(existing.get("source") or "").split("+") if token]
         raw_sources = existing_raw.get("_paper_monitor_sources")
         if isinstance(raw_sources, list):
-            source_tokens.extend(str(token) for token in raw_sources if str(token))
+            source_tokens.extend(token for token in raw_sources if isinstance(token, str) and token)
         source_name = str(source_name or "")
-        is_new_source = bool(source_name and source_name not in source_tokens)
         if source_name:
             source_tokens.append(source_name)
-        source_tokens = list(dict.fromkeys(source_tokens))
+        source_tokens = self._stable_source_union(source_tokens)
         if source_tokens:
             existing_raw["_paper_monitor_sources"] = source_tokens
         if not str(merged.get("source") or "") and source_name:
             merged["source"] = source_name
-        if is_new_source:
-            merged["source_count"] = int(existing.get("source_count") or 1) + 1
+        merged["source_count"] = max(1, int(existing.get("source_count") or 1))
         merged["raw_json"] = json.dumps(existing_raw, ensure_ascii=False)
         merged["last_seen_at"] = now_iso()
-        self._update_paper(merged, commit=commit)
+        observation = self._source_observation_from_token(source_name)
+        try:
+            self._update_paper(merged, commit=False)
+            if observation:
+                self.record_paper_source_observations(
+                    str(merged["paper_id"]),
+                    [observation],
+                    commit=False,
+                )
+            else:
+                self._sync_paper_source_projection(str(merged["paper_id"]))
+            if commit:
+                self.conn.commit()
+        except Exception:
+            if commit:
+                self.conn.rollback()
+            raise
         return False
 
     def _update_paper(self, paper: dict[str, Any], *, commit: bool = True) -> None:
@@ -1211,7 +1733,30 @@ class Storage:
         if not existing:
             return None
         timestamp = now_iso()
-        raw_json = json.dumps(paper.get("raw") or {}, ensure_ascii=False)
+        existing_raw = self._paper_raw_dict(existing)
+        incoming_raw = self._paper_raw_dict(paper)
+        existing_sources = (
+            existing_raw.get("_paper_monitor_sources")
+            if isinstance(existing_raw.get("_paper_monitor_sources"), list)
+            else []
+        )
+        incoming_sources = (
+            incoming_raw.get("_paper_monitor_sources")
+            if isinstance(incoming_raw.get("_paper_monitor_sources"), list)
+            else []
+        )
+        source_projection = self._stable_source_union(
+            existing_sources,
+            str(existing.get("source") or "").split("+"),
+            incoming_sources,
+            str(paper.get("source") or "").split("+"),
+        )
+        if source_projection:
+            incoming_raw["_paper_monitor_sources"] = source_projection
+        raw_json = json.dumps(incoming_raw, ensure_ascii=False)
+        source_observations = self._payload_source_observations(
+            {**paper, "raw": incoming_raw}
+        )
         normalized_title = normalize_publication_title(paper.get("title")) if paper.get("title") else ""
         if is_placeholder_publication_title(normalized_title):
             normalized_title = ""
@@ -1242,8 +1787,20 @@ class Storage:
         assignments = ", ".join([f"{column} = ?" for column in columns])
         values = [updates[column] for column in columns]
         values.append(str(paper_id))
-        self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
-        self.conn.commit()
+        try:
+            self.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", values)
+            if source_observations:
+                self.record_paper_source_observations(
+                    str(paper_id),
+                    source_observations,
+                    commit=False,
+                )
+            else:
+                self._sync_paper_source_projection(str(paper_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_paper(paper_id)
 
     def update_semantic_scholar_enrichment(self, paper_id: str, enrichment: dict[str, Any]) -> dict[str, Any] | None:
@@ -1260,16 +1817,47 @@ class Storage:
         return self.get_paper(paper_id)
 
     def update_paper_raw_json(self, paper_id: str, raw: dict[str, Any]) -> dict[str, Any] | None:
-        self.conn.execute(
-            """
-            UPDATE papers
-            SET raw_json = ?,
-                last_seen_at = ?
-            WHERE paper_id = ?
-            """,
-            (json.dumps(raw or {}, ensure_ascii=False), now_iso(), str(paper_id)),
+        existing = self.get_paper(str(paper_id))
+        if not existing:
+            return None
+        merged_raw = dict(raw or {})
+        existing_raw = self._paper_raw_dict(existing)
+        sources = self._stable_source_union(
+            existing_raw.get("_paper_monitor_sources")
+            if isinstance(existing_raw.get("_paper_monitor_sources"), list)
+            else [],
+            merged_raw.get("_paper_monitor_sources")
+            if isinstance(merged_raw.get("_paper_monitor_sources"), list)
+            else [],
+            str(existing.get("source") or "").split("+"),
         )
-        self.conn.commit()
+        if sources:
+            merged_raw["_paper_monitor_sources"] = sources
+        observations = self._payload_source_observations(
+            {**existing, "raw": merged_raw}
+        )
+        try:
+            self.conn.execute(
+                """
+                UPDATE papers
+                SET raw_json = ?,
+                    last_seen_at = ?
+                WHERE paper_id = ?
+                """,
+                (json.dumps(merged_raw, ensure_ascii=False), now_iso(), str(paper_id)),
+            )
+            if observations:
+                self.record_paper_source_observations(
+                    str(paper_id),
+                    observations,
+                    commit=False,
+                )
+            else:
+                self._sync_paper_source_projection(str(paper_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_paper(paper_id)
 
     def record_fetch_run(
@@ -1411,6 +1999,15 @@ class Storage:
                 """,
                 rows,
             )
+            for paper_id in sorted({row[1] for row in rows}):
+                self.record_paper_source_observation(
+                    paper_id,
+                    source_kind="monitor",
+                    source_name="journal",
+                    first_seen_at=timestamp,
+                    last_seen_at=timestamp,
+                    commit=False,
+                )
             if commit:
                 self.conn.commit()
         except Exception:
@@ -1617,17 +2214,30 @@ class Storage:
         ]
         if not rows:
             return
-        self.conn.executemany(
-            """
-            INSERT INTO theme_candidates (
-              paper_id, source, window_start, window_end, query_plan_hash, fetched_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(paper_id, source, window_start, window_end, query_plan_hash)
-            DO UPDATE SET fetched_at = excluded.fetched_at
-            """,
-            rows,
-        )
-        self.conn.commit()
+        try:
+            self.conn.executemany(
+                """
+                INSERT INTO theme_candidates (
+                  paper_id, source, window_start, window_end, query_plan_hash, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id, source, window_start, window_end, query_plan_hash)
+                DO UPDATE SET fetched_at = excluded.fetched_at
+                """,
+                rows,
+            )
+            for paper_id in sorted({row[0] for row in rows}):
+                self.record_paper_source_observation(
+                    paper_id,
+                    source_kind="monitor",
+                    source_name="subject",
+                    first_seen_at=timestamp,
+                    last_seen_at=timestamp,
+                    commit=False,
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def get_aps_rss_feed(self, journal_slug: str) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -2202,32 +2812,44 @@ class Storage:
         window_end: str,
     ) -> None:
         timestamp = now_iso()
-        self.conn.execute(
-            """
-            INSERT INTO theme_results (
-              paper_id, group_key, group_name, query, score, hits_json,
-              window_start, window_end, searched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(paper_id, group_key, window_start, window_end) DO UPDATE SET
-              group_name = excluded.group_name,
-              query = excluded.query,
-              score = MAX(theme_results.score, excluded.score),
-              hits_json = excluded.hits_json,
-              searched_at = excluded.searched_at
-            """,
-            (
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO theme_results (
+                  paper_id, group_key, group_name, query, score, hits_json,
+                  window_start, window_end, searched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id, group_key, window_start, window_end) DO UPDATE SET
+                  group_name = excluded.group_name,
+                  query = excluded.query,
+                  score = MAX(theme_results.score, excluded.score),
+                  hits_json = excluded.hits_json,
+                  searched_at = excluded.searched_at
+                """,
+                (
+                    paper_id,
+                    group_key,
+                    group_name,
+                    query,
+                    int(score),
+                    json.dumps(hits, ensure_ascii=False),
+                    window_start,
+                    window_end,
+                    timestamp,
+                ),
+            )
+            self.record_paper_source_observation(
                 paper_id,
-                group_key,
-                group_name,
-                query,
-                int(score),
-                json.dumps(hits, ensure_ascii=False),
-                window_start,
-                window_end,
-                timestamp,
-            ),
-        )
-        self.conn.commit()
+                source_kind="monitor",
+                source_name="subject",
+                first_seen_at=timestamp,
+                last_seen_at=timestamp,
+                commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def list_theme_papers(
         self,
@@ -2876,34 +3498,44 @@ class Storage:
         current = self.conn.execute("SELECT * FROM my_publications WHERE id = ?", (publication_id,)).fetchone()
         if not current:
             return {}
-        existing = self.conn.execute(
-            "SELECT * FROM my_publications WHERE paper_id = ? AND id != ?",
-            (paper_id, publication_id),
-        ).fetchone()
-        if existing:
-            starred = max(int(current["starred"] or 0), int(existing["starred"] or 0))
-            first_author = max(int(current["first_author"] or 0), int(existing["first_author"] or 0))
-            corresponding_author = max(int(current["corresponding_author"] or 0), int(existing["corresponding_author"] or 0))
-            review_article = max(int(current["review_article"] or 0), int(existing["review_article"] or 0))
-            export_excluded = max(int(current["export_excluded"] or 0), int(existing["export_excluded"] or 0))
-            sort_order = min(int(current["sort_order"] or 0), int(existing["sort_order"] or 0))
-            self.conn.execute(
-                """
-                UPDATE my_publications
-                SET starred = ?, first_author = ?, corresponding_author = ?, review_article = ?, export_excluded = ?, sort_order = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (starred, first_author, corresponding_author, review_article, export_excluded, sort_order, timestamp, int(existing["id"])),
-            )
-            self.conn.execute("DELETE FROM my_publications WHERE id = ?", (publication_id,))
+        source_paper_id = str(current["paper_id"] or "")
+        try:
+            if source_paper_id and source_paper_id != paper_id:
+                self.merge_paper_source_observations(
+                    source_paper_id,
+                    paper_id,
+                    commit=False,
+                )
+            existing = self.conn.execute(
+                "SELECT * FROM my_publications WHERE paper_id = ? AND id != ?",
+                (paper_id, publication_id),
+            ).fetchone()
+            if existing:
+                starred = max(int(current["starred"] or 0), int(existing["starred"] or 0))
+                first_author = max(int(current["first_author"] or 0), int(existing["first_author"] or 0))
+                corresponding_author = max(int(current["corresponding_author"] or 0), int(existing["corresponding_author"] or 0))
+                review_article = max(int(current["review_article"] or 0), int(existing["review_article"] or 0))
+                export_excluded = max(int(current["export_excluded"] or 0), int(existing["export_excluded"] or 0))
+                sort_order = min(int(current["sort_order"] or 0), int(existing["sort_order"] or 0))
+                self.conn.execute(
+                    """
+                    UPDATE my_publications
+                    SET starred = ?, first_author = ?, corresponding_author = ?, review_article = ?, export_excluded = ?, sort_order = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (starred, first_author, corresponding_author, review_article, export_excluded, sort_order, timestamp, int(existing["id"])),
+                )
+                self.conn.execute("DELETE FROM my_publications WHERE id = ?", (publication_id,))
+                publication_id = int(existing["id"])
+            else:
+                self.conn.execute(
+                    "UPDATE my_publications SET paper_id = ?, updated_at = ? WHERE id = ?",
+                    (paper_id, timestamp, publication_id),
+                )
             self.conn.commit()
-            publication_id = int(existing["id"])
-        else:
-            self.conn.execute(
-                "UPDATE my_publications SET paper_id = ?, updated_at = ? WHERE id = ?",
-                (paper_id, timestamp, publication_id),
-            )
-            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_my_publication(publication_id=publication_id) or {}
 
     def delete_my_publication(self, *, publication_id: int) -> None:
@@ -3269,35 +3901,47 @@ class Storage:
             (int(author_monitor_id), str(paper_id)),
         ).fetchone()
         timestamp = now_iso()
-        self.conn.execute(
-            """
-            INSERT INTO author_monitor_papers (
-              author_monitor_id, paper_id, scholar_key, scholar_title,
-              is_unread, first_seen_at, last_seen_at
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO author_monitor_papers (
+                  author_monitor_id, paper_id, scholar_key, scholar_title,
+                  is_unread, first_seen_at, last_seen_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(author_monitor_id, paper_id) DO UPDATE SET
+                  scholar_key = CASE
+                    WHEN excluded.scholar_key != '' THEN excluded.scholar_key
+                    ELSE author_monitor_papers.scholar_key
+                  END,
+                  scholar_title = CASE
+                    WHEN excluded.scholar_title != '' THEN excluded.scholar_title
+                    ELSE author_monitor_papers.scholar_title
+                  END,
+                  last_seen_at = excluded.last_seen_at
+                """,
+                (
+                    int(author_monitor_id),
+                    str(paper_id),
+                    str(scholar_key or ""),
+                    str(scholar_title or ""),
+                    1 if unread else 0,
+                    timestamp,
+                    timestamp,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(author_monitor_id, paper_id) DO UPDATE SET
-              scholar_key = CASE
-                WHEN excluded.scholar_key != '' THEN excluded.scholar_key
-                ELSE author_monitor_papers.scholar_key
-              END,
-              scholar_title = CASE
-                WHEN excluded.scholar_title != '' THEN excluded.scholar_title
-                ELSE author_monitor_papers.scholar_title
-              END,
-              last_seen_at = excluded.last_seen_at
-            """,
-            (
-                int(author_monitor_id),
+            self.record_paper_source_observation(
                 str(paper_id),
-                str(scholar_key or ""),
-                str(scholar_title or ""),
-                1 if unread else 0,
-                timestamp,
-                timestamp,
-            ),
-        )
-        self.conn.commit()
+                source_kind="monitor",
+                source_name="author",
+                first_seen_at=timestamp,
+                last_seen_at=timestamp,
+                commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return existing is None
 
     def author_monitor_paper_count(self, author_monitor_id: int) -> int:
