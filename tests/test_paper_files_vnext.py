@@ -11,7 +11,12 @@ from pypdf import PdfReader, PdfWriter
 from pypdf.annotations import Text
 
 from paper_monitor import ui_server
-from paper_monitor.storage import PAPER_FILE_TYPES, STORAGE_SCHEMA_VERSION, Storage
+from paper_monitor.storage import (
+    PAPER_FILE_TYPES,
+    STORAGE_SCHEMA_VERSION,
+    Storage,
+    inferred_paper_file_source,
+)
 
 
 def pdf_bytes(*, annotation: bool = False) -> bytes:
@@ -217,7 +222,7 @@ class PaperFilesVNextTests(unittest.TestCase):
 
     def test_internal_backfill_detail_is_hidden_and_cleared_when_source_changes(self) -> None:
         self.assertEqual(
-            ui_server.inferred_paper_file_source("", "legacy_backfill"),
+            inferred_paper_file_source("", "legacy_backfill"),
             ("user_import", ""),
         )
         self.add_paper("legacy-source-detail")
@@ -247,6 +252,66 @@ class PaperFilesVNextTests(unittest.TestCase):
         )
         self.assertEqual(updated["file_source"], "other")
         self.assertIsNone(updated["source_detail"])
+
+    def test_file_source_inference_requires_real_publisher_evidence(self) -> None:
+        cases = (
+            (
+                "https://files.example.net/paper.pdf",
+                "download",
+                ("other", "files.example.net"),
+            ),
+            (
+                "https://files.example.net/paper.pdf",
+                "download_refresh",
+                ("other", "files.example.net"),
+            ),
+            (
+                "https://files.example.net/paper.pdf",
+                "publisher_browser_download",
+                ("publisher", "files.example.net"),
+            ),
+            (
+                "https://files.example.net/paper.pdf",
+                "aaas_supplement_download",
+                ("publisher", "files.example.net"),
+            ),
+            (
+                "https://files.example.net/paper.pdf",
+                "nature_browser_download",
+                ("publisher", "files.example.net"),
+            ),
+            (
+                "https://www.nature.com/articles/example.pdf",
+                "download",
+                ("publisher", "www.nature.com"),
+            ),
+            (
+                "https://journals.aps.org/prl/pdf/example",
+                "download",
+                ("publisher", "journals.aps.org"),
+            ),
+            (
+                "https://export.arxiv.org/pdf/2601.00001",
+                "download",
+                ("preprint_server", "export.arxiv.org"),
+            ),
+            (
+                "https://repository.example.edu/paper.pdf",
+                "download",
+                ("institutional_repository", "repository.example.edu"),
+            ),
+            (
+                "https://files.example.net/paper.pdf",
+                "manual_import",
+                ("user_import", ""),
+            ),
+        )
+        for source_url, added_via, expected in cases:
+            with self.subTest(source_url=source_url, added_via=added_via):
+                self.assertEqual(
+                    inferred_paper_file_source(source_url, added_via),
+                    expected,
+                )
 
     def test_exact_duplicate_is_idempotent_but_annotated_peer_is_preserved(self) -> None:
         self.add_paper("dedupe")

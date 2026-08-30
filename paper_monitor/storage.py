@@ -53,6 +53,19 @@ AUTOMATIC_DEFAULT_FILE_TYPE_RANK = {
     "accepted_manuscript": 200,
     "preprint": 100,
 }
+_PAPER_FILE_PUBLISHER_PROVENANCE_TOKENS = {"publisher", "aaas", "nature"}
+_PAPER_FILE_PUBLISHER_HOST_SUFFIXES = (
+    "nature.com",
+    "science.org",
+    "aps.org",
+    "wiley.com",
+    "iop.org",
+    "sciencedirect.com",
+    "elsevier.com",
+    "oup.com",
+    "springer.com",
+    "springernature.com",
+)
 
 
 def normalize_paper_file_type(value: Any) -> str:
@@ -168,12 +181,19 @@ def inferred_paper_file_source(source_url: Any = "", added_via: Any = "") -> tup
     added = str(added_via or "").strip()
     host = (urlparse(url).hostname or "").casefold()
     added_key = added.casefold()
+    added_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", added_key)
+        if token
+    }
     if host.endswith(("arxiv.org", "biorxiv.org", "medrxiv.org")) or "arxiv" in added_key:
         return "preprint_server", host or added
     if any(token in host for token in ("repository", "eprints", "dspace", "hal.science")):
         return "institutional_repository", host
-    if url and any(token in added_key for token in ("publisher", "download", "aaas", "nature")):
-        return "publisher", host or added
+    if added_tokens & _PAPER_FILE_PUBLISHER_PROVENANCE_TOKENS:
+        return "publisher", host
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in _PAPER_FILE_PUBLISHER_HOST_SUFFIXES):
+        return "publisher", host
     if any(token in added_key for token in ("manual", "paper_details", "inventory", "legacy", "import")):
         return "user_import", ""
     if url:
