@@ -201,6 +201,26 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("compare:self.serverStartupDeadline", source)
         self.assertNotIn("self.attempts >= 80", source)
 
+    def test_native_launcher_recovers_an_unexpected_server_exit_before_alerting(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+        termination_handler = source.split("task.terminationHandler", 1)[1].split(
+            "NSError *error", 1
+        )[0]
+        recovery = source.split("- (void)recoverServerAfterUnexpectedExit", 1)[1].split(
+            "- (void)checkServerWithCompletion", 1
+        )[0]
+
+        self.assertIn("self.applicationIsTerminating = YES;", source)
+        self.assertIn("strongSelf.ownedServerTask = nil", termination_handler)
+        self.assertIn("recoverServerAfterUnexpectedExit", termination_handler)
+        self.assertNotIn("presentStartupFailure", termination_handler)
+        self.assertIn("[self checkServerWithCompletion", recovery)
+        self.assertIn("if ([self restartServerForCurrentOutageIfPossible])", recovery)
+        self.assertIn("[self beginServerReadinessPolling]", recovery)
+        self.assertIn("GewuInsightServerMaxRestartAttempts = 3", source)
+        self.assertIn("Native launcher observed server", source)
+        self.assertIn("if (self.applicationIsTerminating || self.startupFailurePresented) return;", source)
+
     def test_non_pdf_library_preview_uses_macos_quick_look_without_replacing_pdf_preview(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()

@@ -5,6 +5,8 @@
 
 static const NSTimeInterval GewuInsightServerStartupTimeout = 120.0;
 static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
+static const NSTimeInterval GewuInsightServerRecoveryDelay = 0.75;
+static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
 @interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
@@ -323,6 +325,11 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 @property(nonatomic) NSInteger hiddenPublisherDiscoveryPageRetryCount;
 @property(nonatomic, strong) NSTask *ownedServerTask;
 @property(nonatomic, strong) NSDate *serverStartupDeadline;
+@property(nonatomic) BOOL serverReadinessPollActive;
+@property(nonatomic) BOOL applicationIsTerminating;
+@property(nonatomic) BOOL mainAppHasLoaded;
+@property(nonatomic) BOOL startupFailurePresented;
+@property(nonatomic) NSInteger serverRestartAttempts;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
@@ -352,6 +359,10 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 - (void)removeNativeQuickLookKeyMonitor;
 - (void)dispatchNativeQuickLookKey:(NSString *)key;
 - (void)scheduleNativeQuickLookReload;
+- (void)beginServerReadinessPolling;
+- (void)recoverServerAfterUnexpectedExit;
+- (BOOL)restartServerForCurrentOutageIfPossible;
+- (void)appendLauncherLogMessage:(NSString *)message;
 @end
 
 @implementation PaperMonitorDelegate
@@ -428,6 +439,7 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    self.applicationIsTerminating = YES;
     [self closeNativeQuickLookNotifyingWeb:NO];
     if (self.ownedServerTask && self.ownedServerTask.isRunning) {
         [self.ownedServerTask terminate];
@@ -1749,19 +1761,20 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 - (void)ensureServerThenLoad {
     [self checkServerWithCompletion:^(BOOL available) {
         if (available) {
+            self.serverRestartAttempts = 0;
             [self loadApp];
         } else {
             [self startServerIfNeeded];
-            self.serverStartupDeadline = [NSDate dateWithTimeIntervalSinceNow:GewuInsightServerStartupTimeout];
-            [self pollUntilReady];
+            [self beginServerReadinessPolling];
         }
     }];
 }
 
 - (void)startServerIfNeeded {
-    if (self.ownedServerTask) {
+    if (self.ownedServerTask.isRunning) {
         return;
     }
+    self.ownedServerTask = nil;
 
     NSURL *helperURL = [[[[[NSBundle mainBundle] bundleURL]
         URLByAppendingPathComponent:@"Contents"]
@@ -1777,9 +1790,19 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             if (!strongSelf) {
                 return;
             }
-            if (terminatedTask.terminationStatus != 0) {
-                [strongSelf presentStartupFailure:nil];
-            }
+            if (strongSelf.ownedServerTask == terminatedTask) strongSelf.ownedServerTask = nil;
+            NSString *reason = terminatedTask.terminationReason == NSTaskTerminationReasonUncaughtSignal
+                ? @"signal"
+                : @"exit";
+            [strongSelf appendLauncherLogMessage:[NSString stringWithFormat:
+                @"Native launcher observed server %@ status %ld.",
+                reason,
+                (long)terminatedTask.terminationStatus
+            ]];
+            if (strongSelf.applicationIsTerminating) return;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(GewuInsightServerRecoveryDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [strongSelf recoverServerAfterUnexpectedExit];
+            });
         });
     };
 
@@ -1791,15 +1814,28 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     self.ownedServerTask = task;
 }
 
+- (void)beginServerReadinessPolling {
+    if (self.serverReadinessPollActive) return;
+    self.serverReadinessPollActive = YES;
+    self.serverStartupDeadline = [NSDate dateWithTimeIntervalSinceNow:GewuInsightServerStartupTimeout];
+    [self pollUntilReady];
+}
+
 - (void)pollUntilReady {
+    if (!self.serverReadinessPollActive) return;
     [self checkServerWithCompletion:^(BOOL available) {
+        if (!self.serverReadinessPollActive) return;
         if (available) {
+            self.serverReadinessPollActive = NO;
             self.serverStartupDeadline = nil;
+            self.serverRestartAttempts = 0;
             [self loadApp];
             return;
         }
         if (self.serverStartupDeadline &&
             [[NSDate date] compare:self.serverStartupDeadline] != NSOrderedAscending) {
+            self.serverReadinessPollActive = NO;
+            self.serverStartupDeadline = nil;
             [self presentStartupFailure:nil];
             return;
         }
@@ -1807,6 +1843,40 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             [self pollUntilReady];
         });
     }];
+}
+
+- (void)recoverServerAfterUnexpectedExit {
+    if (self.applicationIsTerminating) return;
+    [self checkServerWithCompletion:^(BOOL available) {
+        if (self.applicationIsTerminating) return;
+        if (available) {
+            self.serverRestartAttempts = 0;
+            return;
+        }
+        if (self.mainAppHasLoaded && !self.startupWebView) [self showLoadingPage];
+        if ([self restartServerForCurrentOutageIfPossible]) {
+            [self beginServerReadinessPolling];
+        }
+    }];
+}
+
+- (BOOL)restartServerForCurrentOutageIfPossible {
+    if (self.applicationIsTerminating) return NO;
+    if (self.ownedServerTask.isRunning) return YES;
+    if (self.serverRestartAttempts >= GewuInsightServerMaxRestartAttempts) {
+        self.serverReadinessPollActive = NO;
+        self.serverStartupDeadline = nil;
+        [self presentStartupFailure:@"The local UI server stopped and could not be restarted automatically. Check the launcher log for details."];
+        return NO;
+    }
+    self.serverRestartAttempts += 1;
+    [self appendLauncherLogMessage:[NSString stringWithFormat:
+        @"Native launcher is restarting the server (attempt %ld of %ld).",
+        (long)self.serverRestartAttempts,
+        (long)GewuInsightServerMaxRestartAttempts
+    ]];
+    [self startServerIfNeeded];
+    return YES;
 }
 
 - (void)checkServerWithCompletion:(void (^)(BOOL available))completion {
@@ -1824,6 +1894,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)loadApp {
+    self.mainAppHasLoaded = YES;
+    self.startupFailurePresented = NO;
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];
     [self refreshLibraryNamingRuleMenu];
 }
@@ -2201,6 +2273,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)presentStartupFailure:(NSString *)message {
+    if (self.applicationIsTerminating || self.startupFailurePresented) return;
+    self.startupFailurePresented = YES;
     NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
     NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
     NSAlert *alert = [[NSAlert alloc] init];
@@ -2209,6 +2283,22 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
+}
+
+- (void)appendLauncherLogMessage:(NSString *)message {
+    if (message.length == 0) return;
+    NSString *projectDir = [[[NSBundle mainBundle] bundleURL].URLByDeletingLastPathComponent path];
+    NSString *logPath = [projectDir stringByAppendingPathComponent:@"logs/paper_monitor_launcher.log"];
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!handle) return;
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], message];
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    } @catch (__unused NSException *exception) {
+        @try { [handle closeFile]; } @catch (__unused NSException *closeException) {}
+    }
 }
 
 - (WKWebView *)webView:(WKWebView *)webView
