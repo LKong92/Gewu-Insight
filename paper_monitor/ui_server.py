@@ -30330,15 +30330,16 @@ INDEX_HTML = """<!doctype html>
       width: 100%;
       min-width: 0;
       display: grid;
-      grid-template-columns: 34px minmax(0, 1fr) auto;
+      grid-template-columns: 34px minmax(0, 1fr);
       grid-template-rows: auto auto;
-      align-items: center;
-      gap: 8px;
+      align-items: start;
+      column-gap: 8px;
+      row-gap: 10px;
       border: 1px solid #dfe5ec;
       border-radius: 9px;
       background: rgba(255, 255, 255, 0.92);
       color: #273244;
-      padding: 8px;
+      padding: 9px 8px 8px;
       font: inherit;
       text-align: left;
       cursor: pointer;
@@ -30362,7 +30363,7 @@ INDEX_HTML = """<!doctype html>
     .library-resource-card:disabled { color: #9a6262; cursor: default; }
     .library-resource-icon-tile {
       grid-column: 1;
-      grid-row: 1 / span 2;
+      grid-row: 1;
       width: 32px;
       height: 32px;
       display: grid;
@@ -30379,34 +30380,76 @@ INDEX_HTML = """<!doctype html>
       grid-column: 2;
       grid-row: 1;
       display: block;
+      align-self: center;
       overflow: hidden;
       font-size: 11px;
       font-weight: 650;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .library-resource-card .library-resource-meta {
-      grid-column: 2 / 4;
+    .library-resource-card .library-resource-properties {
+      grid-column: 1 / 3;
       grid-row: 2;
       width: 100%;
       min-width: 0;
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 3px;
-      overflow: hidden;
-      margin-top: 3px;
+      display: grid;
+      gap: 5px;
       color: #7b8491;
       font-size: 9px;
-      text-align: right;
-      text-overflow: ellipsis;
+    }
+    .library-resource-property {
+      min-width: 0;
+      min-height: 25px;
+      display: grid;
+      grid-template-columns: 57px minmax(0, 1fr);
+      align-items: center;
+      gap: 7px;
+      border-radius: 6px;
+      background: #f4f6f8;
+      padding: 3px 5px 3px 7px;
+    }
+    .library-resource-property.is-file-type {
+      min-height: 28px;
+      background: #e8f0f8;
+      color: #425a72;
+    }
+    .library-resource-property-label {
+      color: #8792a1;
+      font-size: 8px;
+      font-weight: 760;
+      letter-spacing: .02em;
       white-space: nowrap;
     }
-    .library-resource-card .paper-file-version-picker { min-width: 0; }
+    .library-resource-property.is-file-type .library-resource-property-label {
+      color: #55708b;
+    }
+    .library-resource-card .paper-file-version-picker {
+      min-width: 0;
+      width: 100%;
+      justify-content: space-between;
+      color: #536173;
+      font-size: 9.5px;
+      font-weight: 620;
+    }
+    .library-resource-card .library-resource-property.is-file-type .paper-file-version-picker {
+      color: #294b6d;
+      font-size: 10px;
+      font-weight: 720;
+    }
     .library-resource-card .paper-file-version-picker > span:first-child {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .library-resource-file-meta {
+      min-height: 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 4px;
+      padding: 0 3px;
+      color: #8a95a4;
+      font-size: 8.5px;
+      line-height: 1.2;
     }
     .library-resource-state {
       grid-column: 3;
@@ -43809,7 +43852,12 @@ INDEX_HTML = """<!doctype html>
                   <span class="library-resource-icon-tile"><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
                   <span class="library-resource-copy">
                     <span class="library-resource-name">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</span>
-                    <span class="library-resource-meta">${typeControl}<span aria-hidden="true">·</span>${annotationControl}<span aria-hidden="true">·</span>${sourceControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
+                    <span class="library-resource-properties">
+                      <span class="library-resource-property is-file-type"><span class="library-resource-property-label">File type</span>${typeControl}</span>
+                      <span class="library-resource-property"><span class="library-resource-property-label">Annotation</span>${annotationControl}</span>
+                      <span class="library-resource-property"><span class="library-resource-property-label">Source</span>${sourceControl}</span>
+                      ${metaTail.length ? `<span class="library-resource-file-meta">${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true">·</span>')}</span>` : ""}
+                    </span>
                   </span>
                 </div>
               `;

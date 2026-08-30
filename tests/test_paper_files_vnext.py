@@ -343,6 +343,16 @@ class PaperFilesVNextTests(unittest.TestCase):
             },
         )
 
+    def test_user_facing_product_docs_use_published_version_vocabulary(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text()
+        profile_builder = (root / "scripts" / "build_documentation_profile.py").read_text()
+        for product_text in (readme, profile_builder):
+            self.assertIn("Published version", product_text)
+            self.assertNotIn("Version of Record", product_text)
+            self.assertNotIn("version of record", product_text)
+        self.assertIn('role="version_of_record"', profile_builder)
+
 
 if __name__ == "__main__":
     unittest.main()

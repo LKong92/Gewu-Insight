@@ -86,7 +86,7 @@ data model.
   the local project.
 - **Visible evidence** — PDFs and attachments stay as real files that Finder,
   Preview, and other applications can inspect.
-- **Continuity over time** — a preprint, later DOI, Version of Record,
+- **Continuity over time** — a preprint, later DOI, Published version,
   annotations, and personal contexts can accumulate around one paper object.
 - **Explicit state and provenance** — complete, empty, partial, failed,
   downloaded, imported, and retried are distinct states.
@@ -138,7 +138,7 @@ can connect:
 - DOI, arXiv identifier, title, authors, venue, and dates;
 - Journal, Subject, and Author Monitor provenance;
 - Library folders, Spaces, and My Publications;
-- Version of Record, accepted manuscript, preprint revisions, and imported PDFs;
+- Published version, accepted manuscript, preprint revisions, and imported PDFs;
 - supplements, annotated copies, notes, presentations, data, code, and images;
 - read state, download state, retries, failures, and timestamps.
 
@@ -151,7 +151,7 @@ Paper Files groups the current publication PDF, other versions, supplements,
 and attachments without pretending they are another Finder folder level.
 
 - Only publication-version PDFs can become current.
-- A Version of Record remains current when a preprint or accepted manuscript
+- The Published version remains current when a preprint or accepted manuscript
   arrives later.
 - Supplements and other attachments cannot become current merely because they
   use the PDF format.

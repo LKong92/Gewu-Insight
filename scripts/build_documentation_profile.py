@@ -95,7 +95,7 @@ def demo_pdf(path: Path, *, title: str, authors: str, accent: str = "#235EA7") -
     pdf.setFont("Helvetica", 10.5)
     for index, sentence in enumerate(
         [
-            "A publication may have a version of record and one or more historical preprints.",
+            "A publication may have a published version and one or more historical preprints.",
             "Associated files remain linked when the visible paper moves between folders.",
             "The documentation profile contains no credentials and performs no automatic network fetches.",
         ],
@@ -303,7 +303,7 @@ def build_profile(profile_root: Path) -> Path:
                 visible_dir = visible_dir / str(parent["name"]) / str(folder["name"])
             main = visible_dir / f"{paper_id.split(':')[-1].replace('-', '_')}.pdf"
             demo_pdf(main, title=item["title"], authors=", ".join(name for name in ["Researcher A", "Researcher B"]))
-            attach_version(storage, paper_id, main, role="version_of_record", label="Version of Record", primary=True)
+            attach_version(storage, paper_id, main, role="version_of_record", label="Published version", primary=True)
             if index == 0:
                 associated = data_root / "Associated Files" / "Library" / "2. Quantum Information" / "Superconducting Qubits" / "qubit_review_preprint.pdf"
                 demo_pdf(associated, title=item["title"] + " — preprint", authors="Researcher A, Researcher B", accent="#7667D7")
