@@ -741,7 +741,7 @@ class PaperResourceStorageTests(unittest.TestCase):
                 "",
             )
 
-    def test_non_pdf_cannot_be_selected_as_preferred_pdf(self) -> None:
+    def test_non_pdf_can_be_selected_as_manual_default(self) -> None:
         self.add_paper("paper-with-note")
         note = self.root / "data" / "Associated Files" / "note.md"
         note.parent.mkdir(parents=True, exist_ok=True)
@@ -751,12 +751,11 @@ class PaperResourceStorageTests(unittest.TestCase):
             stored_path=str(note),
             file_role="note",
         )
-        with self.assertRaisesRegex(ValueError, "Preferred file must be a PDF"):
-            self.storage.set_preferred_paper_resource(
-                "paper-with-note", int(resource["id"])
-            )
+        self.storage.set_preferred_paper_resource("paper-with-note", int(resource["id"]))
+        resolved = self.storage.resolve_default_paper_resource("paper-with-note")
+        self.assertEqual(int(resolved["id"]), int(resource["id"]))
 
-    def test_attachment_pdfs_cannot_be_preferred_or_promoted_but_paper_version_can(self) -> None:
+    def test_attachment_pdfs_can_be_manual_defaults_without_becoming_primary(self) -> None:
         self.add_paper("paper-current-role-guard")
         current_path = self.write_pdf("Role Guard/Published.pdf")
         self.storage.update_download_status(
@@ -806,10 +805,13 @@ class PaperResourceStorageTests(unittest.TestCase):
         }
 
         for attachment in (supplement, other):
-            with self.assertRaisesRegex(ValueError, "paper-version PDFs"):
-                self.storage.set_preferred_paper_resource(
-                    "paper-current-role-guard", int(attachment["id"])
-                )
+            self.storage.set_preferred_paper_resource(
+                "paper-current-role-guard", int(attachment["id"])
+            )
+            self.assertEqual(
+                int(self.storage.resolve_default_paper_resource("paper-current-role-guard")["id"]),
+                int(attachment["id"]),
+            )
             with self.assertRaisesRegex(ValueError, "paper-version PDFs"):
                 ui_server.promote_paper_resource(
                     self.storage,
@@ -817,6 +819,7 @@ class PaperResourceStorageTests(unittest.TestCase):
                     int(attachment["id"]),
                     manual_preferred=True,
                 )
+        self.storage.set_preferred_paper_resource("paper-current-role-guard", None)
 
         self.assertEqual(
             dict(self.storage.get_paper("paper-current-role-guard")), before_paper
@@ -839,11 +842,7 @@ class PaperResourceStorageTests(unittest.TestCase):
             "paper-current-role-guard", int(preprint["id"])
         )
         self.assertEqual(
-            int(
-                self.storage.resolve_primary_paper_resource(
-                    "paper-current-role-guard"
-                )["id"]
-            ),
+            int(self.storage.resolve_default_paper_resource("paper-current-role-guard")["id"]),
             int(preprint["id"]),
         )
         promoted = ui_server.promote_paper_resource(
@@ -857,7 +856,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
         self.assertEqual(int(promoted["id"]), int(preprint["id"]))
 
-    def test_preferred_paper_file_http_handler_rejects_attachment_and_accepts_version(self) -> None:
+    def test_preferred_paper_file_http_handler_accepts_any_valid_file(self) -> None:
         self.add_paper("paper-http-current-role")
         current_path = self.write_pdf("HTTP Role/Published.pdf")
         self.storage.update_download_status(
@@ -886,7 +885,6 @@ class PaperResourceStorageTests(unittest.TestCase):
             version_role="preprint",
             version_label="Preprint",
         )
-        before = self.conversion_db_state()
         before_bytes = {
             path: path.read_bytes()
             for path in (current_path, attachment_path, preprint_path)
@@ -903,10 +901,10 @@ class PaperResourceStorageTests(unittest.TestCase):
             }
         )
 
-        handler.send_error_json.assert_called_once()
-        self.assertEqual(handler.send_error_json.call_args.args[0], HTTPStatus.BAD_REQUEST)
-        handler.send_json.assert_not_called()
-        self.assertEqual(self.conversion_db_state(), before)
+        handler.send_error_json.assert_not_called()
+        handler.send_json.assert_called_once()
+        attachment_response = handler.send_json.call_args.args[0]
+        self.assertEqual(attachment_response["default_resource_id"], int(attachment["id"]))
         for path, content in before_bytes.items():
             self.assertTrue(path.exists())
             self.assertEqual(path.read_bytes(), content)
@@ -926,7 +924,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(response["preferred_resource_id"], int(preprint["id"]))
         self.assertEqual(response["resolved_resource_id"], int(preprint["id"]))
         paper = self.storage.get_paper("paper-http-current-role")
-        self.assertEqual(int(paper["primary_resource_id"]), int(preprint["id"]))
+        self.assertEqual(int(paper["primary_resource_id"]), int(current["id"]))
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
 
     def test_explicit_attachment_is_copied_to_mirrored_associated_files(self) -> None:
@@ -1018,7 +1016,8 @@ class PaperResourceStorageTests(unittest.TestCase):
         attached = self.storage.get_paper_resource(int(source_resource["id"]))
         self.assertEqual(attached["paper_id"], "target-work")
         self.assertEqual(attached["file_role"], "other")
-        self.assertEqual(attached["version_label"], "Other File")
+        self.assertEqual(attached["file_type"], "other")
+        self.assertIsNone(attached["version_label"])
         attached_path = Path(attached["stored_path"])
         self.assertTrue(attached_path.exists())
         self.assertEqual(attached_path.read_bytes(), b"processed data")
@@ -1153,7 +1152,8 @@ class PaperResourceStorageTests(unittest.TestCase):
             attached = self.storage.get_paper_resource(resource_id)
             self.assertEqual(attached["paper_id"], "conversion-success-target")
             self.assertEqual(attached["file_role"], "other")
-            self.assertEqual(attached["version_label"], "Other File")
+            self.assertEqual(attached["file_type"], "other")
+            self.assertIsNone(attached["version_label"])
             self.assertTrue(attached["sha256"])
             attached_path = Path(attached["stored_path"])
             self.assertTrue(attached_path.exists())
@@ -1567,7 +1567,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertFalse(primary.exists())
         self.assertFalse(downloaded.exists())
 
-    def test_browser_downloaded_publisher_pdf_archives_preprint_instead_of_overwriting_it(self) -> None:
+    def test_browser_downloaded_publisher_pdf_preserves_manual_preprint_default(self) -> None:
         self.add_paper("paper-browser-publisher-upgrade")
         preprint = self.write_pdf("Topic/1602.05061.pdf")
         preprint_bytes = preprint.read_bytes()
@@ -1619,19 +1619,24 @@ class PaperResourceStorageTests(unittest.TestCase):
         resources = self.storage.list_paper_resources("paper-browser-publisher-upgrade")
         self.assertEqual(len(resources), 2)
         current = next(resource for resource in resources if resource["is_primary"])
-        archived = next(resource for resource in resources if not resource["is_primary"])
-        self.assertEqual(current["version_role"], "version_of_record")
-        self.assertEqual(current["version_label"], "Published Version")
-        self.assertEqual(Path(current["stored_path"]).resolve(), target)
-        self.assertEqual(target.parent.resolve(), preprint.parent.resolve())
+        published = next(resource for resource in resources if not resource["is_primary"])
+        self.assertEqual(current["version_role"], "preprint")
+        self.assertEqual(current["file_type"], "preprint")
+        self.assertEqual(Path(current["stored_path"]).read_bytes(), preprint_bytes)
+        self.assertEqual(published["version_role"], "version_of_record")
+        self.assertEqual(published["file_type"], "published_version")
+        self.assertEqual(Path(published["stored_path"]).resolve(), target)
+        self.assertIn("Associated Files/Library/Topic", str(target))
         self.assertEqual(target.name, publisher.name)
         self.assertEqual(target.read_bytes(), publisher.read_bytes())
-        self.assertEqual(archived["version_role"], "preprint")
-        self.assertEqual(Path(archived["stored_path"]).read_bytes(), preprint_bytes)
-        self.assertIn("Associated Files/Library/Topic", archived["stored_path"])
         self.assertEqual(int(paper["primary_resource_id"]), int(current["id"]))
-        self.assertFalse(int(paper["preferred_resource_id"] or 0))
-        self.assertEqual(Path(paper["merged_pdf_path"]).resolve(), target)
+        self.assertEqual(int(paper["preferred_resource_id"]), int(current["id"]))
+        self.assertTrue(int(paper["preferred_resource_manual"] or 0))
+        self.assertEqual(
+            int(self.storage.resolve_default_paper_resource("paper-browser-publisher-upgrade")["id"]),
+            int(current["id"]),
+        )
+        self.assertEqual(Path(paper["merged_pdf_path"]).resolve(), preprint.resolve())
 
     def test_download_from_arxiv_is_preprint_even_when_paper_has_doi(self) -> None:
         self.add_paper("paper-doi-with-arxiv-pdf")
@@ -1753,7 +1758,8 @@ class PaperResourceStorageTests(unittest.TestCase):
         repaired_path = Path(paper["merged_pdf_path"])
         self.assertEqual(repaired["version_role"], "version_of_record")
         self.assertEqual(repaired["version_label"], "Published Version")
-        self.assertFalse(int(paper["preferred_resource_id"] or 0))
+        self.assertEqual(int(paper["preferred_resource_id"]), int(repaired["id"]))
+        self.assertTrue(int(paper["preferred_resource_manual"] or 0))
         self.assertEqual(repaired_path.name, "physrevb.93.235142 [Published Version].pdf")
         self.assertEqual(repaired_path.read_bytes(), b"%PDF-1.4\nfixture\n%%EOF\n")
         self.assertFalse(current_path.exists())

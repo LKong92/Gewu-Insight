@@ -329,6 +329,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @property(nonatomic) BOOL applicationIsTerminating;
 @property(nonatomic) BOOL mainAppHasLoaded;
 @property(nonatomic) BOOL startupFailurePresented;
+@property(nonatomic, strong) NSAlert *startupFailureAlert;
 @property(nonatomic) NSInteger serverRestartAttempts;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
@@ -363,6 +364,8 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 - (void)recoverServerAfterUnexpectedExit;
 - (BOOL)restartServerForCurrentOutageIfPossible;
 - (void)appendLauncherLogMessage:(NSString *)message;
+- (void)dismissStartupFailureAlert;
+- (void)recheckServerWhileStartupFailureIsVisible;
 @end
 
 @implementation PaperMonitorDelegate
@@ -1895,7 +1898,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)loadApp {
     self.mainAppHasLoaded = YES;
-    self.startupFailurePresented = NO;
+    [self dismissStartupFailureAlert];
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];
     [self refreshLibraryNamingRuleMenu];
 }
@@ -2282,7 +2285,43 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     alert.informativeText = message ?: [NSString stringWithFormat:@"The local UI server did not become ready. Check the launcher log for details:\n\n%@", logPath];
     alert.alertStyle = NSAlertStyleWarning;
     [alert addButtonWithTitle:@"OK"];
-    [alert runModal];
+    self.startupFailureAlert = alert;
+    __weak typeof(self) weakSelf = self;
+    [alert beginSheetModalForWindow:self.window completionHandler:^(__unused NSModalResponse response) {
+        PaperMonitorDelegate *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.startupFailureAlert != alert) return;
+        strongSelf.startupFailureAlert = nil;
+        strongSelf.startupFailurePresented = NO;
+    }];
+    [self recheckServerWhileStartupFailureIsVisible];
+}
+
+- (void)dismissStartupFailureAlert {
+    NSAlert *alert = self.startupFailureAlert;
+    self.startupFailureAlert = nil;
+    self.startupFailurePresented = NO;
+    if (!alert) return;
+    if (alert.window.sheetParent) {
+        [alert.window.sheetParent endSheet:alert.window];
+    } else {
+        [alert.window close];
+    }
+}
+
+- (void)recheckServerWhileStartupFailureIsVisible {
+    if (!self.startupFailureAlert || self.applicationIsTerminating) return;
+    [self checkServerWithCompletion:^(BOOL available) {
+        if (!self.startupFailureAlert || self.applicationIsTerminating) return;
+        if (available) {
+            [self appendLauncherLogMessage:@"Native launcher dismissed a stale startup failure after server recovery."];
+            self.serverRestartAttempts = 0;
+            [self loadApp];
+            return;
+        }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self recheckServerWhileStartupFailureIsVisible];
+        });
+    }];
 }
 
 - (void)appendLauncherLogMessage:(NSString *)message {

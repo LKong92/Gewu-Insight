@@ -60,8 +60,8 @@ class JournalSubscriptionStorageTests(unittest.TestCase):
             finally:
                 migrated.close()
 
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 13)
-        self.assertEqual(version, 13)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 14)
+        self.assertEqual(version, 14)
         self.assertIsNotNone(table)
 
     def test_seed_runs_once_and_disabled_journal_is_not_reenabled(self) -> None:

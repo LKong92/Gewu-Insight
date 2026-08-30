@@ -364,8 +364,8 @@ class PaperSourceObservationMigrationTests(unittest.TestCase):
             finally:
                 migrated.close()
 
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 13)
-        self.assertEqual(version, 13)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 14)
+        self.assertEqual(version, 14)
         self.assertEqual(
             {(row["source_kind"], row["source_name"]) for row in observations},
             {

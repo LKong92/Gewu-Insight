@@ -124,7 +124,19 @@ from .sources.semantic_scholar import (
     semantic_scholar_request,
     test_semantic_scholar_api_key,
 )
-from .storage import Storage
+from .storage import (
+    AUTOMATIC_DEFAULT_FILE_TYPE_RANK,
+    PAPER_FILE_ANNOTATION_STATES,
+    PAPER_FILE_SOURCES,
+    PAPER_FILE_TYPES,
+    Storage,
+    inferred_paper_file_source,
+    legacy_paper_file_type,
+    legacy_role_projection,
+    normalize_annotation_state,
+    normalize_paper_file_source,
+    normalize_paper_file_type,
+)
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, paper_is_from_zenodo, safe_slug
 from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
 
@@ -1224,7 +1236,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
             resources = storage.list_paper_resources(paper_id)
-            resolved = storage.resolve_primary_paper_resource(paper_id)
+            resolved = storage.resolve_default_paper_resource(paper_id)
             paper = storage.get_paper(paper_id) or paper
         finally:
             storage.close()
@@ -1234,6 +1246,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "storage_key": paper.get("storage_key") or "",
                 "primary_resource_id": int(paper.get("primary_resource_id") or 0),
                 "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
+                "preferred_resource_manual": bool(paper.get("preferred_resource_manual")),
+                "default_resource_id": int((resolved or {}).get("id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
                 "files": paper_resources_to_api(resources),
             }
@@ -1376,6 +1390,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 file_role=fields.get("file_role") or "other",
                 version_role=fields.get("version_role") or "",
                 version_label=fields.get("version_label") or "",
+                file_type=fields.get("file_type") or "",
+                file_source=fields.get("file_source") or "user_import",
+                source_detail=fields.get("source_detail") or "",
+                annotation_state=fields.get("annotation_state") or "",
             )
             resources = storage.list_paper_resources(paper_id)
             paper = storage.get_paper(paper_id)
@@ -1418,6 +1436,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 file_role=clean_text(str(payload.get("file_role") or "other")),
                 version_role=clean_text(str(payload.get("version_role") or "")),
                 version_label=clean_text(str(payload.get("version_label") or "")),
+                file_type=clean_text(str(payload.get("file_type") or "")),
+                file_source=clean_text(str(payload.get("file_source") or "user_import")),
+                source_detail=clean_text(str(payload.get("source_detail") or "")),
+                annotation_state=clean_text(str(payload.get("annotation_state") or "")),
                 added_via=clean_text(str(payload.get("added_via") or "paper_details_path")),
             )
             resources = storage.list_paper_resources(paper_id)
@@ -1521,19 +1543,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
-            if resource_id is not None:
-                promote_paper_resource(
-                    storage,
-                    paper_id,
-                    resource_id,
-                    manual_preferred=True,
-                )
-            else:
-                storage.set_preferred_paper_resource(paper_id, None)
-                resolved = storage.resolve_primary_paper_resource(paper_id)
-                if resolved and int(resolved.get("id") or 0) != int(paper.get("primary_resource_id") or 0):
-                    promote_paper_resource(storage, paper_id, int(resolved.get("id") or 0))
-            resolved = storage.resolve_primary_paper_resource(paper_id)
+            storage.set_preferred_paper_resource(paper_id, resource_id)
+            resolved = storage.resolve_default_paper_resource(paper_id)
             resources = storage.list_paper_resources(paper_id)
             paper = storage.get_paper(paper_id)
         except ValueError as exc:
@@ -1544,7 +1555,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(
             {
                 "paper_id": paper_id,
-                "preferred_resource_id": int(resource_id or 0),
+                "preferred_resource_id": int((paper or {}).get("preferred_resource_id") or 0),
+                "preferred_resource_manual": bool((paper or {}).get("preferred_resource_manual")),
+                "default_resource_id": int((resolved or {}).get("id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
                 "files": paper_resources_to_api(resources),
                 "paper": paper_to_api(paper) if paper else None,
@@ -1561,7 +1574,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             deleted = delete_paper_resource(storage, paper_id, resource_id)
             resources = storage.list_paper_resources(paper_id)
-            resolved = storage.resolve_primary_paper_resource(paper_id)
+            resolved = storage.resolve_default_paper_resource(paper_id)
             paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper file was not found")
@@ -1576,6 +1589,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "paper_id": paper_id,
                 "primary_resource_id": int((paper or {}).get("primary_resource_id") or 0),
                 "preferred_resource_id": int((paper or {}).get("preferred_resource_id") or 0),
+                "preferred_resource_manual": bool((paper or {}).get("preferred_resource_manual")),
+                "default_resource_id": int((resolved or {}).get("id") or 0),
                 "resolved_resource_id": int((resolved or {}).get("id") or 0),
                 "files": paper_resources_to_api(resources),
                 "deleted": deleted,
@@ -1586,9 +1601,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_set_paper_file_role(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
         resource_id = int(payload.get("resource_id") or 0)
-        file_role = clean_text(str(payload.get("file_role") or "publication_version"))
-        version_role = clean_text(str(payload.get("version_role") or ""))
-        is_annotated = bool(payload.get("is_annotated"))
+        file_type = clean_text(str(payload.get("file_type") or ""))
+        if not file_type:
+            file_type = legacy_paper_file_type(
+                payload.get("file_role"),
+                payload.get("version_role"),
+            )
+        annotation_state = clean_text(str(payload.get("annotation_state") or ""))
+        if not annotation_state and "is_annotated" in payload:
+            annotation_state = "annotated" if bool(payload.get("is_annotated")) else "unannotated"
+        annotation_state = annotation_state or "unknown"
+        file_source = clean_text(str(payload.get("file_source") or ""))
+        source_detail = clean_text(str(payload.get("source_detail") or ""))
         if not paper_id or resource_id <= 0:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id and resource_id are required")
             return
@@ -1598,9 +1622,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 storage,
                 paper_id,
                 resource_id,
-                file_role,
-                version_role,
-                is_annotated=is_annotated,
+                file_type,
+                annotation_state=annotation_state,
+                file_source=file_source,
+                source_detail=source_detail,
             )
             response = paper_files_state_payload(storage, paper_id)
         except KeyError:
@@ -2404,7 +2429,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             publication: dict[str, Any] = {}
             if isinstance(candidate, dict):
                 normalized = paper_from_publication_candidate(candidate)
-                storage.upsert_paper(normalized)
+                if not storage.upsert_paper(normalized):
+                    self.send_error_json(HTTPStatus.CONFLICT, "Paper identity conflict is pending review")
+                    return
                 paper = storage.get_paper(normalized["paper_id"])
                 paper_id = normalized["paper_id"]
                 if not paper_id or not paper:
@@ -2575,7 +2602,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.send_error_json(HTTPStatus.NOT_FOUND, "No DOI or arXiv match found for this publication")
                 return
             normalized = paper_from_publication_candidate(identifier_candidate)
-            storage.upsert_paper(normalized)
+            if not storage.upsert_paper(normalized):
+                self.send_error_json(HTTPStatus.CONFLICT, "Paper identity conflict is pending review")
+                return
             replaced = storage.replace_my_publication_paper(publication_id=publication_id, paper_id=normalized["paper_id"])
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         except Exception as exc:
@@ -3047,7 +3076,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 requested_folder_id=int(payload.get("folder_id") or root_folder_id),
                 root_label=root_label,
             )
-            storage.upsert_paper(paper)
+            if not storage.upsert_paper(paper):
+                self.send_error_json(HTTPStatus.CONFLICT, "Paper identity conflict is pending review")
+                return
             paper_id = str(paper.get("paper_id") or "")
             stored_paper = storage.get_paper(paper_id)
             stored_paper = refresh_pubmed_if_possible(storage, stored_paper, doi=doi, timeout=8, max_retries=1) or stored_paper
@@ -6724,11 +6755,18 @@ def run_theme_monitor(
         for merge_key, paper in candidates.items():
             sources = candidate_sources.get(merge_key, set())
             paper_id = str(paper.get("paper_id") or "")
+            existing_candidate = storage.get_paper(paper_id)
+            if existing_candidate:
+                conflict_reasons = storage.paper_identity_conflict_reasons(existing_candidate, paper)
+                if conflict_reasons:
+                    storage.record_paper_identity_conflict(existing_candidate, paper, conflict_reasons)
+                    continue
             has_local_source = bool(sources.intersection({"local_arxiv", "local_aps_rss"}))
             if not has_local_source or storage.get_paper(paper_id) is None:
                 if paper.get("section_allowed") is None:
                     paper["section_allowed"] = True
-                storage.upsert_paper(paper)
+                if not storage.upsert_paper(paper):
+                    continue
             for source_name in sources:
                 candidate_rows.append(
                     {
@@ -9408,6 +9446,20 @@ def paper_resource_to_api(resource: dict[str, Any]) -> dict[str, Any]:
         "paper_id": resource.get("paper_id") or "",
         "display_name": resource.get("display_name") or resource.get("original_filename") or Path(local_path).name,
         "file_role": resource.get("file_role") or "other",
+        "file_type": normalize_paper_file_type(
+            resource.get("file_type")
+            or legacy_paper_file_type(
+                resource.get("file_role"),
+                resource.get("version_role"),
+                display_name=resource.get("display_name"),
+                parse_status=resource.get("parse_status"),
+            )
+        ),
+        "file_source": normalize_paper_file_source(resource.get("file_source")),
+        "source_detail": resource.get("source_detail") or "",
+        "annotation_state": normalize_annotation_state(resource.get("annotation_state")),
+        "file_type_override": bool(resource.get("file_type_override")),
+        "annotation_override": bool(resource.get("annotation_override")),
         "version_role": resource.get("version_role") or "",
         "version_label": resource.get("version_label") or "",
         "version_date": resource.get("version_date") or "",
@@ -9422,6 +9474,7 @@ def paper_resource_to_api(resource: dict[str, Any]) -> dict[str, Any]:
         "exists": bool(resource.get("exists")),
         "is_primary": bool(resource.get("is_primary")),
         "is_preferred": bool(resource.get("is_preferred")),
+        "is_default": bool(resource.get("is_default")),
         "missing_status": resource.get("missing_status") or "",
         "added_via": resource.get("added_via") or "",
         "sha256": resource.get("sha256") or "",
@@ -9516,13 +9569,15 @@ def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]
     if not paper:
         return {}
     resources = storage.list_paper_resources(str(paper_id))
-    resolved = storage.resolve_primary_paper_resource(str(paper_id))
+    resolved = storage.resolve_default_paper_resource(str(paper_id))
     paper = storage.get_paper(str(paper_id)) or paper
     return {
         "paper_id": str(paper_id),
         "storage_key": paper.get("storage_key") or "",
         "primary_resource_id": int(paper.get("primary_resource_id") or 0),
         "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
+        "preferred_resource_manual": bool(paper.get("preferred_resource_manual")),
+        "default_resource_id": int((resolved or {}).get("id") or 0),
         "resolved_resource_id": int((resolved or {}).get("id") or 0),
         "files": paper_resources_to_api(resources),
         "paper": paper_to_api(paper),
@@ -9564,6 +9619,7 @@ def paper_to_api(
         "storage_key": paper.get("storage_key") or "",
         "primary_resource_id": int(paper.get("primary_resource_id") or 0),
         "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
+        "preferred_resource_manual": bool(paper.get("preferred_resource_manual")),
         "title": paper.get("title") or "",
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
@@ -9647,6 +9703,7 @@ def monitor_paper_to_api(
         "storage_key": paper.get("storage_key") or "",
         "primary_resource_id": int(paper.get("primary_resource_id") or 0),
         "preferred_resource_id": int(paper.get("preferred_resource_id") or 0),
+        "preferred_resource_manual": bool(paper.get("preferred_resource_manual")),
         "title": paper.get("title") or "",
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
@@ -14464,6 +14521,10 @@ def refresh_author_monitor_for_db(
                     continue
                 existing = existing_paper_for_author_monitor(storage, normalized)
                 if existing:
+                    conflict_reasons = storage.paper_identity_conflict_reasons(existing, normalized)
+                    if conflict_reasons:
+                        storage.record_paper_identity_conflict(existing, normalized, conflict_reasons)
+                        continue
                     paper_id = clean_text(existing.get("paper_id") or "")
                     if is_scholar:
                         save_google_scholar_publication_observation(
@@ -14478,7 +14539,8 @@ def refresh_author_monitor_for_db(
                             storage, paper_id, candidate
                         )
                 else:
-                    storage.upsert_paper(normalized)
+                    if not storage.upsert_paper(normalized):
+                        continue
                     paper_id = clean_text(normalized.get("paper_id") or "")
                     if (
                         active_metadata_provider == "Semantic Scholar"
@@ -18399,12 +18461,17 @@ def download_arxiv_preprint_versions(
                         UPDATE resources
                         SET file_role = 'publication_version', version_role = 'preprint',
                             version_label = ?, version_date = ?, version_number = ?,
+                            file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE 'preprint' END,
+                            file_source = 'preprint_server', source_detail = 'arxiv.org',
                             source_url = ?, sha256 = ?, content_sha256 = ?,
                             annotation_count = ?,
                             is_annotated = CASE
-                                WHEN ? > 0 THEN 1
-                                WHEN COALESCE(annotation_count, 0) > 0 THEN 0
-                                ELSE COALESCE(is_annotated, 0)
+                                WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated
+                                WHEN ? > 0 THEN 1 ELSE 0
+                            END,
+                            annotation_state = CASE
+                                WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                                WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
                             END,
                             missing_status = '', updated_at = ?
                         WHERE id = ? AND paper_id = ?
@@ -18416,6 +18483,7 @@ def download_arxiv_preprint_versions(
                             source_url,
                             fingerprint.sha256,
                             fingerprint.content_sha256 or None,
+                            fingerprint.annotation_count,
                             fingerprint.annotation_count,
                             fingerprint.annotation_count,
                             now_iso(),
@@ -18449,8 +18517,15 @@ def download_arxiv_preprint_versions(
                     SET stored_path = ?, original_filename = ?, display_name = ?,
                         file_role = 'publication_version', version_role = 'preprint',
                         version_label = ?, version_date = ?, version_number = ?,
+                        file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE 'preprint' END,
+                        file_source = 'preprint_server', source_detail = 'arxiv.org',
                         source_url = ?, storage_mode = 'managed', sha256 = ?, content_sha256 = ?,
-                        annotation_count = ?, is_annotated = ?,
+                        annotation_count = ?,
+                        is_annotated = CASE WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated ELSE ? END,
+                        annotation_state = CASE
+                            WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                            WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
+                        END,
                         added_via = 'arxiv_version_sync', mime_type = 'application/pdf',
                         kind = 'pdf', size_bytes = ?, modified_at = ?,
                         supersedes_resource_id = ?, missing_status = '', status = 'imported',
@@ -18469,6 +18544,7 @@ def download_arxiv_preprint_versions(
                         fingerprint.content_sha256 or None,
                         fingerprint.annotation_count,
                         1 if fingerprint.is_annotated else 0,
+                        fingerprint.annotation_count,
                         int(target.stat().st_size),
                         now_iso(),
                         int(previous.get("id") or 0) if previous else None,
@@ -18494,6 +18570,10 @@ def download_arxiv_preprint_versions(
                     content_sha256=fingerprint.content_sha256,
                     annotation_count=fingerprint.annotation_count,
                     is_annotated=fingerprint.is_annotated,
+                    file_type="preprint",
+                    file_source="preprint_server",
+                    source_detail="arxiv.org",
+                    annotation_state="annotated" if fingerprint.is_annotated else "unannotated",
                     added_via="arxiv_version_sync",
                     mime_type="application/pdf",
                     kind="pdf",
@@ -20998,6 +21078,8 @@ def adopt_existing_paper_resource(
     version = clean_text(version_role or "").lower().replace("-", "_") if role == "publication_version" else ""
     if role == "publication_version" and version not in {"version_of_record", "first_published", "accepted_manuscript", "preprint", "other"}:
         version = "other"
+    adopted_file_type = legacy_paper_file_type(role, version, display_name=source.name)
+    projected_role, projected_version, projected_label = legacy_role_projection(adopted_file_type)
     destination_dir = associated_work_dir_for_paper(storage, paper_id) / associated_resource_subdir(role)
     destination_dir.mkdir(parents=True, exist_ok=True)
     destination = unique_path_in_dir(destination_dir / finder_safe_name(source.name, "Attached File"))
@@ -21012,6 +21094,8 @@ def adopt_existing_paper_resource(
             """
             UPDATE resources
             SET stored_path = ?, display_name = ?, file_role = ?, version_role = ?,
+                version_label = ?, file_type = ?, file_type_override = 1,
+                file_source = 'user_import',
                 storage_mode = 'managed', sha256 = ?, added_via = ?,
                 missing_status = '', updated_at = ?
             WHERE id = ?
@@ -21019,8 +21103,10 @@ def adopt_existing_paper_resource(
             (
                 str(destination),
                 destination.name,
-                role,
-                version or None,
+                projected_role,
+                projected_version or None,
+                projected_label,
+                adopted_file_type,
                 digest,
                 clean_text(added_via or "manual_resource_repair"),
                 now_iso(),
@@ -21046,65 +21132,108 @@ def update_paper_resource_role(
     storage: Storage,
     paper_id: str,
     resource_id: int,
-    file_role: str,
-    version_role: str,
+    file_type: str,
+    version_role: str | None = None,
     *,
-    is_annotated: bool = False,
+    annotation_state: str = "unknown",
+    is_annotated: bool | None = None,
+    file_source: str = "",
+    source_detail: str = "",
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
         raise KeyError(int(resource_id))
-    role = clean_text(file_role or "other").lower().replace("-", "_")
-    allowed_roles = {"publication_version", "supplement", "figure", "note", "presentation", "data", "code", "other"}
-    if role not in allowed_roles:
-        raise ValueError("Unknown file type")
-    is_primary = int(paper.get("primary_resource_id") or 0) == int(resource_id)
-    if is_primary and role != "publication_version":
-        raise ValueError("The current default PDF must remain a paper version")
-    is_preferred = int(paper.get("preferred_resource_id") or 0) == int(resource_id)
-    if is_preferred and role != "publication_version":
-        raise ValueError("The preferred PDF must remain a paper version")
-    version = clean_text(version_role or "other").lower().replace("-", "_")
-    version_labels = {
-        "version_of_record": "Published Version",
-        "first_published": "Published Version",
-        "accepted_manuscript": "Accepted Manuscript",
-        "preprint": "Preprint",
-        "other": "Imported PDF",
-    }
-    if role == "publication_version" and not storage.resource_is_pdf(resource):
-        raise ValueError("Only PDFs can be classified as paper versions")
-    if role == "publication_version" and version not in version_labels:
-        raise ValueError("Unknown paper version type")
-    attachment_labels = {
-        "supplement": "Supplement",
-        "figure": "Image",
-        "note": "Note",
-        "presentation": "Presentation",
-        "data": "Data",
-        "code": "Code",
-        "other": "Other File",
-    }
-    version_number = int(resource.get("version_number") or 0) if role == "publication_version" and version == "preprint" else 0
-    version_label = (
-        f"Preprint v{version_number}"
-        if version_number
-        else (version_labels[version] if role == "publication_version" else attachment_labels[role])
+    legacy_call = version_role is not None or clean_text(file_type or "").lower().replace("-", "_") not in PAPER_FILE_TYPES
+    legacy_role = clean_text(file_type or "other").lower().replace("-", "_")
+    legacy_version = clean_text(version_role or "").lower().replace("-", "_")
+    raw_type = (
+        legacy_paper_file_type(
+            legacy_role,
+            legacy_version,
+            display_name=resource.get("display_name"),
+        )
+        if legacy_call
+        else clean_text(file_type or "").lower().replace("-", "_").replace(" ", "_")
     )
+    if raw_type not in PAPER_FILE_TYPES:
+        raise ValueError("Unknown file type")
+    if legacy_call and legacy_role == "publication_version" and not storage.resource_is_pdf(resource):
+        raise ValueError("Only PDFs can be classified as paper versions")
+    if (
+        legacy_call
+        and int(paper.get("primary_resource_id") or 0) == int(resource_id)
+        and legacy_role != "publication_version"
+    ):
+        raise ValueError("The current default PDF must remain a paper version")
+    normalized_type = normalize_paper_file_type(raw_type)
+    if is_annotated is not None:
+        annotation_state = "annotated" if is_annotated else "unannotated"
+    raw_annotation = clean_text(annotation_state or "unknown").lower().replace("-", "_").replace(" ", "_")
+    if raw_annotation not in PAPER_FILE_ANNOTATION_STATES:
+        raise ValueError("Unknown annotation state")
+    normalized_annotation = normalize_annotation_state(raw_annotation)
+    raw_source = clean_text(file_source or resource.get("file_source") or "unknown").lower().replace("-", "_").replace(" ", "_")
+    if raw_source not in PAPER_FILE_SOURCES:
+        raise ValueError("Unknown file source")
+    normalized_source = normalize_paper_file_source(raw_source)
+    role, version, version_label = legacy_role_projection(normalized_type)
+    if legacy_call:
+        legacy_labels = {
+            "supplement": "Supplement",
+            "figure": "Image",
+            "note": "Note",
+            "presentation": "Presentation",
+            "data": "Data",
+            "code": "Code",
+            "other": "Other File",
+        }
+        if legacy_role == "publication_version":
+            role = "publication_version"
+            version = legacy_version or "other"
+            version_label = {
+                "version_of_record": "Published Version",
+                "first_published": "Published Version",
+                "accepted_manuscript": "Accepted Manuscript",
+                "preprint": "Preprint",
+                "other": "Imported PDF",
+            }.get(version, "Imported PDF")
+        else:
+            role = legacy_role if legacy_role in legacy_labels else "other"
+            version = ""
+            version_label = legacy_labels.get(role, "Other File")
+    version_number = (
+        int(resource.get("version_number") or 0)
+        if normalized_type == "preprint"
+        else 0
+    )
+    if normalized_type == "preprint" and version_number:
+        version_label = f"Preprint v{version_number}"
     storage.conn.execute(
         """
         UPDATE resources
-        SET file_role = ?, version_role = ?, version_label = ?, version_number = ?,
-            is_annotated = ?, updated_at = ?
+        SET file_type = ?, annotation_state = ?, file_source = ?, source_detail = ?,
+            file_type_override = 1, annotation_override = 1,
+            file_role = ?, version_role = ?, version_label = ?, version_number = ?,
+            is_annotated = CASE
+                WHEN ? = 'annotated' THEN 1
+                WHEN ? = 'unannotated' THEN 0
+                ELSE is_annotated
+            END,
+            updated_at = ?
         WHERE id = ? AND paper_id = ?
         """,
         (
+            normalized_type,
+            normalized_annotation,
+            normalized_source,
+            clean_text(source_detail or resource.get("source_detail") or "") or None,
             role,
-            version if role == "publication_version" else None,
+            version or None,
             version_label,
             version_number or None,
-            1 if is_annotated else 0,
+            normalized_annotation,
+            normalized_annotation,
             now_iso(),
             int(resource_id),
             str(paper_id),
@@ -21152,7 +21281,11 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
     try:
         storage.conn.execute("BEGIN IMMEDIATE")
         storage.conn.execute(
-            "UPDATE papers SET preferred_resource_id = NULL WHERE paper_id = ? AND preferred_resource_id = ?",
+            """
+            UPDATE papers
+            SET preferred_resource_id = NULL, preferred_resource_manual = 0
+            WHERE paper_id = ? AND preferred_resource_id = ?
+            """,
             (str(paper_id), int(resource_id)),
         )
         storage.conn.execute("DELETE FROM resources WHERE id = ?", (int(resource_id),))
@@ -21213,9 +21346,14 @@ def refresh_paper_resource_fingerprints(
             UPDATE resources
             SET sha256 = ?, content_sha256 = ?, annotation_count = ?,
                 is_annotated = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN COALESCE(is_annotated, 0)
                     WHEN ? > 0 THEN 1
-                    WHEN COALESCE(annotation_count, 0) > 0 THEN 0
-                    ELSE COALESCE(is_annotated, 0)
+                    ELSE 0
+                END,
+                annotation_state = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                    WHEN ? > 0 THEN 'annotated'
+                    ELSE 'unannotated'
                 END,
                 size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
             WHERE id = ? AND paper_id = ?
@@ -21223,6 +21361,7 @@ def refresh_paper_resource_fingerprints(
             (
                 fingerprint.sha256,
                 fingerprint.content_sha256 or None,
+                fingerprint.annotation_count,
                 fingerprint.annotation_count,
                 fingerprint.annotation_count,
                 fingerprint.size_bytes,
@@ -21307,6 +21446,13 @@ def downloaded_version_label(version_role: str) -> str:
     }.get(clean_text(version_role or ""), "Imported PDF")
 
 
+def downloaded_file_source(source_url: str) -> tuple[str, str]:
+    host = (urlparse(clean_text(source_url or "")).hostname or "").casefold()
+    if host == "arxiv.org" or host.endswith(".arxiv.org"):
+        return "preprint_server", host
+    return ("publisher", host) if host else ("unknown", "")
+
+
 def downloaded_primary_filename(
     paper: dict[str, Any],
     *,
@@ -21349,7 +21495,14 @@ def register_downloaded_paper_resource(
         storage.conn.execute(
             """
             UPDATE resources
-            SET sha256 = ?, content_sha256 = ?, annotation_count = ?, is_annotated = ?,
+            SET sha256 = ?, content_sha256 = ?, annotation_count = ?,
+                is_annotated = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated ELSE ?
+                END,
+                annotation_state = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                    WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
+                END,
                 size_bytes = ?, modified_at = ?, missing_status = '', updated_at = ?
             WHERE id = ?
             """,
@@ -21358,6 +21511,7 @@ def register_downloaded_paper_resource(
                 new_fingerprint.content_sha256 or None,
                 new_fingerprint.annotation_count,
                 1 if new_fingerprint.is_annotated else 0,
+                new_fingerprint.annotation_count,
                 new_fingerprint.size_bytes,
                 new_fingerprint.modified_at,
                 now_iso(),
@@ -21369,6 +21523,8 @@ def register_downloaded_paper_resource(
     download_source_url = clean_text(result.get("main_pdf_url") or paper.get("pdf_url") or "")
     new_version_role = downloaded_version_role(paper, download_source_url)
     new_version_label = downloaded_version_label(new_version_role)
+    new_file_type = normalize_paper_file_type(new_version_role)
+    new_file_source, new_source_detail = downloaded_file_source(download_source_url)
     if not snapshot:
         primary = storage.ensure_primary_pdf_resource(str(paper_id))
         if primary:
@@ -21378,6 +21534,13 @@ def register_downloaded_paper_resource(
                 SET sha256 = ?, content_sha256 = ?, annotation_count = ?, is_annotated = ?,
                     size_bytes = ?, modified_at = ?, file_role = 'publication_version',
                     version_role = ?, version_label = ?,
+                    file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE ? END,
+                    file_source = CASE WHEN COALESCE(file_source, 'unknown') = 'unknown' THEN ? ELSE file_source END,
+                    source_detail = COALESCE(NULLIF(source_detail, ''), ?),
+                    annotation_state = CASE
+                        WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                        WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
+                    END,
                     source_url = COALESCE(NULLIF(?, ''), source_url),
                     added_via = 'download_initial', missing_status = '', updated_at = ?
                 WHERE id = ?
@@ -21391,6 +21554,10 @@ def register_downloaded_paper_resource(
                     new_fingerprint.modified_at,
                     new_version_role,
                     new_version_label,
+                    new_file_type,
+                    new_file_source,
+                    new_source_detail or None,
+                    new_fingerprint.annotation_count,
                     download_source_url,
                     now_iso(),
                     int(primary.get("id") or 0),
@@ -21427,7 +21594,14 @@ def register_downloaded_paper_resource(
                 UPDATE resources
                 SET sha256 = ?, stored_path = ?, display_name = ?, file_role = 'publication_version',
                     version_role = ?, version_label = ?, source_url = COALESCE(NULLIF(?, ''), source_url),
+                    file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE ? END,
+                    file_source = CASE WHEN COALESCE(file_source, 'unknown') = 'unknown' THEN ? ELSE file_source END,
+                    source_detail = COALESCE(NULLIF(source_detail, ''), ?),
                     content_sha256 = ?, annotation_count = ?, is_annotated = ?,
+                    annotation_state = CASE
+                        WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                        WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
+                    END,
                     size_bytes = ?, modified_at = ?,
                     missing_status = '', updated_at = ?
                 WHERE id = ?
@@ -21439,9 +21613,13 @@ def register_downloaded_paper_resource(
                     new_version_role,
                     new_version_label,
                     download_source_url,
+                    new_file_type,
+                    new_file_source,
+                    new_source_detail or None,
                     new_fingerprint.content_sha256 or None,
                     new_fingerprint.annotation_count,
                     1 if new_fingerprint.is_annotated else 0,
+                    new_fingerprint.annotation_count,
                     new_fingerprint.size_bytes,
                     new_fingerprint.modified_at,
                     now_iso(),
@@ -21451,7 +21629,7 @@ def register_downloaded_paper_resource(
             storage.conn.execute(
                 """
                 UPDATE papers
-                SET main_pdf_path = ?, merged_pdf_path = ?, preferred_resource_id = NULL
+                SET main_pdf_path = ?, merged_pdf_path = ?
                 WHERE paper_id = ?
                 """,
                 (str(final_path), str(final_path), str(paper_id)),
@@ -21497,7 +21675,15 @@ def register_downloaded_paper_resource(
             """
             UPDATE resources
             SET stored_path = ?, display_name = ?, sha256 = ?, content_sha256 = ?,
-                annotation_count = ?, is_annotated = ?, missing_status = '', updated_at = ?
+                annotation_count = ?,
+                is_annotated = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN is_annotated ELSE ?
+                END,
+                annotation_state = CASE
+                    WHEN COALESCE(annotation_override, 0) = 1 THEN annotation_state
+                    WHEN ? > 0 THEN 'annotated' ELSE 'unannotated'
+                END,
+                missing_status = '', updated_at = ?
             WHERE id = ?
             """,
             (
@@ -21507,6 +21693,7 @@ def register_downloaded_paper_resource(
                 old_content_digest or None,
                 old_annotation_count,
                 1 if old_is_annotated else 0,
+                old_annotation_count,
                 timestamp,
                 old_id,
             ),
@@ -21524,6 +21711,10 @@ def register_downloaded_paper_resource(
             content_sha256=new_fingerprint.content_sha256,
             annotation_count=new_fingerprint.annotation_count,
             is_annotated=new_fingerprint.is_annotated,
+            file_type=new_file_type,
+            file_source=new_file_source,
+            source_detail=new_source_detail,
+            annotation_state="annotated" if new_fingerprint.is_annotated else "unannotated",
             added_via="download_refresh",
             mime_type="application/pdf",
             kind="pdf",
@@ -21534,8 +21725,7 @@ def register_downloaded_paper_resource(
         storage.conn.execute(
             """
             UPDATE papers
-            SET primary_resource_id = ?, preferred_resource_id = NULL,
-                main_pdf_path = ?, merged_pdf_path = ?
+            SET primary_resource_id = ?, main_pdf_path = ?, merged_pdf_path = ?
             WHERE paper_id = ?
             """,
             (created_id, str(final_path), str(final_path), str(paper_id)),
@@ -21567,6 +21757,10 @@ def attach_file_to_paper(
     file_role: str = "other",
     version_role: str = "",
     version_label: str = "",
+    file_type: str = "",
+    file_source: str = "user_import",
+    source_detail: str = "",
+    annotation_state: str = "",
     added_via: str = "paper_details",
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
@@ -21586,6 +21780,10 @@ def attach_file_to_paper(
         version = ""
     safe_name = finder_safe_name(Path(filename or "Attached File").name, "Attached File")
     suffix = Path(safe_name).suffix.lower()
+    resolved_type = normalize_paper_file_type(
+        file_type
+        or legacy_paper_file_type(role, version, display_name=safe_name)
+    )
     if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
@@ -21621,11 +21819,18 @@ def attach_file_to_paper(
             content_sha256=fingerprint.content_sha256,
             annotation_count=fingerprint.annotation_count,
             is_annotated=fingerprint.is_annotated,
+            file_type=resolved_type,
+            file_source=file_source,
+            source_detail=source_detail,
+            annotation_state=(
+                annotation_state
+                or ("annotated" if fingerprint.is_annotated else "unannotated")
+            ),
             added_via=added_via,
             mime_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
             kind=suffix.lstrip(".") or "file",
         )
-        if role == "publication_version" and should_promote_new_paper_version(storage, str(paper_id), resource):
+        if resolved_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK and should_promote_new_paper_version(storage, str(paper_id), resource):
             resource = promote_paper_resource(storage, str(paper_id), int(resource.get("id") or 0))
     except Exception:
         temporary.unlink(missing_ok=True)
@@ -21738,8 +21943,7 @@ def convert_library_item_to_paper_attachment(
             storage.conn.execute(
                 """
                 UPDATE resources
-                SET paper_id = ?, stored_path = ?, display_name = ?, file_role = 'other',
-                    version_role = NULL, version_label = 'Other File', version_number = NULL,
+                SET paper_id = ?, stored_path = ?, display_name = ?,
                     storage_mode = 'managed', added_via = 'library_drag_attachment',
                     missing_status = '', updated_at = ?
                 WHERE id = ? AND paper_id = ?
@@ -21817,14 +22021,32 @@ def attach_downloaded_publisher_pdf_to_paper(
         or paper.get("pdf_url")
         or ""
     )
+    classification_text = " ".join(
+        [publisher_kind, source.name, source_url, clean_text(context.get("publisher_download_referer") or "")]
+    ).casefold()
+    if re.search(r"\b(correction|erratum|corrigendum)\b", classification_text):
+        publisher_file_type = "correction_notice"
+    elif (
+        is_nature_reference_pdf_url(source_url)
+        or "first release" in classification_text
+        or "first_release" in classification_text
+    ):
+        publisher_file_type = "accepted_manuscript"
+    else:
+        publisher_file_type = "published_version"
+    projected_role, projected_version, projected_label = legacy_role_projection(publisher_file_type)
+    source_host = (urlparse(source_url).hostname or "").casefold()
     resource = attach_file_to_paper(
         storage,
         paper_id=str(paper_id),
         filename=source.name,
         content=source.read_bytes(),
-        file_role="publication_version",
-        version_role="version_of_record",
-        version_label="Published Version",
+        file_role=projected_role,
+        version_role=projected_version,
+        version_label=projected_label,
+        file_type=publisher_file_type,
+        file_source="publisher",
+        source_detail=source_host,
         added_via=publisher_kind or "publisher_browser_download",
     )
     resource_id = int(resource.get("id") or 0)
@@ -21835,16 +22057,30 @@ def attach_downloaded_publisher_pdf_to_paper(
         storage.conn.execute(
             """
             UPDATE resources
-            SET file_role = 'publication_version', version_role = 'version_of_record',
-                version_label = 'Published Version', version_number = NULL,
+            SET file_role = ?, version_role = ?, version_label = ?, version_number = NULL,
+                file_type = CASE WHEN COALESCE(file_type_override, 0) = 1 THEN file_type ELSE ? END,
+                file_source = 'publisher', source_detail = COALESCE(NULLIF(?, ''), source_detail),
                 source_url = COALESCE(NULLIF(?, ''), source_url), updated_at = ?
             WHERE id = ? AND paper_id = ?
             """,
-            (source_url, now_iso(), resource_id, str(paper_id)),
+            (
+                projected_role,
+                projected_version or None,
+                projected_label,
+                publisher_file_type,
+                source_host or None,
+                source_url,
+                now_iso(),
+                resource_id,
+                str(paper_id),
+            ),
         )
         storage.conn.commit()
         resource = storage.get_paper_resource(resource_id) or resource
-        if should_promote_new_paper_version(storage, str(paper_id), resource):
+        if (
+            publisher_file_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
+            and should_promote_new_paper_version(storage, str(paper_id), resource)
+        ):
             resource = promote_paper_resource(storage, str(paper_id), resource_id)
     elif resource_id and source_url:
         storage.conn.execute(
@@ -21854,12 +22090,13 @@ def attach_downloaded_publisher_pdf_to_paper(
         storage.conn.commit()
         resource = storage.get_paper_resource(resource_id) or resource
 
-    # Download is an explicit request for the newest publisher version.  Return
-    # to automatic ranking instead of leaving an older manually preferred
-    # preprint as the resolved CURRENT file.
-    storage.set_preferred_paper_resource(str(paper_id), None)
     refreshed = storage.get_paper(str(paper_id)) or paper
-    if resource_id and int(refreshed.get("primary_resource_id") or 0) != resource_id:
+    if (
+        publisher_file_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
+        and resource_id
+        and int(refreshed.get("primary_resource_id") or 0) != resource_id
+        and should_promote_new_paper_version(storage, str(paper_id), resource)
+    ):
         resource = promote_paper_resource(storage, str(paper_id), resource_id)
 
     refreshed = storage.get_paper(str(paper_id)) or paper
@@ -21867,7 +22104,7 @@ def attach_downloaded_publisher_pdf_to_paper(
     message = (
         "published Science main PDF saved; supplementary PDF pending"
         if publisher_kind == "aaas-published-pdf"
-        else "publisher PDF downloaded and saved as a new paper version"
+        else "publisher PDF downloaded and saved as a paper file"
     )
     storage.conn.execute(
         """
@@ -22023,6 +22260,7 @@ def promote_paper_resource(
             UPDATE papers
             SET primary_resource_id = ?,
                 preferred_resource_id = CASE WHEN ? THEN ? ELSE preferred_resource_id END,
+                preferred_resource_manual = CASE WHEN ? THEN 1 ELSE preferred_resource_manual END,
                 main_pdf_path = ?, merged_pdf_path = ?, download_status = 'success',
                 download_message = ?, downloaded_at = ?
             WHERE paper_id = ?
@@ -22031,6 +22269,7 @@ def promote_paper_resource(
                 int(resource_id),
                 1 if manual_preferred else 0,
                 int(resource_id),
+                1 if manual_preferred else 0,
                 str(target_path),
                 str(target_path),
                 "preferred PDF selected" if manual_preferred else "new publication version selected",
@@ -40490,7 +40729,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="quicklook-paper-resource">Quick Look</button>
           <button type="button" data-action="reveal-paper-resource">Show in Finder</button>
           <div class="library-menu-separator" role="separator"></div>
-          <button type="button" data-action="prefer-paper-resource">Use as Current</button>
+          <button type="button" data-action="prefer-paper-resource">Make Default</button>
           <button type="button" data-action="auto-paper-resource">Use Automatic Selection</button>
           <label class="paper-resource-context-role" data-paper-resource-role-row>
             <span>Change File Type</span><span class="paper-resource-context-role-arrow" aria-hidden="true">›</span>
@@ -43551,43 +43790,30 @@ INDEX_HTML = """<!doctype html>
       const snapshot = paperFilesSnapshot(paperId);
       if (!snapshot && paperId) loadPaperFiles(paperId).catch(() => {});
       const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
-      const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
-      const groupLabels = {
-        CURRENT: "Primary file",
-        VERSIONS: "Other versions",
-        SUPPLEMENTS: "Supplements",
-        FILES: "Attachments"
-      };
       const rows = files.length
-        ? groups.map((group) => {
-            const matches = files.filter((file) => paperFileGroup(file) === group);
-            if (!matches.length) return "";
-            return `<section class="library-resource-section">
-              <div class="library-resource-section-head"><span>${groupLabels[group]}</span><span class="library-resource-section-count">${matches.length}</span></div>
-              ${matches.map((file) => {
+        ? files.map((file) => {
               const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
               const selected = String(state.libraryPaperResourceSelection?.paperId || "") === paperId
                 && Number(state.libraryPaperResourceSelection?.resourceId || 0) === Number(file.id || 0);
-              const roleControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-role data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
-              const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean);
+              const typeControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-control data-control-kind="type" data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
+              const annotationControl = `<span class="paper-file-version-picker" title="Change annotation state"><span>${escapeHtml(paperFileAnnotationLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-control data-control-kind="annotation" data-paper-file-id="${Number(file.id || 0)}" aria-label="Annotation state for ${escapeAttr(name)}">${paperFileAnnotationOptions(file)}</select></span>`;
+              const sourceControl = `<span class="paper-file-version-picker" title="Change file source"><span>${escapeHtml(paperFileSourceLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-control data-control-kind="source" data-paper-file-id="${Number(file.id || 0)}" aria-label="File source for ${escapeAttr(name)}">${paperFileSourceOptions(file)}</select></span>`;
+              const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing file"].filter(Boolean);
               const ext = String(file.extension || "").replace(/^\./, "") || "none";
               return `
-                <div class="library-resource-card${file.is_primary ? " is-primary" : ""}${selected ? " is-selected" : ""}"
+                <div class="library-resource-card${file.is_default ? " is-primary" : ""}${selected ? " is-selected" : ""}"
                   data-library-resource-id="${Number(file.id || 0)}" data-library-resource-paper-id="${escapeAttr(paperId)}"
                   data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
                   role="option" aria-selected="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
                   <span class="library-resource-icon-tile"><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
                   <span class="library-resource-copy">
-                    <span class="library-resource-name">${escapeHtml(name)}</span>
-                    <span class="library-resource-meta">${roleControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
+                    <span class="library-resource-name">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</span>
+                    <span class="library-resource-meta">${typeControl}<span aria-hidden="true">·</span>${annotationControl}<span aria-hidden="true">·</span>${sourceControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
                   </span>
-                  ${file.is_primary ? `<span class="library-resource-state">Current</span>` : ""}
                 </div>
               `;
-            }).join("")}
-            </section>`;
-          }).join("")
+            }).join("")
         : paperFilesStatusMarkup(snapshot ? "empty" : "loading");
       const title = item.display_name || libraryPaperDisplayName(paper) || "Paper Files";
       return `
@@ -44104,86 +44330,92 @@ INDEX_HTML = """<!doctype html>
     }
 
     function paperFileRoleLabel(file) {
-      const versionLabels = {
-        version_of_record: "Published Version",
-        first_published: "Published Version",
-        accepted_manuscript: "Accepted Manuscript",
-        preprint: file.version_label || (file.version_number ? `arXiv v${file.version_number}` : "Preprint"),
-        other: file.version_label || (file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF")
-      };
-      if (file.file_role === "publication_version") {
-        const base = versionLabels[file.version_role || "other"] || "Publication Version";
-        return file.is_annotated ? `${base} · Annotated` : base;
-      }
       return {
-        supplement: "Supplement",
-        figure: "Image",
-        note: "Note",
-        presentation: "Presentation",
-        data: "Data",
-        code: "Code",
-        other: file.version_label || "Other File"
-      }[file.file_role || "other"] || "Other File";
+        preprint: "Preprint",
+        accepted_manuscript: "Accepted manuscript",
+        published_version: "Published version",
+        corrected_published_version: "Corrected published version",
+        correction_notice: "Correction notice",
+        supplementary_material: "Supplementary material",
+        peer_review_file: "Peer review file",
+        other: "Other",
+        unknown: "Unknown",
+        invalid_file: "Invalid file"
+      }[file.file_type || "unknown"] || "Unknown";
     }
 
-    function paperFileGroup(file) {
-      if (file.is_primary) return "CURRENT";
-      if (file.file_role === "publication_version") return "VERSIONS";
-      if (file.file_role === "supplement") return "SUPPLEMENTS";
-      return "FILES";
+    function paperFileAnnotationLabel(file) {
+      return {
+        annotated: "Annotated",
+        unannotated: "Unannotated",
+        unknown: "Unknown"
+      }[file.annotation_state || "unknown"] || "Unknown";
     }
 
     function paperFileRoleOptions(file) {
-      const annotationChoice = file.is_annotated ? "annotated" : "plain";
-      const selected = file.file_role === "publication_version"
-        ? `publication_version:${file.version_role || "other"}:${annotationChoice}`
-        : String(file.file_role || "other");
-      const pdfLike = String(file.extension || "").toLowerCase() === ".pdf"
-        || String(file.mime_type || "").toLowerCase() === "application/pdf"
-        || file.file_role === "publication_version";
-      const options = pdfLike ? [
-        ["publication_version:other:plain", "Imported PDF"],
-        ["publication_version:other:annotated", "Imported PDF · Annotated"],
-        ["publication_version:version_of_record:plain", "Published Version"],
-        ["publication_version:version_of_record:annotated", "Published Version · Annotated"],
-        ["publication_version:accepted_manuscript:plain", "Accepted Manuscript"],
-        ["publication_version:accepted_manuscript:annotated", "Accepted Manuscript · Annotated"],
-        ["publication_version:preprint:plain", "Preprint"],
-        ["publication_version:preprint:annotated", "Preprint · Annotated"]
-      ] : [];
-      if (file.version_role === "first_published") {
-        options.splice(4, 0,
-          ["publication_version:first_published:plain", "Published Version"],
-          ["publication_version:first_published:annotated", "Published Version · Annotated"]
-        );
-      }
-      if (!file.is_primary) options.push(
-        ["figure", "Image"],
-        ["supplement", "Supplement"],
-        ["note", "Note"],
-        ["presentation", "Presentation"],
-        ["data", "Data"],
-        ["code", "Code"],
-        ["other", "Other File"]
-      );
+      const selected = String(file.file_type || "unknown");
+      const options = [
+        ["preprint", "Preprint"],
+        ["accepted_manuscript", "Accepted manuscript"],
+        ["published_version", "Published version"],
+        ["corrected_published_version", "Corrected published version"],
+        ["correction_notice", "Correction notice"],
+        ["supplementary_material", "Supplementary material"],
+        ["peer_review_file", "Peer review file"],
+        ["other", "Other"],
+        ["unknown", "Unknown"],
+        ["invalid_file", "Invalid file"]
+      ];
       return options.map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+    }
+
+    function paperFileAnnotationOptions(file) {
+      const selected = String(file.annotation_state || "unknown");
+      return [["annotated", "Annotated"], ["unannotated", "Unannotated"], ["unknown", "Unknown"]]
+        .map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
+    }
+
+    function paperFileSourceLabel(file) {
+      const label = {
+        publisher: "Publisher",
+        preprint_server: "Preprint server",
+        institutional_repository: "Institutional repository",
+        user_import: "User import",
+        other: "Other",
+        unknown: "Unknown"
+      }[file.file_source || "unknown"] || "Unknown";
+      return file.source_detail ? `${label} · ${file.source_detail}` : label;
+    }
+
+    function paperFileSourceOptions(file) {
+      const selected = String(file.file_source || "unknown");
+      return [
+        ["publisher", "Publisher"],
+        ["preprint_server", "Preprint server"],
+        ["institutional_repository", "Institutional repository"],
+        ["user_import", "User import"],
+        ["other", "Other"],
+        ["unknown", "Unknown"]
+      ].map(([value, label]) => `<option value="${value}"${selected === value ? " selected" : ""}>${label}</option>`).join("");
     }
 
     function paperFileRowMarkup(file) {
       const name = file.display_name || file.local_path?.split("/").pop() || "Attached File";
-      const roleControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-action="set-paper-file-role" data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
-      const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing File"].filter(Boolean);
+      const typeControl = `<span class="paper-file-version-picker" title="Change file type"><span>${escapeHtml(paperFileRoleLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-paper-file-control data-action="set-paper-file-type" data-paper-file-id="${Number(file.id || 0)}" aria-label="File type for ${escapeAttr(name)}">${paperFileRoleOptions(file)}</select></span>`;
+      const annotationControl = `<span class="paper-file-version-picker" title="Change annotation state"><span>${escapeHtml(paperFileAnnotationLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-paper-file-control data-action="set-paper-file-annotation" data-paper-file-id="${Number(file.id || 0)}" aria-label="Annotation state for ${escapeAttr(name)}">${paperFileAnnotationOptions(file)}</select></span>`;
+      const sourceControl = `<span class="paper-file-version-picker" title="Change file source"><span>${escapeHtml(paperFileSourceLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-paper-file-control data-action="set-paper-file-source" data-paper-file-id="${Number(file.id || 0)}" aria-label="File source for ${escapeAttr(name)}">${paperFileSourceOptions(file)}</select></span>`;
+      const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing file"].filter(Boolean);
       const ext = String(file.extension || "").replace(/^\./, "") || "none";
       return `
         <div class="paper-file-row" data-paper-file-id="${Number(file.id || 0)}">
           <span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')"></span>
           <span class="paper-file-copy">
-            <button class="paper-file-name" type="button" data-action="open-paper-file" data-file-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"} title="${escapeAttr(file.local_path || name)}">${escapeHtml(name)}${file.is_primary ? `<span class="paper-file-default">Default</span>` : ""}</button>
-            <span class="paper-file-meta">${roleControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
+            <button class="paper-file-name" type="button" data-action="open-paper-file" data-file-path="${escapeAttr(file.local_path || "")}" ${file.exists ? "" : "disabled"} title="${escapeAttr(file.local_path || name)}">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</button>
+            <span class="paper-file-meta">${typeControl}<span aria-hidden="true">·</span>${annotationControl}<span aria-hidden="true">·</span>${sourceControl}${metaTail.map((value) => `<span aria-hidden="true">·</span><span>${escapeHtml(value)}</span>`).join("")}</span>
           </span>
           <span class="paper-file-actions">
-            ${file.file_role === "publication_version" && file.exists && !file.is_primary ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}">Use</button>` : ""}
-            ${file.is_primary && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file">Auto</button>` : ""}
+            ${file.exists && file.file_type !== "invalid_file" && !file.is_default ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}">Make Default</button>` : ""}
+            ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file">Auto</button>` : ""}
             ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show</button>` : ""}
             ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
           </span>
@@ -44215,20 +44447,16 @@ INDEX_HTML = """<!doctype html>
       const snapshot = paperFilesSnapshot(paperId);
       const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
       const collapsed = !state.expandedPaperFiles.has(paperId);
-      const currentFile = files.find((file) => file.is_primary) || null;
+      const defaultFile = files.find((file) => file.is_default) || null;
       const currentSummary = !snapshot
-        ? "Current · Loading"
-        : currentFile
-          ? `Current · ${paperFileRoleLabel(currentFile)}`
-          : "No Current File";
-      const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
+        ? "Default · Loading"
+        : defaultFile
+          ? `Default · ${paperFileRoleLabel(defaultFile)}`
+          : "No default file";
       const body = !snapshot
         ? paperFilesStatusMarkup("loading")
         : files.length
-          ? groups.map((group) => {
-              const rows = files.filter((file) => paperFileGroup(file) === group);
-              return rows.length ? `<div class="paper-files-group-label">${group}</div>${rows.map(paperFileRowMarkup).join("")}` : "";
-            }).join("")
+          ? files.map(paperFileRowMarkup).join("")
           : paperFilesStatusMarkup("empty");
       return `
         <section class="paper-files-panel${collapsed ? " is-collapsed" : ""}" data-paper-files-panel data-paper-id="${escapeAttr(paperId)}">
@@ -44277,8 +44505,8 @@ INDEX_HTML = """<!doctype html>
       for (const file of files) {
         const form = new FormData();
         form.append("paper_id", paperId);
-        form.append("file_role", "other");
-        form.append("version_role", "");
+        form.append("file_type", "unknown");
+        form.append("file_source", "user_import");
         form.append("file", file, file.name);
         const res = await fetch("/api/paper-files", {method: "POST", body: form});
         const data = await res.json();
@@ -44302,6 +44530,10 @@ INDEX_HTML = """<!doctype html>
             source_path: sourcePath,
             file_role: role,
             version_role: role === "publication_version" ? versionRole : "",
+            file_type: role === "publication_version"
+              ? ({version_of_record: "published_version", accepted_manuscript: "accepted_manuscript", preprint: "preprint"}[versionRole] || "unknown")
+              : "unknown",
+            file_source: "user_import",
             added_via: addedVia
           })
         });
@@ -44358,11 +44590,19 @@ INDEX_HTML = """<!doctype html>
       return data;
     }
 
-    async function setPaperFileRole(paperId, resourceId, fileRole, versionRole = "", isAnnotated = false) {
+    async function setPaperFileMetadata(paperId, resourceId, updates = {}) {
+      const current = paperFilesSnapshot(paperId)?.files?.find((file) => Number(file.id || 0) === Number(resourceId || 0)) || {};
       const res = await fetch("/api/paper-files/role", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({paper_id: paperId, resource_id: resourceId, file_role: fileRole, version_role: versionRole, is_annotated: Boolean(isAnnotated)})
+        body: JSON.stringify({
+          paper_id: paperId,
+          resource_id: resourceId,
+          file_type: updates.file_type || current.file_type || "unknown",
+          annotation_state: updates.annotation_state || current.annotation_state || "unknown",
+          file_source: updates.file_source || current.file_source || "unknown",
+          source_detail: updates.source_detail ?? current.source_detail ?? ""
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not change file type");
@@ -44424,12 +44664,16 @@ INDEX_HTML = """<!doctype html>
         }
       }));
       panel.querySelectorAll('[data-action="auto-paper-file"]').forEach((button) => button.addEventListener("click", () => setPreferredPaperFile(paper.paper_id, null).catch(() => {})));
-      panel.querySelectorAll('[data-action="set-paper-file-role"]').forEach((select) => select.addEventListener("change", async () => {
+      panel.querySelectorAll('[data-paper-file-control]').forEach((select) => select.addEventListener("change", async () => {
         const resourceId = Number(select.dataset.paperFileId || 0);
-        const [fileRole, versionRole = "", annotationChoice = "plain"] = String(select.value || "other").split(":", 3);
+        const updates = select.dataset.action === "set-paper-file-type"
+          ? {file_type: String(select.value || "unknown")}
+          : select.dataset.action === "set-paper-file-annotation"
+            ? {annotation_state: String(select.value || "unknown")}
+            : {file_source: String(select.value || "unknown")};
         select.disabled = true;
         try {
-          await setPaperFileRole(paper.paper_id, resourceId, fileRole, versionRole, annotationChoice === "annotated");
+          await setPaperFileMetadata(paper.paper_id, resourceId, updates);
           if (state.libraryTab === "my-publications") renderPublicationDetail();
           else renderLibrary();
         } catch (error) {
@@ -46872,8 +47116,7 @@ INDEX_HTML = """<!doctype html>
 
     function orderedLibraryPaperResources(paperId) {
       const files = Array.isArray(paperFilesSnapshot(paperId)?.files) ? paperFilesSnapshot(paperId).files : [];
-      const groups = ["CURRENT", "VERSIONS", "SUPPLEMENTS", "FILES"];
-      return groups.flatMap((group) => files.filter((file) => paperFileGroup(file) === group));
+      return [...files].sort((left, right) => Number(Boolean(right.is_default)) - Number(Boolean(left.is_default)));
     }
 
     function libraryPaperFilesNavigationEnabled() {
@@ -47101,7 +47344,7 @@ INDEX_HTML = """<!doctype html>
         revealNativePaperFile({native_file_path: file.local_path}, {missingMessage: "Attached file not found."});
       };
       if (preferButton) {
-        const canPrefer = Boolean(file?.file_role === "publication_version" && !file?.is_primary);
+        const canPrefer = Boolean(file?.exists && file?.file_type !== "invalid_file" && !file?.is_default);
         preferButton.style.display = canPrefer ? "" : "none";
         preferButton.onclick = async () => {
           hidePaperResourceContextMenu();
@@ -47113,7 +47356,7 @@ INDEX_HTML = """<!doctype html>
         };
       }
       if (autoButton) {
-        const canUseAutomatic = Boolean(file?.is_primary && file?.is_preferred);
+        const canUseAutomatic = Boolean(file?.is_default && file?.is_preferred);
         autoButton.style.display = canUseAutomatic ? "" : "none";
         autoButton.onclick = async () => {
           hidePaperResourceContextMenu();
@@ -47128,10 +47371,13 @@ INDEX_HTML = """<!doctype html>
         roleRow.style.display = file ? "" : "none";
         roleSelect.innerHTML = file ? paperFileRoleOptions(file) : "";
         roleSelect.onchange = async () => {
-          const [fileRole, versionRole = "", annotationChoice = "plain"] = String(roleSelect.value || "other").split(":", 3);
           roleSelect.disabled = true;
           try {
-            await setPaperFileRole(paperId, Number(file.id || 0), fileRole, versionRole, annotationChoice === "annotated");
+            await setPaperFileMetadata(
+              paperId,
+              Number(file.id || 0),
+              {file_type: String(roleSelect.value || "unknown")}
+            );
             hidePaperResourceContextMenu();
             renderLibrary();
           } catch (error) {
@@ -47175,13 +47421,13 @@ INDEX_HTML = """<!doctype html>
         const paperId = String(card.dataset.libraryResourcePaperId || "");
         const resourceId = Number(card.dataset.libraryResourceId || 0);
         card.addEventListener("click", (event) => {
-          if (event.target.closest("[data-library-resource-role]")) return;
+          if (event.target.closest("[data-library-resource-control]")) return;
           event.preventDefault();
           event.stopPropagation();
           setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
         });
         card.addEventListener("dblclick", (event) => {
-          if (event.target.closest("[data-library-resource-role]")) return;
+          if (event.target.closest("[data-library-resource-control]")) return;
           event.preventDefault();
           event.stopPropagation();
           setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
@@ -47190,7 +47436,7 @@ INDEX_HTML = """<!doctype html>
         });
         card.addEventListener("contextmenu", (event) => showPaperResourceContextMenu(event, paperId, resourceId));
       });
-      shell.querySelectorAll("[data-library-resource-role]").forEach((select) => {
+      shell.querySelectorAll("[data-library-resource-control]").forEach((select) => {
         ["pointerdown", "click", "dblclick", "contextmenu"].forEach((eventName) => {
           select.addEventListener(eventName, (event) => event.stopPropagation());
         });
@@ -47202,10 +47448,14 @@ INDEX_HTML = """<!doctype html>
           const card = select.closest(".library-resource-card");
           const paperId = String(card?.dataset.libraryResourcePaperId || "");
           const resourceId = Number(select.dataset.paperFileId || 0);
-          const [fileRole, versionRole = "", annotationChoice = "plain"] = String(select.value || "other").split(":", 3);
+          const updates = select.dataset.controlKind === "type"
+            ? {file_type: String(select.value || "unknown")}
+            : select.dataset.controlKind === "annotation"
+              ? {annotation_state: String(select.value || "unknown")}
+              : {file_source: String(select.value || "unknown")};
           select.disabled = true;
           try {
-            await setPaperFileRole(paperId, resourceId, fileRole, versionRole, annotationChoice === "annotated");
+            await setPaperFileMetadata(paperId, resourceId, updates);
             renderLibrary();
           } catch (error) {
             select.disabled = false;

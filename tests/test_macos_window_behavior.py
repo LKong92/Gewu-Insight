@@ -221,6 +221,19 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("Native launcher observed server", source)
         self.assertIn("if (self.applicationIsTerminating || self.startupFailurePresented) return;", source)
 
+    def test_native_launcher_dismisses_stale_failure_after_server_recovers(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+        failure = source.split("- (void)presentStartupFailure", 1)[1].split(
+            "- (void)appendLauncherLogMessage", 1
+        )[0]
+
+        self.assertIn("beginSheetModalForWindow:self.window", failure)
+        self.assertNotIn("[alert runModal]", failure)
+        self.assertIn("recheckServerWhileStartupFailureIsVisible", failure)
+        self.assertIn("[self dismissStartupFailureAlert];", source)
+        self.assertIn("if (available)", failure)
+        self.assertIn("[self loadApp];", failure)
+
     def test_non_pdf_library_preview_uses_macos_quick_look_without_replacing_pdf_preview(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()

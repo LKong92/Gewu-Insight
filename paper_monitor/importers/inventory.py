@@ -1088,7 +1088,7 @@ def upsert_imported_paper(
     }
     if record["arxiv_id"]:
         raw["arxiv_id"] = record["arxiv_id"]
-    storage.upsert_paper(
+    accepted = storage.upsert_paper(
         {
             "paper_id": paper_id,
             "doi": record["doi"],
@@ -1108,6 +1108,8 @@ def upsert_imported_paper(
             "raw": raw,
         }
     )
+    if not accepted:
+        raise ValueError("Imported paper identity conflict is pending review")
     storage.conn.execute(
         """
         UPDATE papers
@@ -1177,7 +1179,7 @@ def upsert_imported_file_paper(
             "extension": record["extension"],
         },
     }
-    storage.upsert_paper(
+    accepted = storage.upsert_paper(
         {
             "paper_id": paper_id,
             "doi": "",
@@ -1197,6 +1199,8 @@ def upsert_imported_file_paper(
             "raw": raw,
         }
     )
+    if not accepted:
+        raise ValueError("Imported file identity conflict is pending review")
     storage.conn.execute(
         """
         UPDATE papers
@@ -1339,6 +1343,17 @@ def upsert_resource(
             fingerprint = fingerprint_file(fingerprint_path)
         except OSError:
             fingerprint = None
+    parse_status = clean_text(record.get("parse_status") or "").casefold()
+    file_type = (
+        "invalid_file"
+        if record.get("kind") == "pdf" and parse_status in {"failed", "invalid", "unparseable", "corrupt"}
+        else ("preprint" if clean_text(record.get("arxiv_id") or "") else "unknown")
+    )
+    annotation_state = (
+        "annotated"
+        if fingerprint and fingerprint.is_annotated
+        else ("unannotated" if fingerprint and record.get("kind") == "pdf" else "unknown")
+    )
     storage.conn.execute(
         """
         INSERT INTO resources (
@@ -1346,8 +1361,9 @@ def upsert_resource(
           original_parent_relative_path, original_filename, kind, mime_type,
           import_as, import_batch_id, size_bytes, modified_at, parse_status,
           parse_error, page_count, sha256, content_sha256, annotation_count,
-          is_annotated, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          is_annotated, file_type, file_source, source_detail, annotation_state,
+          status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_path, size_bytes, kind) DO UPDATE SET
           paper_id = COALESCE(excluded.paper_id, resources.paper_id),
           stored_path = COALESCE(NULLIF(excluded.stored_path, ''), resources.stored_path),
@@ -1364,7 +1380,23 @@ def upsert_resource(
           sha256 = COALESCE(NULLIF(excluded.sha256, ''), resources.sha256),
           content_sha256 = COALESCE(NULLIF(excluded.content_sha256, ''), resources.content_sha256),
           annotation_count = MAX(COALESCE(resources.annotation_count, 0), COALESCE(excluded.annotation_count, 0)),
-          is_annotated = MAX(COALESCE(resources.is_annotated, 0), COALESCE(excluded.is_annotated, 0)),
+          is_annotated = CASE
+            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.is_annotated
+            ELSE excluded.is_annotated
+          END,
+          annotation_state = CASE
+            WHEN COALESCE(resources.annotation_override, 0) = 1 THEN resources.annotation_state
+            ELSE excluded.annotation_state
+          END,
+          file_type = CASE
+            WHEN COALESCE(resources.file_type_override, 0) = 1 THEN resources.file_type
+            ELSE excluded.file_type
+          END,
+          file_source = CASE
+            WHEN COALESCE(resources.file_source, 'unknown') = 'unknown' THEN excluded.file_source
+            ELSE resources.file_source
+          END,
+          source_detail = COALESCE(NULLIF(resources.source_detail, ''), excluded.source_detail),
           status = excluded.status,
           updated_at = excluded.updated_at
         """,
@@ -1388,6 +1420,10 @@ def upsert_resource(
             fingerprint.content_sha256 if fingerprint else None,
             fingerprint.annotation_count if fingerprint else 0,
             1 if fingerprint and fingerprint.is_annotated else 0,
+            file_type,
+            "user_import",
+            "inventory",
+            annotation_state,
             "imported" if stored_path else "missing_source",
             timestamp,
             timestamp,

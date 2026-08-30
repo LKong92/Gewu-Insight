@@ -19,15 +19,16 @@ def _has_pdf_envelope(header: bytes, trailer: bytes) -> bool:
 def _reader_is_parseable(reader: PdfReader) -> bool:
     if reader.is_encrypted:
         try:
-            reader.decrypt("")
+            if not reader.decrypt(""):
+                return False
         except Exception:
-            # A password-protected PDF can still be structurally valid even though
-            # Gewu Insight cannot inspect its pages without the password.
-            return True
-        if reader.is_encrypted:
-            return True
+            return False
     try:
-        len(reader.pages)
+        page_count = len(reader.pages)
+        if page_count <= 0:
+            return False
+        first_page = reader.pages[0]
+        _ = first_page.mediabox
     except Exception:
         return False
     return True

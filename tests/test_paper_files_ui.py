@@ -115,8 +115,8 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
         self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
         self.assertIn(">Add File</button>", INDEX_HTML)
-        self.assertIn("Published Version", INDEX_HTML)
-        self.assertIn("Accepted Manuscript", INDEX_HTML)
+        self.assertIn("Published version", INDEX_HTML)
+        self.assertIn("Accepted manuscript", INDEX_HTML)
         self.assertIn("Preprint", INDEX_HTML)
 
     def test_library_paper_row_opens_a_resource_column(self) -> None:
@@ -125,18 +125,17 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("data-library-resource-path", INDEX_HTML)
         self.assertIn('const meta = "›";', INDEX_HTML)
 
-    def test_resource_column_uses_an_attachment_inspector_instead_of_folder_rows(self) -> None:
+    def test_resource_column_uses_a_flat_inspector_instead_of_grouped_folder_rows(self) -> None:
         resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
             "function libraryColumnFolderIds", 1
         )[0]
         self.assertIn("library-resource-inspector-head", resources)
         self.assertIn(">Paper Files</strong>", resources)
-        self.assertIn("library-resource-section", resources)
+        self.assertIn("library-resource-body", resources)
         self.assertIn("library-resource-card", resources)
-        self.assertIn('CURRENT: "Primary file"', resources)
-        self.assertIn('VERSIONS: "Other versions"', resources)
-        self.assertIn('FILES: "Attachments"', resources)
-        self.assertIn("library-resource-state", resources)
+        self.assertIn("files.map((file)", resources)
+        self.assertIn('file.is_default ? `<span class="paper-file-default">Default</span>`', resources)
+        self.assertNotIn("library-resource-section", resources)
         self.assertNotIn("library-resource-row", resources)
 
     def test_resource_cards_show_file_type_icons_and_right_align_metadata(self) -> None:
@@ -220,14 +219,19 @@ class PaperFilesUiTests(unittest.TestCase):
         resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(
             "function libraryColumnFolderIds", 1
         )[0]
-        self.assertIn("data-library-resource-role", resources)
+        self.assertIn("data-library-resource-control", resources)
+        self.assertIn('data-control-kind="type"', resources)
+        self.assertIn('data-control-kind="annotation"', resources)
+        self.assertIn('data-control-kind="source"', resources)
         self.assertIn("paperFileRoleOptions(file)", resources)
+        self.assertIn("paperFileAnnotationOptions(file)", resources)
+        self.assertIn("paperFileSourceOptions(file)", resources)
         self.assertIn("paper-file-version-arrows", resources)
-        interactions = INDEX_HTML.split('shell.querySelectorAll("[data-library-resource-role]")', 1)[1].split(
+        interactions = INDEX_HTML.split('shell.querySelectorAll("[data-library-resource-control]")', 1)[1].split(
             'shell.querySelectorAll("[data-library-resource-paper]")', 1
         )[0]
         self.assertIn('select.addEventListener("change"', interactions)
-        self.assertIn("setPaperFileRole", interactions)
+        self.assertIn("setPaperFileMetadata", interactions)
         self.assertIn('event.stopPropagation()', interactions)
 
     def test_paper_files_use_a_dedicated_context_menu(self) -> None:
@@ -335,25 +339,27 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('class="paper-file-version-picker"', INDEX_HTML)
         self.assertIn('class="paper-file-version-select"', INDEX_HTML)
         self.assertIn('class="paper-file-version-arrows"', INDEX_HTML)
-        self.assertIn('data-action="set-paper-file-role"', INDEX_HTML)
-        self.assertIn('["publication_version:other:plain", "Imported PDF"]', INDEX_HTML)
-        self.assertIn('["publication_version:other:annotated", "Imported PDF · Annotated"]', INDEX_HTML)
-        self.assertIn('["publication_version:version_of_record:plain", "Published Version"]', INDEX_HTML)
-        self.assertIn('["publication_version:version_of_record:annotated", "Published Version · Annotated"]', INDEX_HTML)
-        self.assertIn('["publication_version:accepted_manuscript:plain", "Accepted Manuscript"]', INDEX_HTML)
-        self.assertIn('["publication_version:accepted_manuscript:annotated", "Accepted Manuscript · Annotated"]', INDEX_HTML)
-        self.assertIn('["publication_version:preprint:plain", "Preprint"]', INDEX_HTML)
-        self.assertIn('["publication_version:preprint:annotated", "Preprint · Annotated"]', INDEX_HTML)
-        self.assertIn('["figure", "Image"]', INDEX_HTML)
-        self.assertIn('["supplement", "Supplement"]', INDEX_HTML)
-        self.assertIn('["note", "Note"]', INDEX_HTML)
-        self.assertIn('["presentation", "Presentation"]', INDEX_HTML)
-        self.assertIn('["data", "Data"]', INDEX_HTML)
-        self.assertIn('["code", "Code"]', INDEX_HTML)
-        self.assertIn('["other", "Other File"]', INDEX_HTML)
+        self.assertIn('data-action="set-paper-file-type"', INDEX_HTML)
+        self.assertIn('data-action="set-paper-file-annotation"', INDEX_HTML)
+        self.assertIn('data-action="set-paper-file-source"', INDEX_HTML)
+        for option in (
+            '["preprint", "Preprint"]',
+            '["accepted_manuscript", "Accepted manuscript"]',
+            '["published_version", "Published version"]',
+            '["corrected_published_version", "Corrected published version"]',
+            '["correction_notice", "Correction notice"]',
+            '["supplementary_material", "Supplementary material"]',
+            '["peer_review_file", "Peer review file"]',
+            '["invalid_file", "Invalid file"]',
+            '["annotated", "Annotated"]',
+            '["unannotated", "Unannotated"]',
+            '["publisher", "Publisher"]',
+            '["user_import", "User import"]',
+        ):
+            self.assertIn(option, INDEX_HTML)
         self.assertNotIn('"First Published"', INDEX_HTML)
-        self.assertIn("async function setPaperFileRole", INDEX_HTML)
-        self.assertIn("annotationChoice === \"annotated\"", INDEX_HTML)
+        self.assertIn("async function setPaperFileMetadata", INDEX_HTML)
+        self.assertIn("annotation_state: updates.annotation_state", INDEX_HTML)
         self.assertIn("font-size: 9px;", INDEX_HTML)
 
     def test_add_file_and_files_panel_drop_import_before_classification(self) -> None:
@@ -373,7 +379,8 @@ class PaperFilesUiTests(unittest.TestCase):
         uploader = INDEX_HTML.split("async function uploadPaperFiles", 1)[1].split(
             "async function setPreferredPaperFile", 1
         )[0]
-        self.assertIn('form.append("file_role", "other")', uploader)
+        self.assertIn('form.append("file_type", "unknown")', uploader)
+        self.assertIn('form.append("file_source", "user_import")', uploader)
         self.assertIn('fileRole: "other"', uploader)
         self.assertNotIn('role = "figure"', uploader)
 
@@ -382,7 +389,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('paper-files-panel.is-collapsed .paper-files-body', INDEX_HTML)
         self.assertIn('expandedPaperFiles: new Set()', INDEX_HTML)
         self.assertIn('const collapsed = !state.expandedPaperFiles.has(paperId);', INDEX_HTML)
-        self.assertIn('Current · ${paperFileRoleLabel(currentFile)}', INDEX_HTML)
+        self.assertIn('Default · ${paperFileRoleLabel(defaultFile)}', INDEX_HTML)
         self.assertIn('paper-files-current-summary', INDEX_HTML)
         self.assertIn('data-action="delete-paper-file"', INDEX_HTML)
         self.assertIn('!file.is_primary', INDEX_HTML)
@@ -391,10 +398,11 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('addButtonWithTitle:@"Delete"', launcher)
 
     def test_unknown_legacy_pdf_is_not_presented_as_published_version(self) -> None:
-        self.assertIn(
-            'file.added_via === "legacy_backfill" ? "Imported PDF" : "Unclassified PDF"',
-            INDEX_HTML,
-        )
+        labels = INDEX_HTML.split("function paperFileRoleLabel", 1)[1].split(
+            "function paperFileAnnotationLabel", 1
+        )[0]
+        self.assertIn('unknown: "Unknown"', labels)
+        self.assertNotIn("added_via", labels)
 
     def test_native_app_uses_a_real_file_chooser_for_add_file(self) -> None:
         launcher = (ROOT / "scripts" / "PaperMonitorApp.m").read_text(encoding="utf-8")

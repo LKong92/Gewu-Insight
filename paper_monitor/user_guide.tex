@@ -437,7 +437,7 @@ Area & Purpose \\
 \textbf{1. Source tabs} & {Library, shortcuts, and independent Spaces.} \\
 \textbf{2. Folder columns} & {Move from broad folders to the selected item.} \\
 \textbf{3. Item column} & {Papers, files, and child folders in the current location.} \\
-\textbf{4. Paper Files} & {The current PDF, versions, supplements, and attachments for one paper.} \\
+\textbf{4. Paper Files} & {One flat list of resources with independent type, annotation, source, and Default status.} \\
 \textbf{5. Details} & {Metadata, identifiers, actions, citations, and folder membership.} \\
 \end{longtable}
 \GewuTableEnd
@@ -532,7 +532,7 @@ The right-side Paper Details area scrolls independently. A long author list or c
 
 \section{Recognize stable and temporary state}\label{recognize-stable-and-temporary-state}
 
-Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource role, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.
+Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource properties, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.
 
 \begin{quote}
 \textbf{Keep the active context visible}
@@ -626,7 +626,7 @@ Role
 \begin{minipage}[t]{\linewidth}\raggedright
 {{When file-backed}\\
 \textbf{File record}}\strut
-\end{minipage} & {Role, version, source, stored path, fingerprints, and current/preferred status when known.} \\
+\end{minipage} & {Type, annotation state, source, stored path, fingerprints, and Default status when known.} \\
 \begin{minipage}[t]{\linewidth}\raggedright
 {{When file-backed}\\
 \textbf{Visible local file}}\strut
@@ -662,11 +662,11 @@ A cataloged-only paper may have no local file, and nothing is missing merely bec
 \item
   \textbf{Open the \textbf{Files} section.} It starts collapsed in Paper Details so long file lists do not dominate the inspector.
 \item
-  \textbf{Classify the available PDF.} Use its small role menu to choose Published Version, Accepted Manuscript, Preprint, or another accurate type. Do not infer the role from the filename alone.
+  \textbf{Classify the available file.} Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.
 \item
   \textbf{Add related material if you have it.} Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.
 \item
-  \textbf{Check the current file.} \textbf{Open in Preview} and the Library preview use the resolved current PDF. Selecting \textbf{Use} changes preference without renaming the resource.
+  \textbf{Check the default file.} \textbf{Open in Preview} and Library preview use the resolved default when applicable. Selecting \textbf{Make Default} changes preference without renaming the resource.
 \item
   \textbf{Reveal one file in Finder.} Choose \textbf{Show in Finder} and confirm the real managed file exists where the database expects it.
 \end{enumerate}
@@ -682,7 +682,7 @@ Principle & What it means \\
 \bottomrule\noalign{}
 \endlastfoot
 \textbf{Cataloged and organized} & {The shared paper record and Library placement are durable even when no local file has been added.} \\
-\textbf{File-backed} & {After a file is added, its resource role and physical bytes can be inspected separately from paper identity and folder context.} \\
+\textbf{File-backed} & {After a file is added, its independent file properties and physical bytes can be inspected separately from paper identity and folder context.} \\
 \end{longtable}
 \GewuTableEnd
 }
@@ -707,7 +707,7 @@ Copy the paper to a second Library folder, then select it there. The title, Gewu
 
 \section{Finish with a safe baseline}\label{finish-with-a-safe-baseline}
 
-Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is current, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.
+Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -721,7 +721,7 @@ Principle & What it means \\
 \endlastfoot
 \textbf{Identity checked} & {The title, authors, DOI, and arXiv evidence do not point to different works.} \\
 \textbf{Placement understood} & {The Library folder expresses personal organization, not a second scholarly identity.} \\
-\textbf{Resource classified when present} & {If the paper is file-backed, the current PDF and any attachments have roles that describe what they actually are.} \\
+\textbf{Resource classified when present} & {If the paper is file-backed, its files can have independent type, annotation, and source descriptions.} \\
 \textbf{File visible when present} & {If the paper is file-backed, the expected managed file opens from the app and can be revealed in Finder.} \\
 \end{longtable}
 \GewuTableEnd
@@ -859,7 +859,7 @@ Object & Meaning & Example \\
 \endlastfoot
 Paper record & The shared scholarly identity and normalized metadata. & The work that later connects arXiv and a journal DOI. \\
 Placement or relation & Why and where the paper appears in your workspace. & A Library folder entry, a shortcut, a My Publications role, or an Author Monitor association. \\
-Resource record & A described file or retrievable version belonging to the paper. & Preprint v2, Version of Record, supplement, slide deck, or data file. \\
+Resource record & A described file or retrievable version belonging to the paper. & Preprint v2, published version, supplementary material, peer review file, or data file. \\
 Physical file & The bytes stored at a real path on disk. & A PDF under \nolinkurl{data/Library} or an associated attachment. \\
 \end{longtable}
 \GewuTableEnd
@@ -916,7 +916,7 @@ Element & Role \\
 {\textbf{SQLite state authority}} & {A local transactional database stored with the project.} \\
 {\textbf{Identity and metadata}} & {Shared papers, external identifiers, normalized title and authors, dates, fields, and Gewu Key.} \\
 {\textbf{Relationships and context}} & {Library placements, folder tree, Spaces, My Publications, and Monitor associations.} \\
-{\textbf{Resource registry}} & {Roles, versions, paths, source URLs, hashes, annotation state, current and preferred resources.} \\
+{\textbf{Resource registry}} & {File types, paths, source evidence, hashes, annotation state, and default preferences.} \\
 {\textbf{Operational memory}} & {Fetch runs, import batches, source tasks, reads, settings, failures, retries, and completion timestamps.} \\
 \end{longtable}
 \GewuTableEnd
@@ -926,11 +926,11 @@ Element & Role \\
 Table names and schema versions can evolve; these four responsibilities are the stable user-level model.
 \end{GewuCaption}
 
-The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what role and version they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.
+The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what file type they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.
 
 \section{Why a folder scan is not an equivalent database}\label{why-a-folder-scan-is-not-an-equivalent-database}
 
-Finder can show that \texttt{paper.pdf} exists. It cannot reliably say whether it is a Version of Record or a preprint, whether the same work is also in My Publications, whether a Monitor refresh completed with zero results, which external source produced the metadata, or which attachment should survive deletion of one shortcut. Those facts live in SQLite.
+Finder can show that \texttt{paper.pdf} exists. It cannot reliably say whether it is a published version or a preprint, whether it is annotated, where it came from, whether the same work is also in My Publications, or which file is the manual default. Those facts live in SQLite.
 
 \section{Transactions, relationships, and WAL}\label{transactions-relationships-and-wal}
 
@@ -1014,10 +1014,10 @@ Element & Role \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-{\textbf{Persistent Paper Object}} & {Owns the resource relationships and decides which usable file is current.} \\
-{\textbf{Current file}} & {The best available or explicitly preferred PDF used by Open in Preview and Library preview.} \\
+{\textbf{Persistent Paper Object}} & {Owns the resource relationships and decides which usable file is the default.} \\
+{\textbf{Default file}} & {The automatically ranked or explicitly preferred valid file used by Open in Preview and Library preview.} \\
 {\textbf{Associated Files}} & {Earlier versions, supplements, annotated copies, presentations, notes, data, code, images, and other attachments.} \\
-{\textbf{Versions}} & {Version of Record, First Published, Accepted Manuscript, and arXiv preprint versions.} \\
+{\textbf{Paper Files}} & {Flat peer records with independent type, annotation state, and source.} \\
 {\textbf{Supplements}} & {Publisher or author-provided supporting files.} \\
 {\textbf{Files and figures}} & {User material such as notes, slides, data, code, and extracted or attached images.} \\
 \end{longtable}
@@ -1050,16 +1050,16 @@ A resource can be managed while retaining a separate external source path as pro
 
 Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.
 
-\section{How the current file is resolved}\label{how-the-current-file-is-resolved}
+\section{How the default file is resolved}\label{how-the-default-file-is-resolved}
 
-An explicit preferred publication-version PDF takes precedence when it still exists. Otherwise, usable publication versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified publication PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.
+An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.
 
-Supplements and other attachments are never eligible to become current, even when the attachment itself is a PDF. This separates ``a file that belongs to the paper'' from ``a publication version that can represent the paper in Preview.''
+Supplementary Material, Peer Review File, Other, Unknown, and Invalid File do not become the automatic default. A valid one can still be selected manually; Invalid File remains visible only for audit and repair.
 
 \begin{quote}
-\textbf{Published-version labels}
+\textbf{Published files}
 
-\textbf{First Published} means the publisher\textquotesingle s initially released file; \textbf{Version of Record} means the current formal record. The compact UI can present either under the broader label \textbf{Published Version}, while the resource registry retains the more specific role when it is known.
+The user-facing type is \textbf{Published version}. A later formal correction can be classified as \textbf{Corrected published version}; the correction notice itself remains a separate peer.
 \end{quote}
 
 \section{Fingerprints and annotations}\label{fingerprints-and-annotations}
@@ -1072,7 +1072,7 @@ An exact duplicate can be reused instead of stored twice. A clean PDF and an ann
 
 \section{Why Finder and the UI do not look identical}\label{why-finder-and-the-ui-do-not-look-identical}
 
-The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore appear as a current file in the visible topic folder while its previous versions and attachments live under a mirrored Associated Files path. Paper Files deliberately groups those resources by role instead of showing every physical directory level.
+The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore retain a compatibility primary file in the visible topic folder while related files live under a mirrored Associated Files path. Paper Files deliberately presents all resource records as flat peers instead of mirroring those physical directories.
 
 \begin{quote}
 \textbf{Important}
@@ -1082,7 +1082,7 @@ Do not manually move or rename managed resources in Finder. The bytes may still 
 
 \section{See also}\label{see-also-6}
 
-\hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
 
 \chapter{The Personal Research Workspace}\label{personal-research-workspace}
 
@@ -1159,7 +1159,7 @@ Element & Role \\
 \endlastfoot
 {\textbf{1. Acquire}} & {Journal, Subject, Author, Folder Loader, or a direct identifier introduces a candidate.} \\
 {\textbf{2. Identify}} & {DOI, arXiv, title, authors, source evidence, and existing records are reconciled.} \\
-{\textbf{3. Resolve}} & {Metadata, available versions, file roles, paths, hashes, and a current resource are established.} \\
+{\textbf{3. Resolve}} & {Metadata, file types, annotation states, sources, paths, hashes, and a default preference are established.} \\
 {\textbf{4. Remember}} & {Placements, authorship, reading state, provenance, completion, and failures persist.} \\
 \end{longtable}
 \GewuTableEnd
@@ -1178,13 +1178,13 @@ The loop is continuous because a work can acquire better evidence, a new publica
 \item
   \textbf{Identify the work.} The title, authors, and arXiv identifier connect it to one shared paper identity.
 \item
-  \textbf{Resolve its first resource.} A preprint PDF becomes current because no higher-priority version is available.
+  \textbf{Resolve its first resource.} A preprint PDF becomes the automatic default because no higher-priority file is available.
 \item
   \textbf{Remember your context.} You add it to a Library folder, read it, and attach notes or data.
 \item
-  \textbf{Acquire new evidence later.} Journal Monitor or a metadata refresh finds the published DOI and Version of Record.
+  \textbf{Acquire new evidence later.} Journal Monitor or a metadata refresh finds the published DOI and a published file.
 \item
-  \textbf{Resolve without erasing.} The publication PDF becomes current; the preprint and its provenance remain in Versions.
+  \textbf{Resolve without erasing.} The published file becomes the automatic default unless a manual choice is sticky; the preprint and its provenance remain peer records.
 \end{enumerate}
 
 \section{Operational state is part of scientific memory}\label{operational-state-is-part-of-scientific-memory}
@@ -1269,7 +1269,7 @@ Remove an Author Monitor profile & The monitored-author relation and its profile
 Remove a shortcut & That fast entry point. & The underlying Library folder and its papers. \\
 Copy a paper to another folder & Add another placement. & One shared paper identity and resource bundle. \\
 Move a paper in the app & Change its managed placement and corresponding stored paths. & Gewu Key, metadata, versions, and associations. \\
-Use another version & Change the preferred/current resource. & The file\textquotesingle s original name and the other saved versions. \\
+Make another file default & Change the reading preference without physical promotion. & The file\textquotesingle s original name, location, and all other saved resources. \\
 Delete an associated file & That resource relationship and its managed file, subject to confirmation. & The paper identity and unrelated resources. \\
 \end{longtable}
 \GewuTableEnd
@@ -1380,7 +1380,7 @@ While the source rail owns focus, the current row in the adjacent column remains
 \item
   \textbf{Press \texttt{{\symbolfont →}}.} Focus enters Paper Files and the active card gains a light-blue selection. The main paper remains visible with a quieter selection color.
 \item
-  \textbf{Press \texttt{{\symbolfont ↑}} or \texttt{{\symbolfont ↓}}.} Move among the current file, versions, supplements, and attachments.
+  \textbf{Press \texttt{{\symbolfont ↑}} or \texttt{{\symbolfont ↓}}.} Move through the flat Paper Files list.
 \item
   \textbf{Press \texttt{{\symbolfont ←}}.} Focus returns to the main paper. Paper Files no longer shows an active card.
 \end{enumerate}
@@ -1611,7 +1611,7 @@ Action & What it does \\
 
 \subsection{Files summary}\label{files-summary}
 
-The \textbf{Files · n} row is collapsed by default. Its right side identifies the current file type. Expand it to add, classify, show, use, sync, or delete related files.
+The \textbf{Files · n} row is collapsed by default. Its right side identifies the default file type. Expand it to add, classify, show, choose a default, sync, or delete related files.
 
 \subsection{Metadata rows}\label{metadata-rows}
 
@@ -1703,27 +1703,9 @@ Confirm an identifier before running a version sync. A wrong identifier can atta
 A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.
 \end{GewuLead}
 
-\subsection{Two views of the same bundle}\label{two-views-of-the-same-bundle}
+\subsection{Two views of the same flat bundle}\label{two-views-of-the-same-flat-bundle}
 
-The dedicated Paper Files column uses the headings \textbf{Primary file}, \textbf{Other versions}, \textbf{Supplements}, and \textbf{Attachments}. The compact Files panel inside Paper Details shows the same records with shorter headings:
-
-{\def\LTcaptype{none} % do not increment counter
-\GewuTableStart
-\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.19\textwidth}>{\RaggedRight\arraybackslash}p{0.29\textwidth}>{\RaggedRight\arraybackslash}p{0.36\textwidth}@{}}
-\toprule\noalign{}
-\rowcolor{GewuTableHeader}
-Paper Files column & Paper Details panel & Contents \\
-\midrule\noalign{}
-\endhead
-\bottomrule\noalign{}
-\endlastfoot
-\textbf{Primary file} & \textbf{CURRENT} & The PDF used by Open in Preview and normal Library preview. \\
-\textbf{Other versions} & \textbf{VERSIONS} & Other publication, accepted-manuscript, preprint, or imported PDF versions. \\
-\textbf{Supplements} & \textbf{SUPPLEMENTS} & Supporting information associated with the work. \\
-\textbf{Attachments} & \textbf{FILES} & Notes, images, presentations, data, code, and other attachments. \\
-\end{longtable}
-\GewuTableEnd
-}
+The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each row carries three independent facts: \textbf{file type}, \textbf{annotation state}, and \textbf{source}. A small \textbf{Default} marker identifies the file selected for the paper.
 
 \subsection{Select, open, or act on a file}\label{select-open-or-act-on-a-file}
 
@@ -1736,12 +1718,12 @@ Paper Files column & Paper Details panel & Contents \\
 \item
   Press \texttt{Space} to use Quick Look.
 \item
-  Control-click for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, current-file controls, type controls, add/sync actions, or deletion where allowed.
+  Control-click for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, default-file controls, type controls, add/sync actions, or deletion where allowed.
 \item
-  Press \texttt{Delete} or \texttt{Backspace} while Paper Files has keyboard focus to remove only the selected non-current resource after confirmation. This does not delete the parent paper or its other files.
+  Press \texttt{Delete} or \texttt{Backspace} while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.
 \end{itemize}
 
-The current primary file is protected from direct deletion. Choose another eligible publication version as current first, then delete the old non-current resource if it is no longer needed.
+The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing \textbf{Make Default} changes the preferred row without moving, renaming, or rewriting that file.
 
 The Paper Details \textbf{Files} panel provides the same underlying bundle and classification controls in a compact form.
 
@@ -1749,11 +1731,11 @@ The Paper Details \textbf{Files} panel provides the same underlying bundle and c
 
 \textbf{Missing File} means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper\textquotesingle s live canonical file.
 
-A missing attachment is not another copy of the current PDF merely because both rows have a similar name. Check \textbf{Show in Finder}, the paper\textquotesingle s Associated Files bundle, and Recycle before deleting or importing anything. The current resource and explicitly typed attachments remain visible even when their paths need repair.
+A missing attachment is not another copy of the default PDF merely because both rows have a similar name. Check \textbf{Show in Finder}, the paper\textquotesingle s Associated Files bundle, and Recycle before deleting or importing anything. The default resource and explicitly typed attachments remain visible even when their paths need repair.
 
 \subsection{See also}\label{see-also-17}
 
-\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
 
 \section{Preview Files with Quick Look}\label{quick-look}
 
@@ -1803,28 +1785,26 @@ Use & Best for \\
 \begin{quote}
 \textbf{Note}
 
-Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change the PDF, its role, its current-file status, or the SQLite paper record.
+Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change file type, annotation state, source, Default status, or the SQLite paper record.
 \end{quote}
 
 \subsection{See also}\label{see-also-18}
 
 \hyperref[quick-look-settings]{Quick Look Settings} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
 
-\section{Choose Versions and the Current File}\label{versions-current}
+\section{Choose File Types and the Default File}\label{versions-current}
 
 \begin{GewuLead}
-The current file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.
+The default file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.
 \end{GewuLead}
 
 \subsection{Automatic selection}\label{automatic-selection}
 
-The automatic order favors a published version, then an accepted manuscript, then a preprint, then an imported or unclassified PDF. Within a role, a later recognized version normally wins. Availability and file validity are checked before a file becomes current.
+The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, Unknown, and Invalid file never become the automatic default.
 
-\subsection{Only publication versions can be current}\label{only-publication-versions-can-be-current}
+\subsection{Automatic and manual eligibility}\label{automatic-and-manual-eligibility}
 
-Only publication-version PDFs are eligible for automatic or manual current selection. Published versions, accepted manuscripts, preprints, and an imported PDF classified as a paper version can represent the paper. Supplements, notes, images, data, code, presentations, and Other File attachments cannot become current---even if one of those attachments uses the PDF format.
-
-If a Version of Record is already current, a preprint or accepted manuscript that arrives later is preserved under Other versions and does not automatically displace it. Manual preference remains available between eligible publication versions.
+Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Auto}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
 
 \subsection{Choose a file manually}\label{choose-a-file-manually}
 
@@ -1833,39 +1813,39 @@ If a Version of Record is already current, a preprint or accepted manuscript tha
 \item
   \textbf{Enter Paper Files or expand \textbf{Files}.}
 \item
-  \textbf{Select a PDF under \textbf{VERSIONS}.}
+  \textbf{Select the file you want.}
 \item
-  \textbf{Choose \textbf{Use} or \textbf{Use as Current}.}
+  \textbf{Choose \textbf{Make Default}.}
 \end{enumerate}
 
 \begin{GewuResult}
-\textbf{Result.} The selected PDF becomes current. Its existing filename is preserved.
+\textbf{Result.} The selected file becomes the manual default. Its existing filename and physical location are preserved.
 \end{GewuResult}
 
 \subsection{Return to automatic selection}\label{return-to-automatic-selection}
 
-Control-click a Paper Files card and choose \textbf{Use Automatic Selection}. Gewu Insight evaluates the known roles again.
+Control-click a Paper Files card and choose \textbf{Auto}. Gewu Insight evaluates the eligible file types again.
 
-\subsection{Classify PDF versions}\label{classify-pdf-versions}
+\subsection{Classify files without collapsing annotation state}\label{classify-files-without-collapsing-annotation-state}
 
-Use the small type control beside a PDF label. Available labels include:
+Use the three small controls on a row. File type uses exactly these labels:
 
 \begin{itemize}
 \tightlist
 \item
-  \textbf{Published Version} and \textbf{Published Version · Annotated}
+  \textbf{Preprint}, \textbf{Accepted manuscript}, \textbf{Published version}, and \textbf{Corrected published version}
 \item
-  \textbf{Accepted Manuscript} and \textbf{Accepted Manuscript · Annotated}
+  \textbf{Correction notice}, \textbf{Supplementary material}, and \textbf{Peer review file}
 \item
-  \textbf{Preprint} and \textbf{Preprint · Annotated}
-\item
-  \textbf{Imported PDF} and \textbf{Imported PDF · Annotated}
+  \textbf{Other}, \textbf{Unknown}, and \textbf{Invalid file}
 \end{itemize}
+
+Annotation state is selected independently as \textbf{Annotated}, \textbf{Unannotated}, or \textbf{Unknown}. Source is independently recorded as \textbf{Publisher}, \textbf{Preprint server}, \textbf{Institutional repository}, \textbf{User import}, \textbf{Other}, or \textbf{Unknown}. Manual type and annotation choices survive later fingerprint rescans.
 
 \begin{quote}
 \textbf{Note}
 
-Changing a type or choosing Use changes database metadata and preference. It does not rename the file merely to match the label. A current or preferred publication version must be replaced or returned to automatic selection before it can be reclassified as an attachment.
+Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.
 \end{quote}
 
 \subsection{See also}\label{see-also-19}
@@ -1875,7 +1855,7 @@ Changing a type or choosing Use changes database metadata and preference. It doe
 \section{Add and Classify Attachments}\label{attachments}
 
 \begin{GewuLead}
-Import first, classify afterward. This keeps the add operation simple and lets you decide the role after seeing the file in context.
+Import first, classify afterward. This keeps the add operation simple and lets you set type, annotation state, and source after seeing the file in context.
 \end{GewuLead}
 
 \subsection{Add a file from Paper Details}\label{add-a-file-from-paper-details}
@@ -1887,14 +1867,14 @@ Import first, classify afterward. This keeps the add operation simple and lets y
 \item
   \textbf{Choose \textbf{Add File}.} Select one or more local files.
 \item
-  \textbf{Wait for the new row.} A new item begins as an unclassified or Other File attachment.
+  \textbf{Wait for the new row.} A new item begins as \textbf{Unknown} unless its source proves a more specific type.
 \item
-  \textbf{Select its compact type control.} Choose the correct PDF role or attachment type.
+  \textbf{Select its compact controls.} Choose the file type, annotation state, and source independently.
 \end{enumerate}
 
 \subsection{Attachment types}\label{attachment-types}
 
-Non-primary attachments can be labeled \textbf{Image}, \textbf{Supplement}, \textbf{Note}, \textbf{Presentation}, \textbf{Data}, \textbf{Code}, or \textbf{Other File}. PDF roles use the publication-version labels described in the previous topic.
+The same ten file types apply to every row. File extension and MIME type remain separate technical facts, so an image, note, dataset, or code archive can use \textbf{Other} without being mistaken for a PDF version.
 
 \subsection{Add by drag and drop}\label{add-by-drag-and-drop}
 
@@ -1903,7 +1883,7 @@ Drag a Finder file over the expanded Paper Files area, wait for the drop target 
 \begin{quote}
 \textbf{Important}
 
-The current PDF cannot be deleted or reclassified as an attachment. Choose another eligible publication-version PDF as current first, or return to automatic selection. A PDF supplement remains a supplement and cannot represent the paper as current.
+Invalid or unreadable PDFs are rejected at file ingress. Existing migrated records that can be proven invalid remain visible as \textbf{Invalid file} for audit and repair, but cannot become a default.
 \end{quote}
 
 \subsection{See also}\label{see-also-20}
@@ -1925,9 +1905,9 @@ Downloads add a version to the paper bundle. They do not silently overwrite a di
 \item
   \textbf{Choose \textbf{Download} at the top of Paper Details.} Gewu Insight first tries the best available published file, then supported alternatives.
 \item
-  \textbf{Wait for the status message.} The existing current file is preserved if the incoming file is a different version.
+  \textbf{Wait for the status message.} Existing files are preserved if the incoming file is a different version; a manual default stays selected.
 \item
-  \textbf{Inspect Paper Files.} The best version becomes current according to manual or automatic selection; older versions appear under \textbf{VERSIONS}.
+  \textbf{Inspect Paper Files.} Every preserved file appears in the same flat list. Automatic ranking changes only the Default marker; a manual default remains unchanged.
 \end{enumerate}
 
 \subsection{Download arXiv files}\label{download-arxiv-files}
@@ -1950,11 +1930,11 @@ Gewu Insight computes exact SHA-256 and PDF content fingerprints as each new res
 
 A response is not accepted merely because it begins with \texttt{\%PDF-}. Structural PDF validation rejects empty files, HTML responses, truncated downloads, missing valid endings, and content that cannot be parsed as a PDF. A download is written to a temporary file and replaces the destination only after validation succeeds. If the request or stream fails, an existing valid file remains untouched and a partial file is not registered as a resource.
 
-\subsection{Roles follow the file that actually arrived}\label{roles-follow-the-file-that-actually-arrived}
+\subsection{Classification follows the file that actually arrived}\label{classification-follows-the-file-that-actually-arrived}
 
-A publisher download is classified from the file and source actually returned. A Version of Record remains the automatic current file when a preprint or accepted manuscript arrives later. A publisher reference or accepted manuscript is preserved as an accepted manuscript rather than promoted merely because the paper also has a DOI.
+A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference, First Release, or accepted preview remains an accepted manuscript. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.
 
-If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved role itself is wrong.
+If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved classification itself is wrong.
 
 \begin{quote}
 \textbf{Note}
@@ -1964,7 +1944,7 @@ A Monitor result is not forced into a Library placement. Where download is avail
 
 \subsection{See also}\label{see-also-21}
 
-\hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
 
 \section{Move a Standalone File into Paper Files}\label{drag-attach}
 
@@ -2221,7 +2201,7 @@ A reliable transfer preserves both the SQLite database and the managed file root
 \item
   \textbf{Start the new version once.} Required database schema changes run automatically against the existing SQLite database.
 \item
-  \textbf{Verify before deleting the backup.} Open a current PDF, an older Paper Files version, an attachment, and a My Publications entry.
+  \textbf{Verify before deleting the backup.} Open the default PDF, another Paper Files version, an attachment, and a My Publications entry.
 \end{enumerate}
 
 \begin{quote}
@@ -2314,7 +2294,7 @@ The report is a generated local reading artifact. Network services may return fe
 
 \subsection{Work with files}\label{work-with-files}
 
-My Publications uses the same Paper Details and Paper Files model as Library. A publication can keep a current PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
+My Publications uses the same Paper Details and flat Paper Files model as Library. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
 
 \subsection{Read the summary}\label{read-the-summary}
 
@@ -2848,17 +2828,17 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 \begin{quote}
 \textbf{Note}
 
-Changing a Paper Files role or choosing \textbf{Use} does not rename that file. A rename occurs only through a naming or rename action.
+Changing a Paper Files property or choosing \textbf{Make Default} does not rename that file. A rename occurs only through a naming or rename action.
 \end{quote}
 
 \subsection{See also}\label{see-also-36}
 
-\hyperref[versions-current]{Choose Versions and the Current File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
+\hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
 
 \section{How Gewu Insight Stores Files}\label{storage-model}
 
 \begin{GewuLead}
-The visible Library stays simple: its main tree contains the preferred current file. Other versions and attachments live in a mirrored Associated Files area.
+The visible Library stays simple: its main tree contains a compatibility primary path. Other resources can live in a mirrored Associated Files area, while the UI presents every resource as a peer in one flat Paper Files list.
 \end{GewuLead}
 
 \subsection{One work, several representations}\label{one-work-several-representations}
@@ -2870,7 +2850,7 @@ Each managed paper has one database identity and a stable \textbf{Gewu Key}. DOI
 \begin{itemize}
 \tightlist
 \item
-  The best current PDF stays in the visible Library, Space, or My Publications tree.
+  A compatibility primary PDF stays in the visible Library, Space, or My Publications tree.
 \item
   Older PDF versions go to a mirrored \texttt{Versions} area.
 \item
@@ -2883,7 +2863,7 @@ The associated bundle mirrors the paper's managed path under \nolinkurl{data/Ass
 
 \subsection{Why the UI and Finder look different}\label{why-the-ui-and-finder-look-different}
 
-The UI presents a paper as one item with Paper Files inside it. Finder shows the current file in the normal tree and the related bundle in Associated Files. This keeps ordinary folder browsing uncluttered while preserving every version.
+The UI presents a paper as one item with a flat Paper Files list inside it. Finder shows a compatibility primary file in the normal tree and the related bundle in Associated Files. The UI Default marker is a reading preference and does not require physical file promotion or renaming.
 
 \subsection{Copies and filesystem shortcuts}\label{copies-and-filesystem-shortcuts}
 
@@ -3167,27 +3147,27 @@ Start with the visible status and the selected work. Avoid broad repair actions 
 
 \section{Paper Files shows Missing File}\label{paper-files-shows-missing-file}
 
-This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check \textbf{Show in Finder}, the corresponding \nolinkurl{data/Associated Files} bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the current PDF; explicitly typed attachments and current resources are intentionally retained for recovery.
+This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check \textbf{Show in Finder}, the corresponding \nolinkurl{data/Associated Files} bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the default PDF; explicitly typed attachments and the default resource remain visible for recovery.
 
 \section{Quick Look is slow on the first open}\label{quick-look-is-slow-on-the-first-open}
 
 A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use \textbf{Open in Preview} to check whether the file itself is valid.
 
-\section{The wrong PDF is current}\label{the-wrong-pdf-is-current}
+\section{The wrong file is the default}\label{the-wrong-file-is-the-default}
 
 \begin{enumerate}
 \tightlist
 \item
   Open Paper Files and verify every file type.
 \item
-  Correct a mislabeled Published Version, Accepted Manuscript, Preprint, or annotated copy.
+  Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.
 \item
-  Choose \textbf{Use} for the desired PDF, or return to \textbf{Use Automatic Selection}.
+  Choose \textbf{Make Default} for the desired valid file, or choose \textbf{Auto} to resume automatic selection.
 \end{enumerate}
 
 \section{A duplicate appears after download}\label{a-duplicate-appears-after-download}
 
-Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. If two rows are truly identical, keep the correct current file, then delete the non-current duplicate.
+Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. Exact byte duplicates are reused, while clean and annotated peers can both remain. Keep the intended default before deleting any redundant non-default row.
 
 \section{A monitor shows no papers}\label{a-monitor-shows-no-papers}
 
@@ -3209,9 +3189,9 @@ On a cold launch, allow the math renderer a moment to become ready. The active d
 
 Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.
 
-\section{A current file cannot be deleted}\label{a-current-file-cannot-be-deleted}
+\section{A default file cannot be deleted}\label{a-default-file-cannot-be-deleted}
 
-This is expected. Choose another version with \textbf{Use} first, or enable automatic selection, then delete the former non-current file.
+Choose another valid file with \textbf{Make Default} first, or choose \textbf{Auto}; then delete the former non-default file. An \textbf{Invalid File} remains an audit record and is never eligible to become default.
 
 \begin{quote}
 \textbf{Important}
@@ -3241,7 +3221,7 @@ Location & Purpose \\
 \endlastfoot
 \nolinkurl{data/paper_monitor.sqlite} & {Authoritative database for papers, identities, relationships, settings, and operational state.} \\
 \nolinkurl{data/cache/journal_logos} & {Rebuildable local image cache for configured Journal Monitor logos.} \\
-\nolinkurl{data/Library} & {Visible main Library root and preferred current files.} \\
+\nolinkurl{data/Library} & {Visible main Library root and compatibility primary files.} \\
 \nolinkurl{data/Spaces} & {Independent Space roots.} \\
 \nolinkurl{data/My Publications} & {Managed local files for My Publications.} \\
 \nolinkurl{data/Associated Files} & {Mirrored bundles for versions, supplements, and attachments.} \\

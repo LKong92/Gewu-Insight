@@ -107,6 +107,27 @@ class PdfIngressTests(unittest.TestCase):
         path.write_bytes(content)
         self.assertTrue(pdf_utils.is_valid_pdf_file(path))
 
+    def test_central_pdf_validator_rejects_zero_page_and_password_locked_documents(self) -> None:
+        empty_output = BytesIO()
+        empty_writer = PdfWriter()
+        empty_writer.write(empty_output)
+        self.assertFalse(pdf_utils.is_valid_pdf_bytes(empty_output.getvalue()))
+
+        locked_output = BytesIO()
+        locked_writer = PdfWriter()
+        locked_writer.add_blank_page(width=612, height=792)
+        locked_writer.encrypt("secret")
+        locked_writer.write(locked_output)
+        self.assertFalse(pdf_utils.is_valid_pdf_bytes(locked_output.getvalue()))
+
+    def test_central_pdf_validator_accepts_empty_password_encrypted_document(self) -> None:
+        output = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=612, height=792)
+        writer.encrypt("")
+        writer.write(output)
+        self.assertTrue(pdf_utils.is_valid_pdf_bytes(output.getvalue()))
+
     def test_pdf_downloader_rejects_truncated_payload_and_accepts_real_pdf(self) -> None:
         messages: list[str] = []
 

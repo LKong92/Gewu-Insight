@@ -414,7 +414,7 @@ class UserGuideTests(unittest.TestCase):
             "article", id="visible-research-files"
         ).get_text(" ", strip=True)
         for phrase in [
-            "Supplements and other attachments are never eligible to become current",
+            "do not become the automatic default",
             "annotation count",
             "computed as the resource is registered",
             "same content fingerprint",
@@ -425,9 +425,9 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         for phrase in [
-            "Only publication versions can be current",
-            "Other File attachments cannot become current",
-            "does not automatically displace it",
+            "Only the four publication types above participate in automatic selection",
+            "manually choose any existing file except one classified as Invalid file",
+            "manual choice is sticky",
         ]:
             self.assertIn(phrase, versions_text)
 
@@ -545,7 +545,7 @@ class UserGuideTests(unittest.TestCase):
             "document viewer starts first",
             "Page count and other metadata load in parallel",
             "bounded thumbnail cache",
-            "does not change the PDF",
+            "does not change file type",
             "macOS Quick Look",
             "keyboard focus",
         ]:
@@ -564,9 +564,9 @@ class UserGuideTests(unittest.TestCase):
             self.assertIn(phrase, quick_look_settings_text)
 
         for phrase in [
-            "remove only the selected non-current resource",
+            "remove only the selected removable resource",
             "does not delete the parent paper",
-            "current primary file is protected",
+            "physical primary file used by older compatibility paths remains protected",
         ]:
             self.assertIn(phrase, paper_files_text)
 

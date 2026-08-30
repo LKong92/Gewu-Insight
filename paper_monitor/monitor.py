@@ -178,7 +178,7 @@ def fetch_one_journal(
                 for source in journal_paper_sources(paper)
             ]
             try:
-                storage.upsert_paper(
+                accepted = storage.upsert_paper(
                     paper,
                     replace_bibliographic_metadata=(
                         is_aps_lifecycle_journal(paper.get("journal"))
@@ -186,6 +186,9 @@ def fetch_one_journal(
                     ),
                     commit=False,
                 )
+                if accepted is False:
+                    storage.conn.commit()
+                    continue
                 storage.record_journal_monitor_papers(
                     fetch_run_id=fetch_run_id,
                     observations=observations,
@@ -253,7 +256,10 @@ def fetch_one_arxiv_preprint_source(
         paper["publisher_section"] = paper.get("publisher_section") or "preprint"
         paper["section_allowed"] = True
         try:
-            storage.upsert_paper(paper, commit=False)
+            accepted = storage.upsert_paper(paper, commit=False)
+            if accepted is False:
+                storage.conn.commit()
+                continue
             storage.record_journal_monitor_paper(
                 fetch_run_id=fetch_run_id,
                 paper_id=str(paper["paper_id"]),

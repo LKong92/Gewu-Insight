@@ -5,19 +5,161 @@ import json
 import re
 import sqlite3
 import threading
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import unquote, urlparse
 
 from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
-from .text import is_placeholder_publication_title, normalize_publication_title, paper_is_from_zenodo
+from .text import (
+    is_placeholder_publication_title,
+    normalize_doi,
+    normalize_publication_title,
+    paper_is_from_zenodo,
+)
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 13
+STORAGE_SCHEMA_VERSION = 14
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
+
+PAPER_FILE_TYPES = (
+    "preprint",
+    "accepted_manuscript",
+    "published_version",
+    "corrected_published_version",
+    "correction_notice",
+    "supplementary_material",
+    "peer_review_file",
+    "other",
+    "unknown",
+    "invalid_file",
+)
+PAPER_FILE_SOURCES = (
+    "publisher",
+    "preprint_server",
+    "institutional_repository",
+    "user_import",
+    "other",
+    "unknown",
+)
+PAPER_FILE_ANNOTATION_STATES = ("annotated", "unannotated", "unknown")
+AUTOMATIC_DEFAULT_FILE_TYPE_RANK = {
+    "corrected_published_version": 400,
+    "published_version": 300,
+    "accepted_manuscript": 200,
+    "preprint": 100,
+}
+
+
+def normalize_paper_file_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "version_of_record": "published_version",
+        "first_published": "published_version",
+        "current_publication_record": "published_version",
+        "combined": "published_version",
+        "combined_version": "published_version",
+        "supplement": "supplementary_material",
+        "peer_review": "peer_review_file",
+        "invalid": "invalid_file",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in PAPER_FILE_TYPES else "unknown"
+
+
+def normalize_paper_file_source(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "arxiv": "preprint_server",
+        "repository": "institutional_repository",
+        "manual": "user_import",
+        "inventory": "user_import",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in PAPER_FILE_SOURCES else "unknown"
+
+
+def normalize_annotation_state(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return normalized if normalized in PAPER_FILE_ANNOTATION_STATES else "unknown"
+
+
+def legacy_paper_file_type(
+    file_role: Any,
+    version_role: Any,
+    *,
+    display_name: Any = "",
+    parse_status: Any = "",
+) -> str:
+    role = str(file_role or "").strip().lower().replace("-", "_")
+    version = str(version_role or "").strip().lower().replace("-", "_")
+    name = str(display_name or "").strip().casefold()
+    parse = str(parse_status or "").strip().lower()
+    if parse in {"invalid", "failed", "corrupt", "unparseable"}:
+        return "invalid_file"
+    if re.search(r"\b(author|publisher)?\s*(correction|erratum|corrigendum)\b", name):
+        return "correction_notice"
+    if "peer review" in name or "reviewer report" in name or "decision letter" in name:
+        return "peer_review_file"
+    if role == "publication_version":
+        return {
+            "preprint": "preprint",
+            "accepted_manuscript": "accepted_manuscript",
+            "version_of_record": "published_version",
+            "first_published": "published_version",
+            "corrected_published_version": "corrected_published_version",
+            "corrected_version": "corrected_published_version",
+        }.get(version, "unknown")
+    if role == "supplement":
+        return "supplementary_material"
+    if role in {"peer_review", "peer_review_file"}:
+        return "peer_review_file"
+    if role in {"figure", "note", "presentation", "data", "code", "other"}:
+        return "other"
+    return "unknown"
+
+
+def legacy_role_projection(file_type: Any) -> tuple[str, str, str]:
+    normalized = normalize_paper_file_type(file_type)
+    projections = {
+        "preprint": ("publication_version", "preprint", "Preprint"),
+        "accepted_manuscript": ("publication_version", "accepted_manuscript", "Accepted manuscript"),
+        "published_version": ("publication_version", "version_of_record", "Published version"),
+        "corrected_published_version": (
+            "publication_version",
+            "corrected_published_version",
+            "Corrected published version",
+        ),
+        "correction_notice": ("other", "", "Correction notice"),
+        "supplementary_material": ("supplement", "", "Supplementary material"),
+        "peer_review_file": ("other", "", "Peer review file"),
+        "other": ("other", "", "Other"),
+        "unknown": ("other", "", "Unknown"),
+        "invalid_file": ("other", "", "Invalid file"),
+    }
+    return projections[normalized]
+
+
+def inferred_paper_file_source(source_url: Any = "", added_via: Any = "") -> tuple[str, str]:
+    url = str(source_url or "").strip()
+    added = str(added_via or "").strip()
+    host = (urlparse(url).hostname or "").casefold()
+    added_key = added.casefold()
+    if host.endswith(("arxiv.org", "biorxiv.org", "medrxiv.org")) or "arxiv" in added_key:
+        return "preprint_server", host or added
+    if any(token in host for token in ("repository", "eprints", "dspace", "hal.science")):
+        return "institutional_repository", host
+    if url and any(token in added_key for token in ("publisher", "download", "aaas", "nature")):
+        return "publisher", host or added
+    if any(token in added_key for token in ("manual", "paper_details", "inventory", "legacy", "import")):
+        return "user_import", added
+    if url:
+        return "other", host or url
+    return "unknown", added
 
 
 SCHEMA = """
@@ -68,6 +210,7 @@ CREATE TABLE IF NOT EXISTS papers (
   storage_key TEXT,
   primary_resource_id INTEGER,
   preferred_resource_id INTEGER,
+  preferred_resource_manual INTEGER NOT NULL DEFAULT 0,
   analysis_status TEXT NOT NULL DEFAULT 'not_started',
   analysis_path TEXT,
   analyzed_at TEXT
@@ -432,6 +575,12 @@ CREATE TABLE IF NOT EXISTS resources (
   content_sha256 TEXT,
   annotation_count INTEGER NOT NULL DEFAULT 0,
   is_annotated INTEGER NOT NULL DEFAULT 0,
+  file_type TEXT NOT NULL DEFAULT 'unknown',
+  file_source TEXT NOT NULL DEFAULT 'unknown',
+  source_detail TEXT,
+  annotation_state TEXT NOT NULL DEFAULT 'unknown',
+  file_type_override INTEGER NOT NULL DEFAULT 0,
+  annotation_override INTEGER NOT NULL DEFAULT 0,
   added_via TEXT,
   supersedes_resource_id INTEGER REFERENCES resources(id) ON DELETE SET NULL,
   missing_status TEXT,
@@ -444,6 +593,23 @@ CREATE TABLE IF NOT EXISTS resources (
 CREATE INDEX IF NOT EXISTS idx_resources_paper ON resources(paper_id);
 CREATE INDEX IF NOT EXISTS idx_resources_batch ON resources(import_batch_id);
 CREATE INDEX IF NOT EXISTS idx_resources_source ON resources(source_path, size_bytes);
+
+CREATE TABLE IF NOT EXISTS paper_identity_conflicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  existing_paper_id TEXT NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+  incoming_paper_id TEXT NOT NULL,
+  incoming_doi TEXT NOT NULL DEFAULT '',
+  conflict_reasons_json TEXT NOT NULL,
+  incoming_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(existing_paper_id, incoming_paper_id, incoming_doi, conflict_reasons_json)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_identity_conflicts_status
+ON paper_identity_conflicts(status, last_seen_at);
 
 CREATE TABLE IF NOT EXISTS paper_metadata_refreshes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -479,12 +645,19 @@ class Storage:
             resource_columns = {
                 row["name"] for row in self.conn.execute("PRAGMA table_info(resources)").fetchall()
             }
-            required_paper_columns = {"storage_key", "primary_resource_id", "preferred_resource_id"}
+            required_paper_columns = {
+                "storage_key",
+                "primary_resource_id",
+                "preferred_resource_id",
+                "preferred_resource_manual",
+            }
             required_resource_columns = {
                 "display_name", "file_role", "version_role", "version_label",
                 "version_date", "version_number", "source_url", "storage_mode",
                 "sha256", "content_sha256", "annotation_count", "is_annotated",
-                "added_via", "supersedes_resource_id", "missing_status",
+                "file_type", "file_source", "source_detail", "annotation_state",
+                "file_type_override", "annotation_override", "added_via",
+                "supersedes_resource_id", "missing_status",
             }
             existing_tables = {
                 row["name"]
@@ -498,6 +671,7 @@ class Storage:
                 or "journal_monitor_papers" not in existing_tables
                 or "journal_subscriptions" not in existing_tables
                 or "paper_source_observations" not in existing_tables
+                or "paper_identity_conflicts" not in existing_tables
             )
             if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
@@ -538,6 +712,7 @@ class Storage:
             "storage_key": "TEXT",
             "primary_resource_id": "INTEGER",
             "preferred_resource_id": "INTEGER",
+            "preferred_resource_manual": "INTEGER NOT NULL DEFAULT 0",
         }.items():
             if column not in columns:
                 self.conn.execute(f"ALTER TABLE papers ADD COLUMN {column} {column_type}")
@@ -569,6 +744,12 @@ class Storage:
             "content_sha256": "TEXT",
             "annotation_count": "INTEGER NOT NULL DEFAULT 0",
             "is_annotated": "INTEGER NOT NULL DEFAULT 0",
+            "file_type": "TEXT NOT NULL DEFAULT 'unknown'",
+            "file_source": "TEXT NOT NULL DEFAULT 'unknown'",
+            "source_detail": "TEXT",
+            "annotation_state": "TEXT NOT NULL DEFAULT 'unknown'",
+            "file_type_override": "INTEGER NOT NULL DEFAULT 0",
+            "annotation_override": "INTEGER NOT NULL DEFAULT 0",
             "added_via": "TEXT",
             "supersedes_resource_id": "INTEGER",
             "missing_status": "TEXT",
@@ -580,9 +761,23 @@ class Storage:
         )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_sha256 ON resources(sha256)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_content_sha256 ON resources(content_sha256)")
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resources_paper_file_type ON resources(paper_id, file_type)"
+        )
         self._backfill_paper_storage_keys()
         self._backfill_primary_pdf_resources()
         self._reclassify_legacy_pdf_versions()
+        self._backfill_flat_paper_file_metadata()
+        self.conn.execute(
+            """
+            UPDATE papers
+            SET preferred_resource_manual = CASE
+                WHEN preferred_resource_id IS NOT NULL THEN 1
+                ELSE 0
+            END
+            WHERE COALESCE(preferred_resource_manual, 0) = 0
+            """
+        )
         self.conn.commit()
         library_item_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(library_items)").fetchall()}
         if "display_name" not in library_item_columns:
@@ -884,6 +1079,78 @@ class Storage:
                     version_label,
                     version_number,
                     source_url,
+                    timestamp,
+                    int(record.get("id") or 0),
+                ),
+            )
+
+    def _backfill_flat_paper_file_metadata(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT id, display_name, original_filename, stored_path, source_path,
+                   file_role, version_role, version_label, source_url, added_via,
+                   parse_status, content_sha256, annotation_count, is_annotated,
+                   file_type, file_source, source_detail, annotation_state,
+                   file_type_override, annotation_override
+            FROM resources
+            ORDER BY id
+            """
+        ).fetchall()
+        timestamp = now_iso()
+        for row in rows:
+            record = dict(row)
+            name = (
+                record.get("display_name")
+                or record.get("original_filename")
+                or record.get("stored_path")
+                or record.get("source_path")
+                or ""
+            )
+            current_type = normalize_paper_file_type(record.get("file_type"))
+            if not int(record.get("file_type_override") or 0) and current_type == "unknown":
+                current_type = legacy_paper_file_type(
+                    record.get("file_role"),
+                    record.get("version_role"),
+                    display_name=name,
+                    parse_status=record.get("parse_status"),
+                )
+            current_source = normalize_paper_file_source(record.get("file_source"))
+            inferred_source, inferred_detail = inferred_paper_file_source(
+                record.get("source_url"),
+                record.get("added_via"),
+            )
+            if current_source == "unknown":
+                current_source = inferred_source
+            source_detail = str(record.get("source_detail") or inferred_detail or "").strip()
+            annotation_state = normalize_annotation_state(record.get("annotation_state"))
+            if not int(record.get("annotation_override") or 0) and annotation_state == "unknown":
+                if int(record.get("is_annotated") or 0) or int(record.get("annotation_count") or 0) > 0:
+                    annotation_state = "annotated"
+                elif str(record.get("content_sha256") or "").strip():
+                    annotation_state = "unannotated"
+            role, version, label = legacy_role_projection(current_type)
+            if current_type == "unknown":
+                role = str(record.get("file_role") or "other")
+                version = str(record.get("version_role") or "")
+                label = str(record.get("version_label") or label)
+            if current_type == "preprint" and record.get("version_role") == "preprint":
+                label = str(record.get("version_label") or label)
+            self.conn.execute(
+                """
+                UPDATE resources
+                SET file_type = ?, file_source = ?, source_detail = ?, annotation_state = ?,
+                    file_role = ?, version_role = ?,
+                    version_label = COALESCE(NULLIF(version_label, ''), ?), updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    current_type,
+                    current_source,
+                    source_detail or None,
+                    annotation_state,
+                    role,
+                    version or None,
+                    label,
                     timestamp,
                     int(record.get("id") or 0),
                 ),
@@ -1466,18 +1733,207 @@ class Storage:
     def close(self) -> None:
         self.conn.close()
 
+    @staticmethod
+    def _identity_text_key(value: Any) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+    @classmethod
+    def _identity_url_doi(cls, value: Any) -> str:
+        text = unquote(str(value or "")).strip()
+        match = re.search(r"10\.\d{4,9}/[^\s?#]+", text, flags=re.IGNORECASE)
+        return normalize_doi(match.group(0).rstrip(".,;:)]}")) if match else ""
+
+    @classmethod
+    def _identity_authors(cls, paper: dict[str, Any]) -> set[str]:
+        raw = cls._paper_raw_dict(paper)
+        candidates: list[Any] = []
+        for key in ("authors", "author"):
+            value = paper.get(key)
+            if value not in (None, "", []):
+                candidates.extend(value if isinstance(value, list) else [value])
+            raw_value = raw.get(key)
+            if raw_value not in (None, "", []):
+                candidates.extend(raw_value if isinstance(raw_value, list) else [raw_value])
+        names: set[str] = set()
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                family = candidate.get("family") or candidate.get("last") or candidate.get("last_name")
+                given = candidate.get("given") or candidate.get("first") or candidate.get("first_name")
+                candidate = candidate.get("name") or " ".join(
+                    part for part in (str(given or ""), str(family or "")) if part
+                )
+            key = cls._identity_text_key(candidate)
+            if key:
+                tokens = key.split()
+                names.add(tokens[-1] if tokens else key)
+        return names
+
+    @classmethod
+    def paper_identity_conflict_reasons(
+        cls,
+        existing: dict[str, Any],
+        incoming: dict[str, Any],
+    ) -> list[str]:
+        existing_doi = normalize_doi(existing.get("doi"))
+        incoming_doi = normalize_doi(incoming.get("doi"))
+        existing_url_dois = {
+            cls._identity_url_doi(existing.get(key))
+            for key in ("url", "landing_url", "pdf_url")
+        } - {""}
+        incoming_url_dois = {
+            cls._identity_url_doi(incoming.get(key))
+            for key in ("url", "landing_url", "pdf_url")
+        } - {""}
+        reasons: list[str] = []
+        if incoming_doi and incoming_url_dois and incoming_doi not in incoming_url_dois:
+            reasons.append("incoming_doi_url_mismatch")
+        if existing_doi and incoming_url_dois and existing_doi not in incoming_url_dois:
+            reasons.append("existing_doi_conflicts_with_incoming_url")
+        if incoming_doi and existing_url_dois and incoming_doi not in existing_url_dois:
+            reasons.append("incoming_doi_conflicts_with_existing_url")
+
+        shared_doi = bool(existing_doi and incoming_doi and existing_doi == incoming_doi)
+        same_storage_identity = str(existing.get("paper_id") or "") == str(incoming.get("paper_id") or "")
+        if not shared_doi and not same_storage_identity and not reasons:
+            return []
+
+        existing_title = cls._identity_text_key(existing.get("title"))
+        incoming_title = cls._identity_text_key(incoming.get("title"))
+        title_conflict = False
+        if existing_title and incoming_title:
+            left_tokens = set(existing_title.split())
+            right_tokens = set(incoming_title.split())
+            overlap = len(left_tokens & right_tokens) / max(1, len(left_tokens | right_tokens))
+            similarity = SequenceMatcher(None, existing_title, incoming_title).ratio()
+            title_conflict = overlap < 0.22 and similarity < 0.48
+
+        existing_authors = cls._identity_authors(existing)
+        incoming_authors = cls._identity_authors(incoming)
+        author_conflict = bool(
+            existing_authors
+            and incoming_authors
+            and not existing_authors.intersection(incoming_authors)
+        )
+
+        existing_journal = cls._identity_text_key(existing.get("journal"))
+        incoming_journal = cls._identity_text_key(incoming.get("journal"))
+        generic_journals = {"", "unknown", "imported library", "fixture journal"}
+        journal_conflict = False
+        if existing_journal not in generic_journals and incoming_journal not in generic_journals:
+            existing_tokens = set(existing_journal.split())
+            incoming_tokens = set(incoming_journal.split())
+            journal_conflict = not (
+                existing_journal in incoming_journal
+                or incoming_journal in existing_journal
+                or existing_tokens.intersection(incoming_tokens)
+            )
+
+        if title_conflict and author_conflict:
+            reasons.append("title_and_authors_conflict")
+        if title_conflict and journal_conflict:
+            reasons.append("title_and_journal_conflict")
+        return sorted(set(reasons))
+
+    def record_paper_identity_conflict(
+        self,
+        existing: dict[str, Any],
+        incoming: dict[str, Any],
+        reasons: list[str],
+        *,
+        commit: bool = True,
+    ) -> int:
+        if not reasons:
+            return 0
+        timestamp = now_iso()
+        incoming_snapshot = {
+            "paper_id": str(incoming.get("paper_id") or ""),
+            "doi": normalize_doi(incoming.get("doi")),
+            "title": str(incoming.get("title") or ""),
+            "journal": str(incoming.get("journal") or ""),
+            "url": str(incoming.get("url") or ""),
+            "landing_url": str(incoming.get("landing_url") or ""),
+            "pdf_url": str(incoming.get("pdf_url") or ""),
+            "authors": sorted(self._identity_authors(incoming)),
+            "source": str(incoming.get("source") or ""),
+        }
+        reasons_json = json.dumps(sorted(set(reasons)), ensure_ascii=False)
+        incoming_json = json.dumps(incoming_snapshot, ensure_ascii=False, sort_keys=True)
+        self.conn.execute(
+            """
+            INSERT INTO paper_identity_conflicts (
+              existing_paper_id, incoming_paper_id, incoming_doi,
+              conflict_reasons_json, incoming_json, status,
+              first_seen_at, last_seen_at, occurrence_count
+            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, 1)
+            ON CONFLICT(existing_paper_id, incoming_paper_id, incoming_doi, conflict_reasons_json)
+            DO UPDATE SET
+              incoming_json = excluded.incoming_json,
+              status = CASE
+                WHEN paper_identity_conflicts.status = 'resolved' THEN 'pending'
+                ELSE paper_identity_conflicts.status
+              END,
+              last_seen_at = excluded.last_seen_at,
+              occurrence_count = paper_identity_conflicts.occurrence_count + 1
+            """,
+            (
+                str(existing.get("paper_id") or ""),
+                str(incoming.get("paper_id") or ""),
+                normalize_doi(incoming.get("doi")),
+                reasons_json,
+                incoming_json,
+                timestamp,
+                timestamp,
+            ),
+        )
+        row = self.conn.execute(
+            """
+            SELECT id FROM paper_identity_conflicts
+            WHERE existing_paper_id = ? AND incoming_paper_id = ?
+              AND incoming_doi = ? AND conflict_reasons_json = ?
+            """,
+            (
+                str(existing.get("paper_id") or ""),
+                str(incoming.get("paper_id") or ""),
+                normalize_doi(incoming.get("doi")),
+                reasons_json,
+            ),
+        ).fetchone()
+        if commit:
+            self.conn.commit()
+        return int(row["id"] or 0) if row else 0
+
+    def list_pending_paper_identity_conflicts(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM paper_identity_conflicts
+            WHERE status = 'pending'
+            ORDER BY last_seen_at DESC, id DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def upsert_paper(
         self,
         paper: dict[str, Any],
         *,
         replace_bibliographic_metadata: bool = False,
         commit: bool = True,
-    ) -> None:
+    ) -> bool:
         existing = self.get_paper(paper["paper_id"])
         timestamp = now_iso()
         payload = dict(paper)
         if payload.get("title"):
             payload["title"] = normalize_publication_title(payload.get("title"))
+        if existing:
+            conflict_reasons = self.paper_identity_conflict_reasons(existing, payload)
+            if conflict_reasons:
+                self.record_paper_identity_conflict(
+                    existing,
+                    payload,
+                    conflict_reasons,
+                    commit=commit,
+                )
+                return False
         payload.setdefault("first_seen_at", timestamp)
         payload["last_seen_at"] = timestamp
         incoming_raw = self._paper_raw_dict(payload)
@@ -1559,7 +2015,7 @@ class Storage:
                 if commit:
                     self.conn.rollback()
                 raise
-            return
+            return True
 
         columns = [
             "paper_id",
@@ -1605,6 +2061,7 @@ class Storage:
             if commit:
                 self.conn.rollback()
             raise
+        return True
 
     def merge_paper_missing_metadata(
         self,
@@ -1628,8 +2085,17 @@ class Storage:
                 raw["_paper_monitor_sources"] = sources
             payload["raw"] = raw
             payload["source"] = payload.get("source") or source_name
-            self.upsert_paper(payload, commit=commit)
-            return True
+            return self.upsert_paper(payload, commit=commit)
+
+        conflict_reasons = self.paper_identity_conflict_reasons(existing, paper)
+        if conflict_reasons:
+            self.record_paper_identity_conflict(
+                existing,
+                paper,
+                conflict_reasons,
+                commit=commit,
+            )
+            return False
 
         merged = dict(existing)
         for key in [
@@ -1732,6 +2198,10 @@ class Storage:
         existing = self.get_paper(paper_id)
         if not existing:
             return None
+        conflict_reasons = self.paper_identity_conflict_reasons(existing, paper)
+        if conflict_reasons:
+            self.record_paper_identity_conflict(existing, paper, conflict_reasons)
+            return existing
         timestamp = now_iso()
         existing_raw = self._paper_raw_dict(existing)
         incoming_raw = self._paper_raw_dict(paper)
@@ -2470,6 +2940,12 @@ class Storage:
                 paper,
                 path_text,
             )
+            file_type = (
+                normalize_paper_file_type(version_role)
+                if version_role != "other"
+                else "unknown"
+            )
+            file_source, source_detail = inferred_paper_file_source(source_url, "legacy_backfill")
             primary_id = int(paper.get("primary_resource_id") or 0)
             primary = self.conn.execute(
                 "SELECT * FROM resources WHERE id = ? AND paper_id = ?",
@@ -2514,6 +2990,9 @@ class Storage:
                         version_label = COALESCE(NULLIF(version_label, ''), ?),
                         version_number = COALESCE(version_number, ?),
                         source_url = COALESCE(NULLIF(source_url, ''), ?),
+                        file_type = CASE WHEN COALESCE(file_type, 'unknown') = 'unknown' THEN ? ELSE file_type END,
+                        file_source = CASE WHEN COALESCE(file_source, 'unknown') = 'unknown' THEN ? ELSE file_source END,
+                        source_detail = COALESCE(NULLIF(source_detail, ''), ?),
                         storage_mode = COALESCE(NULLIF(storage_mode, ''), ?),
                         added_via = COALESCE(NULLIF(added_via, ''), 'legacy_backfill'),
                         missing_status = ?, updated_at = ?
@@ -2525,6 +3004,9 @@ class Storage:
                         version_label,
                         version_number,
                         source_url,
+                        file_type,
+                        file_source,
+                        source_detail or None,
                         self._resource_storage_mode(path_text),
                         "" if Path(path_text).expanduser().exists() else "missing",
                         timestamp,
@@ -2538,9 +3020,10 @@ class Storage:
                       paper_id, stored_path, original_filename, kind, mime_type,
                       import_as, size_bytes, display_name, file_role, version_role,
                       version_label, version_number, source_url, storage_mode,
+                      file_type, file_source, source_detail,
                       added_via, missing_status, status, created_at, updated_at
                     ) VALUES (?, ?, ?, 'pdf', 'application/pdf', 'primary_pdf', ?, ?,
-                              'publication_version', ?, ?, ?, ?, ?, 'legacy_backfill',
+                              'publication_version', ?, ?, ?, ?, ?, ?, ?, ?, 'legacy_backfill',
                               ?, 'imported', ?, ?)
                     """,
                     (
@@ -2554,6 +3037,9 @@ class Storage:
                         version_number,
                         source_url,
                         self._resource_storage_mode(path_text),
+                        file_type,
+                        file_source,
+                        source_detail or None,
                         "" if Path(path_text).expanduser().exists() else "missing",
                         timestamp,
                         timestamp,
@@ -2582,12 +3068,27 @@ class Storage:
         preferred_id = int(paper.get("preferred_resource_id") or 0)
         for row in rows:
             resource = dict(row)
+            resource["file_type"] = normalize_paper_file_type(
+                resource.get("file_type")
+                or legacy_paper_file_type(
+                    resource.get("file_role"),
+                    resource.get("version_role"),
+                    display_name=resource.get("display_name"),
+                    parse_status=resource.get("parse_status"),
+                )
+            )
+            resource["file_source"] = normalize_paper_file_source(resource.get("file_source"))
+            resource["annotation_state"] = normalize_annotation_state(resource.get("annotation_state"))
             path_text = self.resource_local_path(resource)
             resource["local_path"] = path_text
             resource["exists"] = bool(path_text and Path(path_text).expanduser().exists())
             resource["is_primary"] = int(resource.get("id") or 0) == primary_id
             resource["is_preferred"] = int(resource.get("id") or 0) == preferred_id
             resources.append(resource)
+        default_resource = self._select_default_paper_resource(paper, resources)
+        default_id = int((default_resource or {}).get("id") or 0)
+        for resource in resources:
+            resource["is_default"] = int(resource.get("id") or 0) == default_id
         return resources
 
     def create_paper_resource(
@@ -2608,6 +3109,12 @@ class Storage:
         content_sha256: str = "",
         annotation_count: int = 0,
         is_annotated: bool = False,
+        file_type: str = "",
+        file_source: str = "",
+        source_detail: str = "",
+        annotation_state: str = "",
+        file_type_override: bool = False,
+        annotation_override: bool = False,
         added_via: str = "manual",
         mime_type: str = "",
         kind: str = "",
@@ -2619,6 +3126,34 @@ class Storage:
         path = Path(str(stored_path)).expanduser()
         inferred_mime = mime_type or ("application/pdf" if path.suffix.lower() == ".pdf" else "")
         inferred_kind = kind or (path.suffix.lower().lstrip(".") or "file")
+        resolved_type = (
+            normalize_paper_file_type(file_type)
+            if str(file_type or "").strip()
+            else legacy_paper_file_type(
+                file_role,
+                version_role,
+                display_name=display_name or path.name,
+            )
+        )
+        projected_role, projected_version, projected_label = legacy_role_projection(resolved_type)
+        if (
+            str(file_type or "").strip()
+            and resolved_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
+            and str(file_role or "other").strip().lower() in {"", "other"}
+            and not str(version_role or "").strip()
+        ):
+            file_role = projected_role
+            version_role = projected_version
+            if not str(version_label or "").strip():
+                version_label = projected_label
+        inferred_source, inferred_detail = inferred_paper_file_source(source_url, added_via)
+        resolved_source = normalize_paper_file_source(file_source or inferred_source)
+        resolved_annotation = normalize_annotation_state(annotation_state)
+        if not str(annotation_state or "").strip():
+            if is_annotated or int(annotation_count or 0) > 0:
+                resolved_annotation = "annotated"
+            elif content_sha256:
+                resolved_annotation = "unannotated"
         timestamp = now_iso()
         cursor = self.conn.execute(
             """
@@ -2626,9 +3161,11 @@ class Storage:
               paper_id, source_path, stored_path, original_filename, kind, mime_type,
               import_as, size_bytes, modified_at, display_name, file_role, version_role,
               version_label, version_date, version_number, source_url, storage_mode,
-              sha256, content_sha256, annotation_count, is_annotated, added_via,
+              sha256, content_sha256, annotation_count, is_annotated,
+              file_type, file_source, source_detail, annotation_state,
+              file_type_override, annotation_override, added_via,
               supersedes_resource_id, missing_status, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'resource', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ) VALUES (?, ?, ?, ?, ?, ?, 'resource', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       'imported', ?, ?)
             """,
             (
@@ -2652,6 +3189,12 @@ class Storage:
                 content_sha256 or None,
                 max(0, int(annotation_count or 0)),
                 1 if is_annotated or int(annotation_count or 0) > 0 else 0,
+                resolved_type,
+                resolved_source,
+                source_detail or inferred_detail or None,
+                resolved_annotation,
+                1 if file_type_override else 0,
+                1 if annotation_override else 0,
                 added_via or "manual",
                 supersedes_resource_id,
                 "" if path.exists() else "missing",
@@ -2669,16 +3212,73 @@ class Storage:
             resource = self.get_paper_resource(int(resource_id))
             if not resource or str(resource.get("paper_id") or "") != str(paper_id):
                 raise ValueError("File does not belong to this paper")
-            if not self.resource_is_pdf(resource):
-                raise ValueError("Preferred file must be a PDF")
-            if str(resource.get("file_role") or "") != "publication_version":
-                raise ValueError("Only paper-version PDFs can be selected as current")
+            path_text = self.resource_local_path(resource)
+            if not path_text or not Path(path_text).expanduser().is_file():
+                raise ValueError("Default file must exist")
+            if normalize_paper_file_type(
+                resource.get("file_type")
+                or legacy_paper_file_type(resource.get("file_role"), resource.get("version_role"))
+            ) == "invalid_file":
+                raise ValueError("Invalid files cannot be selected as the default")
         self.conn.execute(
-            "UPDATE papers SET preferred_resource_id = ? WHERE paper_id = ?",
-            (int(resource_id) if resource_id is not None else None, str(paper_id)),
+            """
+            UPDATE papers
+            SET preferred_resource_id = ?, preferred_resource_manual = ?
+            WHERE paper_id = ?
+            """,
+            (
+                int(resource_id) if resource_id is not None else None,
+                1 if resource_id is not None else 0,
+                str(paper_id),
+            ),
         )
         self.conn.commit()
         return self.get_paper(str(paper_id))
+
+    @staticmethod
+    def _select_default_paper_resource(
+        paper: dict[str, Any],
+        resources: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        by_id = {int(resource.get("id") or 0): resource for resource in resources}
+        preferred_id = int(paper.get("preferred_resource_id") or 0)
+        preferred_is_manual = bool(int(paper.get("preferred_resource_manual") or 0))
+        preferred = by_id.get(preferred_id)
+        if (
+            preferred_is_manual
+            and preferred
+            and preferred.get("exists")
+            and normalize_paper_file_type(preferred.get("file_type")) != "invalid_file"
+        ):
+            return preferred
+        automatic = [
+            resource
+            for resource in resources
+            if resource.get("exists")
+            and normalize_paper_file_type(resource.get("file_type"))
+            in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
+        ]
+        automatic.sort(
+            key=lambda resource: (
+                AUTOMATIC_DEFAULT_FILE_TYPE_RANK.get(
+                    normalize_paper_file_type(resource.get("file_type")),
+                    0,
+                ),
+                int(resource.get("version_number") or 0),
+                str(resource.get("version_date") or ""),
+                str(resource.get("created_at") or ""),
+                int(resource.get("id") or 0),
+            ),
+            reverse=True,
+        )
+        return automatic[0] if automatic else None
+
+    def resolve_default_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
+        paper = self.get_paper(str(paper_id))
+        if not paper:
+            return None
+        resources = self.list_paper_resources(str(paper_id))
+        return self._select_default_paper_resource(paper, resources)
 
     def resolve_primary_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
         paper = self.get_paper(str(paper_id))
@@ -2696,6 +3296,8 @@ class Storage:
             return preferred
         primary = by_id.get(int(paper.get("primary_resource_id") or 0))
         role_rank = {
+            "corrected_published_version": 600,
+            "corrected_version": 600,
             "version_of_record": 500,
             "first_published": 400,
             "accepted_manuscript": 300,

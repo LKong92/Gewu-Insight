@@ -1,99 +1,62 @@
 # PROJECT_STATE.md
+
 ## Current handoff
+
 - Repo: `/Users/lingyuan/PaperMonitor-20260516`
 - Product/launcher: `Gewu Insight`（格物洞见）, `Gewu Insight.app`
-- Main UI/API file: `paper_monitor/ui_server.py`
-- SQLite is the source of truth: `data/paper_monitor.sqlite`
-- Current worktree includes the new Author Monitor; unrelated local journal configuration and generated reports may also be present.
+- Formal branch: `main`; GitHub product remote is `origin/main`.
+- Main UI/API: `paper_monitor/ui_server.py`; native shell: `scripts/PaperMonitorApp.m`.
+- SQLite is the only source of truth: `data/paper_monitor.sqlite`; JSON is export/diagnostic only.
+- Product code, tests, docs, and required app artifacts stay on `main`. Benchmark code, data, instrumentation, results, seals, and reports stay in the isolated local benchmark worktree and must never be pushed.
 
-## Completed work
+## Current product model
 
-1. Author Monitor
-   - Added a fifth top-level `Author Monitor` view with no calendar.
-   - Uses compact title/authors/citation/date cards with click/arrow-key selection; ordinary scrolling never changes selection. The narrower Library-style Paper Details and 26px animated bottom status bar align with Library/My Publications.
-   - Authors are selected through existing Google Scholar profile matching and persisted by Scholar user ID; full-profile paging is no longer capped at 500 papers.
-   - Scholar rows are saved immediately, then a resumable, rate-limited background stage resolves DOI/arXiv identifiers and abstracts with visible progress; unresolved rows cool down for seven days.
-   - Initial profile import is a read baseline; later recent-profile checks create unread badges.
-   - Automatic checks run once daily after 10:00 local time, stagger requests, and apply a six-hour cooldown after Scholar blocking.
-   - Deleting a monitored author removes only monitor associations and never deletes shared papers, PDFs, or Library items.
+- Library, Shortcut, Space, My Publications, Journal Monitor, Subject Monitor, and Author Monitor share canonical paper identities and stable Gewu Keys.
+- Paper Files is one flat peer list. File type, annotation state, and file source are independent normalized properties.
+- Supported file types are Preprint, Accepted manuscript, Published version, Corrected published version, Correction notice, Supplementary material, Peer review file, Other, Unknown, and Invalid file.
+- Automatic Default priority is corrected published > published > accepted manuscript > preprint. Any existing valid file can be chosen manually; a manual Default is sticky until Auto is selected.
+- Exact SHA-256 duplicates are reused. Clean and annotated peers may coexist even when their content fingerprints match.
+- Invalid or unreadable PDFs are rejected at ingress. Migrated invalid audit records remain visible but cannot become Default.
+- Physical primary paths remain a filesystem-compatibility detail; choosing Default does not move, rename, or rewrite a file.
 
-2. Nature-family PDF download reliability
-   - Fixed false PDF detection where Springer/Nature “Peer Review File” could be treated as the main article PDF.
-   - Added PDF magic-header validation and clearer partial-download messages.
-   - Corrected the affected SQLite download status for a previously false-positive Nature paper.
+## Provenance and identity
 
-3. Native macOS app behavior
-   - Replaced Safari-tab launch behavior with a native macOS wrapper.
-   - `.app` now opens a real app window and keeps its Dock icon.
-   - Backup zip before this work: `backups/PaperMonitor-20260516-backup-before-native-window-20260516-183542.zip`
+- Schema version is 14.
+- `paper_source_observations` is the normalized paper-level provenance authority with `(paper_id, source_kind, source_name, source_key)` uniqueness, first/last seen timestamps, and `ON DELETE CASCADE`.
+- `papers.source_count` and `raw_json._paper_monitor_sources` are maintained compatibility projections and cannot shrink during bibliographic refresh.
+- Existing provenance is backfilled only from provable paper source fields and Journal/Subject/Author relationships.
+- `paper_identity_conflicts` quarantines major DOI/title/author/venue contradictions instead of merging unrelated works. Repeated evidence is idempotent and conflict rows cascade with their paper.
+- Paper merge and canonical-ID replacement migrate source observations before deleting the superseded paper.
 
-4. Calendar/report loading correctness
-   - Fixed stale async report responses overwriting the currently selected date.
-   - Local report loading is now decoupled from background fetching.
-   - Users can browse already-loaded dates while another date is fetching.
-   - Calendar updates after background fetch completion.
+## Ingestion and file safety
 
-5. Fetch progress UI
-   - Calendar cells now show only a green pulsing dot while fetching, not the word “Fetching”.
-   - Right-side report pane shows live fetch progress:
-     “Fetching papers for this date in the background. You can keep browsing other dates.”
-   - Progress is percentage by completed journals, e.g. `1 / 4 journals completed`.
+- Journal, Subject, Author, My Publications, and inventory ingestion all honor identity-conflict rejection before writing relationships.
+- Publisher downloads classify the file actually returned. Correction notices stay peer files and never become automatic Default; First Release/reference-style publisher files map to Accepted manuscript.
+- Metadata-only PDF URLs do not create local file records.
+- Structural validation rejects zero-page, truncated, unreadable, and password-locked PDFs before registration or replacement.
+- Subject Monitor rejects Zenodo at ingestion and cached display and has no Zenodo visibility control.
 
-6. Report UI improvements
-   - Journal Settings add/remove now refreshes UI state immediately.
-   - Journal Settings only removes a journal from the explicit `Remove` button.
-   - Journal add supports OpenAlex lookup for missing ISSN and remembers validated journals in history.
-   - Field Filter is multi-select across `Physics`, `Materials`, `Chemistry`, `All Fields`, and `Other Fields`.
-   - Each report/library item shows first three and last three authors when metadata has authors.
-   - Journal names in paper meta rows are bold.
-   - Report view now uses horizontal journal tabs with journal logos where available.
-   - Report items can show first figures; the toolbar toggle shows/hides figures and the item layout adapts.
-   - No-match dates get a red diagonal mark on the calendar cell.
-   - Report item `Open` now opens inside the app via a local proxied internal page with a `Back` button, instead of launching Safari.
-   - Date switching is kept responsive by limiting background journal fetches to one date at a time.
-   - Report figure hydration is queued with low concurrency so publisher image lookups do not flood the local UI server.
-   - The internal publisher page has an `External Browser` button that opens the current article URL with the system default browser.
+## Native app behavior
 
-7. PDF download fixes
-   - Nature/Springer supplementary detection includes Peer Review File and Reporting Summary as supplements, while keeping them out of main-PDF candidates.
-   - Science PDF candidates are augmented from Crossref `link` metadata and Science PDF/EPDF variants.
-   - Physical Review candidates include direct APS `journals.aps.org/{journal}/pdf/{doi}` and `link.aps.org/pdf/{doi}` URLs.
-   - Publisher Cloudflare/anti-bot 403 failures are reported clearly and no longer waste retry time.
+- The launcher allows slow first-run migrations, automatically restarts an unexpectedly terminated local server, and uses a nonblocking startup-failure sheet.
+- If the server recovers after a failure sheet appears, the launcher rechecks health, dismisses the stale sheet, and reloads the app automatically.
+- Build/relaunch verification must always use the original `Gewu Insight.app`, preserve its Dock identity, verify `/api/health`, and confirm the running page contains the new code.
+- Only true blank title-bar regions can trigger window zoom/restore; app tabs and search controls do not.
 
-8. Library rewrite
-   - Library is now a filesystem-style workspace backed by SQLite folders and shortcut rows.
-   - Existing downloaded/analyzed papers are seeded into the Library root on first migration.
-   - Report items can be added to Library as shortcuts.
-   - Library uses Finder-style left-to-right columns, supports six-plus-level folders, drag/drop moving, folder rename, Finder-like keyboard navigation, adjustable Space-to-in-app PDF preview, PDF download from details, and a Zotero-like detail panel with BibTeX.
-   - Library context menus support rename/delete/copy/paste for folders and paper shortcuts; copied shortcuts still point at the same paper/PDF files.
-   - Library column widths are adjustable by dragging the divider between columns.
-   - Library detail panel now includes BibTeX/reference copy, Google Scholar lookup, citation metrics/histogram when metadata provides them, and a Nature-style reference box with volume/page fallbacks.
-   - Report and Library keep their top controls fixed while only the content panes scroll.
-   - Library now has `unsorted` and `Recycle` special folders, recoverable deletes, keyboard copy/paste/delete, and a Details-side `Remove from Library` action; deleting the last organized shortcut preserves the paper in `unsorted`, then `Recycle`.
-   - BibTeX and Nature-reference copy buttons reset each other; Nature-reference copy preserves rich text formatting for Word/PPT, arXiv labels include the arXiv identifier, and Library keyboard/delete/drag/color/path/Quick Look controls are closer to Finder.
-   - Library top controls now use `Library` and `My Publications` tabs; `My Publications` stores user publications, star/highlight state, and saved author name in SQLite while reusing the shared paper metadata/PDF details pane.
-   - Library/My Publications details now include abstracts and first-figure previews; My Publications uses internal Crossref author/title/DOI lookup, with a horizontally scrollable/resizable publication table.
-   - The former `All Literatures` Library tab and its API were removed; My Publications ID cells use italic journal and bold volume formatting.
-   - App text selection/copy-paste now works better via selectable UI text, JS Ctrl/Cmd copy fallback, and a native macOS Edit menu in the wrapper.
-   - My Publications rows can be deleted, Details bolds the saved/input author name including initial variants, and Library has working drag-assigned folder shortcut tabs plus three reserved independent spaces.
-   - Clicking `Library` from a shortcut tab returns to the real Library root; shortcut/space tabs have compact fixed widths, and `My name` Enter saves without auto-searching.
-   - Shortcut/Space tabs use more available width; green Spaces can be renamed and can add DOI-based literature pointers.
-   - Native launcher opens the app window at the current screen's full visible size by default.
-   - Space rename/DOI inputs keep focus instead of being stolen by the library keyboard shell.
-   - Green Spaces are independent Library-style filesystem roots; DOI adds papers into the active Space root as normal shortcuts.
-   - Inventory importer has CLI/API/tests for `library_inventory.json`; UI can now import a user-selected folder via dry-run/import, preserving folder paths and filename shortcut labels.
-   - Native `.app` is allowed to load the local HTTP UI at `127.0.0.1` via App Transport Security local-networking permission.
+## User Guide
 
-## Verification already done
+- `paper_monitor/user_guide.html`, generated `paper_monitor/user_guide.tex`, and `paper_monitor/Gewu_Insight_User_Guide.pdf` describe the same flat Paper Files and Default/Auto model.
+- The fixed-layout guide currently has 73 visually checked pages with consistent numbering and section transitions.
 
-- Python compile and embedded JavaScript syntax checks pass.
-- Full suite passes: 186 tests.
-- Author Monitor was visually checked with an isolated SQLite database, including empty state, populated three-column layout, unread badges, and click-to-read behavior.
-- `Gewu Insight.app` rebuilt, signed, restarted, and `/api/health` plus `/api/author-monitor?summary=1` verified.
+## Verification
+
+- Python compile check passes.
+- Full product suite passes: 611 tests.
+- A read-only backup of the formal database migrates to schema 14 with zero foreign-key errors.
+- The formal App was rebuilt and reopened from the original path. A controlled server `SIGTERM` recovered automatically without a residual failure sheet; repeated local health probes passed and the live page exposed the new Paper Files controls.
 
 ## Current caveats
 
-- Field classification is keyword/journal-hint based, not a learned classifier. Some interdisciplinary papers may appear in multiple fields or the closest heuristic field.
-- Fetch progress percentage is by journal completion, not elapsed time or individual paper count.
-- New-journal auto-detection depends on network access to OpenAlex; if unavailable, users must provide ISSNs manually.
-- Article figure, journal logo enrichment, and publisher PDF downloads depend on publisher page/network availability; Science.org and APS may still require browser/manual PDF attachment.
+- Schema 14's first formal launch can take roughly 20 seconds while provenance and file metadata are backfilled; the native startup timeout remains 120 seconds.
+- Legacy resources with insufficient evidence remain `Unknown`; migration does not invent a Published version or source.
+- Publisher/network access remains dependent on remote availability and anti-bot limits; avoid overlapping broad refreshes.

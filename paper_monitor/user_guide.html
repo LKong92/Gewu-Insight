@@ -572,7 +572,7 @@
             <button class="topic-link" data-topic="identifiers">Edit DOI and arXiv Identifiers</button>
             <button class="topic-link" data-topic="paper-files">Understand Paper Files</button>
             <button class="topic-link" data-topic="quick-look">Preview Files with Quick Look</button>
-            <button class="topic-link" data-topic="versions-current">Choose Versions and the Current File</button>
+            <button class="topic-link" data-topic="versions-current">Choose File Types and the Default File</button>
             <button class="topic-link" data-topic="attachments">Add and Classify Attachments</button>
             <button class="topic-link" data-topic="download-sync">Download and Sync Versions</button>
             <button class="topic-link" data-topic="drag-attach">Move a Standalone File into Paper Files</button>
@@ -772,7 +772,7 @@
             <div><strong>1. Source tabs</strong><span>Library, shortcuts, and independent Spaces.</span></div>
             <div><strong>2. Folder columns</strong><span>Move from broad folders to the selected item.</span></div>
             <div><strong>3. Item column</strong><span>Papers, files, and child folders in the current location.</span></div>
-            <div><strong>4. Paper Files</strong><span>The current PDF, versions, supplements, and attachments for one paper.</span></div>
+            <div><strong>4. Paper Files</strong><span>One flat list of resources with independent type, annotation, source, and Default status.</span></div>
             <div><strong>5. Details</strong><span>Metadata, identifiers, actions, citations, and folder membership.</span></div>
           </div>
 
@@ -820,7 +820,7 @@
           <div class="note"><span class="callout-title">Note</span>The right-side Paper Details area scrolls independently. A long author list or citation section does not move the Library columns.</div>
 
           <h2>Recognize stable and temporary state</h2>
-          <p>Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource role, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.</p>
+          <p>Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource properties, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.</p>
 
           <div class="important"><span class="callout-title">Keep the active context visible</span>Before moving, deleting, or attaching an item, confirm which pane has focus and which paper is shown in Paper Details. The same file-like name can represent a paper placement, a resource inside Paper Files, or a standalone imported file.</div>
 
@@ -860,7 +860,7 @@
             <div class="architecture-row four">
               <div class="architecture-node"><span class="sequence-label">Always</span><strong>Catalog record</strong><span>Title, authors, identifiers, source evidence, and a stable internal paper identity.</span></div>
               <div class="architecture-node"><span class="sequence-label">Always</span><strong>Library placement</strong><span>A relationship that makes the paper visible in the folder you selected.</span></div>
-              <div class="architecture-node"><span class="sequence-label">When file-backed</span><strong>File record</strong><span>Role, version, source, stored path, fingerprints, and current/preferred status when known.</span></div>
+              <div class="architecture-node"><span class="sequence-label">When file-backed</span><strong>File record</strong><span>Type, annotation state, source, stored path, fingerprints, and Default status when known.</span></div>
               <div class="architecture-node core"><span class="sequence-label">When file-backed</span><strong>Visible local file</strong><span>The actual PDF or attachment that Finder and Preview can open.</span></div>
             </div>
             <figcaption>A cataloged-only paper legitimately has the first two objects and no local file. A file-backed paper also has resource metadata and real bytes. These objects cooperate, but they are not interchangeable.</figcaption>
@@ -878,15 +878,15 @@
           <p>A cataloged-only paper may have no local file, and nothing is missing merely because Paper Files is empty. Continue with these steps after you import, download, or attach a file and the paper becomes file-backed.</p>
           <ol class="steps">
             <li><strong>Open the <span class="ui">Files</span> section.</strong> It starts collapsed in Paper Details so long file lists do not dominate the inspector.</li>
-            <li><strong>Classify the available PDF.</strong> Use its small role menu to choose Published Version, Accepted Manuscript, Preprint, or another accurate type. Do not infer the role from the filename alone.</li>
+            <li><strong>Classify the available file.</strong> Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.</li>
             <li><strong>Add related material if you have it.</strong> Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.</li>
-            <li><strong>Check the current file.</strong> <span class="ui">Open in Preview</span> and the Library preview use the resolved current PDF. Selecting <span class="ui">Use</span> changes preference without renaming the resource.</li>
+            <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Make Default</span> changes preference without renaming the resource.</li>
             <li><strong>Reveal one file in Finder.</strong> Choose <span class="ui">Show in Finder</span> and confirm the real managed file exists where the database expects it.</li>
           </ol>
 
           <div class="invariant-list">
             <div><strong>Cataloged and organized</strong><span>The shared paper record and Library placement are durable even when no local file has been added.</span></div>
-            <div><strong>File-backed</strong><span>After a file is added, its resource role and physical bytes can be inspected separately from paper identity and folder context.</span></div>
+            <div><strong>File-backed</strong><span>After a file is added, its independent file properties and physical bytes can be inspected separately from paper identity and folder context.</span></div>
           </div>
 
           <h2>Optional: verify shared identity</h2>
@@ -901,12 +901,12 @@
           </ul>
 
           <h2>Finish with a safe baseline</h2>
-          <p>Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is current, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.</p>
+          <p>Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.</p>
 
           <div class="invariant-list">
             <div><strong>Identity checked</strong><span>The title, authors, DOI, and arXiv evidence do not point to different works.</span></div>
             <div><strong>Placement understood</strong><span>The Library folder expresses personal organization, not a second scholarly identity.</span></div>
-            <div><strong>Resource classified when present</strong><span>If the paper is file-backed, the current PDF and any attachments have roles that describe what they actually are.</span></div>
+            <div><strong>Resource classified when present</strong><span>If the paper is file-backed, its files can have independent type, annotation, and source descriptions.</span></div>
             <div><strong>File visible when present</strong><span>If the paper is file-backed, the expected managed file opens from the app and can be revealed in Finder.</span></div>
           </div>
 
@@ -981,7 +981,7 @@
             <tr><th>Object</th><th>Meaning</th><th>Example</th></tr>
             <tr><td>Paper record</td><td>The shared scholarly identity and normalized metadata.</td><td>The work that later connects arXiv and a journal DOI.</td></tr>
             <tr><td>Placement or relation</td><td>Why and where the paper appears in your workspace.</td><td>A Library folder entry, a shortcut, a My Publications role, or an Author Monitor association.</td></tr>
-            <tr><td>Resource record</td><td>A described file or retrievable version belonging to the paper.</td><td>Preprint v2, Version of Record, supplement, slide deck, or data file.</td></tr>
+            <tr><td>Resource record</td><td>A described file or retrievable version belonging to the paper.</td><td>Preprint v2, published version, supplementary material, peer review file, or data file.</td></tr>
             <tr><td>Physical file</td><td>The bytes stored at a real path on disk.</td><td>A PDF under <code>data/Library</code> or an associated attachment.</td></tr>
           </table>
 
@@ -1016,16 +1016,16 @@
             <div class="architecture-row four">
               <div class="architecture-node"><strong>Identity and metadata</strong><span>Shared papers, external identifiers, normalized title and authors, dates, fields, and Gewu Key.</span></div>
               <div class="architecture-node"><strong>Relationships and context</strong><span>Library placements, folder tree, Spaces, My Publications, and Monitor associations.</span></div>
-              <div class="architecture-node"><strong>Resource registry</strong><span>Roles, versions, paths, source URLs, hashes, annotation state, current and preferred resources.</span></div>
+              <div class="architecture-node"><strong>Resource registry</strong><span>File types, paths, source evidence, hashes, annotation state, and default preferences.</span></div>
               <div class="architecture-node"><strong>Operational memory</strong><span>Fetch runs, import batches, source tasks, reads, settings, failures, retries, and completion timestamps.</span></div>
             </div>
             <figcaption>Table names and schema versions can evolve; these four responsibilities are the stable user-level model.</figcaption>
           </figure>
 
-          <p>The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what role and version they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.</p>
+          <p>The database does not store the PDF bytes themselves. It stores enough structured information to understand the files: which paper they belong to, what file type they represent, where they are, where they came from, whether they are annotated, and which one should be used by default.</p>
 
           <h2>Why a folder scan is not an equivalent database</h2>
-          <p>Finder can show that <code>paper.pdf</code> exists. It cannot reliably say whether it is a Version of Record or a preprint, whether the same work is also in My Publications, whether a Monitor refresh completed with zero results, which external source produced the metadata, or which attachment should survive deletion of one shortcut. Those facts live in SQLite.</p>
+          <p>Finder can show that <code>paper.pdf</code> exists. It cannot reliably say whether it is a published version or a preprint, whether it is annotated, where it came from, whether the same work is also in My Publications, or which file is the manual default. Those facts live in SQLite.</p>
 
           <h2>Transactions, relationships, and WAL</h2>
           <table class="plain-table">
@@ -1063,22 +1063,22 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#privacy">Local Data and Privacy</a><a href="#storage-reference">Storage Reference</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="visible-research-files" data-group="Understand the System" data-title="Visible Research Files" data-keywords="visible research files managed filesystem Finder Preview current PDF Associated Files versions supplements attachments stored path source path hash fingerprint annotated">
+        <article class="help-topic guide-topic" id="visible-research-files" data-group="Understand the System" data-title="Visible Research Files" data-keywords="visible research files managed filesystem Finder Preview default PDF Associated Files resources attachments stored path source path hash fingerprint annotated">
           <p class="topic-kicker">Understand the System</p>
           <h1>Understand Visible Research Files</h1>
           <p class="lead">Your PDFs and attachments remain real local files. Gewu Insight adds a resource model around them so several versions and related materials can belong to one paper without hiding them inside an opaque cloud library.</p>
 
           <h2>One paper, one file bundle</h2>
           <figure class="architecture-map" aria-label="Current paper file and associated file groups">
-            <div class="architecture-node core"><strong>Persistent Paper Object</strong><span>Owns the resource relationships and decides which usable file is current.</span></div>
+            <div class="architecture-node core"><strong>Persistent Paper Object</strong><span>Owns the resource relationships and decides which usable file is the default.</span></div>
             <div class="architecture-arrow" aria-hidden="true">↓</div>
             <div class="architecture-row two">
-              <div class="architecture-node"><strong>Current file</strong><span>The best available or explicitly preferred PDF used by Open in Preview and Library preview.</span></div>
+              <div class="architecture-node"><strong>Default file</strong><span>The automatically ranked or explicitly preferred valid file used by Open in Preview and Library preview.</span></div>
               <div class="architecture-node"><strong>Associated Files</strong><span>Earlier versions, supplements, annotated copies, presentations, notes, data, code, images, and other attachments.</span></div>
             </div>
             <div class="architecture-arrow" aria-hidden="true">↓</div>
             <div class="architecture-row">
-              <div class="architecture-node"><strong>Versions</strong><span>Version of Record, First Published, Accepted Manuscript, and arXiv preprint versions.</span></div>
+              <div class="architecture-node"><strong>Paper Files</strong><span>Flat peer records with independent type, annotation state, and source.</span></div>
               <div class="architecture-node"><strong>Supplements</strong><span>Publisher or author-provided supporting files.</span></div>
               <div class="architecture-node"><strong>Files and figures</strong><span>User material such as notes, slides, data, code, and extracted or attached images.</span></div>
             </div>
@@ -1096,12 +1096,12 @@
 
           <p>Folder Loader is a migration-oriented workflow. It imports a visible collection as a collection instead of asking you to classify every incoming file as an attachment before identity resolution. The original source path and the managed result remain conceptually distinct.</p>
 
-          <h2>How the current file is resolved</h2>
-          <p>An explicit preferred publication-version PDF takes precedence when it still exists. Otherwise, usable publication versions are ranked so a Version of Record normally comes before First Published, Accepted Manuscript, preprint, and an unclassified publication PDF. A higher-ranked download should become current while the previous file moves into the associated bundle; it should not overwrite the old bytes in place.</p>
+          <h2>How the default file is resolved</h2>
+          <p>An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.</p>
 
-          <p>Supplements and other attachments are never eligible to become current, even when the attachment itself is a PDF. This separates “a file that belongs to the paper” from “a publication version that can represent the paper in Preview.”</p>
+          <p>Supplementary Material, Peer Review File, Other, Unknown, and Invalid File do not become the automatic default. A valid one can still be selected manually; Invalid File remains visible only for audit and repair.</p>
 
-          <div class="note"><span class="callout-title">Published-version labels</span><strong>First Published</strong> means the publisher's initially released file; <strong>Version of Record</strong> means the current formal record. The compact UI can present either under the broader label <strong>Published Version</strong>, while the resource registry retains the more specific role when it is known.</div>
+          <div class="note"><span class="callout-title">Published files</span>The user-facing type is <strong>Published version</strong>. A later formal correction can be classified as <strong>Corrected published version</strong>; the correction notice itself remains a separate peer.</div>
 
           <h2>Fingerprints and annotations</h2>
           <p>When a PDF is imported, attached, or downloaded, its exact SHA-256, content-oriented fingerprint, annotation count, and annotated state are computed as the resource is registered. They do not depend on a later refresh. Exact SHA-256 answers “are these bytes identical?” Adding a highlight or note normally changes those bytes. The content fingerprint is designed to recognize the same underlying document while discounting annotation-only changes, allowing clean and annotated copies to be related without treating them as blindly interchangeable.</p>
@@ -1111,11 +1111,11 @@
           <p>An exact duplicate can be reused instead of stored twice. A clean PDF and an annotated copy may have different exact hashes but the same content fingerprint; both can be retained when the annotation state is meaningful.</p>
 
           <h2>Why Finder and the UI do not look identical</h2>
-          <p>The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore appear as a current file in the visible topic folder while its previous versions and attachments live under a mirrored Associated Files path. Paper Files deliberately groups those resources by role instead of showing every physical directory level.</p>
+          <p>The filesystem must expose practical paths and folders; the UI must expose the meaning of one paper bundle. A Library paper can therefore retain a compatibility primary file in the visible topic folder while related files live under a mirrored Associated Files path. Paper Files deliberately presents all resource records as flat peers instead of mirroring those physical directories.</p>
 
           <div class="important"><span class="callout-title">Important</span>Do not manually move or rename managed resources in Finder. The bytes may still exist, but the saved path and live workspace can disagree. Use an app-supported move, repair, or restore; do not assume a restart will rediscover an arbitrary manual move.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#versions-current">Choose File Types and the Default File</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="personal-research-workspace" data-group="Understand the System" data-title="The Personal Research Workspace" data-keywords="personal research workspace visible workspace UI projection Library Spaces My Publications Journal Monitor Subject Monitor Author Monitor shared graph relations shortcuts">
@@ -1166,7 +1166,7 @@
             <div class="architecture-row four">
               <div class="architecture-node"><strong>1. Acquire</strong><span>Journal, Subject, Author, Folder Loader, or a direct identifier introduces a candidate.</span></div>
               <div class="architecture-node"><strong>2. Identify</strong><span>DOI, arXiv, title, authors, source evidence, and existing records are reconciled.</span></div>
-              <div class="architecture-node"><strong>3. Resolve</strong><span>Metadata, available versions, file roles, paths, hashes, and a current resource are established.</span></div>
+              <div class="architecture-node"><strong>3. Resolve</strong><span>Metadata, file types, annotation states, sources, paths, hashes, and a default preference are established.</span></div>
               <div class="architecture-node"><strong>4. Remember</strong><span>Placements, authorship, reading state, provenance, completion, and failures persist.</span></div>
             </div>
             <div class="architecture-arrow" aria-hidden="true">↺ saved context informs the next acquisition cycle</div>
@@ -1177,10 +1177,10 @@
           <ol class="steps">
             <li><strong>Acquire an early work.</strong> Subject Monitor finds an arXiv preprint. Its source and discovery context are stored.</li>
             <li><strong>Identify the work.</strong> The title, authors, and arXiv identifier connect it to one shared paper identity.</li>
-            <li><strong>Resolve its first resource.</strong> A preprint PDF becomes current because no higher-priority version is available.</li>
+            <li><strong>Resolve its first resource.</strong> A preprint PDF becomes the automatic default because no higher-priority file is available.</li>
             <li><strong>Remember your context.</strong> You add it to a Library folder, read it, and attach notes or data.</li>
-            <li><strong>Acquire new evidence later.</strong> Journal Monitor or a metadata refresh finds the published DOI and Version of Record.</li>
-            <li><strong>Resolve without erasing.</strong> The publication PDF becomes current; the preprint and its provenance remain in Versions.</li>
+            <li><strong>Acquire new evidence later.</strong> Journal Monitor or a metadata refresh finds the published DOI and a published file.</li>
+            <li><strong>Resolve without erasing.</strong> The published file becomes the automatic default unless a manual choice is sticky; the preprint and its provenance remain peer records.</li>
           </ol>
 
           <h2>Operational state is part of scientific memory</h2>
@@ -1226,7 +1226,7 @@
             <tr><td>Remove a shortcut</td><td>That fast entry point.</td><td>The underlying Library folder and its papers.</td></tr>
             <tr><td>Copy a paper to another folder</td><td>Add another placement.</td><td>One shared paper identity and resource bundle.</td></tr>
             <tr><td>Move a paper in the app</td><td>Change its managed placement and corresponding stored paths.</td><td>Gewu Key, metadata, versions, and associations.</td></tr>
-            <tr><td>Use another version</td><td>Change the preferred/current resource.</td><td>The file's original name and the other saved versions.</td></tr>
+            <tr><td>Make another file default</td><td>Change the reading preference without physical promotion.</td><td>The file's original name, location, and all other saved resources.</td></tr>
             <tr><td>Delete an associated file</td><td>That resource relationship and its managed file, subject to confirmation.</td><td>The paper identity and unrelated resources.</td></tr>
           </table>
 
@@ -1295,7 +1295,7 @@
           <ol class="steps">
             <li><strong>Select a paper in the main item column.</strong> Paper Files appears to its right. No Paper Files card is highlighted yet.</li>
             <li><strong>Press <kbd>→</kbd>.</strong> Focus enters Paper Files and the active card gains a light-blue selection. The main paper remains visible with a quieter selection color.</li>
-            <li><strong>Press <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> Move among the current file, versions, supplements, and attachments.</li>
+            <li><strong>Press <kbd>↑</kbd> or <kbd>↓</kbd>.</strong> Move through the flat Paper Files list.</li>
             <li><strong>Press <kbd>←</kbd>.</strong> Focus returns to the main paper. Paper Files no longer shows an active card.</li>
           </ol>
 
@@ -1432,7 +1432,7 @@
           </table>
 
           <h2>Files summary</h2>
-          <p>The <span class="ui">Files · n</span> row is collapsed by default. Its right side identifies the current file type. Expand it to add, classify, show, use, sync, or delete related files.</p>
+          <p>The <span class="ui">Files · n</span> row is collapsed by default. Its right side identifies the default file type. Expand it to add, classify, show, choose a default, sync, or delete related files.</p>
 
           <h2>Metadata rows</h2>
           <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable, human-visible storage handle for a cataloged work record. It is not a DOI, arXiv identifier, or the database's relational primary key.</p>
@@ -1485,40 +1485,33 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Citation Settings</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="current versions supplements attachments files panel groups inspector">
+        <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector">
           <p class="topic-kicker">Library</p>
           <h1>Understand Paper Files</h1>
           <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
 
-          <h2>Two views of the same bundle</h2>
-          <p>The dedicated Paper Files column uses the headings <span class="ui">Primary file</span>, <span class="ui">Other versions</span>, <span class="ui">Supplements</span>, and <span class="ui">Attachments</span>. The compact Files panel inside Paper Details shows the same records with shorter headings:</p>
-          <table class="plain-table">
-            <tr><th>Paper Files column</th><th>Paper Details panel</th><th>Contents</th></tr>
-            <tr><td><span class="ui">Primary file</span></td><td><span class="ui">CURRENT</span></td><td>The PDF used by Open in Preview and normal Library preview.</td></tr>
-            <tr><td><span class="ui">Other versions</span></td><td><span class="ui">VERSIONS</span></td><td>Other publication, accepted-manuscript, preprint, or imported PDF versions.</td></tr>
-            <tr><td><span class="ui">Supplements</span></td><td><span class="ui">SUPPLEMENTS</span></td><td>Supporting information associated with the work.</td></tr>
-            <tr><td><span class="ui">Attachments</span></td><td><span class="ui">FILES</span></td><td>Notes, images, presentations, data, code, and other attachments.</td></tr>
-          </table>
+          <h2>Two views of the same flat bundle</h2>
+          <p>The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each row carries three independent facts: <span class="ui">file type</span>, <span class="ui">annotation state</span>, and <span class="ui">source</span>. A small <span class="ui">Default</span> marker identifies the file selected for the paper.</p>
 
           <h2>Select, open, or act on a file</h2>
           <ul>
             <li>Single-click a card to select it.</li>
             <li>Double-click a card to open it.</li>
             <li>Press <kbd>Space</kbd> to use Quick Look.</li>
-            <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, current-file controls, type controls, add/sync actions, or deletion where allowed.</li>
-            <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected non-current resource after confirmation. This does not delete the parent paper or its other files.</li>
+            <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, default-file controls, type controls, add/sync actions, or deletion where allowed.</li>
+            <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.</li>
           </ul>
 
-          <p>The current primary file is protected from direct deletion. Choose another eligible publication version as current first, then delete the old non-current resource if it is no longer needed.</p>
+          <p>The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing <span class="ui">Make Default</span> changes the preferred row without moving, renaming, or rewriting that file.</p>
 
           <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form.</p>
 
           <h2>Understand a Missing File row</h2>
           <p><span class="ui">Missing File</span> means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper's live canonical file.</p>
 
-          <p>A missing attachment is not another copy of the current PDF merely because both rows have a similar name. Check <span class="ui">Show in Finder</span>, the paper's Associated Files bundle, and Recycle before deleting or importing anything. The current resource and explicitly typed attachments remain visible even when their paths need repair.</p>
+          <p>A missing attachment is not another copy of the default PDF merely because both rows have a similar name. Check <span class="ui">Show in Finder</span>, the paper's Associated Files bundle, and Recycle before deleting or importing anything. The default resource and explicitly typed attachments remain visible even when their paths need repair.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#versions-current">Choose Versions and the Current File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#versions-current">Choose File Types and the Default File</a><a href="#attachments">Add and Classify Attachments</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="quick-look" data-group="Papers and Files" data-title="Preview Files with Quick Look" data-keywords="pdf preview quick look space macOS native built-in hybrid presentation media image thumbnails page count range streaming cache large file performance">
@@ -1548,45 +1541,44 @@
             <tr><td><span class="ui">Open in Preview</span></td><td>Full macOS Preview tools, annotation, export, printing, and a separate reading window.</td></tr>
           </table>
 
-          <div class="note"><span class="callout-title">Note</span>Previewing is read-only from Gewu Insight's perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change the PDF, its role, its current-file status, or the SQLite paper record.</div>
+          <div class="note"><span class="callout-title">Note</span>Previewing is read-only from Gewu Insight's perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change file type, annotation state, source, Default status, or the SQLite paper record.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look-settings">Quick Look Settings</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a><a href="#troubleshooting">Troubleshooting</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="versions-current" data-group="Papers and Files" data-title="Choose Versions and the Current File" data-keywords="use auto current default preferred eligibility publication version published accepted manuscript preprint supplement other annotated classify">
+        <article class="help-topic guide-topic" id="versions-current" data-group="Papers and Files" data-title="Choose File Types and the Default File" data-keywords="make default auto preferred eligibility corrected published accepted manuscript preprint supplement annotation source classify">
           <p class="topic-kicker">Library</p>
-          <h1>Choose Versions and the Current File</h1>
-          <p class="lead">The current file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
+          <h1>Choose File Types and the Default File</h1>
+          <p class="lead">The default file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
 
           <h2>Automatic selection</h2>
-          <p>The automatic order favors a published version, then an accepted manuscript, then a preprint, then an imported or unclassified PDF. Within a role, a later recognized version normally wins. Availability and file validity are checked before a file becomes current.</p>
+          <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, Unknown, and Invalid file never become the automatic default.</p>
 
-          <h2>Only publication versions can be current</h2>
-          <p>Only publication-version PDFs are eligible for automatic or manual current selection. Published versions, accepted manuscripts, preprints, and an imported PDF classified as a paper version can represent the paper. Supplements, notes, images, data, code, presentations, and Other File attachments cannot become current—even if one of those attachments uses the PDF format.</p>
-
-          <p>If a Version of Record is already current, a preprint or accepted manuscript that arrives later is preserved under Other versions and does not automatically displace it. Manual preference remains available between eligible publication versions.</p>
+          <h2>Automatic and manual eligibility</h2>
+          <p>Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as <span class="ui">Invalid file</span>. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose <span class="ui">Auto</span>. Newly arriving files remain peer rows and do not erase or silently reclassify older files.</p>
 
           <h2>Choose a file manually</h2>
           <ol class="steps">
             <li><strong>Enter Paper Files or expand <span class="ui">Files</span>.</strong></li>
-            <li><strong>Select a PDF under <span class="ui">VERSIONS</span>.</strong></li>
-            <li><strong>Choose <span class="ui">Use</span> or <span class="ui">Use as Current</span>.</strong></li>
+            <li><strong>Select the file you want.</strong></li>
+            <li><strong>Choose <span class="ui">Make Default</span>.</strong></li>
           </ol>
-          <p class="result">The selected PDF becomes current. Its existing filename is preserved.</p>
+          <p class="result">The selected file becomes the manual default. Its existing filename and physical location are preserved.</p>
 
           <h2>Return to automatic selection</h2>
-          <p>Control-click a Paper Files card and choose <span class="ui">Use Automatic Selection</span>. Gewu Insight evaluates the known roles again.</p>
+          <p>Control-click a Paper Files card and choose <span class="ui">Auto</span>. Gewu Insight evaluates the eligible file types again.</p>
 
-          <h2>Classify PDF versions</h2>
-          <p>Use the small type control beside a PDF label. Available labels include:</p>
+          <h2>Classify files without collapsing annotation state</h2>
+          <p>Use the three small controls on a row. File type uses exactly these labels:</p>
           <ul>
-            <li><span class="ui">Published Version</span> and <span class="ui">Published Version · Annotated</span></li>
-            <li><span class="ui">Accepted Manuscript</span> and <span class="ui">Accepted Manuscript · Annotated</span></li>
-            <li><span class="ui">Preprint</span> and <span class="ui">Preprint · Annotated</span></li>
-            <li><span class="ui">Imported PDF</span> and <span class="ui">Imported PDF · Annotated</span></li>
+            <li><span class="ui">Preprint</span>, <span class="ui">Accepted manuscript</span>, <span class="ui">Published version</span>, and <span class="ui">Corrected published version</span></li>
+            <li><span class="ui">Correction notice</span>, <span class="ui">Supplementary material</span>, and <span class="ui">Peer review file</span></li>
+            <li><span class="ui">Other</span>, <span class="ui">Unknown</span>, and <span class="ui">Invalid file</span></li>
           </ul>
 
-          <div class="note"><span class="callout-title">Note</span>Changing a type or choosing Use changes database metadata and preference. It does not rename the file merely to match the label. A current or preferred publication version must be replaced or returned to automatic selection before it can be reclassified as an attachment.</div>
+          <p>Annotation state is selected independently as <span class="ui">Annotated</span>, <span class="ui">Unannotated</span>, or <span class="ui">Unknown</span>. Source is independently recorded as <span class="ui">Publisher</span>, <span class="ui">Preprint server</span>, <span class="ui">Institutional repository</span>, <span class="ui">User import</span>, <span class="ui">Other</span>, or <span class="ui">Unknown</span>. Manual type and annotation choices survive later fingerprint rescans.</p>
+
+          <div class="note"><span class="callout-title">Note</span>Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#attachments">Add and Classify Attachments</a></div></div>
         </article>
@@ -1594,23 +1586,23 @@
         <article class="help-topic guide-topic" id="attachments" data-group="Papers and Files" data-title="Add and Classify Attachments" data-keywords="add file image supplement note presentation data code other PDF type dropdown">
           <p class="topic-kicker">Library</p>
           <h1>Add and Classify Attachments</h1>
-          <p class="lead">Import first, classify afterward. This keeps the add operation simple and lets you decide the role after seeing the file in context.</p>
+          <p class="lead">Import first, classify afterward. This keeps the add operation simple and lets you set type, annotation state, and source after seeing the file in context.</p>
 
           <h2>Add a file from Paper Details</h2>
           <ol class="steps">
             <li><strong>Expand <span class="ui">Files</span>.</strong></li>
             <li><strong>Choose <span class="ui">Add File</span>.</strong> Select one or more local files.</li>
-            <li><strong>Wait for the new row.</strong> A new item begins as an unclassified or Other File attachment.</li>
-            <li><strong>Select its compact type control.</strong> Choose the correct PDF role or attachment type.</li>
+            <li><strong>Wait for the new row.</strong> A new item begins as <span class="ui">Unknown</span> unless its source proves a more specific type.</li>
+            <li><strong>Select its compact controls.</strong> Choose the file type, annotation state, and source independently.</li>
           </ol>
 
           <h2>Attachment types</h2>
-          <p>Non-primary attachments can be labeled <span class="ui">Image</span>, <span class="ui">Supplement</span>, <span class="ui">Note</span>, <span class="ui">Presentation</span>, <span class="ui">Data</span>, <span class="ui">Code</span>, or <span class="ui">Other File</span>. PDF roles use the publication-version labels described in the previous topic.</p>
+          <p>The same ten file types apply to every row. File extension and MIME type remain separate technical facts, so an image, note, dataset, or code archive can use <span class="ui">Other</span> without being mistaken for a PDF version.</p>
 
           <h2>Add by drag and drop</h2>
           <p>Drag a Finder file over the expanded Paper Files area, wait for the drop target to respond, then release. The file is copied into the selected paper’s associated bundle and appears in Paper Files.</p>
 
-          <div class="important"><span class="callout-title">Important</span>The current PDF cannot be deleted or reclassified as an attachment. Choose another eligible publication-version PDF as current first, or return to automatic selection. A PDF supplement remains a supplement and cannot represent the paper as current.</div>
+          <div class="important"><span class="callout-title">Important</span>Invalid or unreadable PDFs are rejected at file ingress. Existing migrated records that can be proven invalid remain visible as <span class="ui">Invalid file</span> for audit and repair, but cannot become a default.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#drag-attach">Move a Standalone File into Paper Files</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
@@ -1624,8 +1616,8 @@
           <ol class="steps">
             <li><strong>Verify DOI and arXiv.</strong> Make sure the identifiers belong to the selected work.</li>
             <li><strong>Choose <span class="ui">Download</span> at the top of Paper Details.</strong> Gewu Insight first tries the best available published file, then supported alternatives.</li>
-            <li><strong>Wait for the status message.</strong> The existing current file is preserved if the incoming file is a different version.</li>
-            <li><strong>Inspect Paper Files.</strong> The best version becomes current according to manual or automatic selection; older versions appear under <span class="ui">VERSIONS</span>.</li>
+            <li><strong>Wait for the status message.</strong> Existing files are preserved if the incoming file is a different version; a manual default stays selected.</li>
+            <li><strong>Inspect Paper Files.</strong> Every preserved file appears in the same flat list. Automatic ranking changes only the Default marker; a manual default remains unchanged.</li>
           </ol>
 
           <h2>Download arXiv files</h2>
@@ -1641,14 +1633,14 @@
           <h2>Validation before replacement</h2>
           <p>A response is not accepted merely because it begins with <code>%PDF-</code>. Structural PDF validation rejects empty files, HTML responses, truncated downloads, missing valid endings, and content that cannot be parsed as a PDF. A download is written to a temporary file and replaces the destination only after validation succeeds. If the request or stream fails, an existing valid file remains untouched and a partial file is not registered as a resource.</p>
 
-          <h2>Roles follow the file that actually arrived</h2>
-          <p>A publisher download is classified from the file and source actually returned. A Version of Record remains the automatic current file when a preprint or accepted manuscript arrives later. A publisher reference or accepted manuscript is preserved as an accepted manuscript rather than promoted merely because the paper also has a DOI.</p>
+          <h2>Classification follows the file that actually arrived</h2>
+          <p>A publisher download is classified from the file and source actually returned. A corrected published version outranks a published version automatically; a publisher reference, First Release, or accepted preview remains an accepted manuscript. A correction notice remains a separate peer and never becomes automatic merely because it came from a publisher.</p>
 
-          <p>If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved role itself is wrong.</p>
+          <p>If a download is skipped because the local bytes already exist, that skipped operation does not relabel the existing file from metadata or a newly discovered URL. Correct the file type explicitly if the saved classification itself is wrong.</p>
 
           <div class="note"><span class="callout-title">Note</span>A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose File Types and the Default File</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="drag-attach" data-group="Papers and Files" data-title="Move a Standalone File into Paper Files" data-keywords="drag adopt convert standalone attachment move into paper files remove independent item">
@@ -1805,7 +1797,7 @@
             <li><strong>Quit the current version and make a full backup.</strong> Preserve SQLite and every managed file root together.</li>
             <li><strong>Install or build the newer application.</strong> A normal software upgrade does not overwrite the existing <code>data</code> directory.</li>
             <li><strong>Start the new version once.</strong> Required database schema changes run automatically against the existing SQLite database.</li>
-            <li><strong>Verify before deleting the backup.</strong> Open a current PDF, an older Paper Files version, an attachment, and a My Publications entry.</li>
+            <li><strong>Verify before deleting the backup.</strong> Open the default PDF, another Paper Files version, an attachment, and a My Publications entry.</li>
           </ol>
 
           <div class="note"><span class="callout-title">Note</span>Schema migration updates database structure; it is not a reason to rebuild the database or re-import the Library. Keep the pre-upgrade backup until the new version has been checked.</div>
@@ -1860,7 +1852,7 @@
           <p>The report is a generated local reading artifact. Network services may return fewer contexts than citation records, and a temporary rate limit can leave some entries without quoted context. Reopen or rebuild the report later to retry the available sources; an existing report remains on disk until you deliberately replace or remove it.</p>
 
           <h2>Work with files</h2>
-          <p>My Publications uses the same Paper Details and Paper Files model as Library. A publication can keep a current PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
+          <p>My Publications uses the same Paper Details and flat Paper Files model as Library. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
 
           <h2>Read the summary</h2>
           <p>The lower summary includes publication counts, identifier coverage, h-index and i10 information, journal distribution, merged citation maxima, and major-paper role counts. Select a role statistic to filter the table where supported.</p>
@@ -2176,22 +2168,22 @@
             <li><strong>Verify the result in the Library and Finder.</strong></li>
           </ol>
 
-          <div class="note"><span class="callout-title">Note</span>Changing a Paper Files role or choosing <span class="ui">Use</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
+          <div class="note"><span class="callout-title">Note</span>Changing a Paper Files property or choosing <span class="ui">Make Default</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose Versions and the Current File</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#versions-current">Choose File Types and the Default File</a><a href="#organize">Folders, Shortcuts, and Spaces</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="storage-model" data-group="Settings and Safety" data-title="How Gewu Insight Stores Files" data-keywords="SQLite source truth associated files canonical current physical path bundle mirror alias Gewu key">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Understand How Gewu Insight Stores Files</h1>
-          <p class="lead">The visible Library stays simple: its main tree contains the preferred current file. Other versions and attachments live in a mirrored Associated Files area.</p>
+          <p class="lead">The visible Library stays simple: its main tree contains a compatibility primary path. Other resources can live in a mirrored Associated Files area, while the UI presents every resource as a peer in one flat Paper Files list.</p>
 
           <h2>One work, several representations</h2>
           <p>Each managed paper has one database identity and a stable <span class="ui">Gewu Key</span>. DOI and arXiv are external identifiers attached to that identity; neither is used as the sole storage identity.</p>
 
           <h2>Where the files go</h2>
           <ul>
-            <li>The best current PDF stays in the visible Library, Space, or My Publications tree.</li>
+            <li>A compatibility primary PDF stays in the visible Library, Space, or My Publications tree.</li>
             <li>Older PDF versions go to a mirrored <code>Versions</code> area.</li>
             <li>Supporting information goes to <code>Supplements</code>.</li>
             <li>Images, notes, presentations, data, code, and other attachments go to <code>Files</code>.</li>
@@ -2200,7 +2192,7 @@
           <p>The associated bundle mirrors the paper’s managed path under <code>data/Associated Files</code>. When you move the paper in the UI, Gewu Insight moves the associated bundle and refreshes live paths.</p>
 
           <h2>Why the UI and Finder look different</h2>
-          <p>The UI presents a paper as one item with Paper Files inside it. Finder shows the current file in the normal tree and the related bundle in Associated Files. This keeps ordinary folder browsing uncluttered while preserving every version.</p>
+          <p>The UI presents a paper as one item with a flat Paper Files list inside it. Finder shows a compatibility primary file in the normal tree and the related bundle in Associated Files. The UI Default marker is a reading preference and does not require physical file promotion or renaming.</p>
 
           <h2>Copies and filesystem shortcuts</h2>
           <p>When the same work appears in more than one Library folder, those locations can share one database record and one canonical managed file. Symbolic links can represent secondary filesystem locations. <span class="ui">Make Copy Desktop</span> resolves those shortcuts into real files for a portable export.</p>
@@ -2381,20 +2373,20 @@
           </ol>
 
           <h2>Paper Files shows Missing File</h2>
-          <p>This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check <span class="ui">Show in Finder</span>, the corresponding <code>data/Associated Files</code> bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the current PDF; explicitly typed attachments and current resources are intentionally retained for recovery.</p>
+          <p>This label is a path-state warning, not a failed metadata lookup: SQLite still knows the resource, but the recorded file path does not currently exist. Check <span class="ui">Show in Finder</span>, the corresponding <code>data/Associated Files</code> bundle, and Recycle. If the file was moved outside Gewu Insight, restore it before reorganizing it through the app. Do not delete the row merely because its filename resembles the default PDF; explicitly typed attachments and the default resource remain visible for recovery.</p>
 
           <h2>Quick Look is slow on the first open</h2>
           <p>A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use <span class="ui">Open in Preview</span> to check whether the file itself is valid.</p>
 
-          <h2>The wrong PDF is current</h2>
+          <h2>The wrong file is the default</h2>
           <ol>
             <li>Open Paper Files and verify every file type.</li>
-            <li>Correct a mislabeled Published Version, Accepted Manuscript, Preprint, or annotated copy.</li>
-            <li>Choose <span class="ui">Use</span> for the desired PDF, or return to <span class="ui">Use Automatic Selection</span>.</li>
+            <li>Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.</li>
+            <li>Choose <span class="ui">Make Default</span> for the desired valid file, or choose <span class="ui">Auto</span> to resume automatic selection.</li>
           </ol>
 
           <h2>A duplicate appears after download</h2>
-          <p>Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. If two rows are truly identical, keep the correct current file, then delete the non-current duplicate.</p>
+          <p>Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. Exact byte duplicates are reused, while clean and annotated peers can both remain. Keep the intended default before deleting any redundant non-default row.</p>
 
           <h2>A monitor shows no papers</h2>
           <p>Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.</p>
@@ -2411,8 +2403,8 @@
           <h2>Folder Loader looks incomplete</h2>
           <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
 
-          <h2>A current file cannot be deleted</h2>
-          <p>This is expected. Choose another version with <span class="ui">Use</span> first, or enable automatic selection, then delete the former non-current file.</p>
+          <h2>A default file cannot be deleted</h2>
+          <p>Choose another valid file with <span class="ui">Make Default</span> first, or choose <span class="ui">Auto</span>; then delete the former non-default file. An <span class="ui">Invalid File</span> remains an audit record and is never eligible to become default.</p>
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
@@ -2427,7 +2419,7 @@
           <ul class="path-list">
             <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, and operational state.</span></li>
             <li><code>data/cache/journal_logos</code><span>Rebuildable local image cache for configured Journal Monitor logos.</span></li>
-            <li><code>data/Library</code><span>Visible main Library root and preferred current files.</span></li>
+            <li><code>data/Library</code><span>Visible main Library root and compatibility primary files.</span></li>
             <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
             <li><code>data/My Publications</code><span>Managed local files for My Publications.</span></li>
             <li><code>data/Associated Files</code><span>Mirrored bundles for versions, supplements, and attachments.</span></li>
