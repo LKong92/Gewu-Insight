@@ -190,6 +190,17 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn('nativeReady.postMessage({status: "ready"});', INDEX_HTML)
         self.assertIn("requestAnimationFrame(() => requestAnimationFrame(finishAppStartup));", INDEX_HTML)
 
+    def test_native_launcher_allows_slow_first_run_database_migrations(self) -> None:
+        source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
+
+        self.assertIn("GewuInsightServerStartupTimeout = 120.0", source)
+        self.assertIn(
+            "self.serverStartupDeadline = [NSDate dateWithTimeIntervalSinceNow:GewuInsightServerStartupTimeout];",
+            source,
+        )
+        self.assertIn("compare:self.serverStartupDeadline", source)
+        self.assertNotIn("self.attempts >= 80", source)
+
     def test_non_pdf_library_preview_uses_macos_quick_look_without_replacing_pdf_preview(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text()

@@ -3,6 +3,9 @@
 #import <WebKit/WebKit.h>
 #include <string.h>
 
+static const NSTimeInterval GewuInsightServerStartupTimeout = 120.0;
+static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
+
 @interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
@@ -319,7 +322,7 @@
 @property(nonatomic) NSInteger hiddenPublisherDiscoveryDepth;
 @property(nonatomic) NSInteger hiddenPublisherDiscoveryPageRetryCount;
 @property(nonatomic, strong) NSTask *ownedServerTask;
-@property(nonatomic) NSInteger attempts;
+@property(nonatomic, strong) NSDate *serverStartupDeadline;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
@@ -1749,6 +1752,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             [self loadApp];
         } else {
             [self startServerIfNeeded];
+            self.serverStartupDeadline = [NSDate dateWithTimeIntervalSinceNow:GewuInsightServerStartupTimeout];
             [self pollUntilReady];
         }
     }];
@@ -1788,17 +1792,18 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)pollUntilReady {
-    self.attempts += 1;
     [self checkServerWithCompletion:^(BOOL available) {
         if (available) {
+            self.serverStartupDeadline = nil;
             [self loadApp];
             return;
         }
-        if (self.attempts >= 80) {
+        if (self.serverStartupDeadline &&
+            [[NSDate date] compare:self.serverStartupDeadline] != NSOrderedAscending) {
             [self presentStartupFailure:nil];
             return;
         }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(GewuInsightServerPollInterval * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self pollUntilReady];
         });
     }];
