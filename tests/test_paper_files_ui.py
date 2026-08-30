@@ -159,7 +159,10 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("grid-column: 1 / 3;", properties_css)
         self.assertIn("display: grid;", properties_css)
         property_css = INDEX_HTML.split(".library-resource-property {", 1)[1].split("}", 1)[0]
-        self.assertIn("grid-template-columns: 57px minmax(0, 1fr);", property_css)
+        self.assertIn("grid-template-columns: 54px minmax(0, 1fr);", property_css)
+        self.assertIn("min-height: 20px;", property_css)
+        self.assertIn("background: transparent;", property_css)
+        self.assertIn("border-bottom:", property_css)
         self.assertIn(".library-resource-property.is-file-type {", INDEX_HTML)
         self.assertIn(".library-resource-file-meta {", INDEX_HTML)
 
@@ -368,6 +371,8 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertNotIn('"First Published"', INDEX_HTML)
         self.assertIn("async function setPaperFileMetadata", INDEX_HTML)
         self.assertIn("annotation_state: updates.annotation_state", INDEX_HTML)
+        self.assertIn('const sourceChanged = Object.prototype.hasOwnProperty.call(updates, "file_source")', INDEX_HTML)
+        self.assertIn('source_detail: sourceChanged ? ""', INDEX_HTML)
         self.assertIn("font-size: 9px;", INDEX_HTML)
 
     def test_add_file_and_files_panel_drop_import_before_classification(self) -> None:

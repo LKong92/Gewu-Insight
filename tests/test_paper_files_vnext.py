@@ -208,11 +208,45 @@ class PaperFilesVNextTests(unittest.TestCase):
         self.assertEqual(updated["file_type"], "published_version")
         self.assertEqual(updated["annotation_state"], "unannotated")
         self.assertEqual(updated["file_source"], "publisher")
+        self.assertEqual(updated["source_detail"], "journals.example")
 
         refreshed = ui_server.refresh_paper_resource_fingerprints(self.storage, "independent")[0]
         self.assertGreater(int(refreshed["annotation_count"] or 0), 0)
         self.assertEqual(refreshed["annotation_state"], "unannotated")
         self.assertEqual(refreshed["file_type"], "published_version")
+
+    def test_internal_backfill_detail_is_hidden_and_cleared_when_source_changes(self) -> None:
+        self.assertEqual(
+            ui_server.inferred_paper_file_source("", "legacy_backfill"),
+            ("user_import", ""),
+        )
+        self.add_paper("legacy-source-detail")
+        path = self.root / "legacy.pdf"
+        path.write_bytes(pdf_bytes())
+        resource = self.storage.create_paper_resource(
+            paper_id="legacy-source-detail",
+            stored_path=str(path),
+            file_type="published_version",
+            file_source="publisher",
+            source_detail="legacy_backfill",
+            added_via="legacy_backfill",
+        )
+
+        projected = ui_server.paper_resource_to_api(resource)
+        self.assertEqual(projected["file_source"], "publisher")
+        self.assertEqual(projected["source_detail"], "")
+
+        updated = ui_server.update_paper_resource_role(
+            self.storage,
+            "legacy-source-detail",
+            int(resource["id"]),
+            "published_version",
+            annotation_state="unannotated",
+            file_source="other",
+            source_detail="",
+        )
+        self.assertEqual(updated["file_source"], "other")
+        self.assertIsNone(updated["source_detail"])
 
     def test_exact_duplicate_is_idempotent_but_annotated_peer_is_preserved(self) -> None:
         self.add_paper("dedupe")

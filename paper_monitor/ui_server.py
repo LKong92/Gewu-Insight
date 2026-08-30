@@ -136,6 +136,7 @@ from .storage import (
     normalize_annotation_state,
     normalize_paper_file_source,
     normalize_paper_file_type,
+    visible_paper_file_source_detail,
 )
 from .text import clean_text, is_placeholder_publication_title, journal_name_for_doi, normalize_publication_title, paper_is_from_zenodo, safe_slug
 from .time_utils import local_timezone, now_iso, system_timezone_name, today_local
@@ -1612,7 +1613,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             annotation_state = "annotated" if bool(payload.get("is_annotated")) else "unannotated"
         annotation_state = annotation_state or "unknown"
         file_source = clean_text(str(payload.get("file_source") or ""))
-        source_detail = clean_text(str(payload.get("source_detail") or ""))
+        source_detail = (
+            clean_text(str(payload.get("source_detail") or ""))
+            if "source_detail" in payload
+            else None
+        )
         if not paper_id or resource_id <= 0:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id and resource_id are required")
             return
@@ -9456,7 +9461,10 @@ def paper_resource_to_api(resource: dict[str, Any]) -> dict[str, Any]:
             )
         ),
         "file_source": normalize_paper_file_source(resource.get("file_source")),
-        "source_detail": resource.get("source_detail") or "",
+        "source_detail": visible_paper_file_source_detail(
+            resource.get("source_detail"),
+            resource.get("added_via"),
+        ),
         "annotation_state": normalize_annotation_state(resource.get("annotation_state")),
         "file_type_override": bool(resource.get("file_type_override")),
         "annotation_override": bool(resource.get("annotation_override")),
@@ -21138,7 +21146,7 @@ def update_paper_resource_role(
     annotation_state: str = "unknown",
     is_annotated: bool | None = None,
     file_source: str = "",
-    source_detail: str = "",
+    source_detail: str | None = None,
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
@@ -21173,10 +21181,21 @@ def update_paper_resource_role(
     if raw_annotation not in PAPER_FILE_ANNOTATION_STATES:
         raise ValueError("Unknown annotation state")
     normalized_annotation = normalize_annotation_state(raw_annotation)
-    raw_source = clean_text(file_source or resource.get("file_source") or "unknown").lower().replace("-", "_").replace(" ", "_")
+    current_source = normalize_paper_file_source(resource.get("file_source"))
+    raw_source_input = clean_text(file_source or "")
+    raw_source = clean_text(raw_source_input or current_source or "unknown").lower().replace("-", "_").replace(" ", "_")
     if raw_source not in PAPER_FILE_SOURCES:
         raise ValueError("Unknown file source")
     normalized_source = normalize_paper_file_source(raw_source)
+    source_changed = bool(raw_source_input) and normalized_source != current_source
+    if source_detail is None:
+        resolved_source_detail = "" if source_changed else clean_text(resource.get("source_detail") or "")
+    else:
+        resolved_source_detail = clean_text(source_detail)
+    resolved_source_detail = visible_paper_file_source_detail(
+        resolved_source_detail,
+        resource.get("added_via"),
+    )
     role, version, version_label = legacy_role_projection(normalized_type)
     if legacy_call:
         legacy_labels = {
@@ -21227,7 +21246,7 @@ def update_paper_resource_role(
             normalized_type,
             normalized_annotation,
             normalized_source,
-            clean_text(source_detail or resource.get("source_detail") or "") or None,
+            resolved_source_detail or None,
             role,
             version or None,
             version_label,
@@ -30330,16 +30349,16 @@ INDEX_HTML = """<!doctype html>
       width: 100%;
       min-width: 0;
       display: grid;
-      grid-template-columns: 34px minmax(0, 1fr);
+      grid-template-columns: 28px minmax(0, 1fr);
       grid-template-rows: auto auto;
       align-items: start;
-      column-gap: 8px;
-      row-gap: 10px;
+      column-gap: 7px;
+      row-gap: 5px;
       border: 1px solid #dfe5ec;
       border-radius: 9px;
       background: rgba(255, 255, 255, 0.92);
       color: #273244;
-      padding: 9px 8px 8px;
+      padding: 7px;
       font: inherit;
       text-align: left;
       cursor: pointer;
@@ -30364,14 +30383,14 @@ INDEX_HTML = """<!doctype html>
     .library-resource-icon-tile {
       grid-column: 1;
       grid-row: 1;
-      width: 32px;
-      height: 32px;
+      width: 28px;
+      height: 28px;
       display: grid;
       place-items: center;
-      border-radius: 8px;
+      border-radius: 7px;
       background: #edf1f5;
     }
-    .library-resource-card .paper-file-icon { width: 21px; height: 21px; }
+    .library-resource-card .paper-file-icon { width: 18px; height: 18px; }
     .library-resource-card .library-resource-copy {
       min-width: 0;
       display: contents;
@@ -30382,7 +30401,7 @@ INDEX_HTML = """<!doctype html>
       display: block;
       align-self: center;
       overflow: hidden;
-      font-size: 11px;
+      font-size: 10.5px;
       font-weight: 650;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -30393,29 +30412,30 @@ INDEX_HTML = """<!doctype html>
       width: 100%;
       min-width: 0;
       display: grid;
-      gap: 5px;
+      gap: 0;
+      border-top: 1px solid rgba(116, 137, 158, 0.16);
       color: #7b8491;
       font-size: 9px;
     }
     .library-resource-property {
       min-width: 0;
-      min-height: 25px;
+      min-height: 20px;
       display: grid;
-      grid-template-columns: 57px minmax(0, 1fr);
+      grid-template-columns: 54px minmax(0, 1fr);
       align-items: center;
-      gap: 7px;
-      border-radius: 6px;
-      background: #f4f6f8;
-      padding: 3px 5px 3px 7px;
+      gap: 5px;
+      border-bottom: 1px solid rgba(116, 137, 158, 0.13);
+      background: transparent;
+      padding: 2px 2px 2px 3px;
     }
     .library-resource-property.is-file-type {
-      min-height: 28px;
-      background: #e8f0f8;
+      min-height: 22px;
+      background: transparent;
       color: #425a72;
     }
     .library-resource-property-label {
       color: #8792a1;
-      font-size: 8px;
+      font-size: 7.5px;
       font-weight: 760;
       letter-spacing: .02em;
       white-space: nowrap;
@@ -30428,12 +30448,12 @@ INDEX_HTML = """<!doctype html>
       width: 100%;
       justify-content: space-between;
       color: #536173;
-      font-size: 9.5px;
+      font-size: 9px;
       font-weight: 620;
     }
     .library-resource-card .library-resource-property.is-file-type .paper-file-version-picker {
       color: #294b6d;
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 720;
     }
     .library-resource-card .paper-file-version-picker > span:first-child {
@@ -30442,13 +30462,13 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .library-resource-file-meta {
-      min-height: 12px;
+      min-height: 9px;
       display: flex;
       justify-content: flex-end;
       gap: 4px;
-      padding: 0 3px;
+      padding: 2px 2px 0;
       color: #8a95a4;
-      font-size: 8.5px;
+      font-size: 8px;
       line-height: 1.2;
     }
     .library-resource-state {
@@ -44640,6 +44660,8 @@ INDEX_HTML = """<!doctype html>
 
     async function setPaperFileMetadata(paperId, resourceId, updates = {}) {
       const current = paperFilesSnapshot(paperId)?.files?.find((file) => Number(file.id || 0) === Number(resourceId || 0)) || {};
+      const sourceChanged = Object.prototype.hasOwnProperty.call(updates, "file_source")
+        && String(updates.file_source || "unknown") !== String(current.file_source || "unknown");
       const res = await fetch("/api/paper-files/role", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -44649,7 +44671,7 @@ INDEX_HTML = """<!doctype html>
           file_type: updates.file_type || current.file_type || "unknown",
           annotation_state: updates.annotation_state || current.annotation_state || "unknown",
           file_source: updates.file_source || current.file_source || "unknown",
-          source_detail: updates.source_detail ?? current.source_detail ?? ""
+          source_detail: sourceChanged ? "" : (updates.source_detail ?? current.source_detail ?? "")
         })
       });
       const data = await res.json();

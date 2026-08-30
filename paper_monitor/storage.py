@@ -83,6 +83,25 @@ def normalize_paper_file_source(value: Any) -> str:
     return normalized if normalized in PAPER_FILE_SOURCES else "unknown"
 
 
+def visible_paper_file_source_detail(value: Any, added_via: Any = "") -> str:
+    detail = str(value or "").strip()
+    if not detail:
+        return ""
+    detail_key = detail.casefold().replace("-", "_").replace(" ", "_")
+    added_key = str(added_via or "").strip().casefold().replace("-", "_").replace(" ", "_")
+    internal_markers = {
+        "legacy_backfill",
+        "manual",
+        "paper_details",
+        "paper_details_path",
+        "inventory",
+        "inventory_import",
+    }
+    if detail_key in internal_markers or (added_key and detail_key == added_key):
+        return ""
+    return detail
+
+
 def normalize_annotation_state(value: Any) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     return normalized if normalized in PAPER_FILE_ANNOTATION_STATES else "unknown"
@@ -156,7 +175,7 @@ def inferred_paper_file_source(source_url: Any = "", added_via: Any = "") -> tup
     if url and any(token in added_key for token in ("publisher", "download", "aaas", "nature")):
         return "publisher", host or added
     if any(token in added_key for token in ("manual", "paper_details", "inventory", "legacy", "import")):
-        return "user_import", added
+        return "user_import", ""
     if url:
         return "other", host or url
     return "unknown", added
