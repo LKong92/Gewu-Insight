@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Quartz/Quartz.h>
 #import <WebKit/WebKit.h>
+#import "GewuBrowserController.h"
 #include <string.h>
 
 static const NSTimeInterval GewuInsightServerStartupTimeout = 120.0;
@@ -307,6 +308,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @interface PaperMonitorDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler, QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
+@property(nonatomic, strong) GewuBrowserController *browserController;
 @property(nonatomic, strong) WKWebView *startupWebView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
@@ -443,6 +445,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     self.applicationIsTerminating = YES;
+    [self.browserController invalidate];
     [self closeNativeQuickLookNotifyingWeb:NO];
     if (self.ownedServerTask && self.ownedServerTask.isRunning) {
         [self.ownedServerTask terminate];
@@ -621,6 +624,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     [userContentController addScriptMessageHandler:self name:@"nativeQuickLook"];
     [userContentController addScriptMessageHandler:self name:@"publisherPdfDownload"];
     [userContentController addScriptMessageHandler:self name:@"appReady"];
+    [userContentController addScriptMessageHandler:self name:@"browser"];
     configuration.userContentController = userContentController;
     self.webView = [[GewuInsightWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
@@ -673,6 +677,27 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
+    if ([message.name isEqualToString:@"browser"]) {
+        NSURL *frameURL = message.frameInfo.request.URL;
+        if (message.webView != self.webView || !message.frameInfo.isMainFrame
+            || ![frameURL.scheme isEqualToString:@"http"]
+            || ![frameURL.host isEqualToString:self.url.host]
+            || ![frameURL.port isEqual:self.url.port]
+            || ![message.body isKindOfClass:NSDictionary.class]) return;
+        if (!self.browserController) {
+            self.browserController = [[GewuBrowserController alloc] initWithWorkspace:self.webView];
+            __weak typeof(self) weakSelf = self;
+            self.browserController.onEvent = ^(NSDictionary *event) {
+                NSData *data = [NSJSONSerialization dataWithJSONObject:event options:0 error:nil];
+                if (!data) return;
+                NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                NSString *script = [NSString stringWithFormat:@"window.gewuBrowserNativeEvent && window.gewuBrowserNativeEvent(%@)", json];
+                [weakSelf.webView evaluateJavaScript:script completionHandler:nil];
+            };
+        }
+        [self.browserController handleCommand:message.body];
+        return;
+    }
     if ([message.name isEqualToString:@"openUserGuidePDF"]) {
         [self openUserGuidePDF];
         return;
@@ -1897,6 +1922,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)loadApp {
+    [self.browserController invalidate];
+    self.browserController = nil;
     self.mainAppHasLoaded = YES;
     [self dismissStartupFailureAlert];
     [self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];

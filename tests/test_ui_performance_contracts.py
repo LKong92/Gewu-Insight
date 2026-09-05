@@ -348,7 +348,7 @@ class UiPerformanceContractTests(unittest.TestCase):
         author = self.js_function("handleAuthorMonitorKeydown")
         library = self.js_function("handleLibraryKeydown")
 
-        self.assertIn('PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author"]', ui_server.INDEX_HTML)
+        self.assertIn('PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author", "browser"]', ui_server.INDEX_HTML)
         self.assertIn("switchPrimaryKeyboardView", primary)
         self.assertIn("focusPrimarySurfaceContent", primary)
         self.assertIn("activatePrimaryKeyboardRoot()", report)

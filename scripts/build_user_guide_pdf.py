@@ -35,6 +35,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/journal-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "journal-monitor.png",
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
     "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
+    "/user-guide-assets/browser.png": ROOT / "assets" / "user-guide" / "screenshots" / "browser.png",
 }
 
 PART_BY_GROUP = {
@@ -47,6 +48,7 @@ PART_BY_GROUP = {
     "Journal Monitor": "User Manual",
     "Subject Monitor": "User Manual",
     "Author Monitor": "User Manual",
+    "Browser": "User Manual",
     "Settings and Safety": "User Manual",
     "About Gewu Insight": "Product Identity",
     "Reference": "Technical and Operational Reference",
@@ -626,12 +628,8 @@ def prepare_latex_body(source: str) -> str:
     image_widths = {
         "GewuAboutCalligraphy.png": "0.84\\linewidth",
         "gewu-insight-app-icon.png": "0.18\\linewidth",
-        "library-paper-files.png": "0.96\\linewidth",
-        "space-workspace.png": "0.96\\linewidth",
-        "my-publications.png": "0.96\\linewidth",
-        "journal-monitor.png": "0.96\\linewidth",
-        "subject-monitor.png": "0.96\\linewidth",
-        "author-monitor.png": "0.96\\linewidth",
+        **{path.name: "0.96\\linewidth" for route, path in IMAGE_ROUTES.items()
+           if route.startswith("/user-guide-assets/")},
     }
     for filename, width in image_widths.items():
         pattern = re.compile(

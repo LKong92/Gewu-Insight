@@ -7,7 +7,7 @@ reading, and preserving scholarly work. It connects a research library,
 versioned paper files, personal publications, and three complementary discovery
 monitors around one persistent paper identity.
 
-Gewu Insight is not only an RSS reader, a PDF folder, or five unrelated pages.
+Gewu Insight is not only an RSS reader, a PDF folder, or unrelated pages.
 It is a personal research information infrastructure in which discovery becomes
 durable, file-backed, and auditable.
 
@@ -59,7 +59,27 @@ still resolve to the same persistent paper object.
   </tr>
 </table>
 
-The complete illustrated workflow—including Author Monitor, file versions,
+The sixth main tab, **Browser**, provides a visible native WebKit browser with
+the real Google homepage above a local Favorites folder grid, nested bookmarks,
+searchable local history, inline PDFs, and session-aware downloads. Home preserves
+Google's own search and account controls; other pages use the full browsing area.
+Favorites supports folder selection and nested navigation without copying bookmarks.
+The sidebar can be resized or hidden, with Import, Export, New Folder, and Search
+at its bottom. Bookmarks and
+folders support Safari/Chrome HTML import/export (including a Safari ZIP with
+one bookmark HTML file), and visible sites use a bounded local favicon cache.
+The Passwords toolbar button opens macOS Passwords without creating a password
+vault; Safari-equivalent automatic password filling is not implemented. Apple's
+ordinary App password APIs require an App/website association, and browser password
+extensions are not inherited by a plain WKWebView. Viewable PDF attachments
+stay inline; legacy HTTP GET redirects can retry once over HTTPS without
+disabling certificate checks. Bookmarks and
+history live in SQLite; cookies and cache use an independent persistent WebKit
+profile. Browser follows the system network without changing proxy or Clash
+rules. Existing paper-related external-browser actions remain unchanged in this
+first release.
+
+The complete illustrated workflow—including Author Monitor, Browser, file versions,
 portable export, backup, settings, and keyboard navigation—is available in the
 [offline User Guide PDF](paper_monitor/Gewu_Insight_User_Guide.pdf).
 

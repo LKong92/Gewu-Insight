@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from bs4 import BeautifulSoup
@@ -14,6 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UserGuideTests(unittest.TestCase):
+    def local_handler(self):
+        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler.headers = {"Host": "127.0.0.1:8765"}
+        handler.server = SimpleNamespace(server_port=8765)
+        return handler
+
     def test_offline_guide_asset_is_loaded_from_the_python_package(self) -> None:
         expected = Path(ui_server.__file__).with_name("user_guide.html")
         self.assertEqual(ui_server.USER_GUIDE_PATH, expected)
@@ -23,7 +30,7 @@ class UserGuideTests(unittest.TestCase):
         self.assertGreater(len(html), 40_000)
 
     def test_user_guide_route_reads_the_current_asset_without_browser_cache(self) -> None:
-        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler = self.local_handler()
         handler.path = "/user-guide"
         handler.send_text = MagicMock()
 
@@ -36,7 +43,7 @@ class UserGuideTests(unittest.TestCase):
         )
 
     def test_fixed_layout_pdf_route_serves_the_packaged_manual(self) -> None:
-        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler = self.local_handler()
         handler.path = "/user-guide.pdf"
         handler.send_bytes = MagicMock()
 
@@ -47,7 +54,7 @@ class UserGuideTests(unittest.TestCase):
         handler.send_bytes.assert_called_once_with(data, content_type="application/pdf")
 
     def test_user_guide_screenshot_route_serves_only_packaged_png_assets(self) -> None:
-        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler = self.local_handler()
         handler.path = "/user-guide-assets/library-paper-files.png"
         handler.send_bytes = MagicMock()
 
@@ -59,7 +66,7 @@ class UserGuideTests(unittest.TestCase):
         handler.send_bytes.assert_called_once_with(data, content_type="image/png")
 
     def test_user_guide_calligraphy_route_uses_the_packaged_brand_asset(self) -> None:
-        handler = object.__new__(ui_server.PaperMonitorUiHandler)
+        handler = self.local_handler()
         handler.path = "/api/about-calligraphy"
         handler.handle_about_calligraphy = MagicMock()
 
@@ -261,7 +268,7 @@ class UserGuideTests(unittest.TestCase):
             "Planned Windows release",
             "supported Windows package is available today",
             "What this guide covers",
-            "Five areas of the app",
+            "Six main tabs",
             "Open this guide again",
         ]:
             self.assertIn(phrase, welcome_text)
@@ -738,11 +745,12 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/journal-monitor.png",
                 "/user-guide-assets/subject-monitor.png",
                 "/user-guide-assets/author-monitor.png",
+                "/user-guide-assets/browser.png",
             },
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 6)
+        self.assertEqual(len(screenshot_figures), 7)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:

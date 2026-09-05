@@ -1,0 +1,56 @@
+#import "GewuBrowserNavigation.h"
+
+static NSInteger checks = 0;
+static void check(BOOL condition, NSString *name) {
+    if (!condition) { fprintf(stderr, "FAILED: %s\n", name.UTF8String); exit(1); }
+    checks++;
+}
+
+static NSHTTPURLResponse *response(NSString *mime, NSString *disposition) {
+    NSMutableDictionary *headers = [@{@"Content-Type": mime} mutableCopy];
+    if (disposition) headers[@"Content-Disposition"] = disposition;
+    return [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://example.org/document?id=123"]
+        statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:headers];
+}
+
+int main(void) {
+    @autoreleasepool {
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", nil), YES, NO) == WKNavigationResponsePolicyAllow, @"inline PDF");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment; filename=paper.pdf"), YES, NO) == WKNavigationResponsePolicyAllow, @"attachment PDF stays inline");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment"), YES, YES) == WKNavigationResponsePolicyAllow, @"download attribute PDF stays inline after MIME is known");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf; charset=binary", nil), YES, YES) == WKNavigationResponsePolicyAllow, @"extensionless PDF with MIME parameters");
+        check(GewuBrowserResponsePolicy(response(@"application/x-pdf", @"attachment"), YES, NO) == WKNavigationResponsePolicyAllow, @"viewable PDF alias");
+        check(GewuBrowserResponsePolicy(response(@"application/pdf", nil), NO, NO) == WKNavigationResponsePolicyDownload, @"unsupported PDF remains downloadable");
+        check(GewuBrowserResponsePolicy(response(@"application/zip", @"attachment"), NO, NO) == WKNavigationResponsePolicyDownload, @"archive download preserved");
+        check(GewuBrowserResponsePolicy(response(@"text/html", nil), YES, NO) == WKNavigationResponsePolicyAllow, @"HTML navigation preserved");
+        check(GewuBrowserResponsePolicy(response(@"text/plain", @" Attachment; filename=notes.txt"), YES, NO) == WKNavigationResponsePolicyDownload, @"non-PDF attachment preserved");
+        check(GewuBrowserResponsePolicy(response(@"text/plain", nil), YES, YES) == WKNavigationResponsePolicyDownload, @"non-PDF explicit link download preserved");
+
+        NSURL *http = [NSURL URLWithString:@"http://example.org/cgi-bin/main.plex?return=paper#top"];
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/"]];
+        NSError *ats = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorAppTransportSecurityRequiresSecureConnection userInfo:@{NSURLErrorFailingURLErrorKey:http}];
+        check([GewuBrowserHTTPSRecoveryURL(ats, request, NO).absoluteString isEqualToString:@"https://example.org/cgi-bin/main.plex?return=paper#top"], @"legacy redirect upgrades preserving path query and fragment");
+        check(GewuBrowserHTTPSRecoveryURL(ats, request, YES) == nil, @"only one secure retry");
+        request.HTTPMethod = @"POST";
+        check(GewuBrowserHTTPSRecoveryURL(ats, request, NO) == nil, @"no POST replay");
+        request.HTTPMethod = @"GET"; request.HTTPBody = [@"private form" dataUsingEncoding:NSUTF8StringEncoding];
+        check(GewuBrowserHTTPSRecoveryURL(ats, request, NO) == nil, @"no body replay");
+        request.HTTPBody = nil;
+        request.URL = [NSURL URLWithString:@"https://other.example/"];
+        check(GewuBrowserHTTPSRecoveryURL(ats, request, NO) == nil, @"no cross-host retry");
+        request.URL = [NSURL URLWithString:@"http://example.org/cgi-bin/main.plex"];
+        check(GewuBrowserHTTPSRecoveryURL(ats, request, NO) != nil, @"old HTTP bookmark can upgrade");
+        for (NSString *url in @[@"https://example.org/", @"http://example.org:8080/", @"http://user:password@example.org/"]) {
+            NSError *blocked = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorAppTransportSecurityRequiresSecureConnection userInfo:@{NSURLErrorFailingURLErrorKey:[NSURL URLWithString:url]}];
+            check(GewuBrowserHTTPSRecoveryURL(blocked, request, NO) == nil, @"no invalid recovery or certificate downgrade");
+        }
+        for (NSNumber *code in @[@(NSURLErrorServerCertificateUntrusted), @(NSURLErrorTimedOut), @(NSURLErrorCannotFindHost)]) {
+            NSError *failure = [NSError errorWithDomain:NSURLErrorDomain code:code.integerValue userInfo:@{NSURLErrorFailingURLErrorKey:http, NSLocalizedDescriptionKey:@"private-secret-value"}];
+            check(GewuBrowserHTTPSRecoveryURL(failure, request, NO) == nil, @"no automatic security or network bypass");
+            NSString *message = GewuBrowserNavigationErrorMessage(failure);
+            check([message containsString:code.stringValue] && ![message containsString:@"private-secret-value"] && ![message containsString:@"return=paper"], @"specific error code without secrets or full URL");
+        }
+        printf("Native browser navigation policy: %ld checks passed\n", (long)checks);
+    }
+    return 0;
+}

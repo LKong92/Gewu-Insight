@@ -62,6 +62,8 @@ def test_pdf_html_uses_part_local_chapter_hierarchy():
     ]
     assert ("h3", "Library Layout") in manual
     assert ("h3", "Add Papers and Files") in manual
+    assert ("h2", "Browser") in manual
+    assert ("h3", "Browse, Bookmark, and Revisit Websites") in manual
 
     identity = _headings_between(by_name["Product Identity"], by_name["Technical and Operational Reference"])
     assert [text for level, text in identity if level == "h2"][:4] == [
@@ -87,3 +89,14 @@ def test_pdf_preamble_numbers_chapters_within_each_part():
     assert r"\setcounter{tocdepth}{1}" in preamble
     assert r"\@addtoreset{chapter}{part}" in preamble
     assert r"\renewcommand{\thechapter}{\arabic{part}-\arabic{chapter}}" in preamble
+
+
+def test_every_registered_screenshot_is_constrained_to_page_width():
+    builder = _builder_module()
+    for route, path in builder.IMAGE_ROUTES.items():
+        if not route.startswith('/user-guide-assets/'):
+            continue
+        source = r'\pandocbounded{\includegraphics[keepaspectratio,alt={Screenshot}]{' + str(path) + '}}'
+        result = builder.prepare_latex_body(source)
+        assert r'\includegraphics[width=0.96\linewidth,keepaspectratio]' in result
+        assert r'\pandocbounded' not in result

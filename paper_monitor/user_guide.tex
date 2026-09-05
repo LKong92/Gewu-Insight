@@ -277,7 +277,7 @@ A system that records evidence and assists repeatable work. & A black-box rankin
 \GewuTableEnd
 }
 
-\section{Five areas of the app}\label{five-areas-of-the-app}
+\section{Six main tabs}\label{six-main-tabs}
 
 \begin{itemize}
 \tightlist
@@ -291,6 +291,8 @@ A system that records evidence and assists repeatable work. & A black-box rankin
   \textbf{Subject Monitor} --- topic-based discovery from supported online sources and feeds.
 \item
   \textbf{Author Monitor} --- monitored researchers, profile-linked discovery, and newly found work.
+\item
+  \textbf{Browser} --- Google search, websites, online PDFs, hierarchical bookmarks, and local browsing history.
 \end{itemize}
 
 \section{One continuous research loop}\label{one-continuous-research-loop}
@@ -467,7 +469,7 @@ A Monitor result & Its discovery evidence, report, and available actions. & Addi
 
 \section{Tabs across the top}\label{tabs-across-the-top}
 
-Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.
+Use the six top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Browser instead has a Bookmarks/History sidebar beside a native webpage. Progress messages appear in reserved status areas so the main layout remains stable.
 
 On macOS, double-click only a genuinely blank part of the title bar when you want to zoom or restore the window. Double-clicking an app tab, the Library search field, or another top control is treated as interaction with that control and does not change the window size.
 
@@ -486,6 +488,7 @@ Area & Primary question & Typical next action \\
 \textbf{Journal Monitor} & What appeared in selected journals on a given date? & Filter, inspect, download, or add to Library. \\
 \textbf{Subject Monitor} & What matches a defined scientific topic across supported sources? & Review source evidence and preserve useful results. \\
 \textbf{Author Monitor} & What is new in the work of a researcher I follow? & Inspect the author relationship, open the work, or add a Library placement. \\
+\textbf{Browser} & What can I find on the web without leaving this workspace? & Search Google, read a website or online PDF, save a bookmark, or revisit history. \\
 \end{longtable}
 \GewuTableEnd
 }
@@ -1310,7 +1313,7 @@ The Library uses a Finder-style column view, but the database---not the visible 
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
 
 \begin{GewuCaption}
-Library and Paper Files. The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and article figure stay connected in the adjacent views.
+Library and Paper Files. The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and citation evidence stay connected in the adjacent views.
 \end{GewuCaption}
 
 \subsection{Read the columns from left to right}\label{read-the-columns-from-left-to-right}
@@ -2331,7 +2334,7 @@ Journal Monitor collects papers for a selected publication date and lets you nar
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/journal-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Journal Monitor. Nature is selected for a stored publication date; the paper cards retain their metadata and loaded scientific figures while calendar, journal, and field controls remain available.
+Journal Monitor. Nature is selected for August 12, 2026, with scientific figures visible beside the paper cards. The independent sidebar retains calendar counts, the monitor summary, and journal and field filters.
 \end{GewuCaption}
 
 \subsection{Refresh a date}\label{refresh-a-date}
@@ -2435,7 +2438,7 @@ Subject Monitor discovers papers for reusable topics. Each subject stores a name
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Subject Monitor. Superconductivity is selected, with matching papers and a completed count for the selected date. Other dates with incomplete discovery carry a superscript asterisk; its explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.
+Subject Monitor. Superconductivity is selected, with matching papers and a superscript asterisk on the partially completed count. The explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.
 \end{GewuCaption}
 
 \subsection{Create a subject}\label{create-a-subject}
@@ -2588,7 +2591,109 @@ Google Scholar requests are paced and protected by a cooldown. Repeated manual r
 
 \hyperref[my-publications]{My Publications} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[privacy]{Local Data and Privacy}
 
-\chapter{Settings and Safety}\label{chapter-18}
+\chapter{Browser}\label{chapter-18}
+
+\section{Browse, Bookmark, and Revisit Websites}\label{browser}
+
+\begin{GewuLead}
+Browser is the sixth main tab, immediately after Author Monitor. It displays real websites in a separate native WebKit view, beside a local Bookmarks/History sidebar.
+\end{GewuLead}
+
+\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
+
+\begin{GewuCaption}
+Home combines the real Google page with local Favorites. This example uses a public Journals folder and Nature sidebar search. Bottom controls stay readable even in a narrow sidebar; private pages and history are not shown.
+\end{GewuCaption}
+
+\subsection{Search and navigate}\label{search-and-navigate}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Open Browser.} Its first use opens Home: the real Google homepage above a local Favorites grid. Google supplies its logo, search, and sign-in/account controls using Browser\textquotesingle s own session, not Safari\textquotesingle s. No website is preloaded during App startup.
+\item
+  \textbf{Use the address field.} Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use {{\symbolfont ⌘}L} to focus the field.
+\item
+  \textbf{Navigate normally.} Back, Forward, Reload/Stop, and Home sit in the compact toolbar. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height. Links requesting a new window stay in this Browser surface and its back stack.
+\item
+  \textbf{Switch between workspaces.} Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.
+\end{enumerate}
+
+{{\symbolfont ⌘}F} opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native \textbf{Gewu Insight.app}; opening the local UI in a separate web browser does not embed another browser engine.
+
+\textbf{Choose your Favorites.} Home recognizes an existing Favorites/Favourites folder, including supported localized or imported names. Use its folder selector to choose a different bookmark folder, or \textbf{Create Favorites Folder} if none exists. Tiles are the folder\textquotesingle s direct children, not duplicate records. Open a child folder and use its breadcrumb to return; use \textbf{Add Favorite} to enter a link, or right-click a tile to edit it. The folder choice is saved locally. Deleting a chosen folder asks you to choose again rather than silently displaying another folder. Favorites stays available with the sidebar hidden or History selected. Google receives no Favorites list from Gewu.
+
+\subsection{Save and organize bookmarks}\label{save-and-organize-bookmarks}
+
+The sidebar\textquotesingle s top tabs switch between \textbf{Bookmarks} and \textbf{History}, without a repeated heading. \textbf{Import}, \textbf{Export}, \textbf{+} (New Folder), and Search sit along the bottom; History shows Clear History and Search there instead. Drag the sidebar\textquotesingle s right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Add a page.} Use the bookmark toolbar button, \textbf{Share \textgreater{} Add Bookmark}, or {{\symbolfont ⌘}D}. The native sheet starts with the page title and address.
+\item
+  \textbf{Choose a location.} Edit the name or address and choose a folder under \textbf{Add to}. The previous destination is remembered. Saving the same address in the same folder reuses the existing bookmark.
+\item
+  \textbf{Create nested folders.} Use \textbf{New Folder}, or right-click a folder to create a child folder. The editor can also rename a folder or choose another parent.
+\item
+  \textbf{Arrange the tree.} Drag an item into the middle of a folder row to move it inside, or to a row edge to reorder it. Drop on the top \textbf{Bookmarks} tab to move to the root. A folder cannot move inside itself or its descendants.
+\item
+  \textbf{Save by dragging.} Drag the website icon beside the address field, or a webpage link, into a bookmark folder. Confirm the name and destination in the same native sheet.
+\end{enumerate}
+
+Search filters bookmark names and addresses. Right-click a bookmark for \textbf{Open}, \textbf{Edit Bookmark}, or \textbf{Delete}. Deleting a folder requires confirmation and removes its contained bookmarks, not websites, browsing history, downloaded files, or papers. A bookmark is a saved link, not an offline webpage copy.
+
+\subsection{Import and export bookmarks}\label{import-and-export-bookmarks}
+
+Choose \textbf{Import} at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with \textbf{File \textgreater{} Export Bookmarks} produce HTML; newer Safari versions may use \textbf{File \textgreater{} Export Browsing Data to File} and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use \textbf{Bookmark Manager \textgreater{} menu \textgreater{} Export Bookmarks}.
+
+Imports go into \textbf{Imported Bookmarks}, retaining folders, order, names, and supported links. Repeating an import merges matching folder names and reuses the same URL in the same folder; existing bookmarks are not overwritten. The result reports added bookmarks, new folders, duplicates, and skipped links. Local addresses, application links, and recognized authorization links are skipped. Limits are 10 MB, 20,000 source entries, and 64 folder levels; invalid files do not partially import.
+
+\textbf{Export} saves the full tree as standard bookmark HTML; right-click a folder for \textbf{Export Folder}. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private. Import/export is on demand, not ongoing Safari or Chrome synchronization.
+
+\subsection{Website icons}\label{website-icons}
+
+Visible bookmark rows and Favorites tiles request website icons directly from the corresponding sites, with at most two requests in flight. Icons share a local cache; unavailable icons show a globe in the sidebar or a letter on Home. Visiting a page may supply its nonstandard icon address. Gewu does not send your bookmark list to an external icon service, fetch entire article pages for icons, or attach cookies or credentials. The disposable icon cache is separate from SQLite bookmarks.
+
+\subsection{Revisit and clear history}\label{revisit-and-clear-history}
+
+History groups successfully loaded main pages by Today, Yesterday, and date. It includes names, sites, and visit times, supports search, and loads older records in pages. Image/script requests and main-tab switching do not create visits. Reloading the same navigation updates its existing record rather than adding duplicates.
+
+Click a history entry to revisit it. Its context menu can add a bookmark or delete that visit. \textbf{Clear History} offers Last hour, Last 24 hours, Last 7 days, and All history, with confirmation. It preserves bookmarks, downloaded files, cookies, and website sign-ins. Ordinary history is retained until you delete it; authorization callbacks and recognized signed-download URLs are excluded from saved history.
+
+\subsection{Read PDFs and save downloads}\label{read-pdfs-and-save-downloads}
+
+Viewable PDF responses open inline, even when a publisher labels the PDF as an attachment or its link requests a download. Back and Forward retain the article/PDF navigation. Use the download button or \textbf{Share \textgreater{} Save Download} to save explicitly. Other attachments and unsupported formats open the native save sheet. Both viewing and downloading use Browser\textquotesingle s website session, not the Python publisher downloader.
+
+A saved download is not automatically added to Library and does not create a paper or Gewu Key. \hyperref[import-files]{Import it explicitly} when wanted. Existing Library PDF opening in macOS Preview is unchanged. A website may require its own Download link to obtain an actual PDF rather than an HTML viewer.
+
+\subsection{System networking and Clash rules}\label{system-networking-and-clash-rules}
+
+Browser uses macOS WebKit networking without an App-specific proxy override. If system proxy or TUN routing sends traffic into Clash, its active rules choose DIRECT or a proxy. The \textbf{System network} footer describes this policy, not a verified route. Gewu Insight does not change Clash settings.
+
+DIRECT still needs a school-recognized network exit or authorized institutional login. PDF, login, and CDN domains match rules separately; Chrome-only extensions or Safari/Chrome-only process rules are not inherited. Check actual Clash connections, not just homepage access. See \hyperref[network-access]{Publisher and Network Access} for the distinction between traffic capture and routing rules.
+
+\subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
+
+Bookmarks and history live in \hyperref[privacy]{local SQLite}, separate from paper records. Cookies and cache use an independent persistent WebKit profile. Safari data and extensions are not automatically imported or synchronized. Browsing and search requests go to the websites you visit.
+
+External pages receive no Library or credential bridge. Local app addresses, files, and application schemes are blocked. An HTTP bookmark or redirect blocked by macOS may retry once as a same-host HTTPS GET; forms are not replayed, and certificate checks are never bypassed. Failures show a specific reason and error code. The local server rejects cross-site API requests and unrecognized hosts.
+
+\subsection{Use macOS Passwords}\label{use-macos-passwords}
+
+The key-shaped \textbf{Open Passwords} button opens Apple\textquotesingle s Passwords app on supported Macs. Unlock and choose credentials there yourself; on older macOS versions, use Passwords in System Settings. Gewu does not create a password vault, import or export passwords, read the system password list, or relay passwords through its local UI API.
+
+\textbf{Automatic password filling is not implemented.} On the tested macOS 15.1.1, focusing Google\textquotesingle s username field does not provide Safari\textquotesingle s saved-account suggestions. Apple\textquotesingle s normal App password API requires a trusted App/website association; it is not an arbitrary-website password lookup. WebAuthn/passkey prompts are a different capability. Safari/Chrome password extensions are not inherited by this WKWebView. Open Passwords lets you choose and copy a credential yourself; use \textbf{Open in Safari} when Safari AutoFill is needed. Gewu does not inspect your vault or add false associated-domain claims.
+
+A macOS prompt for \textbf{Gewu Insight WebCrypto Master Key} concerns WebKit\textquotesingle s protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.
+
+\begin{quote}
+\textbf{Compatibility}
+
+Some sign-in providers or publisher checks reject embedded browsers. Use \textbf{Open in Safari} for those cases; it opens the address but does not transfer Browser cookies. Do not bypass a paywall, CAPTCHA, or access control. Existing Open Website and Google Scholar actions elsewhere in the App still use their previous external-browser workflow in this first Browser release.
+\end{quote}
+
+\chapter{Settings and Safety}\label{chapter-19}
 
 \section{Open Source Settings}\label{citation-settings}
 
@@ -2920,6 +3025,8 @@ Gewu Insight runs a local interface and keeps its authoritative library database
 \item
   SQLite stores papers, identities, relationships, settings, and operational state.
 \item
+  Browser bookmarks, folders, history, and sidebar preferences also live in SQLite. Browser cookies and cache use a separate persistent WebKit profile; they are not shared with Safari or exported with the database.
+\item
   Managed PDFs, attachments, photos, and generated reports stay in local project directories.
 \item
   JSON files are exports or diagnostics; they are not the authoritative database.
@@ -3056,7 +3163,10 @@ Shortcut & Action \\
 \texttt{Space} & Open or close Quick Look for the selected Paper Files item. \\
 \texttt{Esc} & Dismiss an active transient control or return focus where supported. \\
 \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V} & Toggle List View and Table View. \\
-\texttt{{\symbolfont ⌘}}\texttt{L} & Open Folder Loader. \\
+\texttt{{\symbolfont ⌘}}\texttt{L} & Focus the address/search field in Browser; otherwise open Folder Loader. \\
+\texttt{{\symbolfont ⌘}}\texttt{D} & In Browser, bookmark the current page. \\
+\texttt{{\symbolfont ⌘}}\texttt{R} & In Browser, reload the current page. \\
+\texttt{{\symbolfont ⌘}}\texttt{F} & In Browser, find text on the current page. \\
 \texttt{{\symbolfont ⌘}}\texttt{,} & Show Open Source Settings. \\
 \texttt{{\symbolfont ⌘}}\texttt{W} & Close the current window. \\
 \end{longtable}
@@ -3094,6 +3204,10 @@ Publishers can rate-limit shared VPN addresses or automated-looking traffic. Gew
 \section{Why figures may arrive later}\label{why-figures-may-arrive-later}
 
 Figure and article-page retrieval is queued behind discovery work and uses caching. This reduces simultaneous RSS, page, and image requests to the same publisher. A paper can appear before its representative image.
+
+\section{Browser and your system network}\label{browser-and-your-system-network}
+
+The Browser tab uses native WebKit requests and does not proxy pages through the Python server. System proxy or TUN capture can send its traffic into Clash; only then do the active rules determine DIRECT or proxy routing. A DIRECT rule uses your current physical network, which must itself provide institutional access. Gewu Insight neither changes these rules nor guarantees a particular route; use Clash connection records to verify the actual route. See \hyperref[browser]{Browse, Bookmark, and Revisit Websites} for downloads, sign-in limits, and the separate browser profile.
 
 \section{Service rate limits}\label{service-rate-limits}
 

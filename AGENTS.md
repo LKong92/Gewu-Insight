@@ -24,6 +24,12 @@
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
 
+## Commit Messages
+
+- Every future commit must include a specific English subject, a blank line, and a readable English body describing purpose, concrete changes, relevant behavior/data boundaries, and actual validation. Never claim unrun tests passed.
+- Follow `docs/COMMIT_GUIDELINES.md` and inspect every outgoing commit message before pushing. Leave existing history and hashes unchanged; do not rewrite or force-push history to add descriptions.
+- Commit or push only when explicitly requested. Stage related files by name, never with `git add -A`, and preserve existing user changes.
+
 ## Commands
 
 - Setup: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt`

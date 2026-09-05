@@ -602,6 +602,10 @@
             <button class="topic-link" data-topic="author-monitor">Researchers, Profiles, and New Work</button>
           </section>
           <section class="nav-group">
+            <h2 class="nav-heading">Browser</h2>
+            <button class="topic-link" data-topic="browser">Browse, Bookmark, and Revisit Websites</button>
+          </section>
+          <section class="nav-group">
             <h2 class="nav-heading">Settings and Safety</h2>
             <button class="topic-link" data-topic="citation-settings">Open Source Settings</button>
             <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
@@ -707,13 +711,14 @@
             <tr><td>A system that records evidence and assists repeatable work.</td><td>A black-box ranking or summary engine that replaces scientific judgment.</td></tr>
           </table>
 
-          <h2>Five areas of the app</h2>
+          <h2>Six main tabs</h2>
           <ul>
             <li><span class="ui">Library</span> — your managed papers, folders, spaces, versions, and related files.</li>
             <li><span class="ui">My Publications</span> — your publication list, citation metrics, author roles, and export tools.</li>
             <li><span class="ui">Journal Monitor</span> — papers published on a selected date, organized by journal and field.</li>
             <li><span class="ui">Subject Monitor</span> — topic-based discovery from supported online sources and feeds.</li>
             <li><span class="ui">Author Monitor</span> — monitored researchers, profile-linked discovery, and newly found work.</li>
+            <li><span class="ui">Browser</span> — Google search, websites, online PDFs, hierarchical bookmarks, and local browsing history.</li>
           </ul>
 
           <h2>One continuous research loop</h2>
@@ -788,7 +793,7 @@
           </table>
 
           <h2>Tabs across the top</h2>
-          <p>Use the five top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Progress messages appear in the reserved status area at the bottom so the main layout does not jump while work is running.</p>
+          <p>Use the six top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Browser instead has a Bookmarks/History sidebar beside a native webpage. Progress messages appear in reserved status areas so the main layout remains stable.</p>
 
           <p>On macOS, double-click only a genuinely blank part of the title bar when you want to zoom or restore the window. Double-clicking an app tab, the Library search field, or another top control is treated as interaction with that control and does not change the window size.</p>
 
@@ -799,6 +804,7 @@
             <tr><td><span class="ui">Journal Monitor</span></td><td>What appeared in selected journals on a given date?</td><td>Filter, inspect, download, or add to Library.</td></tr>
             <tr><td><span class="ui">Subject Monitor</span></td><td>What matches a defined scientific topic across supported sources?</td><td>Review source evidence and preserve useful results.</td></tr>
             <tr><td><span class="ui">Author Monitor</span></td><td>What is new in the work of a researcher I follow?</td><td>Inspect the author relationship, open the work, or add a Library placement.</td></tr>
+            <tr><td><span class="ui">Browser</span></td><td>What can I find on the web without leaving this workspace?</td><td>Search Google, read a website or online PDF, save a bookmark, or revisit history.</td></tr>
           </table>
 
           <h2>Watch one paper move through the workspace</h2>
@@ -1252,7 +1258,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/library-paper-files.png" alt="Library column view with a selected paper, its Paper Files bundle, and Paper Details">
-            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and article figure stay connected in the adjacent views.</figcaption>
+            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and citation evidence stay connected in the adjacent views.</figcaption>
           </figure>
 
           <h2>Read the columns from left to right</h2>
@@ -1879,8 +1885,8 @@
           <p class="lead">Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor with a selected date, journal groups, filters, and paper cards">
-            <figcaption><strong>Journal Monitor.</strong> Nature is selected for a stored publication date; the paper cards retain their metadata and loaded scientific figures while calendar, journal, and field controls remain available.</figcaption>
+            <img src="/user-guide-assets/journal-monitor.png" alt="Journal Monitor showing Nature papers for August 12, 2026, with scientific figures, calendar counts, and filters">
+            <figcaption><strong>Journal Monitor.</strong> Nature is selected for August 12, 2026, with scientific figures visible beside the paper cards. The independent sidebar retains calendar counts, the monitor summary, and journal and field filters.</figcaption>
           </figure>
 
           <h2>Refresh a date</h2>
@@ -1949,7 +1955,7 @@
 
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with Superconductivity selected, subject-specific calendar counts, and the asterisk legend below Updates">
-            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and a completed count for the selected date. Other dates with incomplete discovery carry a superscript asterisk; its explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.</figcaption>
+            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and a superscript asterisk on the partially completed count. The explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.</figcaption>
           </figure>
 
           <h2>Create a subject</h2>
@@ -2047,6 +2053,67 @@
           <div class="note"><span class="callout-title">Note</span>Google Scholar requests are paced and protected by a cooldown. Repeated manual refreshes during a block do not improve the result.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#my-publications">My Publications</a><a href="#network-access">Publisher and Network Access</a><a href="#privacy">Local Data and Privacy</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history PDF download VPN Clash DIRECT proxy TUN network sidebar">
+          <p class="topic-kicker">Browser</p>
+          <h1>Browse, Bookmark, and Revisit Websites</h1>
+          <p class="lead">Browser is the sixth main tab, immediately after Author Monitor. It displays real websites in a separate native WebKit view, beside a local Bookmarks/History sidebar.</p>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/browser.png" alt="Browser Home with Google's real search and sign-in controls, a Favorites grid using the public Journals folder, and sidebar controls along the bottom">
+            <figcaption>Home combines the real Google page with local Favorites. This example uses a public Journals folder and Nature sidebar search. Bottom controls stay readable even in a narrow sidebar; private pages and history are not shown.</figcaption>
+          </figure>
+
+          <h2>Search and navigate</h2>
+          <ol class="steps">
+            <li><strong>Open Browser.</strong> Its first use opens Home: the real Google homepage above a local Favorites grid. Google supplies its logo, search, and sign-in/account controls using Browser's own session, not Safari's. No website is preloaded during App startup.</li>
+            <li><strong>Use the address field.</strong> Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use <span class="key">⌘L</span> to focus the field.</li>
+            <li><strong>Navigate normally.</strong> Back, Forward, Reload/Stop, and Home sit in the compact toolbar. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height. Links requesting a new window stay in this Browser surface and its back stack.</li>
+            <li><strong>Switch between workspaces.</strong> Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.</li>
+          </ol>
+          <p><span class="key">⌘F</span> opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native <span class="ui">Gewu Insight.app</span>; opening the local UI in a separate web browser does not embed another browser engine.</p>
+          <p><strong>Choose your Favorites.</strong> Home recognizes an existing Favorites/Favourites folder, including supported localized or imported names. Use its folder selector to choose a different bookmark folder, or <span class="ui">Create Favorites Folder</span> if none exists. Tiles are the folder's direct children, not duplicate records. Open a child folder and use its breadcrumb to return; use <span class="ui">Add Favorite</span> to enter a link, or right-click a tile to edit it. The folder choice is saved locally. Deleting a chosen folder asks you to choose again rather than silently displaying another folder. Favorites stays available with the sidebar hidden or History selected. Google receives no Favorites list from Gewu.</p>
+
+          <h2>Save and organize bookmarks</h2>
+          <p>The sidebar's top tabs switch between <span class="ui">Bookmarks</span> and <span class="ui">History</span>, without a repeated heading. <span class="ui">Import</span>, <span class="ui">Export</span>, <span class="ui">+</span> (New Folder), and Search sit along the bottom; History shows Clear History and Search there instead. Drag the sidebar's right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.</p>
+          <ol class="steps">
+            <li><strong>Add a page.</strong> Use the bookmark toolbar button, <span class="ui">Share &gt; Add Bookmark</span>, or <span class="key">⌘D</span>. The native sheet starts with the page title and address.</li>
+            <li><strong>Choose a location.</strong> Edit the name or address and choose a folder under <span class="ui">Add to</span>. The previous destination is remembered. Saving the same address in the same folder reuses the existing bookmark.</li>
+            <li><strong>Create nested folders.</strong> Use <span class="ui">New Folder</span>, or right-click a folder to create a child folder. The editor can also rename a folder or choose another parent.</li>
+            <li><strong>Arrange the tree.</strong> Drag an item into the middle of a folder row to move it inside, or to a row edge to reorder it. Drop on the top <span class="ui">Bookmarks</span> tab to move to the root. A folder cannot move inside itself or its descendants.</li>
+            <li><strong>Save by dragging.</strong> Drag the website icon beside the address field, or a webpage link, into a bookmark folder. Confirm the name and destination in the same native sheet.</li>
+          </ol>
+          <p>Search filters bookmark names and addresses. Right-click a bookmark for <span class="ui">Open</span>, <span class="ui">Edit Bookmark</span>, or <span class="ui">Delete</span>. Deleting a folder requires confirmation and removes its contained bookmarks, not websites, browsing history, downloaded files, or papers. A bookmark is a saved link, not an offline webpage copy.</p>
+
+          <h2>Import and export bookmarks</h2>
+          <p>Choose <span class="ui">Import</span> at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with <span class="ui">File &gt; Export Bookmarks</span> produce HTML; newer Safari versions may use <span class="ui">File &gt; Export Browsing Data to File</span> and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use <span class="ui">Bookmark Manager &gt; menu &gt; Export Bookmarks</span>.</p>
+          <p>Imports go into <span class="ui">Imported Bookmarks</span>, retaining folders, order, names, and supported links. Repeating an import merges matching folder names and reuses the same URL in the same folder; existing bookmarks are not overwritten. The result reports added bookmarks, new folders, duplicates, and skipped links. Local addresses, application links, and recognized authorization links are skipped. Limits are 10 MB, 20,000 source entries, and 64 folder levels; invalid files do not partially import.</p>
+          <p><span class="ui">Export</span> saves the full tree as standard bookmark HTML; right-click a folder for <span class="ui">Export Folder</span>. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private. Import/export is on demand, not ongoing Safari or Chrome synchronization.</p>
+
+          <h2>Website icons</h2>
+          <p>Visible bookmark rows and Favorites tiles request website icons directly from the corresponding sites, with at most two requests in flight. Icons share a local cache; unavailable icons show a globe in the sidebar or a letter on Home. Visiting a page may supply its nonstandard icon address. Gewu does not send your bookmark list to an external icon service, fetch entire article pages for icons, or attach cookies or credentials. The disposable icon cache is separate from SQLite bookmarks.</p>
+
+          <h2>Revisit and clear history</h2>
+          <p>History groups successfully loaded main pages by Today, Yesterday, and date. It includes names, sites, and visit times, supports search, and loads older records in pages. Image/script requests and main-tab switching do not create visits. Reloading the same navigation updates its existing record rather than adding duplicates.</p>
+          <p>Click a history entry to revisit it. Its context menu can add a bookmark or delete that visit. <span class="ui">Clear History</span> offers Last hour, Last 24 hours, Last 7 days, and All history, with confirmation. It preserves bookmarks, downloaded files, cookies, and website sign-ins. Ordinary history is retained until you delete it; authorization callbacks and recognized signed-download URLs are excluded from saved history.</p>
+
+          <h2>Read PDFs and save downloads</h2>
+          <p>Viewable PDF responses open inline, even when a publisher labels the PDF as an attachment or its link requests a download. Back and Forward retain the article/PDF navigation. Use the download button or <span class="ui">Share &gt; Save Download</span> to save explicitly. Other attachments and unsupported formats open the native save sheet. Both viewing and downloading use Browser's website session, not the Python publisher downloader.</p>
+          <p>A saved download is not automatically added to Library and does not create a paper or Gewu Key. <a href="#import-files">Import it explicitly</a> when wanted. Existing Library PDF opening in macOS Preview is unchanged. A website may require its own Download link to obtain an actual PDF rather than an HTML viewer.</p>
+
+          <h2>System networking and Clash rules</h2>
+          <p>Browser uses macOS WebKit networking without an App-specific proxy override. If system proxy or TUN routing sends traffic into Clash, its active rules choose DIRECT or a proxy. The <span class="ui">System network</span> footer describes this policy, not a verified route. Gewu Insight does not change Clash settings.</p>
+          <p>DIRECT still needs a school-recognized network exit or authorized institutional login. PDF, login, and CDN domains match rules separately; Chrome-only extensions or Safari/Chrome-only process rules are not inherited. Check actual Clash connections, not just homepage access. See <a href="#network-access">Publisher and Network Access</a> for the distinction between traffic capture and routing rules.</p>
+
+          <h2>Privacy and compatibility boundaries</h2>
+          <p>Bookmarks and history live in <a href="#privacy">local SQLite</a>, separate from paper records. Cookies and cache use an independent persistent WebKit profile. Safari data and extensions are not automatically imported or synchronized. Browsing and search requests go to the websites you visit.</p>
+          <p>External pages receive no Library or credential bridge. Local app addresses, files, and application schemes are blocked. An HTTP bookmark or redirect blocked by macOS may retry once as a same-host HTTPS GET; forms are not replayed, and certificate checks are never bypassed. Failures show a specific reason and error code. The local server rejects cross-site API requests and unrecognized hosts.</p>
+
+          <h2>Use macOS Passwords</h2>
+          <p>The key-shaped <span class="ui">Open Passwords</span> button opens Apple's Passwords app on supported Macs. Unlock and choose credentials there yourself; on older macOS versions, use Passwords in System Settings. Gewu does not create a password vault, import or export passwords, read the system password list, or relay passwords through its local UI API.</p>
+          <p><strong>Automatic password filling is not implemented.</strong> On the tested macOS 15.1.1, focusing Google's username field does not provide Safari's saved-account suggestions. Apple's normal App password API requires a trusted App/website association; it is not an arbitrary-website password lookup. WebAuthn/passkey prompts are a different capability. Safari/Chrome password extensions are not inherited by this WKWebView. Open Passwords lets you choose and copy a credential yourself; use <span class="ui">Open in Safari</span> when Safari AutoFill is needed. Gewu does not inspect your vault or add false associated-domain claims.</p>
+          <p>A macOS prompt for <span class="ui">Gewu Insight WebCrypto Master Key</span> concerns WebKit's protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.</p>
+          <div class="important"><span class="callout-title">Compatibility</span>Some sign-in providers or publisher checks reject embedded browsers. Use <span class="ui">Open in Safari</span> for those cases; it opens the address but does not transfer Browser cookies. Do not bypass a paywall, CAPTCHA, or access control. Existing Open Website and Google Scholar actions elsewhere in the App still use their previous external-browser workflow in this first Browser release.</div>
         </article>
 
         <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Open Source Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
@@ -2233,6 +2300,7 @@
           <ul>
             <li>The UI server listens on the local loopback address, normally <code>127.0.0.1:8765</code>.</li>
             <li>SQLite stores papers, identities, relationships, settings, and operational state.</li>
+            <li>Browser bookmarks, folders, history, and sidebar preferences also live in SQLite. Browser cookies and cache use a separate persistent WebKit profile; they are not shared with Safari or exported with the database.</li>
             <li>Managed PDFs, attachments, photos, and generated reports stay in local project directories.</li>
             <li>JSON files are exports or diagnostics; they are not the authoritative database.</li>
           </ul>
@@ -2315,7 +2383,10 @@
             <tr><td><kbd>Space</kbd></td><td>Open or close Quick Look for the selected Paper Files item.</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Dismiss an active transient control or return focus where supported.</td></tr>
             <tr><td><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></td><td>Toggle List View and Table View.</td></tr>
-            <tr><td><kbd>⌘</kbd><kbd>L</kbd></td><td>Open Folder Loader.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>L</kbd></td><td>Focus the address/search field in Browser; otherwise open Folder Loader.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>D</kbd></td><td>In Browser, bookmark the current page.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>R</kbd></td><td>In Browser, reload the current page.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>F</kbd></td><td>In Browser, find text on the current page.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>,</kbd></td><td>Show Open Source Settings.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>W</kbd></td><td>Close the current window.</td></tr>
           </table>
@@ -2341,6 +2412,9 @@
 
           <h2>Why figures may arrive later</h2>
           <p>Figure and article-page retrieval is queued behind discovery work and uses caching. This reduces simultaneous RSS, page, and image requests to the same publisher. A paper can appear before its representative image.</p>
+
+          <h2>Browser and your system network</h2>
+          <p>The Browser tab uses native WebKit requests and does not proxy pages through the Python server. System proxy or TUN capture can send its traffic into Clash; only then do the active rules determine DIRECT or proxy routing. A DIRECT rule uses your current physical network, which must itself provide institutional access. Gewu Insight neither changes these rules nor guarantees a particular route; use Clash connection records to verify the actual route. See <a href="#browser">Browse, Bookmark, and Revisit Websites</a> for downloads, sign-in limits, and the separate browser profile.</p>
 
           <h2>Service rate limits</h2>
           <p>Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, cooldowns, or exponential backoff. Let the bottom status area settle before starting the same action again.</p>

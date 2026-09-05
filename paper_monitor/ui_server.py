@@ -38,6 +38,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
+from .browser_store import BrowserStore
 from .config import (
     AppConfig,
     DEFAULT_ASSOCIATED_FILES_DIR,
@@ -496,9 +497,36 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     server_version = "GewuInsightUI/0.1"
 
+    def trusted_local_request(self, *, browser: bool = False) -> bool:
+        """Reject cross-site requests and DNS-rebound hosts before any API work.
+
+        Native/CLI loopback clients may omit Origin. Browser organization always
+        requires an explicit same-origin JSON request from the trusted app UI.
+        """
+        host = self.headers.get("Host", "").lower()
+        port = self.server.server_port
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+        origin = self.headers.get("Origin", "")
+        site = self.headers.get("Sec-Fetch-Site", "")
+        valid = host in allowed and site not in {"cross-site", "same-site"}
+        if origin:
+            valid = valid and origin == f"http://{host}"
+        if browser:
+            valid = valid and origin == f"http://{host}" and self.headers.get("X-Gewu-Browser") == "1"
+        if not valid:
+            self.send_error_json(HTTPStatus.FORBIDDEN, "This local API is available only to the Gewu Insight workspace.")
+        return bool(valid)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if not self.trusted_local_request():
+            return
         try:
+            if parsed.path in {"/browser-ui.js", "/browser-ui.css"}:
+                filename = "browser_ui.js" if parsed.path.endswith(".js") else "browser_ui.css"
+                content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
+                self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
+                return
             if parsed.path == "/api/health":
                 self.send_json({"ok": True})
                 return
@@ -685,7 +713,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
+            return
         try:
+            if parsed.path == "/api/browser":
+                if int(self.headers.get("Content-Length") or 0) > 15 * 1024 * 1024:
+                    self.close_connection = True
+                    self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Browser request exceeds 15 MB.")
+                    return
+                self.handle_browser(self.read_json_body())
+                return
             if parsed.path == "/api/paper-files":
                 self.handle_add_paper_file()
                 return
@@ -5459,6 +5496,43 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             else:
                 fields[name] = content.decode(part.get_content_charset() or "utf-8", errors="replace")
         return fields, files
+
+    def handle_browser(self, payload: dict[str, Any]) -> None:
+        from .browser_bookmarks import export_bookmarks, import_bookmarks
+        storage = Storage(self.configured_db_path)
+        try:
+            browser = BrowserStore(storage.conn)
+            action = payload.get("action", "state")
+            result: dict[str, Any] = {"ok": True}
+            if action == "suggestions":
+                self.send_json({"ok": True, "suggestions": browser.suggestions(payload.get("query", ""))})
+                return
+            if action == "save_bookmark":
+                result.update(browser.save_bookmark(payload))
+            elif action == "import_bookmarks":
+                result["import_result"] = import_bookmarks(browser, payload)
+            elif action == "export_bookmarks":
+                result["html"] = export_bookmarks(browser, payload.get("root_id"))
+            elif action == "move_bookmark":
+                browser.move_bookmark(payload.get("id"), payload.get("parent_id"), payload.get("before_id"))
+            elif action == "delete_bookmark":
+                browser.delete_bookmark(payload.get("id"))
+            elif action == "visit":
+                browser.record_visit(payload)
+            elif action == "clear_history":
+                browser.clear_history(payload)
+            elif action == "preferences":
+                browser.save_preferences(payload)
+            elif action != "state":
+                raise ValueError("Unknown browser action.")
+            if action not in {"visit", "preferences", "export_bookmarks"}:
+                result.update(bookmarks=browser.bookmarks(), preferences=browser.preferences())
+                result.update(browser.history(payload.get("query", ""), payload.get("offset", 0)))
+            self.send_json(result)
+        except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        finally:
+            storage.close()
 
     def send_text(self, text: str, *, content_type: str) -> None:
         data = text.encode("utf-8")
@@ -34316,6 +34390,7 @@ INDEX_HTML = """<!doctype html>
       .library-page-thumb { width: 58px; min-height: 78px; }
     }
   </style>
+  <link rel="stylesheet" href="/browser-ui.css">
 </head>
 <body>
   <div class="app-startup-cover" id="appStartupCover" role="status" aria-live="polite">
@@ -34387,6 +34462,7 @@ INDEX_HTML = """<!doctype html>
               <button class="view-switch" id="reportMode" type="button">Journal Monitor</button>
               <button class="view-switch" id="themeMode" type="button">Subject Monitor</button>
               <button class="view-switch" id="authorMode" type="button"><span>Author Monitor</span><span class="view-switch-dot" id="authorMonitorTopDot" hidden></span></button>
+              <button class="view-switch" id="browserMode" type="button">Browser</button>
             </div>
             <h2 id="reportTitle"></h2>
             <div class="toolbar-actions hidden" id="reportToolbarActions">
@@ -39840,7 +39916,7 @@ INDEX_HTML = """<!doctype html>
       refreshSelectedReportPaperQuickLook({open: true});
     }
 
-    const PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author"];
+    const PRIMARY_KEYBOARD_VIEWS = ["library", "my-publications", "report", "theme", "author", "browser"];
 
     function currentPrimaryKeyboardView() {
       if (state.mode === "library") {
@@ -39855,7 +39931,8 @@ INDEX_HTML = """<!doctype html>
         "my-publications": "myPublicationsMode",
         "report": "reportMode",
         "theme": "themeMode",
-        "author": "authorMode"
+        "author": "authorMode",
+        "browser": "browserMode"
       };
       return $(ids[view] || "libraryMode");
     }
@@ -39888,6 +39965,7 @@ INDEX_HTML = """<!doctype html>
       if (view === "report") task = openJournalMonitor();
       if (view === "theme") task = openThemeMonitor();
       if (view === "author") task = openAuthorMonitor();
+      if (view === "browser") task = window.gewuBrowser?.open();
       Promise.resolve(task).catch((error) => {
         showMonitorStatusMessage(error?.message || "Could not switch view");
       });
@@ -39911,6 +39989,10 @@ INDEX_HTML = """<!doctype html>
     function focusPrimarySurfaceContent() {
       state.primaryKeyboardLayer = "content";
       syncPrimaryKeyboardLayer({focus: false});
+      if (state.mode === "browser") {
+        $("browserAddress")?.focus();
+        return true;
+      }
       if (state.mode === "report" || state.mode === "theme") {
         state.monitorKeyboardPanes[activeMonitorKeyboardMode()] = "papers";
         renderCalendar();
@@ -56364,6 +56446,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function setPrimaryView(view) {
+      window.gewuBrowser?.setActive(view === "browser");
       const isLibrarySurface = view === "library" || view === "my-publications";
       const app = document.querySelector(".app");
       const switchingToMonitor = ["report", "theme", "author"].includes(view) && !app?.classList.contains(`${view}-mode`);
@@ -56380,11 +56463,13 @@ INDEX_HTML = """<!doctype html>
       app?.classList.toggle("report-mode", view === "report");
       app?.classList.toggle("theme-mode", view === "theme");
       app?.classList.toggle("author-mode", view === "author");
+      app?.classList.toggle("browser-mode", view === "browser");
       $("libraryMode")?.classList.toggle("active", view === "library");
       $("myPublicationsMode")?.classList.toggle("active", view === "my-publications");
       $("reportMode")?.classList.toggle("active", view === "report");
       $("themeMode")?.classList.toggle("active", view === "theme");
       $("authorMode")?.classList.toggle("active", view === "author");
+      $("browserMode")?.classList.toggle("active", view === "browser");
       $("sideLibraryMode")?.classList.toggle("active", view === "library" || view === "my-publications");
       $("sideReportMode")?.classList.toggle("active", view === "report");
       $("sideThemeMode")?.classList.toggle("active", view === "theme");
@@ -57008,6 +57093,7 @@ INDEX_HTML = """<!doctype html>
       updateReportPanelToggle();
     }
   </script>
+  <script src="/browser-ui.js"></script>
 </body>
 </html>
 """

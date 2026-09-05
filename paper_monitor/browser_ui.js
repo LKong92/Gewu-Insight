@@ -1,0 +1,604 @@
+/* Browser chrome lives in the trusted workspace; remote content lives in a
+ * separate native WKWebView. Never embed a remote page under the local origin. */
+(function (global) {
+  "use strict";
+  const HOME = "https://www.google.com/";
+  const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  function address(value) {
+    const text = String(value || "").trim();
+    if (!text) return HOME;
+    if (/^[a-z][a-z\d+.-]*:/i.test(text) && !/^https?:/i.test(text)) throw new Error("Use an HTTP or HTTPS website address.");
+    if (/^https?:\/\//i.test(text)) return new URL(text).href;
+    if (!/\s/.test(text) && /^[^/]+\.[^/]+/.test(text)) return new URL("https://" + text).href;
+    return "https://www.google.com/search?q=" + encodeURIComponent(text);
+  }
+  function folderChoices(nodes, excludedId = null) {
+    const result = [], seen = new Set();
+    const walk = (parent, prefix) => {
+      for (const node of nodes.filter(n => n.parent_id === parent && n.kind === "folder")) {
+        if (node.id === excludedId || seen.has(node.id)) continue;
+        seen.add(node.id);
+        const title = prefix ? prefix + " / " + node.title : node.title;
+        result.push({id: node.id, title}); walk(node.id, title);
+      }
+    };
+    walk(null, ""); return result;
+  }
+  function bookmarkTree(nodes, expanded, query = "") {
+    const result = [], seen = new Set(), needle = query.trim().toLocaleLowerCase();
+    if (needle) return nodes.filter(n => `${n.title} ${n.url || ""}`.toLocaleLowerCase().includes(needle)).map(n => ({...n, depth: 0}));
+    const walk = (parent, depth) => {
+      for (const node of nodes.filter(n => n.parent_id === parent)) {
+        if (seen.has(node.id)) continue;
+        seen.add(node.id); result.push({...node, depth});
+        if (node.kind === "folder" && expanded.has(node.id)) walk(node.id, depth + 1);
+      }
+    };
+    walk(null, 0); return result;
+  }
+  function dayLabel(value, today = new Date()) {
+    const date = new Date(value), yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (date.toDateString() === today.toDateString()) return "Today";
+    if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+    return date.toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
+  }
+  function droppedURL(value) {
+    const line = String(value || "").split(/\r?\n/).find(text => text.trim() && !text.startsWith("#"))?.trim();
+    if (!/^https?:\/\//i.test(line || "")) throw new Error("Drag an HTTP or HTTPS website link to Bookmarks.");
+    return new URL(line).href;
+  }
+  function microtaskScheduler(callback) {
+    let pending = false;
+    return () => {
+      if (pending) return;
+      pending = true;
+      queueMicrotask(() => { pending = false; callback(); });
+    };
+  }
+  function isGoogleHome(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port &&
+        ["google.com", "www.google.com"].includes(url.hostname) &&
+        ["/", "/webhp"].includes(url.pathname) && !url.searchParams.has("q");
+    } catch (_) { return false; }
+  }
+  function favoritesFolder(nodes) {
+    const folders = nodes.filter(node => node.kind === "folder");
+    // Home is fixed to Favorites, never an old arbitrary folder preference or
+    // a browser's unrelated toolbar folder. Prefer the canonical English name.
+    for (const name of ["favorites", "favourites", "个人收藏", "收藏夹"]) {
+      const matches = folders.filter(node => node.title.trim().toLocaleLowerCase() === name);
+      if (matches.length) return matches.find(node => node.parent_id == null) || matches[0];
+    }
+    return null;
+  }
+  function inlineCompletion(typed, url) {
+    if (!typed || /\s/.test(typed)) return null;
+    const candidates = [url, url.replace(/^https?:\/\//i, ""), url.replace(/^https?:\/\/(www\.)?/i, "")];
+    const match = candidates.find(value => value.toLocaleLowerCase().startsWith(typed.toLocaleLowerCase()) && value.length > typed.length);
+    return match ? typed + match.slice(typed.length) : null;
+  }
+  function favoriteContents(nodes, folder, requested) {
+    if (!folder) return {folder:null, trail:[], items:[]};
+    const trail = [], seen = new Set();
+    let current = nodes.find(node => node.id === requested && node.kind === "folder") || folder;
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id); trail.unshift(current);
+      if (current.id === folder.id) return {folder:trail[trail.length - 1], trail, items:nodes.filter(node => node.parent_id === trail[trail.length - 1].id)};
+      current = nodes.find(node => node.id === current.parent_id && node.kind === "folder");
+    }
+    return {folder, trail:[folder], items:nodes.filter(node => node.parent_id === folder.id)};
+  }
+  const model = {address, droppedURL, bookmarkTree, folderChoices, dayLabel, escape, microtaskScheduler, isGoogleHome, favoritesFolder, favoriteContents, inlineCompletion};
+  if (typeof module !== "undefined" && module.exports) module.exports = model;
+  if (typeof document === "undefined") return;
+
+  const $ = id => document.getElementById(id);
+  const bridge = () => global.webkit?.messageHandlers?.browser;
+  const native = payload => { if (bridge()) bridge().postMessage(payload); };
+  const data = {active:false, opened:false, loaded:false, tab:"bookmarks", bookmarks:[], history:[], more:false,
+    preferences:{}, expanded:new Set(), width:250, hidden:false, url:"", title:"", loading:false,
+    query:"", selected:null, favoritePath:null, home:false, fetching:0, layout:"", editor:null, confirm:null, searchTimer:null, persistTimer:null,
+    addressQuery:"", suggestions:[], suggestionIndex:-1, suggestionGeneration:0, addressTimer:null, composing:false};
+  const icons = {
+    back:'<path d="m14 5-7 7 7 7"/>', forward:'<path d="m10 5 7 7-7 7"/>',
+    reload:'<path d="M19 8a8 8 0 1 0 1 7M19 3v6h-6"/>', stop:'<path d="m6 6 12 12M18 6 6 18"/>',
+    home:'<path d="m3 11 9-8 9 8M6 9v11h5v-6h3v6h4V9"/>',
+    sidebar:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    bookmark:'<path d="M6 4h12v17l-6-4-6 4V4Z"/>',
+    share:'<path d="M8 8H5v13h14V8h-3M12 14V2m-4 4 4-4 4 4"/>',
+    globe:'<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>',
+    folder:'<path d="M3 7V5h7l2 3h9v12H3V7Z"/>', plus:'<path d="M12 4v16M4 12h16"/>',
+    down:'<path d="m6 9 6 6 6-6"/>', right:'<path d="m9 6 6 6-6 6"/>',
+    download:'<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
+    external:'<path d="M14 3h7v7m0-7L10 14M11 5H4v16h16v-7"/>',
+    key:'<circle cx="8" cy="9" r="5"/><path d="m12 13 8 8m-3-3 3-3m-6 0 3-3"/>'
+  };
+  const icon = key => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[key] || icons.globe}</svg>`;
+  const button = (id, title, glyph) => `<button type="button" id="${id}" title="${title}" aria-label="${title}">${icon(glyph)}</button>`;
+  const root = document.createElement("section");
+  root.id = "gewuBrowser"; root.hidden = true; root.setAttribute("aria-label", "Browser");
+  root.innerHTML = `
+    <div class="browser-toolbar">
+      ${button("browserSidebarToggle", "Show or hide sidebar", "sidebar")}
+      ${button("browserBack", "Back", "back")}${button("browserForward", "Forward", "forward")}
+      ${button("browserReload", "Reload", "reload")}${button("browserHome", "Home — Google and Favorites", "home")}
+      <form id="browserAddressForm" class="browser-address-form">
+        <a id="browserSiteIcon" href="#" draggable="true" title="Drag this page into a bookmark folder" aria-label="Drag page to bookmarks">${icon("globe")}</a>
+        <input id="browserAddress" type="text" placeholder="Search Google or enter a website" aria-label="Search Google or enter a website" aria-autocomplete="both" aria-expanded="false" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <div id="browserProgress" class="browser-progress"></div>
+      </form>
+      ${button("browserAddBookmark", "Add Bookmark (⌘D)", "bookmark")}
+      ${button("browserPasswords", "Open Passwords", "key")}
+      ${button("browserShare", "Share and page actions", "share")}
+    </div>
+    <div class="browser-body">
+      <aside id="browserSidebar" class="browser-sidebar" aria-label="Browser sidebar">
+        <div class="browser-sidebar-tabs" role="tablist" aria-label="Browser collections">
+          <button id="browserBookmarksTab" role="tab" aria-selected="true" title="Bookmarks · Drop here to move to the root folder">Bookmarks</button>
+          <button id="browserHistoryTab" role="tab" aria-selected="false">History</button>
+        </div>
+        <div id="browserCollection" class="browser-collection" tabindex="0" role="tabpanel" aria-label="Bookmarks"></div>
+        <div class="browser-sidebar-footer">
+          <div id="browserBookmarkTransfer"><button id="browserImportBookmarks">Import</button><button id="browserExportBookmarks">Export</button></div>
+          <button id="browserNewFolder" title="New Folder" aria-label="New Folder">${icon("plus")}</button>
+          <button id="browserClearHistory" hidden>Clear History</button>
+          <input id="browserSidebarSearch" class="browser-sidebar-search" type="search" placeholder="Search bookmarks" aria-label="Search bookmarks">
+        </div>
+        <div id="browserResize" class="browser-sidebar-resize" role="separator" tabindex="0" aria-label="Resize browser sidebar" aria-orientation="vertical"></div>
+      </aside>
+      <div class="browser-page-column">
+        <div id="browserFindBar" class="browser-find" hidden><input id="browserFindInput" placeholder="Find on page" aria-label="Find on page"><button id="browserFindPrevious" title="Previous match">↑</button><button id="browserFindNext" title="Next match">↓</button><span id="browserFindResult"></span><button id="browserFindClose" aria-label="Close find">×</button></div>
+        <div id="browserMessage" class="browser-message" role="status" hidden><span id="browserMessageText"></span><button id="browserMessageDismiss" aria-label="Dismiss message">×</button></div>
+        <div id="browserViewport" class="browser-viewport"><div class="browser-native-placeholder">${icon("globe")}<strong>Browser</strong><span id="browserNativeHint">Opening the native web browser.</span></div></div>
+        <section id="browserFavorites" class="browser-favorites" aria-label="Favorites start page" hidden>
+          <div class="browser-favorites-inner">
+            <nav id="browserFavoritesTrail" class="browser-favorites-trail" aria-label="Favorite folders" hidden></nav>
+            <div id="browserFavoritesGrid" class="browser-favorites-grid"></div>
+          </div>
+        </section>
+        <div class="browser-page-footer"><span title="Uses the system network. Actual DIRECT or proxy routing is determined by your network and Clash configuration.">System network</span><span id="browserPageTitle"></span>${button("browserDownload", "Save Download", "download")}${button("browserExternal", "Open in Safari", "external")}</div>
+      </div>
+    </div><div id="browserContext" class="browser-context" hidden></div>`;
+  document.body.append(root);
+
+  const siteIcons = new Map();
+  const faviconObserver = new IntersectionObserver(entries => {
+    if (!data.active || data.hidden || data.tab !== "bookmarks") return;
+    for (const entry of entries) if (entry.isIntersecting && !siteIcons.has(entry.target.dataset.iconHost)) {
+      native({action:"favicon", url:entry.target.dataset.iconUrl});
+    }
+  }, {root:$("browserCollection"), rootMargin:"32px"});
+  const favoritesIconObserver = new IntersectionObserver(entries => {
+    if (!data.active || !data.home) return;
+    for (const entry of entries) if (entry.isIntersecting && !siteIcons.has(entry.target.dataset.iconHost)) {
+      native({action:"favicon", url:entry.target.dataset.iconUrl});
+    }
+  }, {root:$("browserFavorites"), rootMargin:"32px"});
+  function bookmarkIcon(node, tile = false) {
+    if (node.kind === "folder") return icon("folder");
+    const host = new URL(node.url).hostname.toLowerCase(), saved = siteIcons.get(host);
+    return `<span class="browser-site-image" data-icon-host="${escape(host)}" data-icon-url="${escape(node.url)}">${saved ? `<img alt="" src="${escape(saved)}">` : tile ? `<span class="browser-monogram">${escape(Array.from(node.title.trim() || host)[0].toLocaleUpperCase())}</span>` : icon("globe")}</span>`;
+  }
+  function renderFavorites() {
+    favoritesIconObserver.disconnect();
+    const folder = favoritesFolder(data.bookmarks);
+    const contents = favoriteContents(data.bookmarks, folder, data.favoritePath);
+    data.favoritePath = contents.folder?.id || null;
+    $("browserFavoritesTrail").hidden = contents.trail.length < 2;
+    $("browserFavoritesTrail").innerHTML = contents.trail.map((item, index) => `${index ? '<span aria-hidden="true">/</span>' : ''}<button data-favorite-folder="${item.id}" ${index === contents.trail.length - 1 ? 'aria-current="page"' : ''}>${escape(item.title)}</button>`).join("");
+    $("browserFavoritesGrid").innerHTML = contents.items.map(node => `<button class="browser-favorite-tile" data-favorite-id="${node.id}" title="${escape(node.url || node.title)}"><span class="browser-favorite-icon ${node.kind}" aria-hidden="true">${bookmarkIcon(node, true)}</span><span class="browser-favorite-title">${escape(node.title)}</span></button>`).join("") +
+      (folder ? `<button class="browser-favorite-tile browser-favorite-add" id="browserAddFavorite" title="Add a bookmark to this folder"><span class="browser-favorite-icon">${icon("plus")}</span><span class="browser-favorite-title">Add Favorite</span></button>` : '<div class="browser-favorites-empty">Websites in your Favorites folder appear here.<button id="browserCreateFavorites">Create Favorites Folder</button></div>');
+    $("browserAddFavorite")?.addEventListener("click", () => edit({title:"New Favorite",url:"https://"}, "bookmark", contents.folder.id).catch(fail));
+    $("browserCreateFavorites")?.addEventListener("click", async () => {
+      try {
+        const result = await api("save_bookmark", {kind:"folder", title:"Favorites", parent_id:null});
+        data.favoritePath = null; await refresh();
+      } catch (error) { fail(error); }
+    });
+    $("browserFavoritesGrid").querySelectorAll('[data-icon-host]').forEach(element => favoritesIconObserver.observe(element));
+  }
+  function updateHome() {
+    const home = isGoogleHome(data.url);
+    if (data.home === home) return;
+    data.home = home;
+    root.classList.toggle("browser-at-home", home);
+    $("browserFavorites").hidden = !home;
+    if (home) renderFavorites();
+    scheduleLayout();
+  }
+
+  function message(text, error = false) {
+    $("browserMessageText").textContent = text || "";
+    $("browserMessage").hidden = !text;
+    $("browserMessage").classList.toggle("error", error);
+    scheduleLayout();
+  }
+  async function api(action, payload = {}) {
+    const response = await fetch("/api/browser", {method:"POST", headers:{"Content-Type":"application/json", "X-Gewu-Browser":"1"}, body:JSON.stringify({action, ...payload})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Browser data could not be saved.");
+    return result;
+  }
+  function fail(error) { message(error.message || "This browser action could not be completed.", true); }
+  function persist(values) {
+    Object.assign(data.preferences, values);
+    clearTimeout(data.persistTimer);
+    data.persistTimer = setTimeout(() => api("preferences", data.preferences).catch(fail), 180);
+  }
+  async function refresh(append = false) {
+    const generation = ++data.fetching;
+    const result = await api("state", {query:data.tab === "history" ? data.query : "", offset:append ? data.history.length : 0});
+    if (generation !== data.fetching) return;
+    data.bookmarks = result.bookmarks;
+    data.history = append ? [...data.history, ...result.history] : result.history;
+    data.more = result.history_more;
+    if (!data.loaded) {
+      data.preferences = result.preferences || {};
+      data.width = data.preferences.sidebar_width || 250;
+      data.hidden = Boolean(data.preferences.sidebar_hidden);
+      data.tab = data.preferences.tab || "bookmarks";
+      data.expanded = new Set(data.preferences.expanded || []);
+      data.loaded = true;
+    }
+    render();
+  }
+  function render() {
+    root.style.setProperty("--browser-sidebar-width", data.width + "px");
+    root.classList.toggle("sidebar-hidden", data.hidden);
+    $("browserSidebarToggle").setAttribute("aria-expanded", String(!data.hidden));
+    $("browserBookmarksTab").setAttribute("aria-selected", String(data.tab === "bookmarks"));
+    $("browserHistoryTab").setAttribute("aria-selected", String(data.tab === "history"));
+    $("browserSidebarSearch").placeholder = data.tab === "bookmarks" ? "Search bookmarks" : "Search history";
+    $("browserSidebarSearch").setAttribute("aria-label", $("browserSidebarSearch").placeholder);
+    $("browserNewFolder").hidden = data.tab !== "bookmarks";
+    $("browserClearHistory").hidden = data.tab !== "history";
+    $("browserBookmarkTransfer").hidden = data.tab !== "bookmarks";
+    faviconObserver.disconnect();
+    const list = $("browserCollection"), scroll = list.scrollTop;
+    list.setAttribute("aria-label", data.tab === "bookmarks" ? "Bookmarks" : "History");
+    if (data.tab === "bookmarks") {
+      const rows = bookmarkTree(data.bookmarks, data.expanded, data.query);
+      list.innerHTML = rows.map(node => `<div class="browser-bookmark-row${data.selected === node.id ? " selected" : ""}" data-bookmark-id="${node.id}" data-kind="${node.kind}" style="--depth:${Math.min(node.depth, 10)}" draggable="true" tabindex="0" title="${escape(node.url || node.title)}">
+        <button class="browser-disclosure" data-disclose="${node.id}" ${node.kind !== "folder" ? 'tabindex="-1" disabled' : `aria-expanded="${data.expanded.has(node.id)}" aria-label="${data.expanded.has(node.id) ? "Collapse" : "Expand"} ${escape(node.title)}"`}>${node.kind === "folder" ? icon(data.expanded.has(node.id) ? "down" : "right") : ""}</button>
+        <span class="browser-entry-icon ${node.kind}">${bookmarkIcon(node)}</span><span class="browser-entry-title">${escape(node.title)}</span></div>`).join("") || `<div class="browser-empty">${data.query ? "No matching bookmarks." : "Your saved websites will appear here.<br>Use Add Bookmark or ⌘D to save a page."}</div>`;
+      list.querySelectorAll('[data-icon-host]').forEach(element => faviconObserver.observe(element));
+    } else {
+      let day = "";
+      list.innerHTML = data.history.map(visit => {
+        const label = dayLabel(visit.visited_at), heading = day === label ? "" : `<div class="browser-history-day">${escape(label)}</div>`;
+        day = label;
+        return heading + `<button class="browser-history-row" data-history-id="${visit.id}" title="${escape(visit.url)}"><span>${escape(visit.title)}</span><small>${escape(new URL(visit.url).hostname)} · ${escape(new Date(visit.visited_at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}))}</small></button>`;
+      }).join("") || `<div class="browser-empty">${data.query ? "No matching history." : "Pages you visit will appear here."}</div>`;
+      if (data.more) list.insertAdjacentHTML("beforeend", '<button class="browser-more" id="browserHistoryMore">Load More</button>');
+      $("browserHistoryMore")?.addEventListener("click", () => refresh(true).catch(fail));
+    }
+    list.scrollTop = scroll;
+    renderFavorites();
+    scheduleLayout();
+  }
+  function visibleDialog() {
+    return [...document.querySelectorAll('[role="dialog"], dialog[open], .finder-drop-overlay')].some(element => {
+      const style = getComputedStyle(element);
+      return element.getClientRects().length && style.visibility !== "hidden" && style.display !== "none";
+    });
+  }
+  function layout() {
+    const rect = $("browserViewport").getBoundingClientRect();
+    const active = data.active;
+    const payload = {action:"layout", active, visible:active && !visibleDialog(), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
+    const signature = JSON.stringify(payload);
+    if (signature !== data.layout) { data.layout = signature; native(payload); }
+  }
+  // The workspace WKWebView can stop receiving animation frames while the
+  // independent webpage view has focus. Layout must still track sidebar sizes,
+  // sheets, and messages; coalesce changes without depending on a paint frame.
+  const scheduleLayout = microtaskScheduler(layout);
+  function setActive(active) {
+    data.active = active; root.hidden = !active; closeContext();
+    closeSuggestions();
+    if (!active) { data.layout = ""; layout(); return; }
+    render(); layout();
+    if (!bridge()) {
+      $("browserNativeHint").textContent = "Open Gewu Insight.app to use the embedded browser. Bookmarks and history remain available here.";
+      refresh().catch(fail); return;
+    }
+    if (!data.opened) { data.opened = true; navigate(HOME); }
+    refresh().catch(fail);
+  }
+  function open() {
+    if (typeof closeLibraryQuickLook === "function" && state.libraryQuickLookOpen) closeLibraryQuickLook();
+    setPrimaryView("browser"); state.mode = "browser";
+  }
+  function navigate(value) {
+    try {
+      const url = address(value);
+      closeSuggestions();
+      message("");
+      $("browserAddress").value = url;
+      native({action:"navigate", url});
+    } catch (error) { fail(error); }
+  }
+  async function edit(node = null, kind = "bookmark", parent = null) {
+    if (!bridge()) { message("Use the native App to add or edit bookmarks."); return; }
+    if (data.editor || data.confirm) return;
+    const choices = folderChoices(data.bookmarks, node?.kind === "folder" ? node.id : null);
+    const chosen = parent ?? node?.parent_id ?? data.preferences.last_folder ?? 0;
+    const initial = {id:node?.id || null, kind:node?.kind || kind, title:node?.title || (kind === "folder" ? "Untitled Folder" : data.title || data.url), url:node?.url || data.url,
+      parent_id:choices.some(folder => folder.id === chosen) ? chosen : 0};
+    data.editor = initial;
+    native({action:"editor", ...initial, folders:choices});
+  }
+  async function confirm(options) {
+    if (!bridge() || data.confirm || data.editor) return {confirmed:false};
+    return new Promise(resolve => { data.confirm = resolve; native({action:"confirm", ...options}); });
+  }
+  async function remove(node) {
+    const result = await confirm({title:node.kind === "folder" ? "Delete Folder" : "Delete Bookmark", button:"Delete", message:node.kind === "folder" ? `Delete “${node.title}” and all bookmarks inside it? Your browsing history and paper files will not change.` : `Delete “${node.title}” from Bookmarks? This does not delete the website or any downloaded files.`});
+    if (result.confirmed) { await api("delete_bookmark", {id:node.id}); await refresh(); }
+  }
+  async function clearHistory() {
+    const result = await confirm({title:"Clear History", button:"Clear History", history:true, message:"Choose the browsing history to remove. Bookmarks, downloads, cookies, and website sign-ins will be kept."});
+    if (result.confirmed) { await api("clear_history", {range:result.range}); await refresh(); }
+  }
+  function closeContext() { $("browserContext").hidden = true; }
+  function context(event, node, visit) {
+    event.preventDefault(); closeContext();
+    const menu = $("browserContext");
+    const items = node ? [
+      ...(node.kind === "bookmark" ? [["Open", () => navigate(node.url)]] : [["New Folder", () => edit(null, "folder", node.id)]]),
+      [node.kind === "folder" ? "Rename or Move" : "Edit Bookmark", () => edit(node)],
+      ...(node.kind === "folder" ? [["Export Folder", () => exportBookmarks(node.id)]] : []),
+      ["Delete", () => remove(node)]
+    ] : visit ? [["Open", () => navigate(visit.url)], ["Add Bookmark", () => edit({title:visit.title, url:visit.url})],
+      ["Delete Visit", async () => { await api("clear_history", {id:visit.id}); await refresh(); }]] : [["New Folder", () => edit(null, "folder", 0)], ["Add Bookmark", () => edit()]];
+    menu.replaceChildren();
+    items.forEach(([title, handler]) => {
+      const button = document.createElement("button"); button.textContent = title;
+      button.onclick = () => { closeContext(); Promise.resolve(handler()).catch(fail); };
+      menu.append(button);
+    });
+    menu.hidden = false;
+    const minimumTop = event.target.closest("#browserFavorites") ? $("browserFavorites").getBoundingClientRect().top : 46;
+    menu.style.left = Math.max(6, Math.min(event.clientX, innerWidth - 196)) + "px";
+    menu.style.top = Math.max(minimumTop, Math.min(event.clientY, innerHeight - menu.offsetHeight - 6)) + "px";
+    menu.querySelector("button")?.focus();
+  }
+
+  global.gewuBrowserNativeEvent = event => {
+    if (event.event === "favicon") {
+      const value = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(event.data_url || "") && event.data_url.length < 90000 ? event.data_url : "";
+      siteIcons.set(event.host, value);
+      for (const element of root.querySelectorAll('[data-icon-host]')) if (element.dataset.iconHost === event.host && value) {
+        const img = document.createElement("img"); img.alt = ""; img.src = value; element.replaceChildren(img);
+      }
+    } else if (event.event === "bookmark-import") {
+      message("Importing bookmarks.");
+      api("import_bookmarks", {content_base64:event.content_base64}).then(async result => {
+        const info = result.import_result;
+        data.expanded.add(info.folder_id); data.tab = "bookmarks"; data.query = ""; $("browserSidebarSearch").value = "";
+        await refresh(); persist({expanded:[...data.expanded],tab:"bookmarks"});
+        message(`Imported ${info.imported} bookmarks · ${info.folders_created} folders created · ${info.duplicates} duplicates reused · ${info.skipped} unsupported or sensitive links skipped. Existing bookmarks were kept.`);
+      }).catch(fail);
+    } else if (event.event === "state") {
+      data.url = event.url || data.url; data.title = event.title || ""; data.loading = event.loading;
+      updateHome();
+      if (document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
+      $("browserSiteIcon").href = data.url || "#";
+      $("browserSiteIcon").title = data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
+      $("browserBack").disabled = !event.canBack; $("browserForward").disabled = !event.canForward;
+      $("browserReload").innerHTML = icon(event.loading ? "stop" : "reload");
+      $("browserReload").title = event.loading ? "Stop loading" : "Reload";
+      $("browserReload").setAttribute("aria-label", $("browserReload").title);
+      $("browserProgress").style.width = (event.loading ? Math.max(3, event.progress * 100) : 0) + "%";
+      $("browserPageTitle").textContent = data.title;
+    } else if (event.event === "navigation-start") { message(""); }
+    else if (event.event === "visit") {
+      api("visit", {event_id:event.event_id, url:event.url, title:event.title}).then(() => {
+        if (data.active && data.tab === "history") refresh().catch(fail);
+      }).catch(fail);
+    } else if (event.event === "error") { message(event.message, true); }
+    else if (event.event === "download") { message(event.message); }
+    else if (event.event === "focus-address") { closeSuggestions(); $("browserAddress").focus(); $("browserAddress").select(); }
+    else if (event.event === "address-suggestion") { navigate(event.url); $("browserAddress").blur(); native({action:"focus"}); }
+    else if (event.event === "suggestions-dismissed") { closeSuggestions(); }
+    else if (event.event === "bookmark") { edit().catch(fail); }
+    else if (event.event === "find") { $("browserFindBar").hidden = false; $("browserFindInput").focus(); scheduleLayout(); }
+    else if (event.event === "find-result") { $("browserFindResult").textContent = event.found ? "" : "Not found"; }
+    else if (event.event === "editor-result") {
+      const initial = data.editor; data.editor = null;
+      if (!initial || event.cancelled) return;
+      const payload = {...initial, title:event.title, url:event.url, parent_id:event.parent_id || null};
+      api("save_bookmark", payload).then(async result => {
+        if (payload.parent_id) data.expanded.add(payload.parent_id);
+        data.tab = "bookmarks"; data.hidden = false;
+        data.selected = result.bookmark.id;
+        persist({last_folder:payload.parent_id, expanded:[...data.expanded], tab:"bookmarks", sidebar_hidden:false});
+        await refresh();
+        message(result.already_saved ? "This page is already bookmarked in that folder." : "Bookmark saved.");
+      }).catch(error => {
+        fail(error);
+        // Keep edited values available so retrying never discards the user's input.
+        edit({...payload, id:payload.id || null}, payload.kind, payload.parent_id).catch(fail);
+      });
+    } else if (event.event === "confirm-result") { const resolve = data.confirm; data.confirm = null; resolve?.(event); }
+  };
+  global.gewuBrowser = {open, setActive};
+  async function exportBookmarks(rootID = null) {
+    const result = await api("export_bookmarks", {root_id:rootID});
+    native({action:"export-bookmarks", html:result.html});
+  }
+  $("browserImportBookmarks").onclick = () => native({action:"import-bookmarks"});
+  $("browserExportBookmarks").onclick = () => exportBookmarks().catch(fail);
+  $("browserPasswords").onclick = () => native({action:"passwords"});
+  $("browserFavoritesTrail").onclick = event => {
+    const button = event.target.closest("[data-favorite-folder]");
+    if (button) { data.favoritePath = Number(button.dataset.favoriteFolder); renderFavorites(); }
+  };
+  $("browserFavoritesGrid").onclick = event => {
+    const button = event.target.closest("[data-favorite-id]");
+    const node = data.bookmarks.find(item => item.id === Number(button?.dataset.favoriteId));
+    if (!node) return;
+    if (node.kind === "folder") { data.favoritePath = node.id; renderFavorites(); }
+    else navigate(node.url);
+  };
+  $("browserFavoritesGrid").oncontextmenu = event => {
+    const button = event.target.closest("[data-favorite-id]");
+    const node = data.bookmarks.find(item => item.id === Number(button?.dataset.favoriteId));
+    if (node) context(event, node);
+  };
+  $("browserMode").addEventListener("click", open);
+  $("browserAddressForm").onsubmit = event => { event.preventDefault(); navigate(data.suggestions[data.suggestionIndex]?.url || $("browserAddress").value); $("browserAddress").blur(); native({action:"focus"}); };
+  function showSuggestions() {
+    const r = $("browserAddressForm").getBoundingClientRect();
+    $("browserAddress").setAttribute("aria-expanded", String(data.suggestions.length > 0));
+    native({action:"suggestions", items:data.suggestions, selected:data.suggestionIndex,
+      x:r.x, y:r.bottom + 4, width:r.width, viewportWidth:innerWidth});
+  }
+  function closeSuggestions() {
+    clearTimeout(data.addressTimer); data.suggestionGeneration++;
+    data.suggestions = []; data.suggestionIndex = -1;
+    $("browserAddress").setAttribute("aria-expanded", "false");
+    native({action:"suggestions", items:[]});
+  }
+  function querySuggestions(complete = false) {
+    clearTimeout(data.addressTimer);
+    const field = $("browserAddress"), query = field.value;
+    data.addressQuery = query;
+    const generation = ++data.suggestionGeneration;
+    data.suggestions = []; data.suggestionIndex = -1; showSuggestions();
+    if (!query.trim() || data.composing) return;
+    data.addressTimer = setTimeout(async () => {
+      try {
+        const result = await api("suggestions", {query});
+        if (generation !== data.suggestionGeneration || document.activeElement !== field || !data.active || data.composing) return;
+        data.suggestions = result.suggestions || [];
+        data.suggestionIndex = -1;
+        if (complete && field.selectionStart === query.length && field.selectionEnd === query.length && data.suggestions.length) {
+          const completion = inlineCompletion(query, data.suggestions[0].url);
+          if (completion) { field.value = completion; field.setSelectionRange(query.length, completion.length); data.suggestionIndex = 0; }
+        }
+        showSuggestions();
+      } catch (_) { if (generation === data.suggestionGeneration) closeSuggestions(); }
+    }, 110);
+  }
+  $("browserAddress").oninput = event => querySuggestions(!event.isComposing && ["insertText", "insertFromPaste"].includes(event.inputType));
+  $("browserAddress").oncompositionstart = () => { data.composing = true; closeSuggestions(); };
+  $("browserAddress").oncompositionend = () => { data.composing = false; querySuggestions(false); };
+  $("browserAddress").onblur = closeSuggestions;
+  $("browserAddress").onkeydown = event => {
+    if (event.isComposing || data.composing) return;
+    if (event.key === "Escape") { event.preventDefault(); $("browserAddress").value = data.addressQuery || data.url; closeSuggestions(); }
+    if (["ArrowDown", "ArrowUp"].includes(event.key) && data.suggestions.length) {
+      event.preventDefault();
+      data.suggestionIndex = data.suggestionIndex < 0 ? (event.key === "ArrowDown" ? 0 : data.suggestions.length - 1) :
+        (data.suggestionIndex + (event.key === "ArrowDown" ? 1 : -1) + data.suggestions.length) % data.suggestions.length;
+      $("browserAddress").value = data.suggestions[data.suggestionIndex].url; showSuggestions();
+    }
+    if (event.key === "Tab") closeSuggestions();
+  };
+  $("browserSiteIcon").onclick = event => event.preventDefault();
+  $("browserSiteIcon").ondragstart = event => { event.dataTransfer.setData("text/uri-list", data.url); event.dataTransfer.setData("text/plain", data.url); event.dataTransfer.effectAllowed = "copy"; };
+  $("browserSidebarToggle").onclick = () => { data.hidden = !data.hidden; persist({sidebar_hidden:data.hidden}); render(); };
+  for (const [id, action] of [["browserBack","back"],["browserForward","forward"],["browserHome","home"],["browserDownload","download"],["browserExternal","external"]]) $(id).onclick = () => native({action});
+  $("browserReload").onclick = () => native({action:data.loading ? "stop" : "reload"});
+  $("browserAddBookmark").onclick = () => edit().catch(fail);
+  $("browserShare").onclick = () => { const r = $("browserShare").getBoundingClientRect(); native({action:"share", x:r.x, y:r.bottom, viewportWidth:innerWidth}); };
+  $("browserNewFolder").onclick = () => edit(null, "folder", data.bookmarks.find(n => n.id === data.selected && n.kind === "folder")?.id || 0).catch(fail);
+  $("browserClearHistory").onclick = () => clearHistory().catch(fail);
+  $("browserMessageDismiss").onclick = () => message("");
+  for (const tab of ["bookmarks", "history"]) $(tab === "bookmarks" ? "browserBookmarksTab" : "browserHistoryTab").onclick = () => {
+    data.tab = tab; data.query = ""; $("browserSidebarSearch").value = "";
+    persist({tab}); $("browserCollection").scrollTop = 0; render(); refresh().catch(fail);
+  };
+  $("browserSidebarSearch").oninput = () => {
+    data.query = $("browserSidebarSearch").value; clearTimeout(data.searchTimer);
+    if (data.tab === "bookmarks") render(); else data.searchTimer = setTimeout(() => refresh().catch(fail), 180);
+  };
+  $("browserCollection").onclick = event => {
+    const row = event.target.closest("[data-bookmark-id]"), visit = event.target.closest("[data-history-id]");
+    if (row) {
+      const node = data.bookmarks.find(n => n.id === Number(row.dataset.bookmarkId));
+      data.selected = node.id;
+      if (node.kind === "folder") {
+        if (data.expanded.has(node.id)) data.expanded.delete(node.id); else data.expanded.add(node.id);
+        persist({expanded:[...data.expanded]}); render();
+      } else { navigate(node.url); render(); }
+    } else if (visit) { navigate(data.history.find(n => n.id === Number(visit.dataset.historyId)).url); }
+  };
+  $("browserCollection").oncontextmenu = event => {
+    const row = event.target.closest("[data-bookmark-id]"), visit = event.target.closest("[data-history-id]");
+    context(event, data.bookmarks.find(n => n.id === Number(row?.dataset.bookmarkId)), data.history.find(n => n.id === Number(visit?.dataset.historyId)));
+  };
+  $("browserCollection").onkeydown = event => {
+    const row = event.target.closest("[data-bookmark-id]");
+    if (!row) return;
+    const node = data.bookmarks.find(n => n.id === Number(row.dataset.bookmarkId));
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); row.click(); }
+    if (event.key === "Backspace" || event.key === "Delete") { event.preventDefault(); remove(node).catch(fail); }
+  };
+  document.addEventListener("pointerdown", event => { if (!$("browserContext").contains(event.target)) closeContext(); });
+  root.addEventListener("keydown", event => { if (event.key === "Escape") { closeContext(); $("browserFindBar").hidden = true; scheduleLayout(); } }, true);
+
+  let dragged = null;
+  $("browserCollection").ondragstart = event => {
+    const row = event.target.closest("[data-bookmark-id]"); if (!row) return;
+    dragged = Number(row.dataset.bookmarkId);
+    event.dataTransfer.setData("application/x-gewu-bookmark", String(dragged));
+    event.dataTransfer.effectAllowed = "move";
+  };
+  function destination(event) {
+    const row = event.target.closest("[data-bookmark-id]");
+    if (!row) return {parent_id:null, before_id:null};
+    const node = data.bookmarks.find(n => n.id === Number(row.dataset.bookmarkId));
+    const rect = row.getBoundingClientRect(), fraction = (event.clientY - rect.top) / rect.height;
+    if (node.kind === "folder" && fraction > .22 && fraction < .78) return {parent_id:node.id, before_id:null, row, inside:true};
+    const siblings = data.bookmarks.filter(n => n.parent_id === node.parent_id && n.id !== dragged);
+    const index = siblings.findIndex(n => n.id === node.id);
+    return {parent_id:node.parent_id, before_id:fraction < .5 ? node.id : siblings[index + 1]?.id || null, row, after:fraction >= .5};
+  }
+  function clearDrop() { root.querySelectorAll(".drop-inside,.drop-before,.drop-after").forEach(row => row.classList.remove("drop-inside","drop-before","drop-after")); }
+  for (const target of [$("browserCollection"), $("browserBookmarksTab")]) {
+    target.ondragover = event => {
+      if (data.tab !== "bookmarks" || ![...event.dataTransfer.types].some(t => ["application/x-gewu-bookmark","text/uri-list","text/plain"].includes(t))) return;
+      event.preventDefault(); event.stopPropagation(); clearDrop();
+      const dest = destination(event);
+      dest.row?.classList.add(dest.inside ? "drop-inside" : dest.after ? "drop-after" : "drop-before");
+    };
+    target.ondrop = event => {
+      if (data.tab !== "bookmarks") return;
+      event.preventDefault(); event.stopPropagation(); clearDrop();
+      const dest = destination(event), id = dragged; dragged = null;
+      if (id) {
+        if (dest.before_id === id) return;
+        api("move_bookmark", {id, parent_id:dest.parent_id, before_id:dest.before_id}).then(() => { if (dest.parent_id) data.expanded.add(dest.parent_id); persist({expanded:[...data.expanded]}); return refresh(); }).catch(fail);
+      } else {
+        const text = event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain");
+        try { const url = droppedURL(text); edit({url, title:url === data.url ? data.title || url : new URL(url).hostname}, "bookmark", dest.parent_id || 0).catch(fail); } catch (error) { fail(error); }
+      }
+    };
+  }
+  root.addEventListener("dragend", () => { dragged = null; clearDrop(); });
+  const resize = $("browserResize");
+  resize.onpointerdown = event => {
+    if (event.button !== 0) return;
+    event.preventDefault(); resize.setPointerCapture(event.pointerId);
+    resize.onpointermove = move => { data.width = Math.max(190, Math.min(420, move.clientX)); root.style.setProperty("--browser-sidebar-width", data.width + "px"); scheduleLayout(); };
+    resize.onpointerup = () => { resize.onpointermove = null; persist({sidebar_width:data.width}); };
+    resize.onpointercancel = resize.onpointerup;
+  };
+  resize.onkeydown = event => {
+    if (!["ArrowLeft","ArrowRight"].includes(event.key)) return;
+    event.preventDefault(); data.width = Math.max(190, Math.min(420, data.width + (event.key === "ArrowRight" ? 10 : -10))); persist({sidebar_width:data.width}); render();
+  };
+  function find(backwards = false) { native({action:"find", text:$("browserFindInput").value, backwards}); }
+  $("browserFindInput").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); find(event.shiftKey); } };
+  $("browserFindNext").onclick = () => find(); $("browserFindPrevious").onclick = () => find(true);
+  $("browserFindClose").onclick = () => { $("browserFindBar").hidden = true; scheduleLayout(); };
+  new ResizeObserver(scheduleLayout).observe($("browserViewport"));
+  new MutationObserver(() => { if (data.active) scheduleLayout(); }).observe(document.body, {subtree:true, childList:true, attributes:true, attributeFilter:["class","hidden","open","aria-hidden"]});
+  addEventListener("resize", () => { scheduleLayout(); if (data.suggestions.length) showSuggestions(); });
+  $("browserBack").disabled = true; $("browserForward").disabled = true;
+})(globalThis);

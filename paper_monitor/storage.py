@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 
 from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
+from .browser_store import ensure_browser_schema
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
@@ -21,7 +22,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 15
+STORAGE_SCHEMA_VERSION = 16
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -719,14 +720,18 @@ class Storage:
                 self._ensure_library_root()
                 self._seed_library_from_existing_papers()
                 self._ensure_file_path_indexes()
+                ensure_browser_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
                 self.conn.commit()
             elif schema_version < STORAGE_SCHEMA_VERSION:
-                # v14 -> v15 is index-only: do not repeat provenance backfill or
-                # seed Library placements when upgrading a populated workspace.
-                self._ensure_file_path_indexes()
+                # Incremental upgrades never repeat provenance backfill or seed
+                # Library placements. v16 adds browser-only tables and indexes.
+                if schema_version < 15:
+                    self._ensure_file_path_indexes()
+                if schema_version < 16:
+                    ensure_browser_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )

@@ -34,7 +34,11 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -framework Cocoa \
     -framework Quartz \
     -framework WebKit \
+    -framework ImageIO \
+    -framework UniformTypeIdentifiers \
     "$SOURCE" \
+    "$PROJECT_DIR/scripts/GewuBrowserController.m" \
+    "$PROJECT_DIR/scripts/GewuBrowserFavicons.m" \
     -o "$OUTPUT"
 
 chmod +x "$OUTPUT"
