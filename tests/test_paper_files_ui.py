@@ -37,9 +37,14 @@ class PaperFilesUiTests(unittest.TestCase):
         metadata = INDEX_HTML.split("function libraryDetailMetadataMarkup", 1)[1].split(
             "function libraryDetailFolderOccurrencesMarkup", 1
         )[0]
-        self.assertIn("<dt>Gewu Key</dt>", metadata)
-        self.assertIn("paper.storage_key", metadata)
-        self.assertIn("gewu-storage-key", metadata)
+        self.assertIn("libraryDetailGewuKeyMarkup(paper)", metadata)
+        key_row = INDEX_HTML.split("function libraryDetailGewuKeyMarkup", 1)[1].split(
+            "function libraryDetailMetadataMarkup", 1
+        )[0]
+        self.assertIn("<dt>Gewu Key</dt>", key_row)
+        self.assertIn("paper?.storage_key", key_row)
+        self.assertIn("gewu-storage-key", key_row)
+        self.assertIn("(undefined)", key_row)
         self.assertNotIn("<dt>Title</dt>", metadata)
         self.assertGreaterEqual(INDEX_HTML.count("libraryDetailMetadataMarkup(paper"), 6)
 
@@ -168,6 +173,16 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn("border-bottom:", property_css)
         self.assertIn(".library-resource-property.is-file-type {", INDEX_HTML)
         self.assertIn(".library-resource-file-meta {", INDEX_HTML)
+
+    def test_resource_size_footer_meets_card_edge_without_extra_bottom_space(self) -> None:
+        card = INDEX_HTML.split(".library-resource-card {", 1)[1].split("}", 1)[0]
+        footer = INDEX_HTML.split(".library-resource-file-meta {", 1)[1].split("}", 1)[0]
+        self.assertIn("padding: 7px 7px 0;", card)
+        self.assertIn("width: calc(100% + 14px);", footer)
+        self.assertIn("margin: 0 -7px;", footer)
+        self.assertIn("padding: 0 9px;", footer)
+        self.assertIn("border-radius: 0 0 8px 8px;", footer)
+        self.assertIn("min-height: 18px;", footer)
 
     def test_empty_and_loading_file_states_share_a_compact_inline_component(self) -> None:
         resources = INDEX_HTML.split("function libraryPaperResourcesColumnMarkup", 1)[1].split(

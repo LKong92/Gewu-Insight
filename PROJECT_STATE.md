@@ -13,6 +13,7 @@
 
 - Library, Shortcut, Space, My Publications, Journal Monitor, Subject Monitor, and Author Monitor share canonical paper identities and stable Gewu Keys.
 - Paper Files is one flat peer list. File type, annotation state, and file source are independent normalized properties.
+- Paper Files' clickable size footer meets the card's bottom edge without extra outer padding; its hover/focus surface follows the lower corners. Expanded and collapsed metadata use the same footer geometry.
 - Supported file types are Preprint, Accepted manuscript, Published version, Corrected published version, Correction notice, Supplementary material, Peer review file, Other, Unknown, and Invalid file.
 - Automatic Default priority is corrected published > published > accepted manuscript > preprint. Any existing valid file can be chosen manually; a manual Default is sticky until Use Automatic Selection is selected.
 - Exact SHA-256 duplicates are reused. Clean and annotated peers may coexist even when their content fingerprints match.
@@ -20,6 +21,8 @@
 - Physical primary paths remain a filesystem-compatibility detail; choosing Default does not move, rename, or rewrite a file.
 - Open Source Settings (formerly Citation Settings) shows fixed compact password-style dots by default, with explicit Show/Hide and unchanged detailed status. Only Show retrieves the secret through a same-origin, loopback-only, no-store endpoint; Hide/close clears revealed values.
 - Author Monitor's New context menu provides Read All for the selected author or All Authors. Unread state remains per author-paper relationship, including shared papers; cached cards and badges update without deleting papers or Library placements.
+- Author Monitor details now start directly with the paper title. Compact actions wrap whole buttons, not their labels; Get Identifier from Files shares the Library/My Publications workflow. Local filenames stay compact with full paths on hover.
+- Gewu Key is always shown in shared details and Author Monitor's loading state; missing values use `(undefined)`. Keys are assigned when cataloged, before Library placement. Compact API rows and legacy card-cache reads include the canonical key without reindexing or a migration.
 
 ## Provenance and identity
 
@@ -56,12 +59,13 @@
 ## Verification
 
 - Python compile check passes.
-- Full product suite passes: 644 tests, including default-file opening, preserved row DOM, card disclosure, indexed migration, shared/external file protection, and delete rollback.
+- Full product suite passes: 649 tests, including edge-aligned file footers, Author details rendering/identifier actions, stable keys before/after Library placement and restart, legacy cache key projection, default-file opening, preserved row DOM, card disclosure, indexed migration, shared/external file protection, and delete rollback.
 - Schema 15 index-only upgrade verified on a formal DB backup: paper/resource/provenance/placement counts unchanged, zero foreign-key errors. The former full-table shared-path guard took 4.611 s; indexed lookup is below 1 ms. Real Trash + full deletion on the upgraded copy took 0.073 s.
 - Pre-upgrade snapshot retained at `/private/tmp/gewu-file-index-check.Vg9HL9/before-indexes.sqlite`. No product test modified the formal DB; normal App startup installed the indexes. The original App was rebuilt/reopened, health/signature checked, and Library row double-click verified in Preview. Compact cards and removal of the Library Details Files box were checked live; My Publications keeps its only file panel. Packaged PDF matches the generated 74-page guide.
 - Subject calendar verified live against cached August 31 Quantum Sensing (zero with asterisk), August 29 (plain zero), and Quantum Computing (independent count/marker). No manual online refresh or schema migration was needed.
 - Subject Add to Library regression tests exercise real API-shaped responses from temporary SQLite and the real frontend updater, including aliased lists, detached caches, and later image updates. Live App confirms the asterisk legend is the last summary item; the guide screenshot and fixed-layout exports are synchronized.
 - Credential reveal and scoped Read All regressions use synthetic credentials and temporary SQLite only; no real credential was revealed and no formal unread history was cleared for verification.
+- Author details verified in the rebuilt original App using the user's already-read nickelate PDF: no redundant heading, unbroken action labels, visible key, compact filename. Health and single-instance checks pass. No schema migration or direct formal DB edits were needed; guide HTML, Hong Ding screenshot (user-specified), LaTeX, and PDF are synchronized.
 
 ## Current caveats
 

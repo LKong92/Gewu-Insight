@@ -9836,6 +9836,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
     enrichment = raw.get("author_monitor_enrichment") if isinstance(raw.get("author_monitor_enrichment"), dict) else {}
     return {
         "paper_id": paper.get("paper_id") or "",
+        "storage_key": paper.get("storage_key") or "",
         "title": paper.get("title") or "",
         "journal": display_journal_name(paper),
         "publication_date": paper.get("publication_date") or "",
@@ -30476,7 +30477,7 @@ INDEX_HTML = """<!doctype html>
       border-radius: 9px;
       background: rgba(255, 255, 255, 0.92);
       color: #273244;
-      padding: 7px;
+      padding: 7px 7px 0;
       font: inherit;
       text-align: left;
       cursor: pointer;
@@ -30581,14 +30582,15 @@ INDEX_HTML = """<!doctype html>
     }
     .library-resource-file-meta {
       min-height: 18px;
-      width: 100%;
+      width: calc(100% + 14px);
+      margin: 0 -7px;
       display: flex;
       justify-content: flex-end;
       align-items: center;
       gap: 4px;
-      padding: 3px 2px 0;
+      padding: 0 9px;
       border: 0;
-      border-radius: 3px;
+      border-radius: 0 0 8px 8px;
       background: transparent;
       color: #8a95a4;
       font-family: inherit;
@@ -30597,7 +30599,7 @@ INDEX_HTML = """<!doctype html>
       cursor: pointer;
     }
     .library-resource-file-meta:hover { color: #315c84; background: rgba(116, 137, 158, .06); }
-    .library-resource-file-meta:focus-visible { outline: 1px solid #5f93c5; outline-offset: 1px; }
+    .library-resource-file-meta:focus-visible { outline: 1px solid #5f93c5; outline-offset: -2px; }
     .library-resource-file-meta .resource-properties-chevron { margin-right: auto; font-size: 12px; }
     .library-resource-extra-properties[hidden] { display: none; }
     .library-resource-state {
@@ -31050,8 +31052,7 @@ INDEX_HTML = """<!doctype html>
       grid-template-rows: auto minmax(0, 1fr);
     }
     .author-monitor-rail-head,
-    .author-monitor-list-head,
-    .author-monitor-detail-head {
+    .author-monitor-list-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -31065,13 +31066,8 @@ INDEX_HTML = """<!doctype html>
       height: 54px;
       min-height: 54px;
     }
-    .author-monitor-detail-head {
-      height: 55px;
-      min-height: 55px;
-    }
     .author-monitor-rail-head strong,
-    .author-monitor-list-head strong,
-    .author-monitor-detail-head strong { font-size: 14px; }
+    .author-monitor-list-head strong { font-size: 14px; }
     .author-monitor-add {
       width: 30px;
       height: 30px;
@@ -31559,14 +31555,9 @@ INDEX_HTML = """<!doctype html>
     }
     .author-monitor-detail {
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       border: 0;
       border-radius: 0;
-      background: #f9f9f9;
-    }
-    .author-monitor-detail .author-monitor-detail-head {
-      padding-left: 8px;
-      padding-right: 4px;
       background: #f9f9f9;
     }
     .author-monitor-detail-body {
@@ -31603,7 +31594,15 @@ INDEX_HTML = """<!doctype html>
     }
     .author-monitor-detail-body.library-detail .actions.author-detail-actions {
       width: 100%;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
+    }
+    .author-monitor-detail-body .library-detail-status:empty {
+      display: none;
+    }
+    .author-monitor-detail-body .library-file-line {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .author-monitor-status-bar {
       grid-column: 1 / -1;
@@ -34215,6 +34214,8 @@ INDEX_HTML = """<!doctype html>
       min-height: 26px;
       padding: 0 7px;
       font-size: 11px;
+      flex: 0 0 auto;
+      white-space: nowrap;
     }
     .library-detail .library-detail-doi > .action {
       height: 22px;
@@ -38640,18 +38641,23 @@ INDEX_HTML = """<!doctype html>
 
     async function extractLibraryIdentifierFromFiles(paper) {
       if (!paper?.paper_id) return;
-      const status = $("libraryDetailStatus");
-      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
+      const authorContext = state.mode === "author";
+      const root = $(authorContext ? "authorMonitorDetailBody" : "libraryDetail");
+      const status = root?.querySelector(".library-detail-status");
+      const buttons = root?.querySelectorAll("button") || [];
+      const reportStatus = (message, options = {}) => authorContext
+        ? updateAuthorMonitorActivityStatus(message, options)
+        : updateLibraryActivityStatus(message, options);
       const activityId = `identifier:${paper.paper_id}`;
       buttons.forEach((button) => button.disabled = true);
       if (status) {
         status.textContent = "Looking for identifier on the PDF title page...";
         status.className = "library-detail-status";
       }
-      if (state.libraryTab === "my-publications") {
+      if (!authorContext && state.libraryTab === "my-publications") {
         setMyPublicationActivity(activityId, "Finding identifier...");
       }
-      updateLibraryActivityStatus("Finding identifier from local file...", {live: true, clear: false});
+      reportStatus("Finding identifier from local file...", {live: true, clear: false});
       try {
         const res = await fetch("/api/library/extract-identifier", {
           method: "POST",
@@ -38665,24 +38671,25 @@ INDEX_HTML = """<!doctype html>
         const input = $("libraryDetailDoiInput");
         if (input && data.identifier) input.value = data.identifier;
         state.figureFailures.delete(paper.paper_id);
-        if (state.libraryTab === "my-publications") renderMyPublications();
+        if (state.mode === "author") renderAuthorMonitorPaperDetail();
+        else if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
         const label = data.identifier_kind === "arxiv" ? "arXiv ID" : "DOI";
         const source = String(data.identifier_source || "");
         const origin = source.startsWith("title_")
           ? "from the PDF title and publication databases"
           : "on the PDF title page";
-        updateLibraryActivityStatus(`${label} found ${origin}.`, {delay: 3200});
+        reportStatus(`${label} found ${origin}.`, {live: false, delay: 3200});
       } catch (error) {
         const message = error.message || "Could not extract identifier";
-        updateLibraryActivityStatus(`Identifier lookup failed: ${message}`, {delay: 4200});
+        reportStatus(`Identifier lookup failed: ${message}`, {live: false, delay: 4200});
         if (status) {
           status.textContent = message;
           status.className = "library-detail-status err";
         }
         buttons.forEach((button) => button.disabled = false);
       } finally {
-        clearMyPublicationActivity(activityId);
+        if (!authorContext) clearMyPublicationActivity(activityId);
       }
     }
 
@@ -44592,11 +44599,12 @@ INDEX_HTML = """<!doctype html>
       const localPath = paper?.merged_pdf_path || paper?.native_file_path || paper?.source_path || "";
       const localLabel = paper?.merged_pdf_path ? "PDF" : "File";
       if (localPath) {
-        lines.push(`<span class="library-file-line">${escapeHtml(`${localLabel}: ${localPath}`)}</span>`);
+        const displayPath = options.compactFiles ? fileNameFromPath(localPath) : localPath;
+        lines.push(`<span class="library-file-line" title="${escapeAttr(localPath)}">${escapeHtml(`${localLabel}: ${displayPath}`)}</span>`);
       } else {
         lines.push(`<span class="library-file-line">${libraryPaperIsPdfLike(paper) ? "PDF" : "File"}: No local file</span>`);
       }
-      if (paper?.pdf_url) lines.push(`<span class="library-file-line">Source PDF: ${escapeHtml(paper.pdf_url)}</span>`);
+      if (paper?.pdf_url) lines.push(`<span class="library-file-line" title="${escapeAttr(paper.pdf_url)}">Source PDF: ${escapeHtml(paper.pdf_url)}</span>`);
       return lines.join("");
     }
 
@@ -45038,6 +45046,11 @@ INDEX_HTML = """<!doctype html>
         : "";
     }
 
+    function libraryDetailGewuKeyMarkup(paper) {
+      const storageKey = String(paper?.storage_key || "").trim();
+      return `<dt>Gewu Key</dt><dd><span class="gewu-storage-key" title="Gewu Insight internal storage key">${escapeHtml(storageKey || "(undefined)")}</span></dd>`;
+    }
+
     function libraryDetailMetadataMarkup(paper, authors, publication = null, options = {}) {
       const preprintId = paper.preprint_id || "";
       const preprintUrl = preprintId ? `https://arxiv.org/abs/${encodeURI(preprintId.replace(/^arxiv:/i, "").trim())}` : "";
@@ -45051,7 +45064,7 @@ INDEX_HTML = """<!doctype html>
           <dt>Date</dt><dd>${escapeHtml(paper.publication_date || "")}</dd>
           <dt>DOI</dt><dd>${libraryDetailDoiMarkup(paper)}</dd>
           ${showPreprintRow ? `<dt>arXiv</dt><dd class="library-preprint-identifier"><span class="preprint-identifier-main"><button class="preprint-identifier-value${preprintId ? "" : " is-empty"}" type="button" data-action="edit-preprint-identifier" title="Click to edit the arXiv identifier">${preprintDisplay}</button><input class="preprint-identifier-input" type="text" inputmode="url" autocomplete="off" spellcheck="false" value="${escapeAttr(preprintId)}" aria-label="arXiv identifier"></span><span class="preprint-identifier-actions">${preprintId ? `<button class="action preprint-icon-action" type="button" data-action="open-preprint-page" data-preprint-url="${escapeAttr(preprintUrl)}" aria-label="Open arXiv page" title="Open arXiv page"><span aria-hidden="true">↗</span></button>${options.managePreprintFiles ? `<button class="action preprint-icon-action" type="button" data-action="download-arxiv-latest" aria-label="Download latest arXiv PDF" title="Download latest arXiv PDF"><span aria-hidden="true">↓</span></button>` : ""}` : ""}</span><span class="preprint-identifier-status" aria-live="polite"></span></dd>` : ""}
-          ${options.hideGewuKey ? "" : `<dt>Gewu Key</dt><dd><span class="gewu-storage-key" title="Gewu Insight internal storage key">${escapeHtml(paper.storage_key || "—")}</span></dd>`}
+          ${libraryDetailGewuKeyMarkup(paper)}
           <dt>Citation</dt><dd>${escapeHtml(paper.citation_label || "")}</dd>
           <dt>Fields</dt><dd>${paperFieldValues(paper).map((field) => escapeHtml(FIELD_LABELS[field] || field)).join(", ")}</dd>
           ${options.showLibraryFolders ? libraryDetailFolderOccurrencesMarkup(paper, options.selectedLibraryItemId) : ""}
@@ -51741,6 +51754,7 @@ INDEX_HTML = """<!doctype html>
             <dd>${escapeHtml(paper.doi || "—")}</dd>
             <dt>arXiv</dt>
             <dd>${escapeHtml(paper.preprint_id || "—")}</dd>
+            ${libraryDetailGewuKeyMarkup(paper)}
           </dl>
           <div class="library-detail-status">Loading paper details…</div>
         `;
@@ -51751,18 +51765,15 @@ INDEX_HTML = """<!doctype html>
         ${libraryDetailFigureMarkup(paper)}
         <div class="actions author-detail-actions">
           ${paper.merged_pdf_path ? `<button class="action" data-action="author-preview-pdf">Open in Preview</button>` : ""}
-          <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download Again" : "Download PDF"}</button>
+          <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="author-open-page">Open Website</button>` : ""}
+          ${paper.google_scholar_url ? `<button class="action" data-action="author-open-scholar">Google Scholar</button>` : ""}
+          ${libraryIdentifierFromFilesButtonMarkup(paper)}
         </div>
-        ${paper.google_scholar_url ? `
-          <div class="actions author-detail-actions">
-            <button class="action" data-action="author-open-scholar">Google Scholar</button>
-          </div>
-        ` : ""}
         <div class="library-detail-status" id="authorMonitorDetailStatus" data-role="status"></div>
         ${libraryDetailMetadataMarkup(paper, authors, null, {
           showLibraryFolders: false,
-          hideGewuKey: true,
+          compactFiles: true,
           hideFiles: !(paper.merged_pdf_path || paper.native_file_path || paper.source_path)
         })}
         ${citationMetricsMarkup(paper)}
@@ -51783,6 +51794,7 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-download-pdf"]')?.addEventListener("click", () => downloadAuthorMonitorPdf(paper));
       root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openUrlExternally(paper.url));
       root.querySelector('[data-action="author-open-scholar"]')?.addEventListener("click", () => openUrlExternally(paper.google_scholar_url));
+      root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
@@ -52127,7 +52139,6 @@ INDEX_HTML = """<!doctype html>
             ` : ""}
           </section>
           <aside class="author-monitor-detail">
-            <div class="author-monitor-detail-head"><strong>Paper Details</strong></div>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">

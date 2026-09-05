@@ -54,6 +54,45 @@ def paper(paper_id: str, title: str, date: str) -> dict:
 
 
 class AuthorMonitorStorageTests(unittest.TestCase):
+    def test_gewu_key_exists_before_library_and_is_preserved_by_placement_and_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                author = storage.add_author_monitor(scholar_profile("test-key", "Test Author"))
+                storage.upsert_paper(paper("shared-key", "Shared work", "2026-09-05"))
+                storage.add_author_monitor_paper(
+                    author_monitor_id=int(author["id"]), paper_id="shared-key", unread=True
+                )
+                before = ui_server.author_monitor_paper_to_api(storage.get_paper("shared-key"))
+                key = before["storage_key"]
+                self.assertTrue(key.startswith("gw_"))
+                self.assertFalse(before["in_library"])
+                # A previously persisted compact index can omit the key or
+                # contain stale data; the live relational record wins.
+                revision = storage.list_author_monitor_card_cache_candidates()[0]["card_cache_revision"]
+                for legacy_payload in ({"paper_id": "shared-key"}, {"paper_id": "shared-key", "storage_key": "stale"}):
+                    cached_json = json.dumps(legacy_payload)
+                    storage.upsert_author_monitor_card_cache([("shared-key", cached_json, revision)])
+                    self.assertEqual(storage.list_author_monitor_cached_cards()[0]["storage_key"], key)
+                    self.assertEqual(storage.conn.execute(
+                        "SELECT payload_json FROM author_monitor_card_cache WHERE paper_id = ?", ("shared-key",)
+                    ).fetchone()[0], cached_json)
+                storage.add_library_item(paper_id="shared-key", folder_id=1)
+                storage.add_library_item(paper_id="shared-key", folder_id=1)
+                row = storage.get_paper("shared-key")
+                self.assertEqual(ui_server.paper_to_api(row)["storage_key"], key)
+                self.assertEqual(ui_server.author_monitor_paper_to_api(row)["storage_key"], key)
+                self.assertEqual(storage.conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0], 1)
+                self.assertEqual(storage.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+            finally:
+                storage.close()
+            storage = Storage(db_path)
+            try:
+                self.assertEqual(storage.get_paper("shared-key")["storage_key"], key)
+            finally:
+                storage.close()
+
     def test_harvard_dataverse_is_excluded_from_openalex_author_works(self):
         self.assertTrue(
             openalex_author_work_is_excluded(
@@ -2527,7 +2566,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn('channel: "secondary"', updating)
         self.assertIn("transform: translateY(1px)", html)
         self.assertIn("height: 76px", html)
-        self.assertIn("height: 55px", html)
+        self.assertNotIn("author-monitor-detail-head", html)
         self.assertIn("Update All Scholar Citations</button>", context_menu)
         self.assertIn("updateAllAuthorScholarCitations(author, {confirm: true})", context_menu)
         self.assertIn("newly discovered publications are marked as new", html)
@@ -2553,7 +2592,8 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
             "async function downloadAuthorMonitorPdf", 1
         )[0]
         self.assertNotIn("<dt>Title</dt>", detail)
-        self.assertIn("hideGewuKey: true", detail)
+        self.assertNotIn("hideGewuKey", detail)
+        self.assertIn("libraryDetailGewuKeyMarkup(paper)", detail)
         self.assertIn("hideFiles: !(paper.merged_pdf_path", detail)
         self.assertIn('id="authorMonitorActivityStatus"', html)
         self.assertIn("minmax(280px, 340px)", html)

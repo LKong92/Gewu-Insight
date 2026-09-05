@@ -4825,11 +4825,14 @@ class Storage:
             """
             SELECT author_monitor_card_cache.payload_json,
                    author_monitor_papers.paper_id,
+                   papers.storage_key,
                    author_monitor_papers.author_monitor_id,
                    author_monitor_papers.is_unread AS author_unread,
                    author_monitor_papers.first_seen_at AS author_first_seen_at,
                    author_monitors.name AS monitored_author_name
             FROM author_monitor_papers
+            JOIN papers
+              ON papers.paper_id = author_monitor_papers.paper_id
             JOIN author_monitors
               ON author_monitors.id = author_monitor_papers.author_monitor_id
             JOIN author_monitor_card_cache
@@ -4856,6 +4859,9 @@ class Storage:
                 if not isinstance(payload, dict):
                     payload = {}
                 payload["paper_id"] = paper_id
+                # Older card caches lack this field. Read the canonical key
+                # directly, without invalidating or rebuilding the whole index.
+                payload["storage_key"] = str(row["storage_key"] or "")
                 payload["author_monitor_ids"] = []
                 payload["author_unread_monitor_ids"] = []
                 payload["monitored_authors"] = []

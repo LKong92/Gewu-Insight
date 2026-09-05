@@ -1129,7 +1129,7 @@ A paper can have more than one Library placement. Copying it to another folder r
 
 \section{Discovery does not require immediate file management}\label{discovery-does-not-require-immediate-file-management}
 
-A Monitor result may remain a discovery relationship with metadata and status but no local Paper Files. The UI can hide the internal Gewu Key in a discovery context even when a shared paper record already exists. Downloading or attaching a file creates a resource relationship; adding the paper to Library creates a managed placement. Neither action should manufacture a second work merely because the user entered from another tab.
+A Monitor result may remain a discovery relationship with metadata and status but no local Paper Files. A cataloged work already has a Gewu Key, which Author Monitor also shows. Downloading or attaching a file creates a resource relationship; adding the paper to Library creates a managed placement. Neither action should manufacture a second work merely because the user entered from another tab.
 
 \section{Why the same action can have different scope}\label{why-the-same-action-can-have-different-scope}
 
@@ -1589,7 +1589,7 @@ A file added to an existing paper's \textbf{Paper Files} bundle is an attachment
 \section{Use Paper Details}\label{paper-details}
 
 \begin{GewuLead}
-Paper Details combines the actions, identifiers, file summary, metadata, citation counts, and folder membership for the selected work.
+Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. Action labels stay on one line; whole buttons wrap when space is narrow.
 \end{GewuLead}
 
 \subsection{Top actions}\label{top-actions}
@@ -1615,7 +1615,7 @@ Action & What it does \\
 
 \subsection{File management}\label{file-management}
 
-Library uses the adjacent \textbf{Paper Files} column; Paper Details does not repeat a Files box. My Publications has no separate file column, so its collapsible \textbf{Files · n} panel remains the place to add, classify, show, select a default, sync, or delete files.
+Library uses the adjacent \textbf{Paper Files} column; Paper Details does not repeat a Files box. My Publications keeps its collapsible \textbf{Files · n} management panel. Author Monitor shows a compact local filename with the full path on hover; \textbf{Get Identifier from Files} appears when a local PDF is available.
 
 \subsection{Metadata rows}\label{metadata-rows}
 
@@ -1650,7 +1650,7 @@ Influential Citations is fetched on demand and cached locally for several hours.
 \begin{quote}
 \textbf{Note}
 
-An Author Monitor result is already cataloged, but the compact Author Monitor details intentionally omit its Gewu Key. It may have no local Paper Files until a file is downloaded or attached. Adding it to Library creates a placement for the existing record rather than a second identity.
+Gewu Key is assigned when a work is first cataloged in SQLite, before Add to Library. Its row remains visible in Author Monitor, including while details load; a missing value shows \texttt{(undefined)}. Adding to Library reuses the existing key and updates the view without creating a second identity.
 \end{quote}
 
 \subsection{See also}\label{see-also-15}
@@ -2521,7 +2521,7 @@ Author Monitor follows researchers and separates a first-import baseline from ne
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/author-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Author Monitor. Hong Ding\textquotesingle s profile is selected; locally cached portraits keep the monitored-author list stable while the publication history and current paper details remain visible together.
+Author Monitor. Hong Ding\textquotesingle s profile is selected. The paper title leads the details pane, followed by compact actions and a visible Gewu Key; local portraits keep the author list stable.
 \end{GewuCaption}
 
 \subsection{Add an author}\label{add-an-author}
@@ -2558,7 +2558,7 @@ Control-click an author and choose \textbf{Edit Homepage} or \textbf{Change Phot
 
 \subsection{Discovery entries and managed papers}\label{discovery-entries-and-managed-papers}
 
-An Author Monitor result is a cataloged shared record, while its Monitor relationship remains a discovery context. The compact view hides the Gewu Key, and the result does not need a local Files bundle. Adding it to Library creates another relationship to the existing record; downloading or attaching a file creates a resource relationship.
+An Author Monitor result is a cataloged shared record, with a Gewu Key shown in its details even before it has Library placements or local files. A missing key displays \texttt{(undefined)} until record data is available. Add to Library preserves the existing key and updates the view; downloading or attaching a file creates a resource relationship.
 
 \subsection{Add an author result to Library}\label{add-an-author-result-to-library}
 
