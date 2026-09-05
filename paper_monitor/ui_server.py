@@ -801,6 +801,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/settings/citation":
                 self.handle_set_citation_settings(payload)
                 return
+            if parsed.path == "/api/settings/citation/reveal":
+                self.handle_reveal_source_credential(payload)
+                return
             if parsed.path == "/api/settings/arxiv":
                 self.handle_set_arxiv_settings(payload)
                 return
@@ -1575,7 +1578,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             deleted = delete_paper_resource(storage, paper_id, resource_id)
             resources = storage.list_paper_resources(paper_id)
-            resolved = storage.resolve_default_paper_resource(paper_id)
+            resolved = next((resource for resource in resources if resource.get("is_default")), None)
             paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper file was not found")
@@ -2353,7 +2356,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(snapshot)
 
     def handle_mark_author_monitor_read(self, payload: dict[str, Any]) -> None:
-        author_monitor_id = int(payload.get("author_id") or 0)
+        try:
+            author_monitor_id = int(payload.get("author_id") or 0)
+            if author_monitor_id < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Invalid author scope")
+            return
         paper_ids = [
             str(value) for value in payload.get("paper_ids") or []
             if str(value or "").strip()
@@ -2363,10 +2372,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.mark_author_monitor_papers_read(
                 author_monitor_id=author_monitor_id,
                 paper_ids=paper_ids,
+                read_all=payload.get("read_all") is True,
             )
+            read_state = {
+                "ok": True,
+                "unreadByPaper": storage.author_monitor_unread_by_paper(),
+                "authors": [author_monitor_to_api(row) for row in storage.list_author_monitors()],
+            }
         finally:
             storage.close()
-        self.send_json({"ok": True})
+        self.send_json(read_state)
 
     def handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
         author_monitor_id = int(payload.get("author_id") or 0)
@@ -3688,6 +3703,40 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             "openalex": openalex,
             "semantic_scholar": semantic_scholar,
         })
+
+    def handle_reveal_source_credential(self, payload: dict[str, Any]) -> None:
+        # Reveal is explicit, same-origin, loopback-only and never part of the
+        # normal settings payload. send_json also sets Cache-Control: no-store.
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin", "")
+        try:
+            target = urlparse(f"http://{host}")
+            allowed = (
+                target.hostname in {"127.0.0.1", "localhost", "::1"}
+                and target.port == self.server.server_port
+                and origin == f"http://{host}"
+                and self.headers.get("X-Gewu-Reveal") == "1"
+            )
+        except ValueError:
+            allowed = False
+        if not allowed:
+            self.send_error_json(HTTPStatus.FORBIDDEN, "Reveal is available only from local Open Source Settings")
+            return
+        provider = payload.get("provider")
+        if provider not in {"openalex", "semantic_scholar", "ads"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown source")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            if provider == "openalex":
+                value = openalex_api_key(storage) or clean_text(os.getenv("OPENALEX_API_KEY", ""))
+            elif provider == "semantic_scholar":
+                value = semantic_scholar_stored_api_key(storage) or clean_text(os.getenv("SEMANTIC_SCHOLAR_API_KEY", ""))
+            else:
+                value = ads_api_token(storage)
+        finally:
+            storage.close()
+        self.send_json({"value": value})
 
     def handle_get_arxiv_settings(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -7947,27 +7996,13 @@ def theme_counts_for_month(storage: Storage, *, prefix: str, group_keys: list[st
                     group_counts[group_key] = group_counts.get(group_key, 0) + 1
         if group_counts:
             counts[day] = group_counts
-    run_rows = storage.conn.execute(
-        f"""
-        SELECT window_start AS day,
-               journal AS journal
-        FROM fetch_runs
-        WHERE monitor_type = 'theme'
-          AND source IN ('openalex', 'multi')
-          AND window_start = window_end
-          AND window_start LIKE ?
-          AND status IN ('success', 'empty', 'error')
-          AND journal IN ({", ".join(["?"] * len(group_keys))})
-        ORDER BY finished_at DESC, id DESC
-        """,
-        (prefix + "%", *[f"theme:{key}" for key in group_keys]),
-    ).fetchall()
-    for row in run_rows:
-        day = str(row["day"] or "")
-        journal = str(row["journal"] or "")
-        group_key = journal.removeprefix("theme:")
-        if day and group_key in group_keys:
-            counts.setdefault(day, {}).setdefault(group_key, 0)
+    # A recorded partial/deferred/failed attempt still has a known current
+    # count, including zero. Completeness is separate evidence, returned in
+    # lastFetches and displayed with a marker; it must not erase that count.
+    for day, last_fetch in theme_last_fetches_for_month(storage, prefix=prefix, group_keys=group_keys).items():
+        for group_key, item in last_fetch["groups"].items():
+            if item["status"] in {"success", "empty", "partial", "error", "deferred", "waiting"}:
+                counts.setdefault(day, {}).setdefault(group_key, 0)
     return counts
 
 
@@ -7994,6 +8029,13 @@ def theme_online_discovery_from_last_fetch(last_fetch: dict[str, Any] | None) ->
             "status": "partial",
             "queries_attempted": 0,
             "message": "Online discovery was deferred for one or more selected subjects.",
+        }
+    if statuses and all(status in {"success", "empty"} for status in statuses):
+        return {"status": "complete"}
+    if statuses and any(status in {"partial", "error", "waiting"} for status in statuses):
+        return {
+            "status": "partial",
+            "message": "One or more sources did not complete successfully; counts may be incomplete.",
         }
     return {}
 
@@ -14096,6 +14138,7 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
     for paper in papers:
         item = author_monitor_paper_to_api(paper)
         item["author_unread"] = bool(paper.get("author_unread"))
+        item["author_unread_monitor_ids"] = list(paper.get("author_unread_monitor_ids") or [])
         item["author_monitor_ids"] = [
             int(value) for value in paper.get("author_monitor_ids") or []
             if int(value or 0) > 0
@@ -25302,6 +25345,12 @@ INDEX_HTML = """<!doctype html>
     }
     .daynum { font-weight: 650; font-size: 14px; }
     .count { color: var(--muted); font-size: 11px; }
+    .calendar-count-partial {
+      font-size: .75em;
+      line-height: 0;
+      vertical-align: super;
+      margin-left: 1px;
+    }
     .fetching-dot {
       width: 7px;
       height: 7px;
@@ -26565,6 +26614,12 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       color: #667085;
       overflow-wrap: anywhere;
+    }
+    .monitor-discovery-note {
+      margin: -2px 0 1px;
+      font-size: 10px;
+      line-height: 1.4;
+      color: #7a8799;
     }
     .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.updates > span:last-child,
     .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.errors > span:last-child {
@@ -30525,15 +30580,26 @@ INDEX_HTML = """<!doctype html>
       white-space: nowrap;
     }
     .library-resource-file-meta {
-      min-height: 9px;
+      min-height: 18px;
+      width: 100%;
       display: flex;
       justify-content: flex-end;
+      align-items: center;
       gap: 4px;
-      padding: 2px 2px 0;
+      padding: 3px 2px 0;
+      border: 0;
+      border-radius: 3px;
+      background: transparent;
       color: #8a95a4;
+      font-family: inherit;
       font-size: 8px;
       line-height: 1.2;
+      cursor: pointer;
     }
+    .library-resource-file-meta:hover { color: #315c84; background: rgba(116, 137, 158, .06); }
+    .library-resource-file-meta:focus-visible { outline: 1px solid #5f93c5; outline-offset: 1px; }
+    .library-resource-file-meta .resource-properties-chevron { margin-right: auto; font-size: 12px; }
+    .library-resource-extra-properties[hidden] { display: none; }
     .library-resource-state {
       grid-column: 3;
       grid-row: 1;
@@ -32507,6 +32573,37 @@ INDEX_HTML = """<!doctype html>
     .citation-token-row button {
       flex: 0 0 auto;
     }
+    .source-credential-field {
+      position: relative;
+      flex: 1 1 300px;
+      min-width: 220px;
+    }
+    .citation-token-row .source-credential-field input {
+      width: 100%;
+      min-width: 0;
+      padding-right: 58px;
+    }
+    .source-credential-toggle {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 3px 5px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .source-credential-toggle:hover:not(:disabled) { background: #edf1f6; color: var(--ink); }
+    .source-credential-toggle:disabled { opacity: 0.45; cursor: default; }
+    .citation-token-row input.saved-credential:placeholder-shown::placeholder {
+      color: var(--ink);
+      opacity: 0.7;
+      font-size: 13px;
+      letter-spacing: 1px;
+    }
     .citation-scope-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
@@ -34467,8 +34564,8 @@ INDEX_HTML = """<!doctype html>
         <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="citationSettingsTitle">
           <div class="settings-modal-head">
             <div>
-              <h2 id="citationSettingsTitle">Citation Settings</h2>
-              <p>Manage optional citation and version-matching sources for paper details.</p>
+              <h2 id="citationSettingsTitle">Open Source Settings</h2>
+              <p>Manage sources for discovery, metadata, citations, and version matching.</p>
             </div>
             <button class="settings-modal-close" id="closeCitationSettings" type="button" title="Close settings">×</button>
           </div>
@@ -34481,7 +34578,10 @@ INDEX_HTML = """<!doctype html>
               <div class="citation-source-setting-head"><strong>OpenAlex</strong><span id="openalexConfiguredLabel">Not configured</span></div>
               <p>Optional but recommended. Gewu Insight uses only the daily free allowance and falls back to other metadata sources when that allowance is exhausted.</p>
               <div class="citation-token-row">
-                <input class="search" id="openalexKeyInput" type="password" autocomplete="off" placeholder="OpenAlex API key">
+                <div class="source-credential-field">
+                  <input class="search" id="openalexKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="OpenAlex API key">
+                  <button class="source-credential-toggle" id="openalexKeyInputReveal" data-credential-input="openalexKeyInput" data-provider="openalex" type="button" aria-label="Show OpenAlex API key" aria-pressed="false">Show</button>
+                </div>
                 <button class="smallbtn" id="saveOpenalexKey" type="button">Save</button>
                 <button class="smallbtn" id="testOpenalexKey" type="button">Test</button>
                 <button class="smallbtn" id="clearOpenalexKey" type="button">Clear</button>
@@ -34492,7 +34592,10 @@ INDEX_HTML = """<!doctype html>
               <div class="citation-source-setting-head"><strong>Semantic Scholar</strong><span id="semanticScholarConfiguredLabel">Anonymous</span></div>
               <p>Optional but recommended. Authenticated requests use the private key locally with the documented <code>x-api-key</code> header and stay below the 1 request-per-second limit across all endpoints. Without a key, anonymous access remains available.</p>
               <div class="citation-token-row">
-                <input class="search" id="semanticScholarKeyInput" type="password" autocomplete="off" placeholder="Semantic Scholar API key">
+                <div class="source-credential-field">
+                  <input class="search" id="semanticScholarKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="Semantic Scholar API key">
+                  <button class="source-credential-toggle" id="semanticScholarKeyInputReveal" data-credential-input="semanticScholarKeyInput" data-provider="semantic_scholar" type="button" aria-label="Show Semantic Scholar API key" aria-pressed="false">Show</button>
+                </div>
                 <button class="smallbtn" id="saveSemanticScholarKey" type="button">Save</button>
                 <button class="smallbtn" id="testSemanticScholarKey" type="button">Test</button>
                 <button class="smallbtn" id="clearSemanticScholarKey" type="button">Clear</button>
@@ -34503,7 +34606,10 @@ INDEX_HTML = """<!doctype html>
               <div class="citation-source-setting-head"><strong>NASA ADS</strong><span id="adsConfiguredLabel">Not configured</span></div>
               <p>Optional. Add an ADS API token to improve arXiv-published version matching and physics citation cross-checks.</p>
               <div class="citation-token-row">
-                <input class="search" id="adsTokenInput" type="password" autocomplete="off" placeholder="ADS API token">
+                <div class="source-credential-field">
+                  <input class="search" id="adsTokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="ADS API token">
+                  <button class="source-credential-toggle" id="adsTokenInputReveal" data-credential-input="adsTokenInput" data-provider="ads" type="button" aria-label="Show ADS API token" aria-pressed="false">Show</button>
+                </div>
                 <button class="smallbtn" id="saveAdsToken" type="button">Save</button>
                 <button class="smallbtn" id="testAdsToken" type="button">Test</button>
                 <button class="smallbtn" id="clearAdsToken" type="button">Clear</button>
@@ -34866,6 +34972,7 @@ INDEX_HTML = """<!doctype html>
       themeMonthCacheKey: "",
       themeMonthLoaded: false,
       themeLastFetchByDate: {},
+      themeCalendarFetches: {},
       themePapersByDate: {},
       themePapers: [],
       themeSummary: null,
@@ -34896,6 +35003,8 @@ INDEX_HTML = """<!doctype html>
       libraryPaperResourceSelection: {paperId: "", resourceId: 0},
       libraryAttachmentDropInFlight: new Set(),
       expandedPaperFiles: new Set(),
+      expandedPaperResourceProperties: new Set(),
+      deletingPaperResources: new Set(),
       libraryPaperLocationRequests: {},
       libraryPaperLocationsLoaded: new Set(),
       libraryTab: "library",
@@ -35041,6 +35150,8 @@ INDEX_HTML = """<!doctype html>
       authorMonitorQuery: "",
       authorPaperQuery: "",
       authorMonitorUnreadOnly: false,
+      authorMonitorReadVersion: 0,
+      authorMonitorReadPending: null,
       authorMonitorProfileResults: [],
       authorMonitorDialogBusy: false,
       authorMonitorStatus: "",
@@ -38589,6 +38700,14 @@ INDEX_HTML = """<!doctype html>
       return names;
     }
 
+    function themeCalendarFetchStatus(iso) {
+      return String(state.themeCalendarFetches[iso]?.[state.activeThemeGroupKey]?.status || "");
+    }
+
+    function themeFetchStatusIsIncomplete(status) {
+      return ["partial", "error", "deferred", "waiting"].includes(status);
+    }
+
     function updateCalendarDayButton(button, iso, day) {
       const isThemeCalendar = state.mode === "theme";
       const dayCounts = isThemeCalendar
@@ -38601,6 +38720,9 @@ INDEX_HTML = """<!doctype html>
       const total = isThemeCalendar
         ? activeThemeCount
         : Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
+      const incomplete = isThemeCalendar && hasCount && themeFetchStatusIsIncomplete(themeCalendarFetchStatus(iso));
+      const countTitle = incomplete ? ' title="Incomplete discovery: one or more sources did not complete; counts may be incomplete."' : "";
+      const countMarker = incomplete ? '<sup class="calendar-count-partial" aria-label="Incomplete discovery">*</sup>' : "";
       const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
       const isFuture = isFutureDateIso(iso);
       const isToday = iso === todayIsoDate();
@@ -38611,7 +38733,7 @@ INDEX_HTML = """<!doctype html>
       const markup = `<span class="daynum">${day}</span>${
         isFetching
           ? `<span class="fetching-dot" title="Fetching"></span>`
-          : `<span class="count">${hasCount ? total : ""}</span>`
+          : `<span class="count"${countTitle}>${hasCount ? total : ""}${countMarker}</span>`
       }`;
       if (button.className !== className) button.className = className;
       if (button.disabled !== isFuture) button.disabled = isFuture;
@@ -39202,12 +39324,11 @@ INDEX_HTML = """<!doctype html>
         const saved = Number(summary.saved || 0);
         const raw = Number(summary.raw_results || 0);
 	        const errors = Array.isArray(summary.errors) ? summary.errors : [];
-	        const discovery = summary.online_discovery || {};
-	        const discoveryStatus = String(discovery.status || "");
+	        const discoveryStatus = themeCalendarFetchStatus(state.selectedDate);
 	        const lastFetch = themeLastFetchLabel(summary.last_fetch).replace(/^Last fetched:\s*/i, "");
 	        const auto = autoMonitorStatusDetails("theme");
 	        const updates = auto.parts.slice(1).join(" · ") || "not run yet";
-	        warning = auto.warning || Boolean(errors.length) || discoveryStatus === "deferred";
+	        warning = auto.warning || Boolean(errors.length) || themeFetchStatusIsIncomplete(discoveryStatus);
         rows.push(monitorSidebarSummaryRow("Subjects", `${knownThemeGroupKeys().length} monitored`));
         rows.push(monitorSidebarSummaryRow("Selected", activeGroup?.name || selectedThemeGroupLabel()));
         rows.push(monitorSidebarSummaryRow("Papers", `${activePapers.length} shown · ${visiblePapers.length} visible`));
@@ -39217,9 +39338,18 @@ INDEX_HTML = """<!doctype html>
 	          rows.push(monitorSidebarSummaryRow("Discovery", "Deferred · local cache only", "errors"));
 	        } else if (discoveryStatus === "partial") {
 	          rows.push(monitorSidebarSummaryRow("Discovery", "Partially completed", "updates"));
+	        } else if (["success", "empty"].includes(discoveryStatus)) {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Completed"));
+	        } else if (discoveryStatus === "error") {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Failed · results incomplete", "errors"));
+	        } else if (discoveryStatus === "waiting") {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Not completed", "updates"));
+	        } else {
+	          rows.push(monitorSidebarSummaryRow("Discovery", "Not fetched"));
 	        }
 	        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
         if (errors.length) rows.push(monitorSidebarSummaryRow("Errors", `${errors.length} incomplete`, "errors"));
+        rows.push('<div class="monitor-discovery-note"><sup>*</sup> Incomplete discovery: one or more sources did not complete; counts may be incomplete. Counts and status refer to the selected subject.</div>');
       }
       root.className = `monitor-sidebar-summary${warning ? " warning" : ""}`;
       root.innerHTML = `<div class="monitor-sidebar-summary-title">Monitor Summary</div>${rows.join("")}`;
@@ -40897,7 +41027,7 @@ INDEX_HTML = """<!doctype html>
       rememberLibraryLocation();
     }
 
-    function renderLibraryNavigationContent() {
+    function renderLibraryNavigationContent({preserveRows = false} = {}) {
       const shell = $("libraryShell");
       const existingColumns = $("libraryColumns");
       if (!shell || !existingColumns || librarySearchIsActive()) {
@@ -40907,12 +41037,13 @@ INDEX_HTML = """<!doctype html>
 
       captureLibraryColumnScrollTops();
       const previousColumnsScrollLeft = existingColumns.scrollLeft ?? state.libraryColumnsScrollLeft;
+      const preservedRows = renderLibraryColumns({preserveRows});
+      if (preservedRows) syncLibrarySelectionAppearance();
       shell.classList.toggle("paper-files-focus-active", Boolean(selectedLibraryPaperResource()));
       shell.classList.toggle("navigation-rail-focus-active", Boolean(state.libraryNavigationRailFocus));
-      renderLibraryColumns();
       renderLibraryDetail();
       wireLibraryResourceInteractions(shell);
-      wireLibraryColumnInteractions(shell);
+      if (!preservedRows) wireLibraryColumnInteractions(shell);
       restoreLibraryColumnScrollTops();
 
       const columns = $("libraryColumns");
@@ -43892,22 +44023,36 @@ INDEX_HTML = """<!doctype html>
       window.addEventListener("pointerup", stop);
     }
 
-    function renderLibraryColumns() {
+    function renderLibraryColumns({preserveRows = false} = {}) {
       const root = $("libraryColumns");
       if (!root) return;
       const folderIds = libraryColumnFolderIds();
       const pathFolderIds = selectedLibraryPathFolderIds();
       const tableMode = libraryTableViewActive();
+      const existingFolders = Array.from(root.querySelectorAll("[data-library-column-folder]"));
+      // Keep the clicked paper row alive between click and dblclick, including
+      // when its asynchronous Paper Files request finishes between the clicks.
+      const canPreserveRows = preserveRows && root.classList.contains("table-view") === tableMode
+        && folderIds.length <= existingFolders.length
+        && (!tableMode || folderIds.length === existingFolders.length)
+        && folderIds.every((id, index) => Number(existingFolders[index]?.dataset.libraryColumnFolder) === id);
       root.classList.toggle("table-view", tableMode);
       root.classList.toggle("four-level-or-deeper", folderIds.length >= 4);
+      const selectedItem = state.librarySelection?.type === "item"
+        ? libraryItemById(state.librarySelection.id)
+        : null;
+      if (canPreserveRows) {
+        existingFolders.slice(folderIds.length).forEach((column) => column.remove());
+        root.querySelector(".library-resource-column")?.remove();
+        if (selectedItem) root.insertAdjacentHTML("beforeend", libraryPaperResourcesColumnMarkup(selectedItem));
+        return true;
+      }
       const folderColumns = folderIds.map((folderId, index) => libraryColumnMarkup(folderId, pathFolderIds, {
         tableColumn: tableMode && index === folderIds.length - 1,
         pathColumn: tableMode && index < folderIds.length - 1
       })).join("");
-      const selectedItem = state.librarySelection?.type === "item"
-        ? libraryItemById(state.librarySelection.id)
-        : null;
       root.innerHTML = folderColumns + (selectedItem ? libraryPaperResourcesColumnMarkup(selectedItem) : "");
+      return false;
     }
 
     function libraryPaperResourcesColumnMarkup(item) {
@@ -43925,21 +44070,30 @@ INDEX_HTML = """<!doctype html>
               const annotationControl = `<span class="paper-file-version-picker" title="Change annotation state"><span>${escapeHtml(paperFileAnnotationLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-control data-control-kind="annotation" data-paper-file-id="${Number(file.id || 0)}" aria-label="Annotation state for ${escapeAttr(name)}">${paperFileAnnotationOptions(file)}</select></span>`;
               const sourceControl = `<span class="paper-file-version-picker" title="Change file source"><span>${escapeHtml(paperFileSourceLabel(file))}</span><span class="paper-file-version-arrows" aria-hidden="true"><span>▲</span><span>▼</span></span><select class="paper-file-version-select" data-library-resource-control data-control-kind="source" data-paper-file-id="${Number(file.id || 0)}" aria-label="File source for ${escapeAttr(name)}">${paperFileSourceOptions(file)}</select></span>`;
               const metaTail = [fileSizeLabel(file.size_bytes), file.exists ? "" : "Missing file"].filter(Boolean);
+              const expanded = state.expandedPaperResourceProperties.has(`${paperId}:${Number(file.id || 0)}`);
+              const propertiesId = `resource-properties-${Number(file.id || 0)}`;
               const ext = String(file.extension || "").replace(/^\./, "") || "none";
               return `
                 <div class="library-resource-card${file.is_default ? " is-primary" : ""}${selected ? " is-selected" : ""}"
                   data-library-resource-id="${Number(file.id || 0)}" data-library-resource-paper-id="${escapeAttr(paperId)}"
                   data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
-                  role="option" aria-selected="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
+                  role="listitem" aria-current="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
                   <span class="library-resource-icon-tile"><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
                   <span class="library-resource-copy">
                     <span class="library-resource-name">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</span>
                     <span class="library-resource-properties">
                       <span class="library-resource-property is-file-type"><span class="library-resource-property-label">File type</span>${typeControl}</span>
-                      <span class="library-resource-property"><span class="library-resource-property-label">Annotation</span>${annotationControl}</span>
-                      <span class="library-resource-property"><span class="library-resource-property-label">Source</span>${sourceControl}</span>
-                      ${metaTail.length ? `<span class="library-resource-file-meta">${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true">·</span>')}</span>` : ""}
+                      <span class="library-resource-extra-properties" id="${propertiesId}"${expanded ? "" : " hidden"}>
+                        <span class="library-resource-property"><span class="library-resource-property-label">Annotation</span>${annotationControl}</span>
+                        <span class="library-resource-property"><span class="library-resource-property-label">Source</span>${sourceControl}</span>
+                      </span>
+                      <button type="button" class="library-resource-file-meta" data-library-resource-toggle
+                        aria-expanded="${expanded}" aria-controls="${propertiesId}" aria-label="${expanded ? "Hide" : "Show"} annotation and source for ${escapeAttr(name)}"
+                        title="${expanded ? "Hide" : "Show"} annotation and source">
+                        <span class="resource-properties-chevron" aria-hidden="true">${expanded ? "⌄" : "›"}</span>
+                        ${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true">·</span>')}
+                      </button>
                     </span>
                   </span>
                 </div>
@@ -43953,7 +44107,7 @@ INDEX_HTML = """<!doctype html>
             <div class="library-resource-inspector-title"><strong>Paper Files</strong><span class="library-resource-count">${snapshot ? `${files.length} item${files.length === 1 ? "" : "s"}` : "Loading"}</span></div>
             <div class="library-resource-paper-title" title="${escapeAttr(title)}">${escapeHtml(title)}</div>
           </header>
-          <div class="library-resource-body" role="listbox" aria-label="Paper Files">${rows}</div>
+          <div class="library-resource-body" role="list" aria-label="Paper Files">${rows}</div>
           <input type="file" data-library-resource-file-input hidden multiple>
         </section>
       `;
@@ -44630,7 +44784,7 @@ INDEX_HTML = """<!doctype html>
             : String(libraryItemById(state.librarySelection?.id)?.paper_id || "");
           if (state.mode === "library" && selectedPaperId === key) {
             if (state.libraryTab === "my-publications") renderPublicationDetail();
-            else renderLibrary();
+            else renderLibraryNavigationContent({preserveRows: true});
           }
           return data;
         })
@@ -45437,7 +45591,6 @@ INDEX_HTML = """<!doctype html>
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
-        ${paperFilesPanelMarkup(paper)}
         ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, hideFiles: true, managePreprintFiles: true})}
         ${citationMetricsMarkup(paper)}
         ${libraryDetailAbstractMarkup(paper)}
@@ -45470,7 +45623,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
-      wirePaperFilesPanel(root, paper);
       wireCitationSourceSelector(root);
       wireSemanticInfluentialCitations(root);
       root.querySelector('[data-action="copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -47273,7 +47425,7 @@ INDEX_HTML = """<!doctype html>
         const selected = String(card.dataset.libraryResourcePaperId || "") === normalizedPaperId
           && Number(card.dataset.libraryResourceId || 0) === normalizedResourceId;
         card.classList.toggle("is-selected", selected);
-        card.setAttribute("aria-selected", selected ? "true" : "false");
+        card.setAttribute("aria-current", selected ? "true" : "false");
         card.tabIndex = selected ? 0 : -1;
         if (selected && focus) card.focus({preventScroll: true});
       });
@@ -47284,7 +47436,7 @@ INDEX_HTML = """<!doctype html>
       $("libraryShell")?.classList.remove("paper-files-focus-active");
       document.querySelectorAll(".library-resource-card.is-selected").forEach((card) => {
         card.classList.remove("is-selected");
-        card.setAttribute("aria-selected", "false");
+        card.setAttribute("aria-current", "false");
         card.tabIndex = -1;
       });
       if (!focusPaper) return;
@@ -47336,6 +47488,8 @@ INDEX_HTML = """<!doctype html>
       const paperId = String(selection.paperId || file?.paper_id || "");
       const resourceId = Number(file?.id || selection.resourceId || 0);
       if (!paperId || !resourceId) return false;
+      const deletionKey = `${paperId}:${resourceId}`;
+      if (state.deletingPaperResources.has(deletionKey)) return true;
       if (file?.is_primary) {
         updateLibraryActivityStatus(
           "The current file cannot be deleted. Select another Publication Version first.",
@@ -47347,6 +47501,8 @@ INDEX_HTML = """<!doctype html>
       if (!window.confirm(`Delete “${name}” from this paper?\n\nIts private managed copy, if present, will be moved to macOS Trash.`)) return true;
       const filesBeforeDelete = orderedLibraryPaperResources(paperId);
       const deletedIndex = filesBeforeDelete.findIndex((candidate) => Number(candidate.id || 0) === resourceId);
+      state.deletingPaperResources.add(deletionKey);
+      updateLibraryActivityStatus(`Moving ${name} to Trash`, {live: true, clear: false});
       try {
         const data = await deletePaperFile(paperId, resourceId);
         const remainingFiles = orderedLibraryPaperResources(paperId);
@@ -47356,7 +47512,7 @@ INDEX_HTML = """<!doctype html>
         state.libraryPaperResourceSelection = next
           ? {paperId, resourceId: Number(next.id || 0)}
           : {paperId: "", resourceId: 0};
-        renderLibrary();
+        renderLibraryNavigationContent({preserveRows: true});
         if (next) {
           window.requestAnimationFrame(() => {
             setLibraryPaperResourceSelection(paperId, Number(next.id || 0), {focus: true});
@@ -47369,11 +47525,14 @@ INDEX_HTML = """<!doctype html>
         );
       } catch (error) {
         updateLibraryActivityStatus(error.message || "Could not delete file", {live: false, clear: false});
+      } finally {
+        state.deletingPaperResources.delete(deletionKey);
       }
       return true;
     }
 
     function handleLibraryPaperResourceKeydown(event, key) {
+      if (event.target?.closest?.("[data-library-resource-toggle]")) return false;
       const selected = selectedLibraryPaperResource();
       if (!selected || !["ArrowUp", "ArrowDown", "ArrowLeft", " ", "Escape", "Delete", "Backspace"].includes(key)) return false;
       event.preventDefault();
@@ -47561,13 +47720,13 @@ INDEX_HTML = """<!doctype html>
         const paperId = String(card.dataset.libraryResourcePaperId || "");
         const resourceId = Number(card.dataset.libraryResourceId || 0);
         card.addEventListener("click", (event) => {
-          if (event.target.closest("[data-library-resource-control]")) return;
+          if (event.target.closest("[data-library-resource-control], [data-library-resource-toggle]")) return;
           event.preventDefault();
           event.stopPropagation();
           setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
         });
         card.addEventListener("dblclick", (event) => {
-          if (event.target.closest("[data-library-resource-control]")) return;
+          if (event.target.closest("[data-library-resource-control], [data-library-resource-toggle]")) return;
           event.preventDefault();
           event.stopPropagation();
           setLibraryPaperResourceSelection(paperId, resourceId, {focus: true});
@@ -47575,6 +47734,21 @@ INDEX_HTML = """<!doctype html>
           openLibraryPaperResource(file);
         });
         card.addEventListener("contextmenu", (event) => showPaperResourceContextMenu(event, paperId, resourceId));
+        const toggle = card.querySelector("[data-library-resource-toggle]");
+        toggle?.addEventListener("dblclick", (event) => event.stopPropagation());
+        toggle?.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const details = card.querySelector(".library-resource-extra-properties");
+          const expanded = details.hidden;
+          details.hidden = !expanded;
+          const key = `${paperId}:${resourceId}`;
+          if (expanded) state.expandedPaperResourceProperties.add(key);
+          else state.expandedPaperResourceProperties.delete(key);
+          toggle.setAttribute("aria-expanded", String(expanded));
+          toggle.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} annotation and source`);
+          toggle.title = `${expanded ? "Hide" : "Show"} annotation and source`;
+          toggle.querySelector(".resource-properties-chevron").textContent = expanded ? "⌄" : "›";
+        });
       });
       shell.querySelectorAll("[data-library-resource-control]").forEach((select) => {
         ["pointerdown", "click", "dblclick", "contextmenu"].forEach((eventName) => {
@@ -48079,7 +48253,7 @@ INDEX_HTML = """<!doctype html>
         refreshLibraryQuickLookForSelection();
         return;
       }
-      renderLibraryNavigationContent();
+      renderLibraryNavigationContent({preserveRows: type === "item"});
       if (type === "folder" && !options.extendRange) {
         prefetchLibraryFolder(id);
       }
@@ -48166,6 +48340,26 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function openNativeLibraryEntry(entryType, entryId) {
+      if (entryType === "item") {
+        const item = libraryItemById(entryId);
+        const paperId = String(item?.paper_id || item?.paper?.paper_id || "");
+        if (paperId) {
+          try {
+            const snapshot = await loadPaperFiles(paperId);
+            const files = (snapshot?.files || []).filter((file) => file.exists && file.file_type !== "invalid_file");
+            // Unknown legacy imports may not qualify for automatic Default
+            // ranking. Keep their current file openable without reclassifying it.
+            const file = files.find((candidate) => candidate.is_default)
+              || files.find((candidate) => candidate.is_primary)
+              || (files.length === 1 ? files[0] : null);
+            if (file) return openLibraryPaperResource(file);
+            updateLibraryActivityStatus("No available default file. Choose a file in Paper Files.", {live: false, clear: false});
+          } catch (error) {
+            updateLibraryActivityStatus(error.message || "Could not load Paper Files", {live: false, clear: false});
+          }
+          return;
+        }
+      }
       const target = libraryNativeTargetForEntry(entryType, entryId);
       await openNativeTarget(target, {
         missingMessage: entryType === "folder"
@@ -50092,13 +50286,20 @@ INDEX_HTML = """<!doctype html>
         nextPaper.in_library = Boolean(existingPaper.in_library);
         nextPaper.library_item_count = Number(existingPaper.library_item_count || 0);
       }
-      const reportIndex = state.papers.findIndex((item) => item.paper_id === paperId);
-      if (reportIndex >= 0) state.papers[reportIndex] = nextPaper;
-      const cachedReport = state.reportCache[nextPaper.publication_date];
-      const cachedIndex = (cachedReport?.papers || []).findIndex((item) => item.paper_id === paperId);
-      if (cachedIndex >= 0) cachedReport.papers[cachedIndex] = nextPaper;
-      const themeIndex = state.themePapers.findIndex((item) => item.paper_id === paperId);
-      if (themeIndex >= 0) state.themePapers[themeIndex] = {...state.themePapers[themeIndex], ...nextPaper};
+      // The active list and its cache can be the same array. Merge into each
+      // view's own row before any replacement can discard its Subject groups,
+      // scores or matches, which generic paper responses do not include.
+      const monitorLists = new Set([
+        state.papers,
+        state.themePapers,
+        ...Object.values(state.reportCache).map((report) => report?.papers),
+        ...Object.values(state.themePapersByDate)
+      ]);
+      monitorLists.forEach((papers) => {
+        if (!Array.isArray(papers)) return;
+        const index = papers.findIndex((item) => item.paper_id === paperId);
+        if (index >= 0) papers[index] = {...papers[index], ...nextPaper};
+      });
       state.libraryItems.forEach((item) => {
         if (item.paper_id === paperId || item.paper?.paper_id === paperId) item.paper = {...(item.paper || {}), ...nextPaper};
       });
@@ -50264,6 +50465,7 @@ INDEX_HTML = """<!doctype html>
           author_details_loaded: detailed.author_details_loaded,
           full_detail: true,
           author_unread: paper.author_unread,
+          author_unread_monitor_ids: paper.author_unread_monitor_ids,
           author_monitor_ids: paper.author_monitor_ids,
           monitored_authors: paper.monitored_authors,
           in_library: paper.in_library,
@@ -50295,7 +50497,11 @@ INDEX_HTML = """<!doctype html>
                 ...(paper.monitored_authors || [])
               ])
             ],
-            author_unread: Boolean(previous.author_unread) || Boolean(paper.author_unread)
+            author_unread_monitor_ids: [
+              ...(previous.author_unread_monitor_ids || []).filter((id) => Number(id) !== paperScopeAuthorId),
+              ...(paper.author_unread_monitor_ids || [])
+            ],
+            author_unread: Boolean(paper.author_unread) || (previous.author_unread_monitor_ids || []).some((id) => Number(id) !== paperScopeAuthorId)
           });
         });
         state.authorMonitorPapers = [...merged.values()];
@@ -50349,6 +50555,7 @@ INDEX_HTML = """<!doctype html>
           ...paper,
           ...detailed,
           author_unread: paper.author_unread,
+          author_unread_monitor_ids: paper.author_unread_monitor_ids,
           author_monitor_ids: paper.author_monitor_ids,
           monitored_authors: paper.monitored_authors,
           author_first_seen_at: paper.author_first_seen_at,
@@ -50417,7 +50624,7 @@ INDEX_HTML = """<!doctype html>
           }, AUTHOR_MONITOR_INDEX_RETRY_MS);
         };
         try {
-          const data = await fetchJson("/api/author-monitor?index=1", 30000);
+          const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1", 30000);
           if (data.indexReady) return applyAuthorMonitorIndex(data);
           document.documentElement.dataset.authorMonitorIndex = "building";
           scheduleRetry();
@@ -50617,7 +50824,7 @@ INDEX_HTML = """<!doctype html>
             Number(item.paper_count || 0)
           ].join(":")
         ).join("|");
-        const data = await fetchJson("/api/author-monitor?summary=1", 12000);
+        const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?summary=1", 12000);
         state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
         if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
           state.scholarGlobalCooldown = data.scholarCooldown;
@@ -50704,7 +50911,7 @@ INDEX_HTML = """<!doctype html>
       const filtered = state.authorMonitorPapers.filter((paper) => {
         const monitorIds = Array.isArray(paper.author_monitor_ids) ? paper.author_monitor_ids.map(Number) : [];
         if (authorId && !monitorIds.includes(authorId)) return false;
-        if (state.authorMonitorUnreadOnly && !paper.author_unread) return false;
+        if (state.authorMonitorUnreadOnly && !authorMonitorPaperIsUnread(paper, authorId)) return false;
         if (query) {
           const haystack = [
             paper.title,
@@ -51092,7 +51299,7 @@ INDEX_HTML = """<!doctype html>
         && paper.citation_count !== undefined
         && Number.isFinite(Number(paper.citation_count));
       const citationSource = String(paper.citation_count_source || "Citation source");
-      article.className = `author-paper-card${selected ? " report-selected" : ""}${paper.author_unread ? " author-unread" : ""}${conferenceAbstract ? " conference-abstract" : ""}`;
+      article.className = `author-paper-card${selected ? " report-selected" : ""}${authorMonitorPaperIsUnread(paper) ? " author-unread" : ""}${conferenceAbstract ? " conference-abstract" : ""}`;
       article.dataset.paperId = paper.paper_id || "";
       article.tabIndex = -1;
       article.setAttribute("role", "option");
@@ -51638,7 +51845,7 @@ INDEX_HTML = """<!doctype html>
       renderAuthorMonitorPaperDetail();
       scheduleAuthorMonitorPaperDetails(paperId);
       const paper = selectedAuthorMonitorPaper();
-      if (paper?.author_unread) markAuthorMonitorPaperRead(paper);
+      if (authorMonitorPaperIsUnread(paper)) markAuthorMonitorPaperRead(paper);
       if (options.scroll) {
         document.querySelector(`.author-monitor-shell .author-paper-card[data-paper-id="${CSS.escape(paperId)}"]`)
           ?.scrollIntoView({block: "nearest"});
@@ -51695,31 +51902,104 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function markAuthorMonitorPaperRead(paper) {
-      if (!paper?.paper_id || !paper.author_unread) return;
-      paper.author_unread = false;
+    function authorMonitorPaperIsUnread(paper, authorId = state.authorMonitorSelectedId) {
+      if (!paper) return false;
+      if (!Array.isArray(paper.author_unread_monitor_ids)) return Boolean(paper.author_unread);
+      const ids = paper.author_unread_monitor_ids.map(Number);
+      return Number(authorId) > 0 ? ids.includes(Number(authorId)) : ids.length > 0;
+    }
+
+    async function fetchAuthorMonitorReadSafeJson(url, timeout = 12000) {
+      // Do not apply a snapshot started before a read operation completed.
+      for (;;) {
+        if (state.authorMonitorReadPending) await state.authorMonitorReadPending.catch(() => {});
+        const version = state.authorMonitorReadVersion;
+        const data = await fetchJson(url, timeout);
+        if (version === state.authorMonitorReadVersion && !state.authorMonitorReadPending) return data;
+      }
+    }
+
+    function applyAuthorMonitorReadState(data) {
+      if (!data.unreadByPaper || !Array.isArray(data.authors)) return;
+      state.authorMonitors = data.authors;
+      const lists = new Set([state.authorMonitorPapers, ...[...state.authorMonitorPaperCache.values()].map((entry) => entry.papers)]);
+      lists.forEach((papers) => (papers || []).forEach((paper) => {
+        paper.author_unread_monitor_ids = (data.unreadByPaper[paper.paper_id] || []).map(Number);
+        paper.author_unread = paper.author_unread_monitor_ids.length > 0;
+      }));
       invalidateAuthorMonitorViewCache();
-      const monitorIds = Array.isArray(paper.author_monitor_ids) ? paper.author_monitor_ids.map(Number) : [];
-      state.authorMonitors.forEach((author) => {
-        if (monitorIds.includes(Number(author.id))) {
-          author.unread_count = Math.max(0, Number(author.unread_count || 0) - 1);
-        }
-      });
-      document.querySelector(`.author-monitor-paper-list .author-paper-card[data-paper-id="${CSS.escape(paper.paper_id)}"]`)
-        ?.classList.remove("author-unread");
       renderAuthorMonitorRail();
       updateAuthorMonitorTopDot();
-      try {
-        await fetch("/api/author-monitor/read", {
+      const papersById = new Map(state.authorMonitorPapers.map((paper) => [paper.paper_id, paper]));
+      document.querySelectorAll(".author-paper-card").forEach((card) => {
+        card.classList.toggle("author-unread", authorMonitorPaperIsUnread(papersById.get(card.dataset.paperId)));
+      });
+    }
+
+    async function persistAuthorMonitorRead(payload) {
+      const previous = state.authorMonitorReadPending || Promise.resolve();
+      const pending = previous.catch(() => {}).then(async () => {
+        const res = await fetch("/api/author-monitor/read", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            author_id: 0,
-            paper_ids: [paper.paper_id]
-          })
+          body: JSON.stringify(payload)
         });
-      } catch (_) {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not mark papers as read");
+        state.authorMonitorReadVersion += 1;
+        applyAuthorMonitorReadState(data);
+      });
+      state.authorMonitorReadPending = pending;
+      try {
+        await pending;
+      } finally {
+        if (state.authorMonitorReadPending === pending) state.authorMonitorReadPending = null;
       }
+    }
+
+    async function markAuthorMonitorPaperRead(paper) {
+      if (!paper?.paper_id || !authorMonitorPaperIsUnread(paper) || paper.author_read_pending) return;
+      paper.author_read_pending = true;
+      try {
+        await persistAuthorMonitorRead({author_id: 0, paper_ids: [paper.paper_id]});
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message, {live: false, clear: false});
+      } finally {
+        paper.author_read_pending = false;
+      }
+    }
+
+    async function readAllAuthorMonitorPapers(authorId) {
+      try {
+        await persistAuthorMonitorRead({author_id: authorId, read_all: true});
+        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        updateAuthorMonitorActivityStatus("All new papers in the selected scope marked as read.", {live: false, clear: false});
+      } catch (error) {
+        updateAuthorMonitorActivityStatus(error.message || "Could not mark papers as read", {live: false, clear: false});
+      }
+    }
+
+    function showAuthorMonitorNewContextMenu(event) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideThemeContextMenu();
+      // Capture the scope when the menu opens, not after the user switches tabs.
+      const authorId = Number(state.authorMonitorSelectedId || 0);
+      if (authorId < 0) return;
+      const author = state.authorMonitors.find((item) => Number(item.id) === authorId);
+      const unread = authorId ? Number(author?.unread_count || 0) : state.authorMonitors.reduce((sum, item) => sum + Number(item.unread_count || 0), 0);
+      const menu = document.createElement("div");
+      menu.className = "library-context-menu open author-monitor-context-menu";
+      menu.setAttribute("role", "menu");
+      menu.innerHTML = `<button type="button" role="menuitem" ${!unread || state.authorMonitorReadPending ? "disabled" : ""} title="${escapeAttr(authorId ? `Mark all new papers for ${author?.name || "this author"} as read` : "Mark all new papers for all authors as read")}">Read All</button>`;
+      document.body.appendChild(menu);
+      menu.addEventListener("mousedown", (menuEvent) => menuEvent.stopPropagation());
+      menu.querySelector("button").addEventListener("click", () => {
+        hideThemeContextMenu();
+        readAllAuthorMonitorPapers(authorId);
+      });
+      menu.style.left = `${Math.min(event.clientX, window.innerWidth - (menu.offsetWidth || 170) - 8)}px`;
+      menu.style.top = `${Math.min(event.clientY, window.innerHeight - (menu.offsetHeight || 36) - 8)}px`;
     }
 
     function setAuthorMonitorSort(mode) {
@@ -51824,6 +52104,8 @@ INDEX_HTML = """<!doctype html>
                   class="author-monitor-sort-button${state.authorMonitorUnreadOnly ? " active" : ""}"
                   type="button"
                   data-action="filter-new-papers"
+                  title="Show new papers. Right-click for Read All."
+                  aria-haspopup="menu"
                   aria-pressed="${state.authorMonitorUnreadOnly ? "true" : "false"}"
                 >New</button>
               </div>
@@ -51878,6 +52160,7 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorUnreadOnly = !state.authorMonitorUnreadOnly;
         renderAuthorMonitor({preserveScroll: false});
       });
+      root.querySelector('[data-action="filter-new-papers"]')?.addEventListener("contextmenu", showAuthorMonitorNewContextMenu);
       root.querySelector(".author-monitor-conference-toggle")?.addEventListener("click", () => {
         const opening = !state.authorMonitorConferenceExpanded;
         state.authorMonitorConferenceExpanded = opening;
@@ -52196,10 +52479,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function fetchAuthorMonitorSnapshot(authorId = 0) {
-      const res = await fetch(`/api/author-monitor?author_id=${Number(authorId || 0)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not reload Author Monitor");
-      return data;
+      return fetchAuthorMonitorReadSafeJson(`/api/author-monitor?author_id=${Number(authorId || 0)}`);
     }
 
     async function reconcileAddedAuthorMonitor(profile) {
@@ -53916,13 +54196,85 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function updateSourceCredentialInput(inputId, configured) {
+      const input = $(inputId);
+      if (!input) return;
+      if (!input.dataset.emptyPlaceholder) input.dataset.emptyPlaceholder = input.placeholder;
+      // Fixed display-only dots. Loading settings never fetches the saved secret.
+      input.placeholder = configured ? "••••••••" : input.dataset.emptyPlaceholder;
+      input.dataset.configured = configured ? "true" : "false";
+      input.classList.toggle("saved-credential", Boolean(configured));
+      input.setAttribute("aria-label", `${input.dataset.emptyPlaceholder}${configured ? "; saved, type to replace" : ""}`);
+      const toggle = $(`${inputId}Reveal`);
+      if (toggle) toggle.disabled = !configured && !input.value;
+    }
+
+    function resetSourceCredentialVisibility(inputId, clear = false) {
+      const input = $(inputId);
+      if (!input) return;
+      input.dataset.revealVersion = String(Number(input.dataset.revealVersion || 0) + 1);
+      if (clear || input.dataset.savedReveal === "true") input.value = "";
+      input.dataset.savedReveal = "false";
+      input.type = "password";
+      const toggle = $(`${inputId}Reveal`);
+      if (toggle) {
+        toggle.textContent = "Show";
+        toggle.setAttribute("aria-pressed", "false");
+        toggle.setAttribute("aria-label", `Show ${input.dataset.emptyPlaceholder || "API key"}`);
+        toggle.disabled = input.dataset.configured !== "true" && !input.value;
+      }
+    }
+
+    async function toggleSourceCredentialVisibility(inputId, provider) {
+      const input = $(inputId);
+      const toggle = $(`${inputId}Reveal`);
+      if (!input || !toggle) return;
+      if (input.type === "text") {
+        resetSourceCredentialVisibility(inputId);
+        return;
+      }
+      const version = String(Number(input.dataset.revealVersion || 0) + 1);
+      input.dataset.revealVersion = version;
+      const statusId = provider === "openalex" ? "openalexCitationSettingsStatus"
+        : (provider === "semantic_scholar" ? "semanticScholarCitationSettingsStatus" : "citationSettingsStatus");
+      try {
+        if (!input.value) {
+          if (input.dataset.configured !== "true") return;
+          toggle.disabled = true;
+          const res = await fetch("/api/settings/citation/reveal", {
+            method: "POST",
+            headers: {"Content-Type": "application/json", "X-Gewu-Reveal": "1"},
+            body: JSON.stringify({provider}),
+            cache: "no-store"
+          });
+          const data = await res.json();
+          if (input.dataset.revealVersion !== version || !$("citationSettingsBackdrop").classList.contains("open")) return;
+          if (!res.ok) throw new Error("Could not show the saved credential. Try again.");
+          input.value = String(data.value || "");
+          input.dataset.savedReveal = "true";
+        }
+        if (!input.value) return;
+        input.type = "text";
+        toggle.textContent = "Hide";
+        toggle.setAttribute("aria-pressed", "true");
+        toggle.setAttribute("aria-label", `Hide ${input.dataset.emptyPlaceholder || "API key"}`);
+      } catch (_) {
+        if (input.dataset.revealVersion === version) {
+          $(statusId).textContent = "Could not show the saved credential. Try again.";
+          $(statusId).className = "citation-settings-status err";
+        }
+      } finally {
+        if (input.dataset.revealVersion === version) toggle.disabled = input.dataset.configured !== "true" && !input.value;
+      }
+    }
+
     async function openCitationSettings() {
       const backdrop = $("citationSettingsBackdrop");
       if (!backdrop) return;
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       focusDialogSurface(backdrop);
-      $("citationSettingsStatus").textContent = "Loading citation settings...";
+      $("citationSettingsStatus").textContent = "Loading open source settings...";
       $("citationSettingsStatus").className = "citation-settings-status";
       $("openalexCitationSettingsStatus").textContent = "Loading OpenAlex settings...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
@@ -53931,10 +54283,14 @@ INDEX_HTML = """<!doctype html>
       $("adsTokenInput").value = "";
       $("openalexKeyInput").value = "";
       $("semanticScholarKeyInput").value = "";
+      ["adsTokenInput", "openalexKeyInput", "semanticScholarKeyInput"].forEach((id) => {
+        resetSourceCredentialVisibility(id, true);
+        updateSourceCredentialInput(id, false);
+      });
       try {
         const res = await fetch("/api/settings/citation");
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not load citation settings");
+        if (!res.ok) throw new Error(data.error || "Could not load open source settings");
         updateCitationSettingsUi(data.ads || {});
         updateOpenalexSettingsUi(data.openalex || {});
         updateSemanticScholarSettingsUi(data.semantic_scholar || {});
@@ -53945,7 +54301,7 @@ INDEX_HTML = """<!doctype html>
         $("semanticScholarCitationSettingsStatus").textContent = semanticScholarSettingsStatusText(data.semantic_scholar || {});
         $("semanticScholarCitationSettingsStatus").className = `citation-settings-status${data.semantic_scholar?.configured ? " ok" : ""}`;
       } catch (error) {
-        $("citationSettingsStatus").textContent = error.message || "Could not load citation settings";
+        $("citationSettingsStatus").textContent = error.message || "Could not load open source settings";
         $("citationSettingsStatus").className = "citation-settings-status err";
         $("openalexCitationSettingsStatus").textContent = error.message || "Could not load OpenAlex settings";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";
@@ -53960,6 +54316,7 @@ INDEX_HTML = """<!doctype html>
       $("adsTokenInput").value = "";
       $("openalexKeyInput").value = "";
       $("semanticScholarKeyInput").value = "";
+      ["adsTokenInput", "openalexKeyInput", "semanticScholarKeyInput"].forEach((id) => resetSourceCredentialVisibility(id, true));
     }
 
     async function openArxivSettings() {
@@ -54037,10 +54394,12 @@ INDEX_HTML = """<!doctype html>
     function updateCitationSettingsUi(ads) {
       const configured = Boolean(ads?.configured);
       $("adsConfiguredLabel").textContent = configured ? "Configured" : "Not configured";
+      updateSourceCredentialInput("adsTokenInput", configured);
     }
 
     function updateOpenalexSettingsUi(openalex) {
       const configured = Boolean(openalex?.configured);
+      updateSourceCredentialInput("openalexKeyInput", configured);
       const paused = Boolean(openalex?.paused);
       $("openalexConfiguredLabel").textContent = paused
         ? "Free limit reached"
@@ -54048,6 +54407,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateSemanticScholarSettingsUi(semanticScholar) {
+      updateSourceCredentialInput("semanticScholarKeyInput", Boolean(semanticScholar?.configured));
       $("semanticScholarConfiguredLabel").textContent = semanticScholar?.configured
         ? "Configured"
         : "Anonymous";
@@ -54092,6 +54452,7 @@ INDEX_HTML = """<!doctype html>
 
     async function saveCitationOpenalexKey() {
       const key = $("openalexKeyInput")?.value || "";
+      resetSourceCredentialVisibility("openalexKeyInput");
       if (!key.trim()) {
         $("openalexCitationSettingsStatus").textContent = "Paste an OpenAlex API key before saving.";
         $("openalexCitationSettingsStatus").className = "citation-settings-status err";
@@ -54119,6 +54480,7 @@ INDEX_HTML = """<!doctype html>
 
     async function testCitationOpenalexKey() {
       const key = $("openalexKeyInput")?.value || "";
+      resetSourceCredentialVisibility("openalexKeyInput");
       $("openalexCitationSettingsStatus").textContent = "Testing OpenAlex connection...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54145,6 +54507,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function clearCitationOpenalexKey() {
+      resetSourceCredentialVisibility("openalexKeyInput", true);
       $("openalexCitationSettingsStatus").textContent = "Clearing OpenAlex key...";
       $("openalexCitationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54167,6 +54530,7 @@ INDEX_HTML = """<!doctype html>
 
     async function saveCitationSemanticScholarKey() {
       const key = $("semanticScholarKeyInput")?.value || "";
+      resetSourceCredentialVisibility("semanticScholarKeyInput");
       if (!key.trim()) {
         $("semanticScholarCitationSettingsStatus").textContent = "Paste a Semantic Scholar API key before saving.";
         $("semanticScholarCitationSettingsStatus").className = "citation-settings-status err";
@@ -54194,6 +54558,7 @@ INDEX_HTML = """<!doctype html>
 
     async function testCitationSemanticScholarKey() {
       const key = $("semanticScholarKeyInput")?.value || "";
+      resetSourceCredentialVisibility("semanticScholarKeyInput");
       $("semanticScholarCitationSettingsStatus").textContent = "Testing Semantic Scholar connection...";
       $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54225,6 +54590,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function clearCitationSemanticScholarKey() {
+      resetSourceCredentialVisibility("semanticScholarKeyInput", true);
       $("semanticScholarCitationSettingsStatus").textContent = "Clearing Semantic Scholar key...";
       $("semanticScholarCitationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54247,6 +54613,7 @@ INDEX_HTML = """<!doctype html>
 
     async function saveCitationAdsToken({test = false} = {}) {
       const token = $("adsTokenInput")?.value || "";
+      resetSourceCredentialVisibility("adsTokenInput");
       if (!token.trim()) {
         $("citationSettingsStatus").textContent = "Paste an ADS token before saving.";
         $("citationSettingsStatus").className = "citation-settings-status err";
@@ -54275,6 +54642,7 @@ INDEX_HTML = """<!doctype html>
 
     async function testCitationAdsToken() {
       const token = $("adsTokenInput")?.value || "";
+      resetSourceCredentialVisibility("adsTokenInput");
       $("citationSettingsStatus").textContent = "Testing ADS connection...";
       $("citationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54295,6 +54663,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function clearCitationAdsToken() {
+      resetSourceCredentialVisibility("adsTokenInput", true);
       $("citationSettingsStatus").textContent = "Clearing ADS token...";
       $("citationSettingsStatus").className = "citation-settings-status";
       try {
@@ -54938,6 +55307,11 @@ INDEX_HTML = """<!doctype html>
     function rememberThemeLastFetch(selectedDate, groupParam, lastFetch) {
       if (!selectedDate || !lastFetch) return;
       state.themeLastFetchByDate[themeLastFetchCacheKey(selectedDate, groupParam)] = lastFetch;
+      // A single-subject refresh updates only that subject. A full snapshot
+      // replaces the date, including removal of any stale cached statuses.
+      state.themeCalendarFetches[selectedDate] = String(groupParam || "ALL").toUpperCase() === "ALL"
+        ? {...(lastFetch.groups || {})}
+        : {...(state.themeCalendarFetches[selectedDate] || {}), ...(lastFetch.groups || {})};
     }
 
     function rememberThemeLastFetches(lastFetches, groupParam) {
@@ -55004,8 +55378,8 @@ INDEX_HTML = """<!doctype html>
       const papers = data?.papers || [];
       rememberThemeLastFetch(selectedDate, groupParam, summary?.last_fetch || null);
       rememberThemePapers(selectedDate, groupParam, papers);
-      updateThemeCalendarCount(selectedDate, data?.themeCounts || countPapersByThemeGroup(papers));
       updateThemeFilterCount(selectedDate, data?.allThemeCounts || data?.themeCounts || countPapersByThemeGroup(papers));
+      updateThemeCalendarCount(selectedDate, data?.themeCounts || countPapersByThemeGroup(papers));
       if (state.mode === "theme" && state.selectedDate === selectedDate && selectedThemeGroupParam() === groupParam) {
         state.themeSummary = summary;
         state.themeSummaryGroupParam = groupParam;
@@ -55089,12 +55463,17 @@ INDEX_HTML = """<!doctype html>
       state.themeFilterCounts = allData.counts || {};
       state.themeMonthCacheKey = `${viewYear}-${String(viewMonth).padStart(2, "0")}|${groupParam || selectedThemeGroupParam()}`;
       state.themeMonthLoaded = true;
+      const monthPrefix = `${viewYear}-${String(viewMonth).padStart(2, "0")}-`;
+      Object.keys(state.themeCalendarFetches).forEach((day) => {
+        if (day.startsWith(monthPrefix)) delete state.themeCalendarFetches[day];
+      });
       rememberThemeLastFetches(selectedData.lastFetches || {}, groupParam || selectedThemeGroupParam());
       rememberThemeLastFetches(allData.lastFetches || {}, "ALL");
       if (state.mode === "theme") {
         state.counts = state.themeCounts;
         renderCalendar();
         renderThemeFilters();
+        renderMonitorSidebarSummary();
       }
     }
 
@@ -56262,6 +56641,16 @@ INDEX_HTML = """<!doctype html>
     $("closeAnalysis").addEventListener("click", closeAnalysis);
     $("analysisBackdrop").addEventListener("click", closeAnalysis);
     $("closeCitationSettings").addEventListener("click", closeCitationSettings);
+    document.querySelectorAll("[data-credential-input]").forEach((button) => {
+      const inputId = button.dataset.credentialInput;
+      button.addEventListener("click", () => toggleSourceCredentialVisibility(inputId, button.dataset.provider));
+      $(inputId).addEventListener("input", () => {
+        const input = $(inputId);
+        input.dataset.revealVersion = String(Number(input.dataset.revealVersion || 0) + 1);
+        input.dataset.savedReveal = "false";
+        button.disabled = !input.value && input.dataset.configured !== "true";
+      });
+    });
     $("citationSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("citationSettingsBackdrop")) closeCitationSettings();
     });

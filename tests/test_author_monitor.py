@@ -2639,7 +2639,7 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn('AUTHOR_MONITOR_SELECTION_STORAGE_KEY = "daiqo-author-monitor-selected-id"', html)
         self.assertIn("async function loadAuthorMonitorScope", html)
         self.assertIn("function prefetchAuthorMonitorIndex", html)
-        self.assertIn('fetchJson("/api/author-monitor?index=1"', html)
+        self.assertIn('fetchAuthorMonitorReadSafeJson("/api/author-monitor?index=1"', html)
         self.assertIn("state.authorMonitorIndexLoaded", html)
         self.assertIn("applyAuthorMonitorIndex(data)", html)
         self.assertIn("authorMonitorSelectedPaperByAuthor: new Map()", html)

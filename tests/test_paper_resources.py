@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from http import HTTPStatus
@@ -2153,6 +2154,84 @@ class PaperResourceStorageTests(unittest.TestCase):
 
         self.assertTrue(primary.exists())
         self.assertIsNotNone(self.storage.get_paper_resource(int(primary_resource["id"])))
+
+    def test_v14_file_path_index_migration_preserves_rows_and_skips_backfill(self) -> None:
+        self.add_paper("index-migration")
+        self.storage.conn.execute("PRAGMA user_version = 14")
+        for name in ("idx_papers_main_pdf_path", "idx_papers_merged_pdf_path", "idx_resources_stored_path"):
+            self.storage.conn.execute(f"DROP INDEX {name}")
+        self.storage.conn.commit()
+        before = self.conversion_db_state()
+        provenance = self.storage.conn.execute("SELECT * FROM paper_source_observations").fetchall()
+        with patch.object(Storage, "_backfill_paper_source_observations", side_effect=AssertionError("No provenance migration")), \
+             patch.object(Storage, "_seed_library_from_existing_papers", side_effect=AssertionError("No Library reseeding")):
+            migrated = Storage(self.db_path)
+            migrated.close()
+            reopened = Storage(self.db_path)
+            reopened.close()
+        self.assertEqual(self.conversion_db_state(), before)
+        self.assertEqual(self.storage.conn.execute("SELECT * FROM paper_source_observations").fetchall(), provenance)
+        self.assertEqual(self.storage.conn.execute("PRAGMA user_version").fetchone()[0], STORAGE_SCHEMA_VERSION)
+        self.assertEqual(self.storage.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_shared_file_guards_use_indexes_instead_of_scanning_metadata(self) -> None:
+        paper_plan = " ".join(row[3] for row in self.storage.conn.execute(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM papers WHERE main_pdf_path = ? OR merged_pdf_path = ? LIMIT 1",
+            ("/fixture/path", "/fixture/path"),
+        ))
+        resource_plan = " ".join(row[3] for row in self.storage.conn.execute(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM resources WHERE id != ? AND stored_path = ? LIMIT 1",
+            (-1, "/fixture/path"),
+        ))
+        self.assertNotIn("SCAN papers", paper_plan)
+        self.assertIn("idx_papers_main_pdf_path", paper_plan)
+        self.assertIn("idx_papers_merged_pdf_path", paper_plan)
+        self.assertIn("idx_resources_stored_path", resource_plan)
+
+    def test_resource_delete_keeps_shared_paths_and_external_originals(self) -> None:
+        for sharing in ("resource", "main_pdf_path", "merged_pdf_path", "external"):
+            with self.subTest(sharing=sharing):
+                paper_id = f"shared-{sharing}"
+                self.add_paper(paper_id)
+                self.add_paper(f"other-{sharing}")
+                path = self.root / ("External" if sharing == "external" else "data/Library") / f"{sharing}.txt"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("temporary product file")
+                resource = self.storage.create_paper_resource(paper_id=paper_id, stored_path=str(path), kind="file")
+                if sharing == "resource":
+                    self.storage.create_paper_resource(paper_id=f"other-{sharing}", stored_path=str(path), kind="file")
+                elif sharing != "external":
+                    self.storage.conn.execute(f"UPDATE papers SET {sharing} = ? WHERE paper_id = ?", (str(path), f"other-{sharing}"))
+                    self.storage.conn.commit()
+                with patch.object(ui_server, "move_path_to_macos_trash") as trash:
+                    deleted = ui_server.delete_paper_resource(self.storage, paper_id, int(resource["id"]))
+                trash.assert_not_called()
+                self.assertTrue(path.exists())
+                self.assertFalse(deleted["trashed"])
+                self.assertIsNone(self.storage.get_paper_resource(int(resource["id"])))
+
+    def test_resource_delete_failure_restores_file_and_database_preference(self) -> None:
+        self.add_paper("rollback-delete")
+        attached = ui_server.attach_file_to_paper(self.storage, paper_id="rollback-delete", filename="Note.txt", content=b"note", file_role="note")
+        resource_id = int(attached["id"])
+        path = Path(attached["stored_path"])
+        self.storage.conn.execute("UPDATE papers SET preferred_resource_id = ?, preferred_resource_manual = 1 WHERE paper_id = ?", (resource_id, "rollback-delete"))
+        self.storage.conn.execute("CREATE TRIGGER reject_test_delete BEFORE DELETE ON resources BEGIN SELECT RAISE(ABORT, 'fixture failure'); END")
+        self.storage.conn.commit()
+        trash_path = self.root / "fixture-trash.txt"
+        def fake_trash(source):
+            source.replace(trash_path)
+            return trash_path
+        with patch.object(ui_server, "move_path_to_macos_trash", side_effect=fake_trash), self.assertRaises(sqlite3.IntegrityError):
+            ui_server.delete_paper_resource(self.storage, "rollback-delete", resource_id)
+        self.assertEqual(path.read_bytes(), b"note")
+        self.assertFalse(trash_path.exists())
+        self.assertIsNotNone(self.storage.get_paper_resource(resource_id))
+        self.assertEqual(self.storage.get_paper("rollback-delete")["preferred_resource_id"], resource_id)
+        with patch.object(ui_server, "move_path_to_macos_trash", side_effect=PermissionError("fixture permission")), self.assertRaises(PermissionError):
+            ui_server.delete_paper_resource(self.storage, "rollback-delete", resource_id)
+        self.assertTrue(path.exists())
+        self.assertIsNotNone(self.storage.get_paper_resource(resource_id))
 
 
 if __name__ == "__main__":

@@ -102,7 +102,7 @@ class UserGuideTests(unittest.TestCase):
             "Journal Monitor",
             "Subject Monitor",
             "Author Monitor",
-            "Citation Settings",
+            "Open Source Settings",
             "arXiv Scope Settings",
             "Field Settings",
             "Quick Look Settings",
@@ -553,15 +553,21 @@ class UserGuideTests(unittest.TestCase):
         for phrase in [
             "Moving to a date with no result does not switch",
             "calendar's day numbers describe the active subject",
+            "including zero, with a superscript asterisk",
+            "zero with an asterisk is not a confirmed empty result",
+            "no stored results and no fetch record remains blank",
+            "A later successful refresh removes the asterisk",
             "arXiv display option is enabled by default",
         ]:
             self.assertIn(phrase, subject_text)
 
         paper_files_text = soup.find("article", id="paper-files").get_text(" ", strip=True)
         for phrase in [
-            "their own rows so their values do not collide",
-            "adaptive property grid",
-            "narrow panels wrap them",
+            "Click the size footer or its chevron",
+            "Each card expands independently",
+            "Library Paper Details no longer repeats this bundle",
+            "Double-click the paper row to the left",
+            "Shared files and external originals are preserved",
             "Set as Default",
             "Use Automatic Selection",
             "Understand a Missing File row",
@@ -697,6 +703,16 @@ class UserGuideTests(unittest.TestCase):
             self.assertIn("does not automatically download a PDF", topic_text)
 
     def test_guide_is_offline_searchable_and_printable(self) -> None:
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        settings_text = soup.find("article", id="citation-settings").get_text(" ", strip=True)
+        self.assertIn("Configure Open Source Settings", settings_text)
+        self.assertIn("fixed round dots by default", settings_text)
+        self.assertIn("retrieved only on Show", settings_text)
+        self.assertIn("cleared on Hide or when settings closes", settings_text)
+        author_text = soup.find("article", id="author-monitor").get_text(" ", strip=True)
+        self.assertIn("Read All", author_text)
+        self.assertIn("other authors keep their unread state, even for a shared paper", author_text)
+        self.assertIn("marks all authors' new publications as read", author_text)
         html = ui_server.load_user_guide_html()
         self.assertIn('id="guideSearch"', html)
         self.assertIn("hashchange", html)

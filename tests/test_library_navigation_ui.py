@@ -210,7 +210,7 @@ class LibraryNavigationUiTests(unittest.TestCase):
             "function libraryDragPayload", 1
         )[0]
 
-        self.assertIn("renderLibraryColumns();", partial_render)
+        self.assertIn("renderLibraryColumns({preserveRows})", partial_render)
         self.assertIn("renderLibraryDetail();", partial_render)
         self.assertIn("wireLibraryResourceInteractions(shell);", partial_render)
         self.assertIn('card.addEventListener("click"', resource_interactions)

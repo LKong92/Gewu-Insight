@@ -111,9 +111,12 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('const value = paper?.doi || ""', doi_markup)
         self.assertIn('placeholder="Enter DOI"', doi_markup)
 
-    def test_library_and_my_publications_share_the_files_panel(self) -> None:
+    def test_only_my_publications_retains_the_details_files_panel(self) -> None:
         self.assertIn("function paperFilesPanelMarkup(paper)", INDEX_HTML)
-        self.assertGreaterEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 2)
+        self.assertEqual(INDEX_HTML.count("${paperFilesPanelMarkup(paper)}"), 1)
+        detail = INDEX_HTML.split("function renderLibraryDetail()", 1)[1].split("function wireLibraryFolderOccurrenceControls", 1)[0]
+        self.assertNotIn("paperFilesPanelMarkup(paper)", detail)
+        self.assertNotIn("wirePaperFilesPanel(root, paper)", detail)
         self.assertIn(">Add File</button>", INDEX_HTML)
         self.assertIn("Published version", INDEX_HTML)
         self.assertIn("Accepted manuscript", INDEX_HTML)

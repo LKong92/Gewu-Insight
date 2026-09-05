@@ -84,7 +84,7 @@ class UiPerformanceContractTests(unittest.TestCase):
 
     def test_loaded_library_navigation_preserves_the_existing_shell(self) -> None:
         partial_renderer = self.js_function("renderLibraryNavigationContent")
-        self.assertIn("renderLibraryColumns();", partial_renderer)
+        self.assertIn("renderLibraryColumns({preserveRows})", partial_renderer)
         self.assertIn("renderLibraryDetail();", partial_renderer)
         self.assertNotIn("root.innerHTML", partial_renderer)
         self.assertNotIn("wireLibraryInteractions();", partial_renderer)
@@ -95,7 +95,7 @@ class UiPerformanceContractTests(unittest.TestCase):
             "focusLibraryFolder",
         ):
             function_body = self.js_function(function_name)
-            self.assertIn("renderLibraryNavigationContent();", function_body, function_name)
+            self.assertIn("renderLibraryNavigationContent(", function_body, function_name)
             self.assertNotIn("renderLibrary();", function_body, function_name)
 
     def test_author_monitor_card_cache_is_a_rebuildable_sqlite_index(self) -> None:

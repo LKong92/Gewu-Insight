@@ -21,6 +21,7 @@ from paper_monitor.ui_server import (
     theme_candidate_is_literature_like,
     theme_counts_for_month,
     theme_fetch_error_message,
+    theme_last_fetch_info,
     theme_online_discovery_from_last_fetch,
     theme_paper_to_api,
 )
@@ -270,6 +271,69 @@ class ThemeMonitorTest(unittest.TestCase):
             {"2026-06-03": {"scanning-squid": 0}},
         )
         self.assertEqual(other_subject_counts, {})
+
+    def test_calendar_incomplete_zero_counts_survive_restart_and_successful_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper_monitor.sqlite"
+            storage = Storage(db_path)
+            try:
+                for day, group, status, source in (
+                    ("03", "alpha", "partial", "multi"),
+                    ("03", "beta", "empty", "multi"),
+                    ("04", "alpha", "error", "multi"),
+                    ("05", "alpha", "deferred", "multi"),
+                    ("06", "alpha", "waiting", "multi"),
+                    ("07", "alpha", "running", "multi"),
+                    ("08", "alpha", "error", "crossref"),
+                ):
+                    storage.record_fetch_run(
+                        monitor_type="theme", source=source, journal=f"theme:{group}",
+                        window_start=f"2026-06-{day}", window_end=f"2026-06-{day}",
+                        status=status, records_found=0,
+                        started_at="2999-01-01T00:00:00+08:00",
+                    )
+            finally:
+                storage.close()
+            storage = Storage(db_path)
+            try:
+                counts = theme_counts_for_month(storage, prefix="2026-06-", group_keys=["alpha", "beta", "unfetched"])
+                self.assertEqual(counts, {
+                    "2026-06-03": {"alpha": 0, "beta": 0},
+                    "2026-06-04": {"alpha": 0},
+                    "2026-06-05": {"alpha": 0},
+                    "2026-06-06": {"alpha": 0},
+                })
+                last = theme_last_fetch_info(storage, "2026-06-03", ["alpha", "beta"])
+                self.assertEqual(last["groups"]["alpha"]["status"], "partial")
+                self.assertEqual(last["groups"]["beta"]["status"], "empty")
+                self.assertEqual(theme_online_discovery_from_last_fetch(last)["status"], "partial")
+                # The most recent summary, not a historic partial result, is authoritative.
+                storage.record_fetch_run(
+                    monitor_type="theme", source="multi", journal="theme:alpha",
+                    window_start="2026-06-03", window_end="2026-06-03",
+                    status="empty", records_found=0, started_at="2999-01-02T00:00:00+08:00",
+                )
+                completed = theme_last_fetch_info(storage, "2026-06-03", ["alpha", "beta"])
+                self.assertEqual(completed["groups"]["alpha"]["status"], "empty")
+                self.assertEqual(theme_online_discovery_from_last_fetch(completed)["status"], "complete")
+                self.assertEqual(theme_counts_for_month(storage, prefix="2026-06-03", group_keys=["alpha"]), {"2026-06-03": {"alpha": 0}})
+            finally:
+                storage.close()
+
+    def test_cached_discovery_recovers_partial_and_complete_statuses(self):
+        for statuses, expected in (
+            (["partial"], "partial"),
+            (["partial", "empty"], "partial"),
+            (["error", "success"], "partial"),
+            (["waiting"], "partial"),
+            (["success", "empty"], "complete"),
+            (["deferred"], "deferred"),
+            (["deferred", "empty"], "partial"),
+        ):
+            with self.subTest(statuses=statuses):
+                last = {"groups": {str(index): {"status": status} for index, status in enumerate(statuses)}}
+                self.assertEqual(theme_online_discovery_from_last_fetch(last)["status"], expected)
+        self.assertEqual(theme_online_discovery_from_last_fetch({"groups": {}}), {})
 
     def test_missing_theme_group_keys_skip_completed_and_present_results(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -897,6 +961,8 @@ class ThemeMonitorTest(unittest.TestCase):
                     )
                     self.assertEqual(first["groups"]["alpha"]["status"], "partial")
                     self.assertEqual(first["groups"]["alpha"]["saved"], 1)
+                    self.assertEqual(theme_counts_for_month(storage, prefix="2026-06-", group_keys=["alpha"]), {"2026-06-02": {"alpha": 1}})
+                    self.assertEqual(theme_last_fetch_info(storage, selected.isoformat(), ["alpha"])["groups"]["alpha"]["status"], "partial")
                     self.assertEqual(second["groups"]["alpha"]["source_statuses"]["limited_source"], "cooldown")
                     self.assertEqual(calls, ["alpha"])
                 finally:

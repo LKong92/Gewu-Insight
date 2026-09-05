@@ -662,7 +662,7 @@ A cataloged-only paper may have no local file, and nothing is missing merely bec
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Open the \textbf{Files} section.} It starts collapsed in Paper Details so long file lists do not dominate the inspector.
+  \textbf{Select the paper to show \textbf{Paper Files}.} Cards initially show File type and size. Click a card\textquotesingle s size footer to show or hide Annotation and Source.
 \item
   \textbf{Classify the available file.} Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.
 \item
@@ -700,7 +700,7 @@ Copy the paper to a second Library folder, then select it there. The title, Gewu
 \item
   Use \textbf{Download} when a better publication version is available.
 \item
-  Open \textbf{Files} to classify imported PDFs or add notes, data, slides, and supplements.
+  Use \textbf{Paper Files} to classify imported PDFs or add notes, data, slides, and supplements.
 \item
   Add the paper to another folder without creating a second independent work record.
 \item
@@ -709,7 +709,7 @@ Copy the paper to a second Library folder, then select it there. The title, Gewu
 
 \section{Finish with a safe baseline}\label{finish-with-a-safe-baseline}
 
-Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.
+Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, Paper Files, and Finder should answer the applicable questions without contradicting one another.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -1358,7 +1358,7 @@ Library and Space columns form one keyboard path with Paper Files. Focus moves i
 \item
   Press \texttt{{\symbolfont ←}} to return to its parent.
 \item
-  Double-click a normal file to open it with its macOS application.
+  Double-click a Library paper row to open its Default file: PDFs open in macOS Preview; other formats use their macOS application. An unclassified legacy import falls back to its available current file.
 \end{itemize}
 
 \subsection{Move between the source rail and Library columns}\label{move-between-the-source-rail-and-library-columns}
@@ -1579,7 +1579,7 @@ A paper record does not require a local PDF. \textbf{Add Paper} creates or reuse
 \begin{quote}
 \textbf{Note}
 
-A file added to an existing paper's \textbf{Files} panel is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.
+A file added to an existing paper's \textbf{Paper Files} bundle is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.
 \end{quote}
 
 \subsection{See also}\label{see-also-14}
@@ -1613,9 +1613,9 @@ Action & What it does \\
 \GewuTableEnd
 }
 
-\subsection{Files summary}\label{files-summary}
+\subsection{File management}\label{file-management}
 
-The \textbf{Files · n} row is collapsed by default. Its right side identifies the default file type. Expand it to add, classify, show, choose a default, sync, or delete related files.
+Library uses the adjacent \textbf{Paper Files} column; Paper Details does not repeat a Files box. My Publications has no separate file column, so its collapsible \textbf{Files · n} panel remains the place to add, classify, show, select a default, sync, or delete files.
 
 \subsection{Metadata rows}\label{metadata-rows}
 
@@ -1699,7 +1699,7 @@ Confirm an identifier before running a version sync. A wrong identifier can atta
 
 \subsection{See also}\label{see-also-16}
 
-\hyperref[download-sync]{Download and Sync Versions} · \hyperref[citation-settings]{Citation Settings}
+\hyperref[download-sync]{Download and Sync Versions} · \hyperref[citation-settings]{Open Source Settings}
 
 \section{Understand Paper Files}\label{paper-files}
 
@@ -1707,9 +1707,9 @@ Confirm an identifier before running a version sync. A wrong identifier can atta
 A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.
 \end{GewuLead}
 
-\subsection{Two views of the same flat bundle}\label{two-views-of-the-same-flat-bundle}
+\subsection{Compact cards for one flat bundle}\label{compact-cards-for-one-flat-bundle}
 
-The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each compact card puts the filename first, then gives \textbf{File type}, \textbf{Annotation}, and \textbf{Source} their own rows so their values do not collide or disappear at narrow pane widths. File type is first because it determines whether the file is a preprint, accepted manuscript, published version, correction, supplement, or another resource. A small \textbf{Default} marker identifies the file selected for the paper.
+The Paper Files column is a flat peer list, not a hierarchy of version or attachment folders. Each card shows its filename, \textbf{File type}, and size by default. Click the size footer or its chevron to expand \textbf{Annotation} and \textbf{Source} into separate rows; click again to collapse them. Each card expands independently, and the choice lasts for the current session. File type remains visible because it identifies a preprint, accepted manuscript, published version, supplement, or other resource. The \textbf{Default} marker identifies the preferred file.
 
 \subsection{Select, open, or act on a file}\label{select-open-or-act-on-a-file}
 
@@ -1720,6 +1720,8 @@ The dedicated Paper Files column and the compact Files panel inside Paper Detail
 \item
   Double-click a card to open it.
 \item
+  Double-click the paper row to the left to open the paper\textquotesingle s Default file, independently of the highlighted resource card. PDFs open in macOS Preview. If an old unclassified import has no Default, its available current file still opens.
+\item
   Press \texttt{Space} to use Quick Look.
 \item
   Control-click for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, default-file controls, type controls, add/sync actions, or deletion where allowed.
@@ -1729,7 +1731,9 @@ The dedicated Paper Files column and the compact Files panel inside Paper Detail
 
 The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing \textbf{Set as Default} makes that resource the file used by \textbf{Open in Preview} and paper preview without moving, renaming, or rewriting it. If you set it manually, \textbf{Use Automatic Selection} returns control to the file-type priority rule.
 
-The Paper Details \textbf{Files} panel provides the same underlying bundle and classification controls in a compact form. When expanded, each file uses a separate filename row, an adaptive property grid for \textbf{File type}, \textbf{Annotation}, and \textbf{Source}, then a footer for file size and actions. Wide panels keep the three properties side by side; narrow panels wrap them instead of letting labels or buttons overlap. \textbf{Show in Finder} reveals the physical file.
+Library Paper Details no longer repeats this bundle. In My Publications, which has no adjacent Paper Files column, the collapsible \textbf{Files} panel keeps its file-management controls. \textbf{Show in Finder} reveals a physical file.
+
+Deleting a private managed attachment moves its bytes to macOS Trash before removing its resource record. Shared files and external originals are preserved. A failed database deletion restores the moved file when macOS returns its Trash path. The interface shows progress and updates only after success; path indexes keep the shared-file safety check fast even in large libraries.
 
 \subsection{Understand a Missing File row}\label{understand-a-missing-file-row}
 
@@ -1815,7 +1819,7 @@ Only the four publication types above participate in automatic selection. You ma
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Enter Paper Files or expand \textbf{Files}.}
+  \textbf{Enter Paper Files, or expand \textbf{Files} in My Publications.}
 \item
   \textbf{Select the file you want.}
 \item
@@ -1864,18 +1868,18 @@ Changing a type, annotation state, source, or default changes database metadata 
 Import first, classify afterward. This keeps the add operation simple and lets you set type, annotation state, and source after seeing the file in context.
 \end{GewuLead}
 
-\subsection{Add a file from Paper Details}\label{add-a-file-from-paper-details}
+\subsection{Add a file to the paper}\label{add-a-file-to-the-paper}
 
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Expand \textbf{Files}.}
+  \textbf{Control-click the Paper Files area and choose \textbf{Add File}.} In My Publications, expand Files and use Add File.
 \item
-  \textbf{Choose \textbf{Add File}.} Select one or more local files.
+  \textbf{Select one or more local files.} Confirm the file chooser.
 \item
   \textbf{Wait for the new row.} A new item begins as \textbf{Unknown} unless its source proves a more specific type.
 \item
-  \textbf{Select its compact controls.} Choose the file type, annotation state, and source independently.
+  \textbf{Select its compact controls.} Choose File type; click the size footer to expand Annotation and Source when needed.
 \end{enumerate}
 
 \subsection{Attachment types}\label{attachment-types}
@@ -2142,7 +2146,7 @@ Verified ``not found'' checks and transient failures use cooldowns so a repeated
 
 \subsection{See also}\label{see-also-25}
 
-\hyperref[citation-settings]{Citation Settings} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
 
 \section{Make a Portable Desktop Copy}\label{desktop-copy}
 
@@ -2314,7 +2318,7 @@ Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf proje
 
 \subsection{See also}\label{see-also-28}
 
-\hyperref[citation-settings]{Citation Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
+\hyperref[citation-settings]{Open Source Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
 
 \chapter{Journal Monitor}\label{chapter-15}
 
@@ -2431,7 +2435,7 @@ Subject Monitor discovers papers for reusable topics. Each subject stores a name
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Subject Monitor. Superconductivity remains the active subject, its calendar counts are subject-specific, and the refreshed result cards include matching evidence and available figures.
+Subject Monitor. Superconductivity is selected, with matching papers and a completed count for the selected date. Other dates with incomplete discovery carry a superscript asterisk; its explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.
 \end{GewuCaption}
 
 \subsection{Create a subject}\label{create-a-subject}
@@ -2453,6 +2457,10 @@ Keywords use case-insensitive literal matching. Enter the words or phrases you e
 \subsection{Keep one subject selected across dates}\label{keep-one-subject-selected-across-dates}
 
 Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar\textquotesingle s day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.
+
+After all sources complete successfully for that subject and date, the calendar shows the stored count, including \textbf{0} for no matching papers. A partially completed fetch also shows its current count, including zero, with a superscript asterisk. The asterisk means one or more sources did not complete, so the count may be incomplete; zero with an asterisk is not a confirmed empty result. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.
+
+The \textbf{Discovery} row describes the selected subject; its asterisk legend appears at the bottom of \textbf{Monitor Summary}, after Updates and any Errors. Discovery distinguishes \textbf{Completed}, \textbf{Partially completed}, failed, and deferred discovery; failed or deferred attempts also keep their provisional counts marked. Switching subjects changes both the counts and their completion markers. A later successful refresh removes the asterisk, and reopening the app preserves the status recorded in SQLite.
 
 \subsection{Refresh subjects}\label{refresh-subjects}
 
@@ -2490,7 +2498,7 @@ Select a paper to read its title, authors, abstract, source, date, identifier, t
   \textbf{Complete the add.} Use \textbf{Show in Library} on later visits to reveal the managed placement.
 \end{enumerate}
 
-Adding the result preserves the matched subject, score, terms, and discovery provenance. It does not automatically download a PDF; use \textbf{Download} separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.
+Adding the result preserves the matched subject, score, terms, and discovery provenance. The paper remains visible in Subject Monitor immediately after adding it; its action becomes \textbf{Show in Library}, while the selected subject, date, and reading position stay in place. It does not automatically download a PDF; use \textbf{Download} separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.
 
 \begin{quote}
 \textbf{Important}
@@ -2538,6 +2546,8 @@ If no publication-data match can be verified, the ResearchGate profile and homep
 
 Later refreshes can mark newly discovered publications as unread. Use the \textbf{New} filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.
 
+Control-click \textbf{New} and choose \textbf{Read All} to clear the blue unread dots. With one author selected, this marks all new publications for that author as read, including those not currently scrolled into view; other authors keep their unread state, even for a shared paper. With \textbf{All Authors} selected, it marks all authors\textquotesingle{} new publications as read. The action preserves papers and Library placements. The New filter stays active, so newly read papers leave that filtered view; click New again to see all publications. Read state persists after reopening the app.
+
 \subsection{Update citation profiles}\label{update-citation-profiles}
 
 \textbf{Update All Citations} is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.
@@ -2580,7 +2590,7 @@ Google Scholar requests are paced and protected by a cooldown. Repeated manual r
 
 \chapter{Settings and Safety}\label{chapter-18}
 
-\section{Citation Settings}\label{citation-settings}
+\section{Open Source Settings}\label{citation-settings}
 
 \begin{GewuLead}
 Built-in sources work without setup. Optional credentials improve access or coverage for supported services.
@@ -2588,7 +2598,7 @@ Built-in sources work without setup. Optional credentials improve access or cove
 
 \subsection{Open settings}\label{open-settings}
 
-Choose \textbf{Setting \textgreater{} Citation Settings}, or press \texttt{{\symbolfont ⌘}}\texttt{,}.
+Choose \textbf{Setting \textgreater{} Open Source Settings}, or press \texttt{{\symbolfont ⌘}}\texttt{,}.
 
 \subsection{Available services}\label{available-services}
 
@@ -2621,6 +2631,8 @@ NASA ADS & Optional API token for astronomy and physics coverage. \\
 \item
   \textbf{Run a small metadata refresh.} Confirm the service appears in the citation panel.
 \end{enumerate}
+
+A configured field shows fixed round dots by default, while the detailed status below continues to report saving, connection, or quota information. The dots do not expose the key or its length. Click \textbf{Show} inside the field to reveal the saved key, or inspect a newly typed key; click \textbf{Hide} to mask it again. A saved key is retrieved only on Show, and its displayed value is cleared on Hide or when settings closes. Type a replacement and choose \textbf{Save} to change the key; \textbf{Clear} removes the locally saved key. A configured environment key can remain available. Avoid screenshots or screen sharing while a key is visible.
 
 Semantic Scholar sends its key in the official \texttt{x-api-key} header. Requests share a low-rate queue and use exponential backoff after rate limits or temporary failures.
 
@@ -2672,7 +2684,7 @@ The category checkboxes in Journal Monitor are display filters. They do not narr
 
 \subsection{See also}\label{see-also-33}
 
-\hyperref[journal-monitor]{Journal Monitor} · \hyperref[field-settings]{Field Settings} · \hyperref[citation-settings]{Citation Settings} · \hyperref[network-access]{Publisher and Network Access}
+\hyperref[journal-monitor]{Journal Monitor} · \hyperref[field-settings]{Field Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access}
 
 \section{Field Settings}\label{field-settings}
 
@@ -2746,7 +2758,7 @@ Use \textbf{Restore Defaults} to return to the four-field default. Field Setting
 
 \subsection{See also}\label{see-also-34}
 
-\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Citation Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
+\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
 
 \section{Quick Look Settings}\label{quick-look-settings}
 
@@ -2919,11 +2931,11 @@ Metadata refresh, citation counts, journal/subject/author discovery, profile ima
 
 \subsection{Protect credentials}\label{protect-credentials}
 
-Optional service credentials belong only in Citation Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.
+Optional service credentials belong only in Open Source Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.
 
 \subsection{See also}\label{see-also-38}
 
-\hyperref[citation-settings]{Citation Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
+\hyperref[citation-settings]{Open Source Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
 
 \part{Product Identity}\label{part-4}
 
@@ -3045,7 +3057,7 @@ Shortcut & Action \\
 \texttt{Esc} & Dismiss an active transient control or return focus where supported. \\
 \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V} & Toggle List View and Table View. \\
 \texttt{{\symbolfont ⌘}}\texttt{L} & Open Folder Loader. \\
-\texttt{{\symbolfont ⌘}}\texttt{,} & Open Citation Settings. \\
+\texttt{{\symbolfont ⌘}}\texttt{,} & Show Open Source Settings. \\
 \texttt{{\symbolfont ⌘}}\texttt{W} & Close the current window. \\
 \end{longtable}
 \GewuTableEnd

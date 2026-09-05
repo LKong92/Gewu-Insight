@@ -603,7 +603,7 @@
           </section>
           <section class="nav-group">
             <h2 class="nav-heading">Settings and Safety</h2>
-            <button class="topic-link" data-topic="citation-settings">Citation Settings</button>
+            <button class="topic-link" data-topic="citation-settings">Open Source Settings</button>
             <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
             <button class="topic-link" data-topic="field-settings">Field Settings</button>
             <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
@@ -879,7 +879,7 @@
           <h2>Complete the first Paper Files bundle</h2>
           <p>A cataloged-only paper may have no local file, and nothing is missing merely because Paper Files is empty. Continue with these steps after you import, download, or attach a file and the paper becomes file-backed.</p>
           <ol class="steps">
-            <li><strong>Open the <span class="ui">Files</span> section.</strong> It starts collapsed in Paper Details so long file lists do not dominate the inspector.</li>
+            <li><strong>Select the paper to show <span class="ui">Paper Files</span>.</strong> Cards initially show File type and size. Click a card's size footer to show or hide Annotation and Source.</li>
             <li><strong>Classify the available file.</strong> Use its small type, annotation, and source controls. Do not infer these facts from the filename alone.</li>
             <li><strong>Add related material if you have it.</strong> Add a supplement, annotated copy, note, presentation, data file, code file, or other attachment. Import first, then classify the resource.</li>
             <li><strong>Check the default file.</strong> <span class="ui">Open in Preview</span> and Library preview use the resolved default when applicable. Selecting <span class="ui">Set as Default</span> changes preference without renaming the resource.</li>
@@ -897,13 +897,13 @@
           <h2>Next useful actions</h2>
           <ul>
             <li>Use <span class="ui">Download</span> when a better publication version is available.</li>
-            <li>Open <span class="ui">Files</span> to classify imported PDFs or add notes, data, slides, and supplements.</li>
+            <li>Use <span class="ui">Paper Files</span> to classify imported PDFs or add notes, data, slides, and supplements.</li>
             <li>Add the paper to another folder without creating a second independent work record.</li>
             <li>Back up the project before a large import or migration.</li>
           </ul>
 
           <h2>Finish with a safe baseline</h2>
-          <p>Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, the Files section, and Finder should answer the applicable questions without contradicting one another.</p>
+          <p>Your first session is complete when you can answer two questions for every paper: What is this work, and why is it in this folder? If the paper is file-backed, answer two more: Which file is the default, and where are the real bytes? Paper Details, Paper Files, and Finder should answer the applicable questions without contradicting one another.</p>
 
           <div class="invariant-list">
             <div><strong>Identity checked</strong><span>The title, authors, DOI, and arXiv evidence do not point to different works.</span></div>
@@ -1283,7 +1283,7 @@
             <li>Press <kbd>↑</kbd> or <kbd>↓</kbd> to change the selection in the focused column.</li>
             <li>Press <kbd>→</kbd> on a folder to enter it.</li>
             <li>Press <kbd>←</kbd> to return to its parent.</li>
-            <li>Double-click a normal file to open it with its macOS application.</li>
+            <li>Double-click a Library paper row to open its Default file: PDFs open in macOS Preview; other formats use their macOS application. An unclassified legacy import falls back to its available current file.</li>
           </ul>
 
           <h2>Move between the source rail and Library columns</h2>
@@ -1415,7 +1415,7 @@
 
           <div class="note"><span class="callout-title">Note</span>A paper record does not require a local PDF. <span class="ui">Add Paper</span> creates or reuses the metadata record; it does not automatically download a PDF. Use <span class="ui">Download</span> or <span class="ui">Add File</span> separately when you want a managed local file.</div>
 
-          <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Files</span> panel is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.</div>
+          <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Paper Files</span> bundle is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#folder-loader">Use Folder Loader</a><a href="#drag-attach">Move a Standalone File into Paper Files</a></div></div>
         </article>
@@ -1435,8 +1435,8 @@
             <tr><td><span class="ui">Get Identifier from Files</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
           </table>
 
-          <h2>Files summary</h2>
-          <p>The <span class="ui">Files · n</span> row is collapsed by default. Its right side identifies the default file type. Expand it to add, classify, show, choose a default, sync, or delete related files.</p>
+          <h2>File management</h2>
+          <p>Library uses the adjacent <span class="ui">Paper Files</span> column; Paper Details does not repeat a Files box. My Publications has no separate file column, so its collapsible <span class="ui">Files · n</span> panel remains the place to add, classify, show, select a default, sync, or delete files.</p>
 
           <h2>Metadata rows</h2>
           <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable, human-visible storage handle for a cataloged work record. It is not a DOI, arXiv identifier, or the database's relational primary key.</p>
@@ -1486,7 +1486,7 @@
 
           <div class="important"><span class="callout-title">Important</span>Confirm an identifier before running a version sync. A wrong identifier can attach files from a different work.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Citation Settings</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#download-sync">Download and Sync Versions</a><a href="#citation-settings">Open Source Settings</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="paper-files" data-group="Papers and Files" data-title="Understand Paper Files" data-keywords="default flat resources file type annotation source attachments files panel inspector compact rows">
@@ -1494,13 +1494,14 @@
           <h1>Understand Paper Files</h1>
           <p class="lead">A paper is one work record that can own several PDFs and related files. Paper Files shows that bundle without pretending it is another Library folder level.</p>
 
-          <h2>Two views of the same flat bundle</h2>
-          <p>The dedicated Paper Files column and the compact Files panel inside Paper Details show the same flat peer list. They do not place files under version, supplement, or attachment parent groups. Each compact card puts the filename first, then gives <span class="ui">File type</span>, <span class="ui">Annotation</span>, and <span class="ui">Source</span> their own rows so their values do not collide or disappear at narrow pane widths. File type is first because it determines whether the file is a preprint, accepted manuscript, published version, correction, supplement, or another resource. A small <span class="ui">Default</span> marker identifies the file selected for the paper.</p>
+          <h2>Compact cards for one flat bundle</h2>
+          <p>The Paper Files column is a flat peer list, not a hierarchy of version or attachment folders. Each card shows its filename, <span class="ui">File type</span>, and size by default. Click the size footer or its chevron to expand <span class="ui">Annotation</span> and <span class="ui">Source</span> into separate rows; click again to collapse them. Each card expands independently, and the choice lasts for the current session. File type remains visible because it identifies a preprint, accepted manuscript, published version, supplement, or other resource. The <span class="ui">Default</span> marker identifies the preferred file.</p>
 
           <h2>Select, open, or act on a file</h2>
           <ul>
             <li>Single-click a card to select it.</li>
             <li>Double-click a card to open it.</li>
+            <li>Double-click the paper row to the left to open the paper's Default file, independently of the highlighted resource card. PDFs open in macOS Preview. If an old unclassified import has no Default, its available current file still opens.</li>
             <li>Press <kbd>Space</kbd> to use Quick Look.</li>
             <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, default-file controls, type controls, add/sync actions, or deletion where allowed.</li>
             <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.</li>
@@ -1508,7 +1509,8 @@
 
           <p>The physical primary file used by older compatibility paths remains protected from direct deletion. Choosing <span class="ui">Set as Default</span> makes that resource the file used by <span class="ui">Open in Preview</span> and paper preview without moving, renaming, or rewriting it. If you set it manually, <span class="ui">Use Automatic Selection</span> returns control to the file-type priority rule.</p>
 
-          <p>The Paper Details <span class="ui">Files</span> panel provides the same underlying bundle and classification controls in a compact form. When expanded, each file uses a separate filename row, an adaptive property grid for <span class="ui">File type</span>, <span class="ui">Annotation</span>, and <span class="ui">Source</span>, then a footer for file size and actions. Wide panels keep the three properties side by side; narrow panels wrap them instead of letting labels or buttons overlap. <span class="ui">Show in Finder</span> reveals the physical file.</p>
+          <p>Library Paper Details no longer repeats this bundle. In My Publications, which has no adjacent Paper Files column, the collapsible <span class="ui">Files</span> panel keeps its file-management controls. <span class="ui">Show in Finder</span> reveals a physical file.</p>
+          <p>Deleting a private managed attachment moves its bytes to macOS Trash before removing its resource record. Shared files and external originals are preserved. A failed database deletion restores the moved file when macOS returns its Trash path. The interface shows progress and updates only after success; path indexes keep the shared-file safety check fast even in large libraries.</p>
 
           <h2>Understand a Missing File row</h2>
           <p><span class="ui">Missing File</span> means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper's live canonical file.</p>
@@ -1563,7 +1565,7 @@
 
           <h2>Choose a file manually</h2>
           <ol class="steps">
-            <li><strong>Enter Paper Files or expand <span class="ui">Files</span>.</strong></li>
+            <li><strong>Enter Paper Files, or expand <span class="ui">Files</span> in My Publications.</strong></li>
             <li><strong>Select the file you want.</strong></li>
             <li><strong>Choose <span class="ui">Set as Default</span>.</strong> This file will be used by <span class="ui">Open in Preview</span> and paper preview.</li>
           </ol>
@@ -1594,12 +1596,12 @@
           <h1>Add and Classify Attachments</h1>
           <p class="lead">Import first, classify afterward. This keeps the add operation simple and lets you set type, annotation state, and source after seeing the file in context.</p>
 
-          <h2>Add a file from Paper Details</h2>
+          <h2>Add a file to the paper</h2>
           <ol class="steps">
-            <li><strong>Expand <span class="ui">Files</span>.</strong></li>
-            <li><strong>Choose <span class="ui">Add File</span>.</strong> Select one or more local files.</li>
+            <li><strong>Control-click the Paper Files area and choose <span class="ui">Add File</span>.</strong> In My Publications, expand Files and use Add File.</li>
+            <li><strong>Select one or more local files.</strong> Confirm the file chooser.</li>
             <li><strong>Wait for the new row.</strong> A new item begins as <span class="ui">Unknown</span> unless its source proves a more specific type.</li>
-            <li><strong>Select its compact controls.</strong> Choose the file type, annotation state, and source independently.</li>
+            <li><strong>Select its compact controls.</strong> Choose File type; click the size footer to expand Annotation and Source when needed.</li>
           </ol>
 
           <h2>Attachment types</h2>
@@ -1763,7 +1765,7 @@
 
           <p>Verified “not found” checks and transient failures use cooldowns so a repeated run does not immediately send the same requests. Bulk missing-identifier work does not use Google Scholar.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Open Source Settings</a><a href="#network-access">Publisher and Network Access</a><a href="#identifiers">Edit DOI and arXiv Identifiers</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="desktop-copy" data-group="Import and Transfer" data-title="Make a Portable Desktop Copy" data-keywords="make copy desktop export alias real files manifest associated portable folder">
@@ -1868,7 +1870,7 @@
           <h2>Export a list</h2>
           <p>Choose <span class="ui">Export List</span>, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Open Source Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="journal-monitor" data-group="Journal Monitor" data-title="Journal Monitor" data-keywords="calendar date refresh arXiv figures journal filter field add library download image provenance source fetch run canonical paper idempotent">
@@ -1946,8 +1948,8 @@
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with per-subject tabs, calendar counts, and matching paper cards">
-            <figcaption><strong>Subject Monitor.</strong> Superconductivity remains the active subject, its calendar counts are subject-specific, and the refreshed result cards include matching evidence and available figures.</figcaption>
+            <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with Superconductivity selected, subject-specific calendar counts, and the asterisk legend below Updates">
+            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and a completed count for the selected date. Other dates with incomplete discovery carry a superscript asterisk; its explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.</figcaption>
           </figure>
 
           <h2>Create a subject</h2>
@@ -1962,6 +1964,10 @@
 
           <h2>Keep one subject selected across dates</h2>
           <p>Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar's day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.</p>
+
+          <p>After all sources complete successfully for that subject and date, the calendar shows the stored count, including <strong>0</strong> for no matching papers. A partially completed fetch also shows its current count, including zero, with a superscript asterisk. The asterisk means one or more sources did not complete, so the count may be incomplete; zero with an asterisk is not a confirmed empty result. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.</p>
+
+          <p>The <span class="ui">Discovery</span> row describes the selected subject; its asterisk legend appears at the bottom of <span class="ui">Monitor Summary</span>, after Updates and any Errors. Discovery distinguishes <span class="ui">Completed</span>, <span class="ui">Partially completed</span>, failed, and deferred discovery; failed or deferred attempts also keep their provisional counts marked. Switching subjects changes both the counts and their completion markers. A later successful refresh removes the asterisk, and reopening the app preserves the status recorded in SQLite.</p>
 
           <h2>Refresh subjects</h2>
           <ol class="steps">
@@ -1985,7 +1991,7 @@
             <li><strong>Select the target Library folder.</strong> The same canonical paper can be placed in a durable topic hierarchy without losing the Subject relationship.</li>
             <li><strong>Complete the add.</strong> Use <span class="ui">Show in Library</span> on later visits to reveal the managed placement.</li>
           </ol>
-          <p>Adding the result preserves the matched subject, score, terms, and discovery provenance. It does not automatically download a PDF; use <span class="ui">Download</span> separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.</p>
+          <p>Adding the result preserves the matched subject, score, terms, and discovery provenance. The paper remains visible in Subject Monitor immediately after adding it; its action becomes <span class="ui">Show in Library</span>, while the selected subject, date, and reading position stay in place. It does not automatically download a PDF; use <span class="ui">Download</span> separately. Repeated discovery of the same identity updates relationships rather than creating unrelated paper records.</p>
 
           <div class="important"><span class="callout-title">Important</span>Subject Monitor rejects Zenodo records during ingestion and when cached results are displayed. There is no Zenodo show/hide option.</div>
 
@@ -2016,6 +2022,7 @@
 
           <h2>Review updates</h2>
           <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.</p>
+          <p>Control-click <span class="ui">New</span> and choose <span class="ui">Read All</span> to clear the blue unread dots. With one author selected, this marks all new publications for that author as read, including those not currently scrolled into view; other authors keep their unread state, even for a shared paper. With <span class="ui">All Authors</span> selected, it marks all authors' new publications as read. The action preserves papers and Library placements. The New filter stays active, so newly read papers leave that filtered view; click New again to see all publications. Read state persists after reopening the app.</p>
 
           <h2>Update citation profiles</h2>
           <p><span class="ui">Update All Citations</span> is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.</p>
@@ -2042,13 +2049,13 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#my-publications">My Publications</a><a href="#network-access">Publisher and Network Access</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Citation Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
+        <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Open Source Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
           <p class="topic-kicker">Settings and Safety</p>
-          <h1>Configure Citation Settings</h1>
+          <h1>Configure Open Source Settings</h1>
           <p class="lead">Built-in sources work without setup. Optional credentials improve access or coverage for supported services.</p>
 
           <h2>Open settings</h2>
-          <p>Choose <span class="ui">Setting &gt; Citation Settings</span>, or press <kbd>⌘</kbd><kbd>,</kbd>.</p>
+          <p>Choose <span class="ui">Setting &gt; Open Source Settings</span>, or press <kbd>⌘</kbd><kbd>,</kbd>.</p>
 
           <h2>Available services</h2>
           <table class="plain-table">
@@ -2065,6 +2072,8 @@
             <li><strong>Save the settings.</strong></li>
             <li><strong>Run a small metadata refresh.</strong> Confirm the service appears in the citation panel.</li>
           </ol>
+
+          <p>A configured field shows fixed round dots by default, while the detailed status below continues to report saving, connection, or quota information. The dots do not expose the key or its length. Click <span class="ui">Show</span> inside the field to reveal the saved key, or inspect a newly typed key; click <span class="ui">Hide</span> to mask it again. A saved key is retrieved only on Show, and its displayed value is cleared on Hide or when settings closes. Type a replacement and choose <span class="ui">Save</span> to change the key; <span class="ui">Clear</span> removes the locally saved key. A configured environment key can remain available. Avoid screenshots or screen sharing while a key is visible.</p>
 
           <p>Semantic Scholar sends its key in the official <code>x-api-key</code> header. Requests share a low-rate queue and use exponential backoff after rate limits or temporary failures.</p>
 
@@ -2095,7 +2104,7 @@
 
           <div class="note"><span class="callout-title">Note</span>The category checkboxes in Journal Monitor are display filters. They do not narrow the discovery scope selected here.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#field-settings">Field Settings</a><a href="#citation-settings">Citation Settings</a><a href="#network-access">Publisher and Network Access</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#journal-monitor">Journal Monitor</a><a href="#field-settings">Field Settings</a><a href="#citation-settings">Open Source Settings</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="field-settings" data-group="Settings and Safety" data-title="Field Settings" data-keywords="field settings discipline classification standalone other fields all fields physics quantum information materials chemistry astronomy astrophysics particle nuclear mathematics computer science biology medicine statistics economics finance electrical engineering earth environmental social sciences">
@@ -2125,7 +2134,7 @@
 
           <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Citation Settings</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Open Source Settings</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="quick-look-settings" data-group="Settings and Safety" data-title="Quick Look Settings" data-keywords="quick look settings built-in macOS native hybrid all files PDFs presentations media images space preview">
@@ -2232,9 +2241,9 @@
           <p>Metadata refresh, citation counts, journal/subject/author discovery, profile images, website opening, and downloads can contact their named services. The app paces services that require strict request limits.</p>
 
           <h2>Protect credentials</h2>
-          <p>Optional service credentials belong only in Citation Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.</p>
+          <p>Optional service credentials belong only in Open Source Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.</p>
 
-          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Citation Settings</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Open Source Settings</a><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#network-access">Publisher and Network Access</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="visual-identity" data-group="About Gewu Insight" data-title="Visual Identity and Cultural Elements" data-keywords="visual identity cultural elements brand symbols logo icon calligraphy 书法 祝枝山 集字 seal script 篆书 watermark 格物洞见 見 汉仪">
@@ -2307,7 +2316,7 @@
             <tr><td><kbd>Esc</kbd></td><td>Dismiss an active transient control or return focus where supported.</td></tr>
             <tr><td><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></td><td>Toggle List View and Table View.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>L</kbd></td><td>Open Folder Loader.</td></tr>
-            <tr><td><kbd>⌘</kbd><kbd>,</kbd></td><td>Open Citation Settings.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>,</kbd></td><td>Show Open Source Settings.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>W</kbd></td><td>Close the current window.</td></tr>
           </table>
 

@@ -106,7 +106,7 @@ class PaperFilesVNextTests(unittest.TestCase):
         self.storage = Storage(self.db_path)
         migrated = self.storage.list_paper_resources("migration")[0]
         paper = self.storage.get_paper("migration")
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 14)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 15)
         self.assertEqual(migrated["file_type"], "preprint")
         self.assertEqual(migrated["file_source"], "preprint_server")
         self.assertEqual(migrated["annotation_state"], "annotated")
@@ -144,7 +144,7 @@ class PaperFilesVNextTests(unittest.TestCase):
             row["name"]
             for row in self.storage.conn.execute("PRAGMA index_list(resources)")
         }
-        self.assertEqual(int(self.storage.conn.execute("PRAGMA user_version").fetchone()[0]), 14)
+        self.assertEqual(int(self.storage.conn.execute("PRAGMA user_version").fetchone()[0]), STORAGE_SCHEMA_VERSION)
         self.assertTrue(
             {
                 "file_type",

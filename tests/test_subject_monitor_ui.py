@@ -1,9 +1,132 @@
+import shutil
+import subprocess
 import unittest
 
 from paper_monitor.ui_server import INDEX_HTML
 
 
 class SubjectMonitorUiTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for calendar rendering tests")
+    def test_subject_calendar_executes_zero_partial_complete_and_scope_rules(self):
+        calendar = "function themeCalendarFetchStatus" + INDEX_HTML.split(
+            "function themeCalendarFetchStatus", 1
+        )[1].split("function renderCalendar", 1)[0]
+        cache = "function themeLastFetchCacheKey" + INDEX_HTML.split(
+            "function themeLastFetchCacheKey", 1
+        )[1].split("function cachedThemeLastFetch", 1)[0]
+        script = r'''
+const assert = require("node:assert/strict");
+const iso = "2026-08-31";
+const state = {
+  mode: "theme", selectedDate: iso, activeThemeGroupKey: "alpha",
+  themeCounts: {}, themeFilterCounts: {}, reportCounts: {},
+  themeCalendarFetches: {}, themeLastFetchByDate: {}, themeFetchingDates: new Set(),
+  monitorKeyboardPanes: {}, monitorCalendarCursorDates: {}
+};
+function isFutureDateIso() { return false; }
+function todayIsoDate() { return "2026-09-04"; }
+function activeCalendarMode() { return state.mode; }
+function reportFetchIsPending() { return false; }
+function dayMarkup() {
+  const button = {className: "", innerHTML: "", disabled: false};
+  updateCalendarDayButton(button, iso, 31);
+  return button.innerHTML;
+}
+''' + calendar + cache + r'''
+assert.ok(dayMarkup().includes('<span class="count"></span>'));
+state.themeCounts[iso] = {alpha: 0, beta: 4};
+rememberThemeLastFetch(iso, "ALL", {groups: {alpha: {status: "partial"}, beta: {status: "success"}}});
+let markup = dayMarkup();
+assert.ok(markup.includes('>0<sup class="calendar-count-partial"'));
+assert.ok(markup.includes('aria-label="Incomplete discovery"'));
+state.themeCounts[iso].alpha = 3;
+assert.ok(dayMarkup().includes('>3<sup'));
+state.activeThemeGroupKey = "beta";
+assert.ok(dayMarkup().includes('class="count">4</span>'));
+assert.ok(!dayMarkup().includes('<sup'));
+state.activeThemeGroupKey = "unfetched";
+assert.ok(dayMarkup().includes('class="count"></span>'));
+state.activeThemeGroupKey = "alpha";
+state.themeCounts[iso].alpha = 0;
+rememberThemeLastFetch(iso, "alpha", {groups: {alpha: {status: "empty"}}});
+assert.ok(dayMarkup().includes('class="count">0</span>'));
+assert.equal(state.themeCalendarFetches[iso].beta.status, "success");
+for (const status of ["partial", "error", "deferred", "waiting"]) {
+  rememberThemeLastFetch(iso, "alpha", {groups: {alpha: {status}}});
+  assert.ok(dayMarkup().includes('>0<sup'), status);
+}
+state.themeFetchingDates.add(iso);
+assert.ok(dayMarkup().includes('class="fetching-dot"'));
+assert.ok(!dayMarkup().includes('<sup'));
+state.themeFetchingDates.clear();
+// Full cached snapshots replace stale statuses, including an empty reset.
+rememberThemeLastFetch(iso, "ALL", {groups: {alpha: {status: "empty"}}});
+assert.equal(state.themeCalendarFetches[iso].beta, undefined);
+assert.ok(!dayMarkup().includes('<sup'));
+rememberThemeLastFetch(iso, "ALL", {groups: {}});
+assert.equal(themeCalendarFetchStatus(iso), "");
+state.mode = "report";
+state.reportCounts[iso] = {Journal: 0};
+assert.ok(dayMarkup().includes('class="count">0</span>'));
+delete state.reportCounts[iso];
+assert.ok(dayMarkup().includes('class="count"></span>'));
+'''
+        result = subprocess.run([shutil.which("node"), "-"], input=script, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for sidebar rendering tests")
+    def test_discovery_sidebar_uses_selected_subject_and_explains_the_asterisk(self):
+        helpers = "function themeCalendarFetchStatus" + INDEX_HTML.split(
+            "function themeCalendarFetchStatus", 1
+        )[1].split("function updateCalendarDayButton", 1)[0]
+        sidebar = "function monitorSidebarSummaryRow" + INDEX_HTML.split(
+            "function monitorSidebarSummaryRow", 1
+        )[1].split("function renderReport()", 1)[0]
+        script = r'''
+const assert = require("node:assert/strict");
+const root = {innerHTML: "", className: ""};
+const state = {
+  mode: "theme", selectedDate: "2026-08-31", activeThemeGroupKey: "alpha",
+  themeCalendarFetches: {"2026-08-31": {alpha: {status: "partial"}, beta: {status: "empty"}}},
+  themeSummary: {online_discovery: {status: "partial"}}
+};
+function $(id) { return root; }
+function escapeHtml(value) { return String(value); }
+function escapeAttr(value) { return String(value); }
+function themeVisiblePapers() { return []; }
+function groupedThemePapers() { return [{key: state.activeThemeGroupKey, name: state.activeThemeGroupKey, papers: []}]; }
+function knownThemeGroupKeys() { return ["alpha", "beta"]; }
+function themeLastFetchLabel() { return ""; }
+function autoMonitorStatusDetails() { return {parts: [], warning: false}; }
+''' + helpers + sidebar + r'''
+renderMonitorSidebarSummary();
+assert.ok(root.innerHTML.includes('Partially completed'));
+assert.ok(root.innerHTML.includes('<sup>*</sup> Incomplete discovery'));
+assert.ok(root.innerHTML.includes('counts may be incomplete'));
+assert.ok(root.innerHTML.indexOf('Updates') < root.innerHTML.indexOf('monitor-discovery-note'));
+state.themeSummary.errors = ["One source did not complete"];
+renderMonitorSidebarSummary();
+assert.ok(root.innerHTML.indexOf('Errors') < root.innerHTML.indexOf('monitor-discovery-note'));
+assert.ok(root.innerHTML.endsWith('Counts and status refer to the selected subject.</div>'));
+state.themeSummary.errors = [];
+state.activeThemeGroupKey = "beta";
+renderMonitorSidebarSummary();
+assert.ok(root.innerHTML.includes('Completed'));
+assert.ok(!root.innerHTML.includes('Partially completed'));
+assert.ok(!root.className.includes('warning'));
+state.activeThemeGroupKey = "unfetched";
+renderMonitorSidebarSummary();
+assert.ok(root.innerHTML.includes('Not fetched'));
+state.activeThemeGroupKey = "alpha";
+for (const [status, label] of [["error", "Failed"], ["deferred", "Deferred"], ["waiting", "Not completed"]]) {
+  state.themeCalendarFetches["2026-08-31"].alpha.status = status;
+  renderMonitorSidebarSummary();
+  assert.ok(root.innerHTML.includes(label));
+}
+'''
+        result = subprocess.run([shutil.which("node"), "-"], input=script, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_subject_toolbar_has_refresh_and_arxiv_visible_by_default(self):
         toolbar = INDEX_HTML.split('id="themeToolbarActions"', 1)[1].split('</div>', 1)[0]
 
@@ -97,6 +220,18 @@ class SubjectMonitorUiTests(unittest.TestCase):
         )[0]
 
         self.assertIn('return knownThemeGroupKeys();', selection)
+
+    def test_calendar_refresh_updates_counts_and_discovery_together(self):
+        apply_data = INDEX_HTML.split('function applyThemeReportData', 1)[1].split(
+            'async function finalizeThemeFetchFromStorage', 1
+        )[0]
+        month = INDEX_HTML.split('async function refreshThemeMonthCounts', 1)[1].split(
+            'async function loadThemeReportForDate', 1
+        )[0]
+        self.assertLess(apply_data.index('rememberThemeLastFetch('), apply_data.index('updateThemeCalendarCount('))
+        self.assertLess(apply_data.index('updateThemeFilterCount('), apply_data.index('updateThemeCalendarCount('))
+        self.assertIn('delete state.themeCalendarFetches[day]', month)
+        self.assertIn('renderMonitorSidebarSummary();', month)
 
     def test_arxiv_filter_is_display_only_and_zenodo_controls_are_removed(self):
         visible = INDEX_HTML.split('function themeVisiblePapers', 1)[1].split(

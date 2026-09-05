@@ -21,7 +21,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 14
+STORAGE_SCHEMA_VERSION = 15
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -712,18 +712,33 @@ class Storage:
                 or "paper_source_observations" not in existing_tables
                 or "paper_identity_conflicts" not in existing_tables
             )
-            if schema_version < STORAGE_SCHEMA_VERSION or schema_needs_repair:
+            if schema_version < 14 or schema_needs_repair:
                 self.conn.executescript(SCHEMA)
                 self._ensure_schema_columns()
                 self._backfill_paper_source_observations()
                 self._ensure_library_root()
                 self._seed_library_from_existing_papers()
+                self._ensure_file_path_indexes()
+                self.conn.execute(
+                    f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
+                )
+                self.conn.commit()
+            elif schema_version < STORAGE_SCHEMA_VERSION:
+                # v14 -> v15 is index-only: do not repeat provenance backfill or
+                # seed Library placements when upgrading a populated workspace.
+                self._ensure_file_path_indexes()
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
                 self.conn.commit()
             self._sync_arxiv_calendar_timezone()
             self._reclassify_aps_records()
+
+    def _ensure_file_path_indexes(self) -> None:
+        """Keep reference-safe file deletion independent of metadata table size."""
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_main_pdf_path ON papers(main_pdf_path)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_papers_merged_pdf_path ON papers(merged_pdf_path)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_resources_stored_path ON resources(stored_path)")
 
     def _ensure_schema_columns(self) -> None:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(papers)").fetchall()}
@@ -4683,6 +4698,7 @@ class Storage:
             paper_id = str(item.get("paper_id") or "")
             if paper_id not in merged:
                 item["author_monitor_ids"] = []
+                item["author_unread_monitor_ids"] = []
                 item["monitored_authors"] = []
                 item["author_unread"] = bool(item.get("author_unread"))
                 merged[paper_id] = item
@@ -4690,6 +4706,8 @@ class Storage:
             current = merged[paper_id]
             monitor_id = int(item.get("author_monitor_id") or 0)
             monitor_name = str(item.get("monitored_author_name") or "")
+            if monitor_id and item.get("author_unread"):
+                current["author_unread_monitor_ids"].append(monitor_id)
             if monitor_id and monitor_id not in current["author_monitor_ids"]:
                 current["author_monitor_ids"].append(monitor_id)
             if monitor_name and monitor_name not in current["monitored_authors"]:
@@ -4839,6 +4857,7 @@ class Storage:
                     payload = {}
                 payload["paper_id"] = paper_id
                 payload["author_monitor_ids"] = []
+                payload["author_unread_monitor_ids"] = []
                 payload["monitored_authors"] = []
                 payload["author_unread"] = False
                 payload["author_first_seen_at"] = ""
@@ -4847,6 +4866,8 @@ class Storage:
             current = merged[paper_id]
             monitor_id = int(row["author_monitor_id"] or 0)
             monitor_name = str(row["monitored_author_name"] or "")
+            if monitor_id and row["author_unread"]:
+                current["author_unread_monitor_ids"].append(monitor_id)
             if monitor_id and monitor_id not in current["author_monitor_ids"]:
                 current["author_monitor_ids"].append(monitor_id)
             if monitor_name and monitor_name not in current["monitored_authors"]:
@@ -4864,9 +4885,10 @@ class Storage:
         *,
         author_monitor_id: int = 0,
         paper_ids: Iterable[str] = (),
+        read_all: bool = False,
     ) -> None:
         ids = [str(paper_id) for paper_id in paper_ids if str(paper_id or "").strip()]
-        if not int(author_monitor_id) and not ids:
+        if not int(author_monitor_id) and not ids and not read_all:
             return
         conditions: list[str] = ["is_unread = 1"]
         params: list[Any] = []
@@ -4882,6 +4904,16 @@ class Storage:
             tuple(params),
         )
         self.conn.commit()
+
+    def author_monitor_unread_by_paper(self) -> dict[str, list[int]]:
+        """Live relationship state, independent of cached paper metadata."""
+        unread: dict[str, list[int]] = {}
+        for row in self.conn.execute(
+            "SELECT paper_id, author_monitor_id FROM author_monitor_papers "
+            "WHERE is_unread = 1 ORDER BY paper_id, author_monitor_id"
+        ):
+            unread.setdefault(str(row["paper_id"]), []).append(int(row["author_monitor_id"]))
+        return unread
 
     def count_active_library_items_for_paper(self, *, paper_id: str, recycle_folder_id: int) -> int:
         row = self.conn.execute(

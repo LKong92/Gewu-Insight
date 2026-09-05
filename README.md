@@ -353,7 +353,7 @@ arXiv, scholarly profiles, feeds, and publisher pages where supported.
 - The app uses pacing, cooldowns, and bounded retries; it does not bypass
   paywalls, CAPTCHA, browser verification, or access controls.
 - OpenAlex, Semantic Scholar, and NASA ADS credentials can be managed in
-  Citation Settings.
+  Open Source Settings.
 - arXiv discovery coverage is managed separately in **Setting > arXiv Scope
   Settings**. One or more archive groups can be selected across primary
   subjects; the default is Physics > Condensed Matter.
