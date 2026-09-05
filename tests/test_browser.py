@@ -446,13 +446,16 @@ assert.equal(model.dayLabel('2026-09-01T10:00:00',new Date('2026-09-01T18:00:00'
         self.assertIn('isKindOfClass:NSNumber.class] ? [command[@"id"] integerValue] : 0', source)
         self.assertIn('addButtonWithTitle:bookmarkID ? @"Save" : @"Add"', source)
 
-    def test_guide_covers_browser_storage_network_and_first_release_boundary(self):
+    def test_guide_covers_browser_storage_network_and_workspace_link_routing(self):
         from bs4 import BeautifulSoup
         guide = BeautifulSoup((ROOT / "paper_monitor/user_guide.html").read_text(), "html.parser")
         article = guide.find(id="browser")
         self.assertIsNotNone(article)
         for phrase in ["Bookmarks", "History", "Clash", "PDF", "SQLite", "Open in Safari", "Google Scholar"]:
             self.assertIn(phrase, article.get_text())
+        self.assertIn("opening a new webpage tab without replacing existing pages", article.get_text())
+        self.assertIn("Local PDF/Preview and Finder actions stay native", article.get_text())
+        self.assertNotIn("elsewhere still use external browsers", article.get_text())
 
 
 if __name__ == "__main__":

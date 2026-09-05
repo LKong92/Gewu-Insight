@@ -84,6 +84,7 @@
 @property(nonatomic, strong) WKWebsiteDataStore *browserDataStore;
 @property(nonatomic) BOOL active;
 @property(nonatomic) BOOL visible;
+@property(nonatomic) BOOL canReturnToWorkspace;
 @property(nonatomic) BOOL initializing;
 @property(nonatomic) BOOL invalidated;
 @property(nonatomic, strong) id keyMonitor;
@@ -245,6 +246,7 @@
                 }
                 return event;
             }
+            if ([self handleWorkspaceReturnKeyEvent:event]) return nil;
             BOOL command = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
             NSString *key = event.charactersIgnoringModifiers.lowercaseString;
             if (command && !(event.modifierFlags & (NSEventModifierFlagOption | NSEventModifierFlagControl))
@@ -266,6 +268,23 @@
         }];
     }
     return self;
+}
+
+- (BOOL)handleWorkspaceReturnKeyEvent:(NSEvent *)event {
+    // This shortcut belongs to the trusted workspace, even when the remote
+    // WKWebView or the address field is first responder. Never traverse a web
+    // page's history, replay its request, or let a sheet lose user input.
+    if (event.type != NSEventTypeKeyDown || !self.active || !self.visible || !self.canReturnToWorkspace
+        || !self.workspace.window || event.window != self.workspace.window || self.workspace.window.attachedSheet) return NO;
+    NSEventModifierFlags flags = event.modifierFlags;
+    if (!(flags & NSEventModifierFlagCommand)
+        || (flags & (NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl))
+        || ![event.charactersIgnoringModifiers isEqualToString:@"["]) return NO;
+    if (event.isARepeat) return YES;
+    self.canReturnToWorkspace = NO;
+    [self.workspace.window makeFirstResponder:self.workspace];
+    [self emit:@{@"event":@"return-workspace"}];
+    return YES;
 }
 
 - (void)emit:(NSDictionary *)event {
@@ -477,6 +496,7 @@
     NSString *action = [command[@"action"] isKindOfClass:NSString.class] ? command[@"action"] : @"";
     if ([action isEqualToString:@"layout"]) {
         self.active = [command[@"active"] boolValue];
+        self.canReturnToWorkspace = self.active && [command[@"canReturnToWorkspace"] boolValue];
         self.favicons.active = self.active;
         BOOL shown = self.active && [command[@"visible"] boolValue];
         if (self.active) [self ensureWebView];
@@ -510,7 +530,10 @@
     if ([action isEqualToString:@"new-tab"]) {
         NSString *value = [command[@"url"] isKindOfClass:NSString.class] ? command[@"url"] : nil;
         NSURL *url = value.length ? [NSURL URLWithString:value] : nil;
-        if (value.length && !GewuBrowserPublicURL(url)) return;
+        if (value.length && !GewuBrowserPublicURL(url)) {
+            [self emit:@{@"event":@"error", @"message":@"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser."}];
+            return;
+        }
         [self addTabWithRequest:url ? [NSURLRequest requestWithURL:url] : nil configuration:nil];
         if (!url) [self emit:@{@"event":@"focus-address"}];
     } else if ([@[@"select-tab", @"close-tab"] containsObject:action]) {

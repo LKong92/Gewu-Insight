@@ -100,3 +100,22 @@ def test_every_registered_screenshot_is_constrained_to_page_width():
         result = builder.prepare_latex_body(source)
         assert r'\includegraphics[width=0.96\linewidth,keepaspectratio]' in result
         assert r'\pandocbounded' not in result
+
+
+def test_related_links_are_preserved_without_numbered_see_also_sections():
+    builder = _builder_module()
+    original = BeautifulSoup(builder.HTML_SOURCE.read_text(), "html.parser")
+    cleaned = BeautifulSoup(builder.clean_guide_html(), "html.parser")
+    assert not any(h.get_text(" ", strip=True).casefold() == "see also"
+                   for h in cleaned.find_all(["h1", "h2", "h3", "h4", "h5"]))
+    paragraphs = [p for p in cleaned.find_all("p") if "GEWURELATEDSTART" in p.get_text()]
+    assert len(paragraphs) == len(original.select(".see-also"))
+    assert [a["href"] for p in paragraphs for a in p.find_all("a")] == [
+        a["href"] for a in original.select(".see-also .see-links a")]
+    source = builder.prepare_latex_body("GEWURELATEDSTARTlinksGEWURELATEDEND")
+    assert r"\begin{GewuRelated}" in source
+    assert r"\end{GewuRelated}" in source
+    assert "GEWURELATED" not in source
+    preamble = builder.latex_preamble("0.1", "test")
+    assert r"\par\nobreak\vspace{3pt}\nobreak" in preamble
+    assert r"\Needspace{9\baselineskip}" in preamble

@@ -114,7 +114,7 @@
     preferences:{}, expanded:new Set(), width:250, hidden:false, url:"", title:"", loading:false,
     query:"", selected:null, favoritePath:null, favoritePage:0, favoriteLayout:"", home:false, fetching:0, layout:"", editor:null, confirm:null, searchTimer:null, persistTimer:null,
     addressQuery:"", suggestions:[], suggestionIndex:-1, suggestionGeneration:0, addressTimer:null, composing:false,
-    browserTabs:[], browserTab:"", tabsSignature:"", tabChrome:new Map()};
+    browserTabs:[], browserTab:"", tabsSignature:"", tabChrome:new Map(), workspaceReturn:null};
   const icons = {
     back:'<path d="m14 5-7 7 7 7"/>', forward:'<path d="m10 5 7 7-7 7"/>',
     reload:'<path d="M19 8a8 8 0 1 0 1 7M19 3v6h-6"/>', stop:'<path d="m6 6 12 12M18 6 6 18"/>',
@@ -360,7 +360,7 @@
     }
     const rect = $("browserViewport").getBoundingClientRect();
     const active = data.active;
-    const payload = {action:"layout", active, visible:active && !visibleDialog(), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
+    const payload = {action:"layout", active, visible:active && !visibleDialog(), canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
     const signature = JSON.stringify(payload);
     if (signature !== data.layout) { data.layout = signature; native(payload); }
   }
@@ -371,7 +371,7 @@
   function setActive(active) {
     data.active = active; root.hidden = !active; closeContext();
     closeSuggestions();
-    if (!active) { data.layout = ""; layout(); return; }
+    if (!active) { data.workspaceReturn = null; data.layout = ""; layout(); return; }
     render(); layout();
     if (!bridge()) {
       $("browserNativeHint").textContent = "Open Gewu Insight.app to use the embedded browser. Bookmarks and history remain available here.";
@@ -383,6 +383,37 @@
   function open() {
     if (typeof closeLibraryQuickLook === "function" && state.libraryQuickLookOpen) closeLibraryQuickLook();
     setPrimaryView("browser"); state.mode = "browser";
+  }
+  function openURL(value) {
+    // Product links are destinations, never address-bar search text. Native
+    // navigation applies the stricter public-network policy before any load.
+    const url = new URL(String(value || "").trim());
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.href.length > 8192)
+      throw new Error("Use an HTTP or HTTPS website link without embedded credentials.");
+    if (!bridge()) {
+      // CLI/browser-hosted UI has no embedded WebKit surface. Keep the request
+      // in this user's browser, not a server-side Safari process.
+      global.open(url.href, "_blank", "noopener,noreferrer");
+      return "browser tab";
+    }
+    const first = !data.opened;
+    if (state.mode !== "browser") {
+      data.workspaceReturn = typeof captureBrowserWorkspaceReturn === "function" ? captureBrowserWorkspaceReturn() : null;
+    }
+    // Suppress cold Home navigation: the first product link uses the unused
+    // initial tab. Later links always preserve every existing Browser document.
+    data.opened = true;
+    open();
+    message("");
+    native({action:first ? "navigate" : "new-tab", url:url.href});
+    return "Browser";
+  }
+  function returnToWorkspace() {
+    if (!data.active || state.mode !== "browser" || !data.workspaceReturn || visibleDialog()) return false;
+    const restore = data.workspaceReturn;
+    data.workspaceReturn = null;
+    restore();
+    return true;
   }
   function navigate(value) {
     try {
@@ -491,6 +522,7 @@
       }).catch(fail);
     } else if (event.event === "error") { message(event.message, true); }
     else if (event.event === "download") { message(event.message); }
+    else if (event.event === "return-workspace") { returnToWorkspace(); }
     else if (event.event === "focus-address") { closeSuggestions(); $("browserAddress").focus(); $("browserAddress").select(); }
     else if (event.event === "address-suggestion") { navigate(event.url); $("browserAddress").blur(); native({action:"focus"}); }
     else if (event.event === "suggestions-dismissed") { closeSuggestions(); }
@@ -515,7 +547,7 @@
       });
     } else if (event.event === "confirm-result") { const resolve = data.confirm; data.confirm = null; resolve?.(event); }
   };
-  global.gewuBrowser = {open, setActive};
+  global.gewuBrowser = {open, setActive, openURL};
   async function exportBookmarks(rootID = null) {
     const result = await api("export_bookmarks", {root_id:rootID});
     native({action:"export-bookmarks", html:result.html});

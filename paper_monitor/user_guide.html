@@ -448,6 +448,7 @@
     .identity-rules strong { display: block; margin-bottom: 4px; font-size: 13px; }
     .identity-rules span { display: block; color: var(--muted); font-size: 12px; line-height: 1.45; }
 
+    #keyboard .plain-table td:first-child { white-space: nowrap; min-width: 92px; }
     .guide-screenshot {
       margin: 22px 0 28px;
       overflow: hidden;
@@ -651,6 +652,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
+          <p class="guide-revision">Guide revision · September 6, 2026</p>
 
           <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -722,14 +724,14 @@
           </ul>
 
           <h2>One continuous research loop</h2>
-          <figure class="architecture-map" aria-label="Research loop across the five areas of Gewu Insight">
+          <figure class="architecture-map" aria-label="Research loop across the research views of Gewu Insight">
             <div class="architecture-row four">
               <div class="architecture-node"><span class="sequence-label">Acquire</span><strong>Find</strong><span>Journal, Subject, and Author Monitor introduce relevant candidates.</span></div>
               <div class="architecture-node"><span class="sequence-label">Identify</span><strong>Recognize</strong><span>DOI, arXiv, title, authors, and source evidence are connected to a shared record.</span></div>
               <div class="architecture-node"><span class="sequence-label">Resolve</span><strong>Preserve</strong><span>Metadata, files, versions, roles, paths, and provenance are made explicit.</span></div>
               <div class="architecture-node core"><span class="sequence-label">Remember</span><strong>Understand</strong><span>Library, Spaces, My Publications, reading state, and personal organization retain meaning.</span></div>
             </div>
-            <figcaption>What you save, read, classify, and follow becomes context for the next cycle; the five areas are different views of this loop.</figcaption>
+            <figcaption>What you save, read, classify, and follow becomes context for the next cycle. The five research views share this loop; Browser supplies a separate place to explore websites.</figcaption>
           </figure>
 
           <div class="important">
@@ -764,7 +766,7 @@
 
           <figure class="architecture-map" aria-label="Visual grammar of the Gewu Insight interface">
             <div class="architecture-row four">
-              <div class="architecture-node"><span class="sequence-label">Top</span><strong>Choose a mode</strong><span>Library, My Publications, or one of the three discovery monitors.</span></div>
+              <div class="architecture-node"><span class="sequence-label">Top</span><strong>Choose a mode</strong><span>Library, My Publications, one of the three discovery monitors, or Browser.</span></div>
               <div class="architecture-node"><span class="sequence-label">Left</span><strong>Set the context</strong><span>A root, folder, date, journal, subject, author, or filter defines the working scope.</span></div>
               <div class="architecture-node"><span class="sequence-label">Center</span><strong>Select the object</strong><span>Browse folders, paper lists, search results, or the resources belonging to one paper.</span></div>
               <div class="architecture-node core"><span class="sequence-label">Right</span><strong>Inspect and act</strong><span>Read metadata and evidence; open, download, classify, refresh, export, or reorganize.</span></div>
@@ -828,9 +830,9 @@
           <div class="note"><span class="callout-title">Note</span>The right-side Paper Details area scrolls independently. A long author list or citation section does not move the Library columns.</div>
 
           <h2>Recognize stable and temporary state</h2>
-          <p>Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource properties, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.</p>
+          <p>Selection, keyboard focus, menus, and scroll position are temporary interface state. Paper identity, placements, resource properties, read state, provenance, and completed operations persist when saved. A breathing progress message means work is active, not that a paper or folder was created.</p>
 
-          <div class="important"><span class="callout-title">Keep the active context visible</span>Before moving, deleting, or attaching an item, confirm which pane has focus and which paper is shown in Paper Details. The same file-like name can represent a paper placement, a resource inside Paper Files, or a standalone imported file.</div>
+          <div class="important"><span class="callout-title">Keep the active context visible</span>Before moving, deleting, or attaching, check the focused pane and selected Paper Details. Similar names can identify different targets: a paper placement, one Paper Files resource, or a standalone file.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
@@ -931,7 +933,7 @@
           <h2>How the parts cooperate</h2>
           <figure class="architecture-map" aria-label="Gewu Insight local system architecture">
             <div class="architecture-row">
-              <div class="architecture-node"><strong>Native desktop shell</strong><span>The current macOS shell starts the app, owns its windows, and connects Help, Preview, Finder, and external websites to the portable core.</span></div>
+              <div class="architecture-node"><strong>Native desktop shell</strong><span>Starts the app, owns Help and Browser, and connects Preview, Finder, and native file actions to the portable core.</span></div>
               <div class="architecture-node"><strong>Personal Research Workspace</strong><span>Library, Spaces, My Publications, and the three Monitor views you see and operate.</span></div>
               <div class="architecture-node"><strong>External research sources</strong><span>Publisher pages, feeds, metadata services, scholarly profiles, and preprint services.</span></div>
             </div>
@@ -947,6 +949,7 @@
           <p>The desktop window presents a local interface served from the project on the current computer. In today's primary release, a macOS shell supplies Finder, Preview, Quick Look, Dock, and native drag-and-drop integration. The Python, SQLite, and web-interface core is designed to support other desktop shells without changing the meaning of the research data. Network sources contribute evidence and downloadable material, but the durable workspace stays local.</p>
 
           <h2>What each persistent layer answers</h2>
+          <p><strong>Browser is a separate web surface.</strong> Its native WebKit views load websites directly, not through the Python service. The local service stores bookmarks and history in SQLite; WebKit manages a separate persistent website profile. External pages do not receive the Library's local API bridge. Visiting a page, saving a bookmark, or downloading through Browser does not create a paper or assign a Gewu Key; import the paper explicitly.</p>
           <table class="plain-table">
             <tr><th>Layer</th><th>Questions it answers</th><th>What it does not decide alone</th></tr>
             <tr><td>SQLite</td><td>What is this paper? Where is it referenced? Which resources belong to it? What happened in the last operation?</td><td>It does not contain the bytes of your PDFs and attachments.</td></tr>
@@ -1025,7 +1028,7 @@
               <div class="architecture-node"><strong>Identity and metadata</strong><span>Shared papers, external identifiers, normalized title and authors, dates, fields, and Gewu Key.</span></div>
               <div class="architecture-node"><strong>Relationships and context</strong><span>Library placements, folder tree, Spaces, My Publications, and Monitor associations.</span></div>
               <div class="architecture-node"><strong>Resource registry</strong><span>File types, paths, source evidence, hashes, annotation state, and default preferences.</span></div>
-              <div class="architecture-node"><strong>Operational memory</strong><span>Fetch runs, import batches, source tasks, reads, settings, failures, retries, and completion timestamps.</span></div>
+              <div class="architecture-node"><strong>Operational memory</strong><span>Fetch runs, import batches, source tasks, reads, settings, failures, and retries; also Browser bookmarks and history.</span></div>
             </div>
             <figcaption>Table names and schema versions can evolve; these four responsibilities are the stable user-level model.</figcaption>
           </figure>
@@ -1109,7 +1112,7 @@
           <h2>How the default file is resolved</h2>
           <p>An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.</p>
 
-          <p>Supplementary Material, Peer Review File, Other, Unknown, and Invalid File do not become the automatic default. A valid one can still be selected manually; Invalid File remains visible only for audit and repair.</p>
+          <p><span class="ui">Supplementary material</span>, <span class="ui">Peer review file</span>, <span class="ui">Other</span>, <span class="ui">Unknown</span>, and <span class="ui">Invalid file</span> do not become the automatic default. Any valid resource can still be selected manually; <span class="ui">Invalid file</span> is never eligible and remains visible only for audit and repair.</p>
 
           <div class="note"><span class="callout-title">Published files</span>The user-facing type is <strong>Published version</strong>. A later formal correction can be classified as <strong>Corrected published version</strong>; the correction notice itself remains a separate peer.</div>
 
@@ -1131,7 +1134,7 @@
         <article class="help-topic guide-topic" id="personal-research-workspace" data-group="Understand the System" data-title="The Personal Research Workspace" data-keywords="personal research workspace visible workspace UI projection Library Spaces My Publications Journal Monitor Subject Monitor Author Monitor shared graph relations shortcuts">
           <p class="topic-kicker">Understand the System</p>
           <h1>Understand the Personal Research Workspace</h1>
-          <p class="lead">The five top-level areas are coordinated views over shared research objects. They are not five separate databases, and moving between them does not reset a paper's identity.</p>
+          <p class="lead">The five research views—Library, My Publications, Journal Monitor, Subject Monitor, and Author Monitor—share research objects. Browser is the sixth main tab, with its own website session. Moving between research views does not reset a paper's identity.</p>
 
           <figure class="architecture-map" aria-label="Discovery and organization views connected through a shared paper identity">
             <div class="architecture-row">
@@ -1436,7 +1439,7 @@
             <tr><th>Action</th><th>What it does</th></tr>
             <tr><td><span class="ui">Open in Preview</span></td><td>Opens the preferred local PDF in macOS Preview.</td></tr>
             <tr><td><span class="ui">Download</span></td><td>Retrieves the best available paper file without overwriting a different preserved version.</td></tr>
-            <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page.</td></tr>
+            <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page in a Browser tab.</td></tr>
             <tr><td><span class="ui">Google Scholar</span></td><td>Searches for the work in Google Scholar.</td></tr>
             <tr><td><span class="ui">Get Identifier from Files</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
           </table>
@@ -1581,7 +1584,7 @@
           <p>Choose <span class="ui">Use Automatic Selection</span> for a manually selected default. Gewu Insight evaluates the eligible file types again.</p>
 
           <h2>Classify files without collapsing annotation state</h2>
-          <p>Use the three small controls on a row. File type uses exactly these labels:</p>
+          <p>File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. File type uses exactly these labels:</p>
           <ul>
             <li><span class="ui">Preprint</span>, <span class="ui">Accepted manuscript</span>, <span class="ui">Published version</span>, and <span class="ui">Corrected published version</span></li>
             <li><span class="ui">Correction notice</span>, <span class="ui">Supplementary material</span>, and <span class="ui">Peer review file</span></li>
@@ -1670,7 +1673,7 @@
             <li><strong>Begin dragging the standalone item.</strong> The main paper remains the active destination while you drag.</li>
             <li><strong>Move the pointer into the Paper Files drop zone.</strong> Wait for the drop feedback that identifies the target paper.</li>
             <li><strong>Release the pointer.</strong> Gewu Insight validates the move, adopts the file into the paper bundle, and removes its independent Library position.</li>
-            <li><strong>Classify the attachment.</strong> Choose Image, Data, Code, Presentation, Note, Supplement, or another appropriate type.</li>
+            <li><strong>Classify the attachment.</strong> Choose <span class="ui">Supplementary material</span> for an actual paper supplement, or <span class="ui">Other</span> for a general image, dataset, code file, slide deck, or note. Expand the size footer to set Annotation and Source separately. See <a href="#versions-current">the complete current file-type list</a>.</li>
           </ol>
 
           <p class="result">The physical file and database link now belong to the destination paper; the former standalone entry is gone.</p>
@@ -1717,7 +1720,7 @@
 
           <h2>Import a folder</h2>
           <ol class="steps">
-            <li><strong>Choose <span class="ui">Loader &gt; Open Loader</span>.</strong> You can also press <kbd>⌘</kbd><kbd>L</kbd>.</li>
+            <li><strong>Choose <span class="ui">Loader &gt; Open Loader</span>.</strong> Outside Browser, you can also press <kbd>⌘</kbd><kbd>L</kbd>; inside Browser that shortcut focuses its address field.</li>
             <li><strong>Choose the source folder.</strong> Review the displayed path before starting.</li>
             <li><strong>Select a metadata mode.</strong>
               <ul>
@@ -1802,7 +1805,7 @@
 
           <h2>Create a full backup</h2>
           <ol class="steps">
-            <li><strong>Quit Gewu Insight.</strong> Wait until background refresh or download work has stopped.</li>
+            <li><strong>Quit Gewu Insight with <span class="key">⌘Q</span>.</strong> Wait until background refresh or download work has stopped. Closing a window is not the same as quitting; also stop any separately launched local UI or CLI process before copying its database.</li>
             <li><strong>Copy the complete project directory.</strong> This is the safest recovery unit because it keeps <code>data</code>, <code>reports</code>, <code>config</code>, the app source, and managed paths together.</li>
             <li><strong>Preserve directory names and permissions.</strong> Do not separate SQLite from the managed file roots it describes.</li>
             <li><strong>Store the backup separately.</strong> Use a second disk or a versioned backup location.</li>
@@ -1829,6 +1832,10 @@
           <h2>Transfer only part of a Library</h2>
           <p>Use <span class="ui">Make Copy Desktop</span> on the source Mac, move the complete exported folder, then use Folder Loader on the destination Mac. Keep its verified manifest intact.</p>
 
+          <h2>Browser and credential backup boundaries</h2>
+          <p>The project database includes Browser bookmarks, folders, history, and saved sidebar preferences. A bookmark HTML export transfers only bookmarks, not history or research papers. Open webpage tabs and unsubmitted forms are memory-only and are not restored after quitting.</p>
+          <p>WebKit website cookies, sign-ins, and cache belong to a macOS-managed Browser profile outside this project. Copying the project or a bookmark export is not a supported transfer of that profile; expect to sign in again on another Mac. Apple Passwords and its passkeys remain under macOS/iCloud management and are never part of a Gewu export. Optional metadata API keys saved in SQLite do travel with the database: keep full backups private.</p>
+
           <div class="important"><span class="callout-title">Important</span>Never migrate by copying only <code>paper_monitor.sqlite</code> or only the visible Library folder. Either choice leaves half of the managed state behind.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#desktop-copy">Make a Portable Desktop Copy</a><a href="#storage-reference">Storage Reference</a><a href="#troubleshooting">Troubleshooting</a></div></div>
@@ -1847,8 +1854,8 @@
           <h2>Choose your profile</h2>
           <ol class="steps">
             <li><strong>Enter a name, optional affiliations, or an exact Google Scholar profile URL.</strong> For a name search, use <code>Name; affiliation A; affiliation B</code>.</li>
-            <li><strong>Choose <span class="ui">Find by Name</span>.</strong> Review candidate profiles carefully.</li>
-            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile; use the remove control to forget it.</li>
+            <li><strong>Choose <span class="ui">Find Profile</span>.</strong> Review candidate profiles carefully.</li>
+            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile in Browser; use the remove control to forget it.</li>
           </ol>
 
           <h2>Add and update publications</h2>
@@ -1868,13 +1875,14 @@
           <p>The report is a generated local reading artifact. Network services may return fewer contexts than citation records, and a temporary rate limit can leave some entries without quoted context. Reopen or rebuild the report later to retry the available sources; an existing report remains on disk until you deliberately replace or remove it.</p>
 
           <h2>Work with files</h2>
-          <p>My Publications uses the same Paper Details and flat Paper Files model as Library. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
+          <p>My Publications uses the same Paper Details and flat Paper Files model as Library. Expand <span class="ui">Files · n</span> within the details to inspect its resources; Library instead has an adjacent Paper Files column. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
 
           <h2>Read the summary</h2>
           <p>The lower summary includes publication counts, identifier coverage, h-index and i10 information, journal distribution, merged citation maxima, and major-paper role counts. Select a role statistic to filter the table where supported.</p>
 
           <h2>Export a list</h2>
           <p>Choose <span class="ui">Export List</span>, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.</p>
+          <p>The Overleaf option downloads a project ZIP and opens Overleaf in Browser. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Open Source Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
@@ -1911,6 +1919,7 @@
 
           <h2>Daily scheduled updates</h2>
           <p>Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.</p>
+          <p>The scheduler belongs to the running local UI service; it does not wake a sleeping Mac or run while that service is stopped. See <a href="#startup">When automatic updates run</a> for the current timing and restart boundaries.</p>
 
           <h2>Journal logos and mathematical text</h2>
           <p>Configured journal logos are downloaded into a local cache and reused from disk. The first successful request may require network access; changing dates and later launches should not repeatedly download the same logo. The cache is presentation data and can be rebuilt without changing subscriptions or papers.</p>
@@ -1927,7 +1936,7 @@
 
           <h2>Act on a result</h2>
           <ul>
-            <li><span class="ui">Open Website</span> opens the publisher or best known record in the external browser.</li>
+            <li><span class="ui">Open Website</span> opens the publisher or best known record in a Browser tab.</li>
             <li><span class="ui">Add to Library</span> begins the placement workflow described below; after that, <span class="ui">Show in Library</span> returns to the managed paper.</li>
             <li><span class="ui">Download</span> retrieves the paper file. <span class="ui">PDF</span> opens an existing local PDF in Preview, and <span class="ui">Delete PDF</span> removes that managed download and resets its status.</li>
             <li>When a reading note exists, <span class="ui">Note</span> opens it in the right-side drawer. The list compresses but keeps its own scroll position. <span class="ui">Delete Note</span> removes the note and resets analysis status.</li>
@@ -2055,28 +2064,30 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#my-publications">My Publications</a><a href="#network-access">Publisher and Network Access</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history PDF download VPN Clash DIRECT proxy TUN network sidebar">
+        <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history address autocomplete suggestions tabs Home PDF download VPN Clash DIRECT proxy TUN network sidebar password passkey autofill">
           <p class="topic-kicker">Browser</p>
           <h1>Browse, Bookmark, and Revisit Websites</h1>
-          <p class="lead">Browser is the sixth main tab, immediately after Author Monitor. It displays real websites in a separate native WebKit view, beside a local Bookmarks/History sidebar.</p>
+          <p class="lead">Browser is the sixth main tab, after Author Monitor. Website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages.</p>
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/browser.png" alt="Browser Home with Google's real search and sign-in controls, a Favorites grid using the public Journals folder, and sidebar controls along the bottom">
-            <figcaption>Browser overview with public journal bookmarks and Nature sidebar search; no private history is shown. This earlier screenshot predates the compact Home and webpage tab strip described below.</figcaption>
+            <img src="/user-guide-assets/browser.png" alt="Current Browser controls with adjoining webpage tabs above the right column, compact Favorites, and aligned sidebar controls; the native webpage area is an explicitly labeled placeholder">
+            <figcaption><strong>Browser layout example.</strong> Rendered from the current Browser interface code with public sample bookmarks. The native webpage area is a labeled illustration, not a live Google screenshot. Website controls and favicons depend on the loaded site; no private session or history is shown.</figcaption>
           </figure>
 
           <h2>Search and navigate</h2>
           <ol class="steps">
-            <li><strong>Open Browser.</strong> Its first use opens Home: the real Google homepage above local Favorites. Google's logo, search, and account controls use Browser's own session, not Safari's. No website is preloaded during App startup.</li>
+            <li><strong>Open Browser.</strong> On first use, the main tab opens Home: real Google above local Favorites, using Browser's own session, not Safari's. Later switches return to your selected webpage; use the Home button to return to Google. A paper link opens its destination directly in the unused first tab. Nothing is preloaded during App startup.</li>
             <li><strong>Use the address field.</strong> Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use <span class="key">⌘L</span> to focus the field.</li>
             <li><strong>Navigate normally.</strong> Back, Forward, Reload/Stop, and Home act on the selected webpage tab. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height.</li>
             <li><strong>Switch between workspaces.</strong> Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.</li>
           </ol>
+          <p><strong>Return to the source workspace: <span class="key">⌘[</span>.</strong> After a website link in Library, My Publications, Journal Monitor, Subject Monitor, or Author Monitor brings you here, press Command-left bracket to return to that workspace's retained selection and scroll position. It works from the webpage or address field and leaves Browser tabs open; it is not webpage Back. The source lasts for this Browser detour only: manually leaving Browser clears it, and entering Browser directly does not create one. Close any open dialog first.</p>
           <p><strong>Instant Home, online search.</strong> Each tab lazily retains Home and a browsing view. Home returns without reloading; Reload refreshes it, including account state. App restart, interrupted loads and process termination need a connection. Search/sign-in remain online. Tabs share Browser's persistent profile, without saved HTML/password copies or replayed forms.</p>
+          <p>When you search or follow a link from Home, Home remains visible while the destination begins loading, then gives way to that destination. It should not flash the page you visited before Home. A cancelled or failed pending navigation leaves Home available rather than presenting that older page as the result.</p>
           <p><span class="key">⌘F</span> opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native <span class="ui">Gewu Insight.app</span>; opening the local UI in a separate web browser does not embed another browser engine.</p>
           <p><strong>Favorites on Home.</strong> Favorites/Favourites (including localized names) supplies the tiles; use <span class="ui">Create Favorites Folder</span> if missing. Open nested folders and return through breadcrumbs; use <span class="ui">Add Favorite</span> or right-click to edit. Google's real logo/search/account controls remain; secondary language/region/footer links are hidden only on Home. Native zoom fits Google above the divider-free tiles. Other pages keep normal zoom/scrolling. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Bookmarks are not sent to Google.</p>
 
           <h2>Use multiple webpage tabs</h2>
-          <p>Below the address toolbar, tabs show icons, titles and <span class="ui">×</span>. The top-right <span class="ui">+</span> (<span class="ui">New Tab</span>, <span class="key">⌘T</span>) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.</p>
+          <p>Below the address toolbar, adjoining rectangular tabs show icons, titles and <span class="ui">×</span> above the webpage column only. The sidebar begins directly below the toolbar; it is not pushed down by the webpage tabs. The top-right <span class="ui">+</span> (<span class="ui">New Tab</span>, <span class="key">⌘T</span>) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.</p>
           <p>Right-click links for <span class="ui">Open Link in New Tab</span>, or Command-click. New-window links also create tabs, including inline PDFs. Bookmarks/Favorites/History offer <span class="ui">Open in New Tab</span>. New tabs are selected immediately; ordinary clicks use the current tab.</p>
           <p><span class="ui">×</span> or <span class="key">⌘W</span> closes a tab; closing the last opens Home. Left/Right switches focused tabs. Up to 32 tabs stay in memory, not restored after App quit. Save drafts before closing; bookmarks, history, downloads and sign-ins remain. AutoFill only triggers in the visible page.</p>
 
@@ -2103,6 +2114,10 @@
           <p>History groups loaded main pages by Today, Yesterday, and date, with names, sites, visit times, search, and pagination. Subresources, main-tab switches, and cached Home returns add no visits; Reload updates the existing record. Click to revisit; right-click to bookmark or delete a visit.</p>
           <p><span class="ui">Clear History</span> confirms Last hour, Last 24 hours, Last 7 days, or All history. It preserves bookmarks, downloads, cookies, and sign-ins. History remains until deleted; authorization callbacks and recognized signed-download URLs are excluded.</p>
 
+          <h2>Address suggestions from your history</h2>
+          <p>As you type in the toolbar address field, Gewu searches saved local visit titles and URLs. Address prefixes rank first, followed by matching titles; visit frequency and recency help order the results. A matching address can complete the typed prefix with its remaining text selected. These are local history suggestions, not live Google suggestions, and typing does not send a suggestion request to a search engine.</p>
+          <p>Use <span class="key">↑</span>/<span class="key">↓</span>, then Enter to open a result, or click it to open directly. Escape dismisses suggestions and restores your typed query. Without a chosen completion, Enter opens an address or searches Google normally. Clearing history also removes those visits from suggestions; bookmark search remains a separate sidebar control.</p>
+
           <h2>Read PDFs and save downloads</h2>
           <p>Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or <span class="ui">Share &gt; Save Download</span>; unsupported attachments use a save sheet. This uses Browser's session, not Python's downloader. For HTML viewers, use the site's PDF link. Downloads create no Library paper or Gewu Key: <a href="#import-files">import explicitly</a>. Library PDFs still open in macOS Preview.</p>
 
@@ -2116,7 +2131,8 @@
           <p><span class="ui">Open Passwords</span> opens Apple's app (or use Passwords in System Settings on older Macs). Unlock and choose credentials there yourself. Gewu has no password vault and never imports, exports, lists or relays credentials.</p>
           <p><strong>Conservative AutoFill trigger.</strong> A single, unmodified click on an explicitly marked HTTPS login username or current-password input can open <span class="ui">AutoFill &gt; Passwords</span>. Search, ordinary email, registration, codes, embedded frames and uncertain fields are skipped, as are keyboard focus, double-clicks and dragging. Each field kind is offered once per site per App session, including cancellation; right-click AutoFill retries manually. Navigation or intervening input cancels a pending trigger. macOS handles authentication, selection and filling; Gewu never reads credentials or submits login. Site matching, Safari-style suggestions and successful filling are not guaranteed.</p>
           <p>A macOS prompt for <span class="ui">Gewu Insight WebCrypto Master Key</span> concerns WebKit's protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.</p>
-          <div class="important"><span class="callout-title">Compatibility</span>Some sites reject embedded browsers. Use <span class="ui">Open in Safari</span>; it opens the address without transferring Browser cookies. Never bypass paywalls, CAPTCHAs, or access controls. Paper-related Open Website and Google Scholar actions elsewhere still use external browsers.</div>
+          <p><strong>Password versus passkey.</strong> A Password entry contains a text password; a Passkey entry is a different sign-in credential and may show only a creation date. A passkey cannot be inserted as text into a password field. Use the website's passkey sign-in flow where supported, or select a genuine Password entry yourself. See <a href="#troubleshooting">AutoFill troubleshooting</a>; the trigger is not a guarantee that macOS or a particular website can fill the field.</p>
+          <div class="important"><span class="callout-title">Website links</span>Publisher, Google Scholar, author/profile, preprint, citation-source, Note and remote-PDF links open here, as does Overleaf export. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use <span class="ui">Open in Safari</span>; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.</div>
         </article>
 
         <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Open Source Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
@@ -2139,13 +2155,14 @@
           <h2>Save a credential</h2>
           <ol class="steps">
             <li><strong>Paste the credential into its service field.</strong></li>
-            <li><strong>Save the settings.</strong></li>
-            <li><strong>Run a small metadata refresh.</strong> Confirm the service appears in the citation panel.</li>
+            <li><strong>Choose <span class="ui">Save</span> beside that service.</strong> Each service has its own Save, Test, and Clear controls.</li>
+            <li><strong>Choose <span class="ui">Test</span> and read the status underneath.</strong> This checks service access; it does not refresh every paper. Then refresh one paper to inspect the available citation evidence.</li>
           </ol>
 
           <p>A configured field shows fixed round dots by default, while the detailed status below continues to report saving, connection, or quota information. The dots do not expose the key or its length. Click <span class="ui">Show</span> inside the field to reveal the saved key, or inspect a newly typed key; click <span class="ui">Hide</span> to mask it again. A saved key is retrieved only on Show, and its displayed value is cleared on Hide or when settings closes. Type a replacement and choose <span class="ui">Save</span> to change the key; <span class="ui">Clear</span> removes the locally saved key. A configured environment key can remain available. Avoid screenshots or screen sharing while a key is visible.</p>
 
           <p>Semantic Scholar sends its key in the official <code>x-api-key</code> header. Requests share a low-rate queue and use exponential backoff after rate limits or temporary failures.</p>
+          <p>OpenAlex status reports the remaining daily free allowance and its reset time when available. Gewu uses only that free allowance and falls back to other metadata sources when it is exhausted; it does not spend paid OpenAlex credits. A saved key is not proof that every remote request will succeed.</p>
 
           <div class="important"><span class="callout-title">Important</span>Credentials are local-only: store them in local SQLite or approved environment variables. Do not place keys in source files, logs, exported reports, tests, or Git.</div>
 
@@ -2373,7 +2390,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#welcome">Welcome</a><a href="#personal-research-workspace">The Personal Research Workspace</a><a href="#startup">Startup, Monitor Cache, and Text Size</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="keyboard" data-group="Reference" data-title="Keyboard Shortcuts" data-keywords="command keys arrows quick look view loader preferences help">
+        <article class="help-topic guide-topic" id="keyboard" data-group="Reference" data-title="Keyboard Shortcuts" data-keywords="command keys arrows quick look view loader preferences help browser new close tab search calendar author">
           <p class="topic-kicker">Reference</p>
           <h1>Keyboard Shortcuts</h1>
           <p class="lead">Use standard macOS editing commands throughout the app. The shortcuts below are specific to navigation and Gewu Insight commands.</p>
@@ -2383,16 +2400,26 @@
             <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move through the focused Library or Paper Files list; on the source rail, move among Library, shortcuts, and Spaces and open the highlighted source.</td></tr>
             <tr><td><kbd>→</kbd></td><td>Enter the highlighted source from the vertical rail, enter a folder, or move from a selected paper into Paper Files.</td></tr>
             <tr><td><kbd>←</kbd></td><td>Leave Paper Files for the selected paper, return to a parent folder, or move from the leftmost Library column to the source rail.</td></tr>
-            <tr><td><kbd>Space</kbd></td><td>Open or close Quick Look for the selected Paper Files item.</td></tr>
+            <tr><td><kbd>Space</kbd></td><td>Open or close Quick Look for the selected local paper/Paper Files item, including available monitor PDFs; not while editing text.</td></tr>
             <tr><td><kbd>Esc</kbd></td><td>Dismiss an active transient control or return focus where supported.</td></tr>
             <tr><td><kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd></td><td>Toggle List View and Table View.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>L</kbd></td><td>Focus the address/search field in Browser; otherwise open Folder Loader.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>D</kbd></td><td>In Browser, bookmark the current page.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>R</kbd></td><td>In Browser, reload the current page.</td></tr>
-            <tr><td><kbd>⌘</kbd><kbd>F</kbd></td><td>In Browser, find text on the current page.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>F</kbd></td><td>In Browser, Find on Page. In Library, My Publications, and the three Monitors, focus the current workspace search.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>T</kbd></td><td>In Browser, open a new webpage tab at Home.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>[</kbd></td><td>Return from Browser to the source workspace; keep its position and webpage tabs.</td></tr>
             <tr><td><kbd>⌘</kbd><kbd>,</kbd></td><td>Show Open Source Settings.</td></tr>
-            <tr><td><kbd>⌘</kbd><kbd>W</kbd></td><td>Close the current window.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>W</kbd></td><td>In Browser, close the selected webpage tab; closing the last creates Home. Outside Browser, dismiss active Quick Look first, otherwise close the current window.</td></tr>
+            <tr><td><kbd>⌘</kbd><kbd>Q</kbd></td><td>Quit Gewu Insight. Save webpage drafts first; open Browser tabs are not restored after quitting.</td></tr>
           </table>
+
+          <h2>Monitor keyboard navigation</h2>
+          <p>In a Journal or Subject calendar, Left/Right moves one day and Up/Down moves one week. Enter selects the date and enters the papers. In the paper area, Up/Down selects papers, Left/Right changes the journal or subject, and Escape returns to the calendar. Space opens an available local PDF in Quick Look.</p>
+          <p>In Author Monitor, Left selects the author rail and Right selects its papers; Up/Down moves through the active pane. Up from the first item enters the main-tab navigation level. At that level, Left/Right chooses a main tab and Down or Enter returns to its content. These commands do not apply while typing in an input.</p>
+
+          <h2>Browser keyboard context</h2>
+          <p>Find on Page uses Enter for the next match, Shift-Enter for the previous match, and Escape to close. In address suggestions, Up/Down selects a result and Escape restores your query. A focused webpage tab uses Left/Right to change tabs. These contexts are separate from Library navigation; <span class="key">⌘L</span> in Browser does not open Folder Loader.</p>
 
           <h2>Paper Files mouse behavior</h2>
           <p>Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.</p>
@@ -2443,6 +2470,18 @@
           <p>If the local UI server exits unexpectedly while the macOS window remains open, the launcher starts it again. The window rechecks local health and reloads the workspace when the service becomes ready. A startup-failure sheet is nonblocking; if the server recovers after that sheet appears, the stale sheet is dismissed automatically instead of continuing to interrupt a healthy workspace.</p>
 
           <p>A brief reload during recovery does not mean the SQLite database was rebuilt or that another copy of Gewu Insight should be opened. If repeated recovery never reaches a healthy Library view, use the launcher log steps below.</p>
+          <p>Recovery reloads the workspace, so Browser's memory-only tabs and unsubmitted forms can be lost. Bookmarks and history already saved in SQLite remain. Save work on websites regularly; recovery is not a web-session or draft backup.</p>
+
+          <h2>When automatic updates run</h2>
+          <p>Automatic monitoring runs inside the local UI service, with startup delays, periodic checks, and saved completion/retry state. Keep the Mac awake and the service running. Closing a window does not necessarily stop that service. Quitting the App stops a server it started; a separately launched server must be stopped separately. A late launch checks work that is due rather than guaranteeing a run at an exact minute.</p>
+          <table class="plain-table">
+            <tr><th>Monitor</th><th>Current automatic schedule</th></tr>
+            <tr><td>Journal Monitor</td><td>Daily work becomes due from 09:00 in the Mac's local time zone; stored completion and pending retry state determine what still needs work.</td></tr>
+            <tr><td>Subject Monitor</td><td>Daily work becomes due from 09:00 local time; incomplete sources have their own bounded retry state.</td></tr>
+            <tr><td>Author Monitor</td><td>Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick.</td></tr>
+            <tr><td>arXiv</td><td>Uses its separate announcement-ready schedule and buffer, not the journal's 09:00 rule. Read the displayed update/countdown state.</td></tr>
+          </table>
+          <p>These are local scheduler rules, not guarantees of remote source completion or a hosted monitoring service. Manual Refresh remains available for the selected scope; repeated broad refreshes can worsen a source's rate limit.</p>
 
           <h2>If the app cannot start</h2>
           <ol class="steps">
@@ -2455,6 +2494,7 @@
 
           <h2>Clear a stale interface</h2>
           <p>Choose <span class="ui">Setting &gt; Clear Monitor Cache</span> if a monitor still shows stale downloaded images or rendered web assets after an app update. This clears disposable monitor presentation cache, not the SQLite database, saved paper records, or managed PDFs.</p>
+          <p>This is not Browser's Clear History command and does not clear Browser sign-in cookies or Apple Passwords. Use <span class="ui">Browser &gt; History &gt; Clear History</span> for visit records only.</p>
 
           <p>Monitor cache and macOS app identity are separate. Clearing Monitor Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt <span class="ui">Gewu Insight.app</span>. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.</p>
 
@@ -2488,7 +2528,7 @@
           <h2>The wrong file is the default</h2>
           <ol>
             <li>Open Paper Files and verify every file type.</li>
-            <li>Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.</li>
+            <li>Correct a mislabeled Corrected published version, Published version, Accepted manuscript, or Preprint; expand the size footer to set annotation separately.</li>
             <li>Choose <span class="ui">Set as Default</span> for the desired valid file, or choose <span class="ui">Use Automatic Selection</span> to resume automatic selection.</li>
           </ol>
 
@@ -2496,7 +2536,7 @@
           <p>Compare file size and classification. New downloads use exact SHA-256 and PDF content fingerprints. A copy with annotations may be retained intentionally. Exact byte duplicates are reused, while clean and annotated peers can both remain. Keep the intended default before deleting any redundant non-default row.</p>
 
           <h2>A monitor shows no papers</h2>
-          <p>Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.</p>
+          <p>Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, allow scheduled source-level retries to finish, or use the selected subject's refresh command when a manual retry is needed. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.</p>
 
           <h2>A journal count and the visible cards disagree</h2>
           <p>This is usually expected when <span class="ui">Field Filter</span> is active. Journal counts describe all stored papers for the selected journal and day; field choices narrow the visible cards. Clear or broaden the field selection before diagnosing a missing fetch.</p>
@@ -2511,7 +2551,17 @@
           <p>Open the live or previous Loader log and the result guide. Confirm the metadata mode, source path, and any stop action. Re-running the same source should reuse existing files rather than overwrite the primary PDF.</p>
 
           <h2>A default file cannot be deleted</h2>
-          <p>Choose another valid file with <span class="ui">Set as Default</span> first, or choose <span class="ui">Use Automatic Selection</span>; then delete the former non-default file. An <span class="ui">Invalid File</span> remains an audit record and is never eligible to become default.</p>
+          <p>The preferred Default and the protected physical primary file are not always the same resource. <span class="ui">Set as Default</span> changes the reading preference, not the Library's compatibility primary path; switching defaults does not guarantee that the old file becomes deletable. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An <span class="ui">Invalid file</span> remains an audit record and is never eligible to become default.</p>
+
+          <h2>A website link opens Browser instead of Safari</h2>
+          <p>This is now the normal action for web links in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Browser selects a new webpage tab, or reuses its unused first tab. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged. Use Browser's explicit <span class="ui">Open in Safari</span> only when you want the external browser.</p>
+
+          <h2>Browser Home needs a connection or a website will not load</h2>
+          <p>A warm Home returns instantly from memory; it is not an offline copy of Google. First use after quitting, an explicit Reload, or a terminated WebKit process needs a connection. Search results and account actions always require the website. Read the actual load error, check the destination and Clash connection route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.</p>
+
+          <h2>AutoFill does not appear or does not fill</h2>
+          <p>Automatic triggering is deliberately limited to an explicit click in a clearly marked login field. Ordinary email, search, registration, verification-code, and uncertain fields do not qualify. Cancellation uses up the automatic offer for that field kind/site during the App session. Right-click the actual input and choose <span class="ui">AutoFill &gt; Passwords</span> to retry manually.</p>
+          <p>Unlock and select the appropriate entry yourself. If the item says <span class="ui">Passkey</span> and shows a creation date, it is not a text password. If a real Password entry closes without filling, macOS or that website may not support the return path in this embedded view. Gewu does not read your vault, relay credentials, or submit forms to work around it. Use the website's supported login flow or Safari; do not send passwords or unmasked credential screenshots in a support report.</p>
 
           <div class="important"><span class="callout-title">Important</span>Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.</div>
 
@@ -2524,7 +2574,7 @@
           <p class="lead">These paths describe the managed project layout. They are useful for backup and diagnosis, not for routine manual reorganization.</p>
 
           <ul class="path-list">
-            <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, and operational state.</span></li>
+            <li><code>data/paper_monitor.sqlite</code><span>Authoritative database for papers, identities, relationships, settings, operational state, Browser bookmarks, and visit history. May contain saved metadata API keys; treat backups as private.</span></li>
             <li><code>data/cache/journal_logos</code><span>Rebuildable local image cache for configured Journal Monitor logos.</span></li>
             <li><code>data/Library</code><span>Visible main Library root and compatibility primary files.</span></li>
             <li><code>data/Spaces</code><span>Independent Space roots.</span></li>
@@ -2536,6 +2586,7 @@
           </ul>
 
           <p>Quick Look page thumbnails use a separate, automatically trimmed temporary cache. It is rebuildable preview data, not part of the Library, Associated Files, or the SQLite record, so it does not belong in a research backup.</p>
+          <p>Browser website data and its disposable favicon cache are managed by macOS outside the project. They are separate from SQLite bookmarks/history and from the monitor caches listed above. See <a href="#backup-migrate">Browser and credential backup boundaries</a> before moving to another Mac.</p>
 
           <h2>Associated Files layout</h2>
           <p>An associated bundle follows the managed scope and path, then a work-specific bundle. Its children separate <code>Versions</code>, <code>Supplements</code>, and <code>Files</code>. The exact physical name can change as the paper moves; the Gewu Key remains stable.</p>

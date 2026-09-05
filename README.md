@@ -98,8 +98,15 @@ stay inline; legacy HTTP GET redirects can retry once over HTTPS without
 disabling certificate checks. Bookmarks and
 history live in SQLite; cookies and cache use an independent persistent WebKit
 profile. Browser follows the system network without changing proxy or Clash
-rules. Existing paper-related external-browser actions remain unchanged in this
-first release.
+rules. Website actions in Library, My Publications, Journal Monitor, Subject
+Monitor, and Author Monitor switch to Browser and open a new webpage tab,
+preserving existing pages. This includes publisher/Scholar/profile links,
+preprints, citation sources, remote PDFs, Note links, and the Overleaf export
+entry. The first link uses Browser's unused initial tab without loading Home
+first. Local PDFs still open in Preview; file/folder actions stay native.
+Browser's explicit Open in Safari remains a compatibility escape hatch.
+The browser-hosted CLI UI opens an ordinary tab instead of invoking Safari on
+the server. See the [website-entry audit](docs/WORKSPACE_BROWSER_LINKS.md).
 
 The complete illustrated workflow—including Author Monitor, Browser, file versions,
 portable export, backup, settings, and keyboard navigation—is available in the
@@ -418,9 +425,16 @@ Choose **Help → User Guide** inside the app. The offline manual covers:
 - Library, Spaces, Paper Files, and version selection;
 - Folder Loader, portable export, backup, and migration;
 - My Publications and all three monitors;
-- citation settings, publisher access, startup, and troubleshooting.
+- Browser tabs, retained Home, local address suggestions, bookmarks, history,
+  website-link routing, downloads, and system Passwords limitations;
+- Open Source Settings, publisher access, contextual keyboard shortcuts,
+  startup, and troubleshooting.
 
 The source manual is [paper_monitor/user_guide.html](paper_monitor/user_guide.html).
+The [PDF manual](paper_monitor/Gewu_Insight_User_Guide.pdf) is built from that
+same source and bundled with the macOS App. The
+[September 2026 guide audit](docs/USER_GUIDE_AUDIT.md) records topic coverage,
+implementation evidence, screenshot provenance, and verification boundaries.
 
 ## Useful CLI commands
 

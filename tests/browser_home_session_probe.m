@@ -7,6 +7,63 @@ static void check(BOOL ok, NSString *label) {
     if (!ok) { fprintf(stderr, "FAILED: %s\n", label.UTF8String); exit(1); }
     checks++;
 }
+@interface ReturnWindow : NSObject
+@property(strong) id attachedSheet, firstResponder;
+@end
+@implementation ReturnWindow
+- (BOOL)makeFirstResponder:(id)responder { self.firstResponder = responder; return YES; }
+@end
+@interface ReturnWorkspace : NSObject
+@property(strong) ReturnWindow *window;
+@end
+@implementation ReturnWorkspace
+@end
+@interface ReturnKey : NSObject
+@property NSEventType type;
+@property NSEventModifierFlags modifierFlags;
+@property(copy) NSString *charactersIgnoringModifiers;
+@property(strong) id window;
+@property BOOL isARepeat;
+@end
+@implementation ReturnKey
+@end
+static void workspaceReturnChecks(void) {
+    GewuBrowserController *browser = [GewuBrowserController alloc];
+    ReturnWorkspace *workspace = [ReturnWorkspace new]; workspace.window = [ReturnWindow new];
+    browser.workspace = (id)workspace; browser.active = YES; browser.visible = YES;
+    ReturnKey *key = [ReturnKey new]; key.type = NSEventTypeKeyDown; key.window = workspace.window;
+    key.modifierFlags = NSEventModifierFlagCommand; key.charactersIgnoringModifiers = @"[";
+    __block NSInteger events = 0;
+    browser.onEvent = ^(NSDictionary *event) { check([event[@"event"] isEqual:@"return-workspace"], @"only trusted return event"); events++; };
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"no origin leaves ordinary Browser key handling alone");
+    browser.canReturnToWorkspace = YES;
+    for (NSNumber *extra in @[@(NSEventModifierFlagShift), @(NSEventModifierFlagControl), @(NSEventModifierFlagOption)]) {
+        key.modifierFlags = NSEventModifierFlagCommand | extra.unsignedLongLongValue;
+        check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"modified bracket is not the return command");
+    }
+    key.modifierFlags = 0;
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"plain bracket still types");
+    key.modifierFlags = NSEventModifierFlagCommand; key.charactersIgnoringModifiers = @"]";
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"right bracket is untouched");
+    key.charactersIgnoringModifiers = @"["; key.window = [ReturnWindow new];
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"another window is excluded");
+    key.window = workspace.window; workspace.window.attachedSheet = [NSObject new];
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"sheet cannot be dismissed by workspace return");
+    workspace.window.attachedSheet = nil; browser.visible = NO;
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"covered Browser cannot return");
+    browser.visible = YES; browser.active = NO;
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"inactive Browser cannot return");
+    browser.active = YES; key.isARepeat = YES;
+    check([browser handleWorkspaceReturnKeyEvent:(id)key] && events == 0, @"held key cannot repeat the return action");
+    key.isARepeat = NO;
+    for (id responder in @[[NSObject new], workspace]) {
+        browser.canReturnToWorkspace = YES; workspace.window.firstResponder = responder;
+        check([browser handleWorkspaceReturnKeyEvent:(id)key], @"return works from webpage or workspace focus");
+        check(workspace.window.firstResponder == workspace && !browser.canReturnToWorkspace, @"native focus returns to workspace once");
+    }
+    check(events == 2 && !browser.webView, @"return neither loads nor creates nor closes any webpage");
+    browser.workspace = nil;
+}
 @interface FakeHistory : NSObject
 @property(strong) id currentItem;
 @property(copy) NSArray *backList;
@@ -281,6 +338,7 @@ int main(void) {
         for (int i = 0; i < 300; i++) [session recordSurface:surface item:[[NSObject alloc] init] home:NO traversal:NO];
         check(session.entries.count == 256 && session.index == 255, @"session metadata is bounded");
         presentationChecks();
+        workspaceReturnChecks();
         printf("Retained Browser Home: %ld checks passed\n", (long)checks);
     }
 }

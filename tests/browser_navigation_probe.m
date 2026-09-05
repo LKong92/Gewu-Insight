@@ -1,4 +1,4 @@
-#import "GewuBrowserNavigation.h"
+#import "GewuWorkspaceNavigation.h"
 
 static NSInteger checks = 0;
 static void check(BOOL condition, NSString *name) {
@@ -15,6 +15,21 @@ static NSHTTPURLResponse *response(NSString *mime, NSString *disposition) {
 
 int main(void) {
     @autoreleasepool {
+        NSURL *workspace = [NSURL URLWithString:@"http://127.0.0.1:8765/"];
+        NSURL *source = [NSURL URLWithString:@"http://127.0.0.1:8765/?mode=library"];
+        NSMutableURLRequest *link = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/paper.pdf"]];
+        check(GewuWorkspaceWebsiteRequest(link, source, YES, workspace), @"public PDF GET from workspace enters Browser");
+        check(!GewuWorkspaceWebsiteRequest(link, source, NO, workspace), @"subframes cannot request privileged workspace routing");
+        for (NSString *origin in @[@"https://example.org/", @"http://127.0.0.1:9999/", @"https://127.0.0.1:8765/"])
+            check(!GewuWorkspaceWebsiteRequest(link, [NSURL URLWithString:origin], YES, workspace), @"untrusted source origin rejected");
+        for (NSString *destination in @[@"http://127.0.0.1:8765/api/file", @"file:///tmp/paper.pdf", @"http://localhost/", @"http://10.0.0.1/", @"https://user:secret@example.org/", @"javascript:alert(1)"])
+            check(!GewuWorkspaceWebsiteRequest([NSURLRequest requestWithURL:[NSURL URLWithString:destination]], source, YES, workspace), @"non-public destination not forwarded");
+        link.HTTPMethod = @"POST";
+        check(!GewuWorkspaceWebsiteRequest(link, source, YES, workspace), @"popup POST is never reconstructed as GET");
+        link.HTTPMethod = @"GET"; link.HTTPBody = [@"form" dataUsingEncoding:NSUTF8StringEncoding];
+        check(!GewuWorkspaceWebsiteRequest(link, source, YES, workspace), @"GET bodies not forwarded");
+        link.HTTPBody = nil; link.HTTPBodyStream = [NSInputStream inputStreamWithData:[NSData data]];
+        check(!GewuWorkspaceWebsiteRequest(link, source, YES, workspace), @"streams not forwarded");
         for (NSString *url in @[@"https://www.google.com/", @"https://google.com/webhp?hl=en", @"https://www.google.com/?authuser=0"])
             check(GewuBrowserGoogleHome([NSURL URLWithString:url]), @"only the real Google homepage can be fitted");
         for (NSString *url in @[@"https://www.google.com/search?q=paper", @"https://www.google.com/?q=", @"https://accounts.google.com/", @"https://www.google.com.evil.example/", @"http://www.google.com/", @"https://user@www.google.com/", @"https://www.google.com:8765/", @"https://www.nature.com/a.pdf"])

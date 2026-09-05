@@ -79,10 +79,11 @@
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{subsection}
 \renewcommand*{\chapterformat}{\color{GewuBlue}\rule[-2pt]{1.7mm}{23pt}\hspace{3mm}\thechapter\enskip}
 \renewcommand*{\sectionformat}{\thesection\enskip}
-\pretocmd{\section}{\Needspace{5\baselineskip}}{}{}
-\pretocmd{\subsection}{\Needspace{4\baselineskip}}{}{}
+\pretocmd{\section}{\Needspace{9\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{6\baselineskip}}{}{}
 \pretocmd{\subsubsection}{\Needspace{3\baselineskip}}{}{}
 \raggedbottom
+\newenvironment{GewuRelated}{\par\nobreak\vspace{3pt}\nobreak\begingroup\small\sffamily\begin{samepage}\noindent}{\par\end{samepage}\endgroup}
 
 \pagestyle{fancy}
 \fancyhf{}
@@ -164,6 +165,8 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 \begin{GewuLead}
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
+
+Guide revision · September 6, 2026
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -334,7 +337,7 @@ Role
 }
 
 \begin{GewuCaption}
-What you save, read, classify, and follow becomes context for the next cycle; the five areas are different views of this loop.
+What you save, read, classify, and follow becomes context for the next cycle. The five research views share this loop; Browser supplies a separate place to explore websites.
 \end{GewuCaption}
 
 \begin{quote}
@@ -370,9 +373,9 @@ Prepare an upgrade or move to another Mac & Read \hyperref[backup-migrate]{Back 
 
 Choose \textbf{Help \textgreater{} User Guide}. The guide opens in its own window and works without an internet connection.
 
-\section{See also}\label{see-also}
-
-\hyperref[guided-tour]{Guided Tour} · \hyperref[first-session]{Your First Session} · \hyperref[system-overview]{System Architecture at a Glance} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[guided-tour]{Guided Tour} · \hyperref[first-session]{Your First Session} · \hyperref[system-overview]{System Architecture at a Glance} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \chapter{Guided Tour}\label{guided-tour}
 
@@ -403,7 +406,7 @@ Role
 \begin{minipage}[t]{\linewidth}\raggedright
 {{Top}\\
 \textbf{Choose a mode}}\strut
-\end{minipage} & {Library, My Publications, or one of the three discovery monitors.} \\
+\end{minipage} & {Library, My Publications, one of the three discovery monitors, or Browser.} \\
 \begin{minipage}[t]{\linewidth}\raggedright
 {{Left}\\
 \textbf{Set the context}}\strut
@@ -537,17 +540,17 @@ The right-side Paper Details area scrolls independently. A long author list or c
 
 \section{Recognize stable and temporary state}\label{recognize-stable-and-temporary-state}
 
-Selection highlight, keyboard focus, an open menu, and the current scroll position can be temporary interface state. Paper identity, folder placement, resource properties, read state, import provenance, and completed operation status are durable when saved. A breathing progress message means work is active; it should not be interpreted as a new paper or a changed folder structure.
+Selection, keyboard focus, menus, and scroll position are temporary interface state. Paper identity, placements, resource properties, read state, provenance, and completed operations persist when saved. A breathing progress message means work is active, not that a paper or folder was created.
 
 \begin{quote}
 \textbf{Keep the active context visible}
 
-Before moving, deleting, or attaching an item, confirm which pane has focus and which paper is shown in Paper Details. The same file-like name can represent a paper placement, a resource inside Paper Files, or a standalone imported file.
+Before moving, deleting, or attaching, check the focused pane and selected Paper Details. Similar names can identify different targets: a paper placement, one Paper Files resource, or a standalone file.
 \end{quote}
 
-\section{See also}\label{see-also-1}
-
-\hyperref[library-layout]{Library Layout} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[keyboard]{Keyboard Shortcuts}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[library-layout]{Library Layout} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[keyboard]{Keyboard Shortcuts}
+\end{GewuRelated}
 
 \chapter{Your First Session}\label{first-session}
 
@@ -738,9 +741,9 @@ Principle & What it means \\
 Before a major import, upgrade, or migration, quit Gewu Insight and back up both the SQLite database and the managed file roots. A database-only copy lacks some bytes; a files-only copy lacks the relationships and state that make the workspace intelligible.
 \end{quote}
 
-\section{See also}\label{see-also-2}
-
-\hyperref[import-files]{Add Papers and Files} · \hyperref[paper-details]{Use Paper Details} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[import-files]{Add Papers and Files} · \hyperref[paper-details]{Use Paper Details} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
+\end{GewuRelated}
 
 \part{Product Concepts and Architecture}\label{part-2}
 
@@ -762,7 +765,7 @@ Element & Role \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-{\textbf{Native desktop shell}} & {The current macOS shell starts the app, owns its windows, and connects Help, Preview, Finder, and external websites to the portable core.} \\
+{\textbf{Native desktop shell}} & {Starts the app, owns Help and Browser, and connects Preview, Finder, and native file actions to the portable core.} \\
 {\textbf{Personal Research Workspace}} & {Library, Spaces, My Publications, and the three Monitor views you see and operate.} \\
 {\textbf{External research sources}} & {Publisher pages, feeds, metadata services, scholarly profiles, and preprint services.} \\
 {\textbf{Local application service}} & {Interprets your actions, resolves identities, schedules network work, and coordinates database and file changes.} \\
@@ -779,6 +782,8 @@ The interface sends an intention to the local service. The service validates it 
 The desktop window presents a local interface served from the project on the current computer. In today\textquotesingle s primary release, a macOS shell supplies Finder, Preview, Quick Look, Dock, and native drag-and-drop integration. The Python, SQLite, and web-interface core is designed to support other desktop shells without changing the meaning of the research data. Network sources contribute evidence and downloadable material, but the durable workspace stays local.
 
 \section{What each persistent layer answers}\label{what-each-persistent-layer-answers}
+
+\textbf{Browser is a separate web surface.} Its native WebKit views load websites directly, not through the Python service. The local service stores bookmarks and history in SQLite; WebKit manages a separate persistent website profile. External pages do not receive the Library\textquotesingle s local API bridge. Visiting a page, saving a bookmark, or downloading through Browser does not create a paper or assign a Gewu Key; import the paper explicitly.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -813,9 +818,9 @@ A paper can appear in a Monitor, the Library, a Space, and My Publications witho
 This guide uses \textbf{Personal Research Workspace} for the on-screen projection and \textbf{Visible Research Files} for assets visible to the native filesystem. These are explanatory terms, not menu names. Together they form the visible workspace, but they serve different roles.
 \end{quote}
 
-\section{See also}\label{see-also-3}
-
-\hyperref[persistent-paper-object]{The Persistent Paper Object} · \hyperref[sqlite-core]{Why SQLite Is the Core} · \hyperref[visible-research-files]{Visible Research Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[persistent-paper-object]{The Persistent Paper Object} · \hyperref[sqlite-core]{Why SQLite Is the Core} · \hyperref[visible-research-files]{Visible Research Files}
+\end{GewuRelated}
 
 \chapter{The Persistent Paper Object}\label{persistent-paper-object}
 
@@ -896,9 +901,9 @@ Editing a DOI or arXiv identifier changes evidence on the existing paper. It sho
 Similar titles are not proof of identity, and matching filenames are not proof that two resources are the same. Use identifiers, metadata, file fingerprints, and provenance together.
 \end{quote}
 
-\section{See also}\label{see-also-4}
-
-\hyperref[identifiers]{Edit DOI and arXiv Identifiers} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[personal-research-workspace]{The Personal Research Workspace}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[identifiers]{Edit DOI and arXiv Identifiers} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[personal-research-workspace]{The Personal Research Workspace}
+\end{GewuRelated}
 
 \chapter{Why SQLite Is the Core}\label{sqlite-core}
 
@@ -922,7 +927,7 @@ Element & Role \\
 {\textbf{Identity and metadata}} & {Shared papers, external identifiers, normalized title and authors, dates, fields, and Gewu Key.} \\
 {\textbf{Relationships and context}} & {Library placements, folder tree, Spaces, My Publications, and Monitor associations.} \\
 {\textbf{Resource registry}} & {File types, paths, source evidence, hashes, annotation state, and default preferences.} \\
-{\textbf{Operational memory}} & {Fetch runs, import batches, source tasks, reads, settings, failures, retries, and completion timestamps.} \\
+{\textbf{Operational memory}} & {Fetch runs, import batches, source tasks, reads, settings, failures, and retries; also Browser bookmarks and history.} \\
 \end{longtable}
 \GewuTableEnd
 }
@@ -999,9 +1004,9 @@ On startup, the storage layer reads the database schema version, checks for requ
 A seemingly small manual change can violate a relationship that is not visible in one table. Use the app for normal work and make a closed, complete backup before any diagnostic intervention.
 \end{quote}
 
-\section{See also}\label{see-also-5}
-
-\hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[storage-reference]{Storage Reference}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[storage-reference]{Storage Reference}
+\end{GewuRelated}
 
 \chapter{Visible Research Files}\label{visible-research-files}
 
@@ -1061,7 +1066,7 @@ Folder Loader is a migration-oriented workflow. It imports a visible collection 
 
 An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.
 
-Supplementary Material, Peer Review File, Other, Unknown, and Invalid File do not become the automatic default. A valid one can still be selected manually; Invalid File remains visible only for audit and repair.
+\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, \textbf{Unknown}, and \textbf{Invalid file} do not become the automatic default. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
 
 \begin{quote}
 \textbf{Published files}
@@ -1087,14 +1092,14 @@ The filesystem must expose practical paths and folders; the UI must expose the m
 Do not manually move or rename managed resources in Finder. The bytes may still exist, but the saved path and live workspace can disagree. Use an app-supported move, repair, or restore; do not assume a restart will rediscover an arbitrary manual move.
 \end{quote}
 
-\section{See also}\label{see-also-6}
-
-\hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \chapter{The Personal Research Workspace}\label{personal-research-workspace}
 
 \begin{GewuLead}
-The five top-level areas are coordinated views over shared research objects. They are not five separate databases, and moving between them does not reset a paper\textquotesingle s identity.
+The five research views---Library, My Publications, Journal Monitor, Subject Monitor, and Author Monitor---share research objects. Browser is the sixth main tab, with its own website session. Moving between research views does not reset a paper\textquotesingle s identity.
 \end{GewuLead}
 
 {\def\LTcaptype{none} % do not increment counter
@@ -1144,9 +1149,9 @@ Removing an author from Author Monitor removes that monitored-author relationshi
 The UI shows a personal map of a shared object graph. It is ``visible'' because you can navigate and act on it, but SQLite---not pixels on the screen---preserves the graph.
 \end{quote}
 
-\section{See also}\label{see-also-7}
-
-\hyperref[organize]{Folders, Shortcuts, and Spaces} · \hyperref[my-publications]{My Publications} · \hyperref[state-and-scope]{State, Scope, and Safe Change}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[organize]{Folders, Shortcuts, and Spaces} · \hyperref[my-publications]{My Publications} · \hyperref[state-and-scope]{State, Scope, and Safe Change}
+\end{GewuRelated}
 
 \chapter{From Discovery to Durable Memory}\label{research-loop}
 
@@ -1226,9 +1231,9 @@ Fetches, metadata refreshes, and imports report progress in reserved status area
 Gewu Insight preserves the consequences of what you monitor, save, read, ignore, classify, and publish. It does not silently replace your research judgment with an invisible global keyword filter.
 \end{quote}
 
-\section{See also}\label{see-also-8}
-
-\hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor} · \hyperref[author-monitor]{Author Monitor}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor} · \hyperref[author-monitor]{Author Monitor}
+\end{GewuRelated}
 
 \chapter{State, Scope, and Safe Change}\label{state-and-scope}
 
@@ -1296,9 +1301,9 @@ A reliable backup contains the SQLite database and the managed file roots from t
 Quit Gewu Insight, preserve the entire project data set, verify the backup can be read, then update the software in place. Do not create a fresh empty database and attempt to reconstruct the workspace from export files.
 \end{quote}
 
-\section{See also}\label{see-also-9}
-
-\hyperref[recycle]{Delete and Recover Items} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[troubleshooting]{Troubleshooting}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[recycle]{Delete and Recover Items} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[troubleshooting]{Troubleshooting}
+\end{GewuRelated}
 
 \part{User Manual}\label{part-3}
 
@@ -1340,9 +1345,9 @@ The breadcrumb at the bottom shows the active path. Select a segment to return t
 
 When you select a folder, the right side shows its name, type, and the number of child folders and items. This is informational; it is not another folder level.
 
-\subsection{See also}\label{see-also-10}
-
-\hyperref[organize]{Folders, Shortcuts, and Spaces} · \hyperref[search-views]{Search, List View, and Table View} · \hyperref[paper-files]{Understand Paper Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[organize]{Folders, Shortcuts, and Spaces} · \hyperref[search-views]{Search, List View, and Table View} · \hyperref[paper-files]{Understand Paper Files}
+\end{GewuRelated}
 
 \section{Navigate with Mouse and Keyboard}\label{navigation}
 
@@ -1418,9 +1423,9 @@ In Paper Files, press \texttt{Space} to open Quick Look. While Quick Look is ope
 Single-click selects a Paper Files item. Double-click opens it. This prevents an accidental external app launch while you are classifying files.
 \end{quote}
 
-\subsection{See also}\label{see-also-11}
-
-\hyperref[paper-files]{Understand Paper Files} · \hyperref[quick-look]{Preview PDFs with Quick Look} · \hyperref[keyboard]{Keyboard Shortcuts}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[quick-look]{Preview PDFs with Quick Look} · \hyperref[keyboard]{Keyboard Shortcuts}
+\end{GewuRelated}
 
 \section{Folders, Shortcuts, and Spaces}\label{organize}
 
@@ -1499,9 +1504,9 @@ When the move finishes, the Space tab is removed and Library opens the moved fol
 Move managed papers in Gewu Insight, not directly in Finder. The app updates the visible file, associated bundle, and live database paths together.
 \end{quote}
 
-\subsection{See also}\label{see-also-12}
-
-\hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[recycle]{Delete and Recover Items}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[recycle]{Delete and Recover Items}
+\end{GewuRelated}
 
 \section{Search, List View, and Table View}\label{search-views}
 
@@ -1531,9 +1536,9 @@ Choose \textbf{View \textgreater{} List View} or \textbf{View \textgreater{} Tab
 
 Control-click the folder contents and choose \textbf{Sort by Name} or \textbf{Sort by Modified Time}. Sorting changes presentation, not the paper identity.
 
-\subsection{See also}\label{see-also-13}
-
-\hyperref[library-layout]{Library Layout} · \hyperref[keyboard]{Keyboard Shortcuts}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[library-layout]{Library Layout} · \hyperref[keyboard]{Keyboard Shortcuts}
+\end{GewuRelated}
 
 \chapter{Papers and Files}\label{chapter-12}
 
@@ -1585,9 +1590,9 @@ A paper record does not require a local PDF. \textbf{Add Paper} creates or reuse
 A file added to an existing paper's \textbf{Paper Files} bundle is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.
 \end{quote}
 
-\subsection{See also}\label{see-also-14}
-
-\hyperref[attachments]{Add and Classify Attachments} · \hyperref[folder-loader]{Use Folder Loader} · \hyperref[drag-attach]{Move a Standalone File into Paper Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[attachments]{Add and Classify Attachments} · \hyperref[folder-loader]{Use Folder Loader} · \hyperref[drag-attach]{Move a Standalone File into Paper Files}
+\end{GewuRelated}
 
 \section{Use Paper Details}\label{paper-details}
 
@@ -1609,7 +1614,7 @@ Action & What it does \\
 \endlastfoot
 \textbf{Open in Preview} & Opens the preferred local PDF in macOS Preview. \\
 \textbf{Download} & Retrieves the best available paper file without overwriting a different preserved version. \\
-\textbf{Open Website} & Opens the publisher, DOI, arXiv, or best known work page. \\
+\textbf{Open Website} & Opens the publisher, DOI, arXiv, or best known work page in a Browser tab. \\
 \textbf{Google Scholar} & Searches for the work in Google Scholar. \\
 \textbf{Get Identifier from Files} & Examines local paper files for DOI or arXiv evidence. \\
 \end{longtable}
@@ -1656,9 +1661,9 @@ Influential Citations is fetched on demand and cached locally for several hours.
 Gewu Key is assigned when a work is first cataloged in SQLite, before Add to Library. Its row remains visible in Author Monitor, including while details load; a missing value shows \texttt{(undefined)}. Adding to Library reuses the existing key and updates the view without creating a second identity.
 \end{quote}
 
-\subsection{See also}\label{see-also-15}
-
-\hyperref[identifiers]{Edit DOI and arXiv Identifiers} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[identifiers]{Edit DOI and arXiv Identifiers} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \section{Edit DOI and arXiv Identifiers}\label{identifiers}
 
@@ -1700,9 +1705,9 @@ The \textbf{arXiv} row remains visible when empty so you can add a corrected ide
 Confirm an identifier before running a version sync. A wrong identifier can attach files from a different work.
 \end{quote}
 
-\subsection{See also}\label{see-also-16}
-
-\hyperref[download-sync]{Download and Sync Versions} · \hyperref[citation-settings]{Open Source Settings}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[download-sync]{Download and Sync Versions} · \hyperref[citation-settings]{Open Source Settings}
+\end{GewuRelated}
 
 \section{Understand Paper Files}\label{paper-files}
 
@@ -1744,9 +1749,9 @@ Deleting a private managed attachment moves its bytes to macOS Trash before remo
 
 A missing attachment is not another copy of the default PDF merely because both rows have a similar name. Check \textbf{Show in Finder}, the paper\textquotesingle s Associated Files bundle, and Recycle before deleting or importing anything. The default resource and explicitly typed attachments remain visible even when their paths need repair.
 
-\subsection{See also}\label{see-also-17}
-
-\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[attachments]{Add and Classify Attachments} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\end{GewuRelated}
 
 \section{Preview Files with Quick Look}\label{quick-look}
 
@@ -1799,9 +1804,9 @@ Use & Best for \\
 Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening Quick Look, loading thumbnails, or moving between pages does not change file type, annotation state, source, Default status, or the SQLite paper record.
 \end{quote}
 
-\subsection{See also}\label{see-also-18}
-
-\hyperref[quick-look-settings]{Quick Look Settings} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[quick-look-settings]{Quick Look Settings} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[troubleshooting]{Troubleshooting}
+\end{GewuRelated}
 
 \section{Choose File Types and the Default File}\label{versions-current}
 
@@ -1839,7 +1844,7 @@ Choose \textbf{Use Automatic Selection} for a manually selected default. Gewu In
 
 \subsection{Classify files without collapsing annotation state}\label{classify-files-without-collapsing-annotation-state}
 
-Use the three small controls on a row. File type uses exactly these labels:
+File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. File type uses exactly these labels:
 
 \begin{itemize}
 \tightlist
@@ -1861,9 +1866,9 @@ Annotation state is selected independently as \textbf{Annotated}, \textbf{Unanno
 Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.
 \end{quote}
 
-\subsection{See also}\label{see-also-19}
-
-\hyperref[download-sync]{Download and Sync Versions} · \hyperref[attachments]{Add and Classify Attachments}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[download-sync]{Download and Sync Versions} · \hyperref[attachments]{Add and Classify Attachments}
+\end{GewuRelated}
 
 \section{Add and Classify Attachments}\label{attachments}
 
@@ -1899,9 +1904,9 @@ Drag a Finder file over the expanded Paper Files area, wait for the drop target 
 Invalid or unreadable PDFs are rejected at file ingress. Existing migrated records that can be proven invalid remain visible as \textbf{Invalid file} for audit and repair, but cannot become a default.
 \end{quote}
 
-\subsection{See also}\label{see-also-20}
-
-\hyperref[drag-attach]{Move a Standalone File into Paper Files} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[drag-attach]{Move a Standalone File into Paper Files} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \section{Download and Sync Versions}\label{download-sync}
 
@@ -1957,9 +1962,9 @@ If a download is skipped because the local bytes already exist, that skipped ope
 A Monitor result is not forced into a Library placement. Where download is available, a local resource can belong to the cataloged paper even before you add that paper to Library or My Publications.
 \end{quote}
 
-\subsection{See also}\label{see-also-21}
-
-\hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\end{GewuRelated}
 
 \section{Move a Standalone File into Paper Files}\label{drag-attach}
 
@@ -1980,7 +1985,7 @@ If a data, image, presentation, or other file was imported as its own Library it
 \item
   \textbf{Release the pointer.} Gewu Insight validates the move, adopts the file into the paper bundle, and removes its independent Library position.
 \item
-  \textbf{Classify the attachment.} Choose Image, Data, Code, Presentation, Note, Supplement, or another appropriate type.
+  \textbf{Classify the attachment.} Choose \textbf{Supplementary material} for an actual paper supplement, or \textbf{Other} for a general image, dataset, code file, slide deck, or note. Expand the size footer to set Annotation and Source separately. See \hyperref[versions-current]{the complete current file-type list}.
 \end{enumerate}
 
 \begin{GewuResult}
@@ -1997,9 +2002,9 @@ The file moves and database changes are coordinated as one recoverable operation
 If the source item is shared by another Library reference or protected relationship, Gewu Insight may refuse a destructive conversion. Add a copy with \textbf{Add File} instead.
 \end{quote}
 
-\subsection{See also}\label{see-also-22}
-
-\hyperref[attachments]{Add and Classify Attachments} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[attachments]{Add and Classify Attachments} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
+\end{GewuRelated}
 
 \section{Delete and Recover Items}\label{recycle}
 
@@ -2041,9 +2046,9 @@ Use final deletion only inside Recycle. The confirmation summarizes how many pap
 \textbf{Delete All} affects every eligible item in the selected Recycle context. Back up first if you are uncertain.
 \end{quote}
 
-\subsection{See also}\label{see-also-23}
-
-\hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \chapter{Import and Transfer}\label{chapter-13}
 
@@ -2058,7 +2063,7 @@ Folder Loader imports an existing directory tree into managed Library storage wh
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Choose \textbf{Loader \textgreater{} Open Loader}.} You can also press \texttt{{\symbolfont ⌘}}\texttt{L}.
+  \textbf{Choose \textbf{Loader \textgreater{} Open Loader}.} Outside Browser, you can also press \texttt{{\symbolfont ⌘}}\texttt{L}; inside Browser that shortcut focuses its address field.
 \item
   \textbf{Choose the source folder.} Review the displayed path before starting.
 \item
@@ -2111,9 +2116,9 @@ Review the selected batch and make a backup before using Delete Import, especial
 For an ordinary folder, Loader does not guess which files are ``primary'' versus ``associated.'' It imports the collection as supplied. Special reconstruction occurs only for a verified Gewu Insight export manifest.
 \end{quote}
 
-\subsection{See also}\label{see-also-24}
-
-\hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[loader-maintenance]{Refresh an Imported Library} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[loader-maintenance]{Refresh an Imported Library} · \hyperref[backup-migrate]{Back Up or Move to Another Mac}
+\end{GewuRelated}
 
 \section{Refresh an Imported Library}\label{loader-maintenance}
 
@@ -2147,9 +2152,9 @@ Loader maintenance commands fill metadata in batches after the files and folder 
 
 Verified ``not found'' checks and transient failures use cooldowns so a repeated run does not immediately send the same requests. Bulk missing-identifier work does not use Google Scholar.
 
-\subsection{See also}\label{see-also-25}
-
-\hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[identifiers]{Edit DOI and arXiv Identifiers}
+\end{GewuRelated}
 
 \section{Make a Portable Desktop Copy}\label{desktop-copy}
 
@@ -2181,9 +2186,9 @@ The export replaces managed filesystem shortcuts with real files, includes relev
 Do not edit or discard the export manifest before migration. Without it, Loader correctly treats the files as an ordinary folder and does not infer hidden associations.
 \end{quote}
 
-\subsection{See also}\label{see-also-26}
-
-\hyperref[folder-loader]{Use Folder Loader} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[folder-loader]{Use Folder Loader} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[storage-model]{How Gewu Insight Stores Files}
+\end{GewuRelated}
 
 \section{Back Up or Move to Another Mac}\label{backup-migrate}
 
@@ -2196,7 +2201,7 @@ A reliable transfer preserves both the SQLite database and the managed file root
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Quit Gewu Insight.} Wait until background refresh or download work has stopped.
+  \textbf{Quit Gewu Insight with {{\symbolfont ⌘}Q}.} Wait until background refresh or download work has stopped. Closing a window is not the same as quitting; also stop any separately launched local UI or CLI process before copying its database.
 \item
   \textbf{Copy the complete project directory.} This is the safest recovery unit because it keeps \texttt{data}, \texttt{reports}, \texttt{config}, the app source, and managed paths together.
 \item
@@ -2243,15 +2248,21 @@ Schema migration updates database structure; it is not a reason to rebuild the d
 
 Use \textbf{Make Copy Desktop} on the source Mac, move the complete exported folder, then use Folder Loader on the destination Mac. Keep its verified manifest intact.
 
+\subsection{Browser and credential backup boundaries}\label{browser-and-credential-backup-boundaries}
+
+The project database includes Browser bookmarks, folders, history, and saved sidebar preferences. A bookmark HTML export transfers only bookmarks, not history or research papers. Open webpage tabs and unsubmitted forms are memory-only and are not restored after quitting.
+
+WebKit website cookies, sign-ins, and cache belong to a macOS-managed Browser profile outside this project. Copying the project or a bookmark export is not a supported transfer of that profile; expect to sign in again on another Mac. Apple Passwords and its passkeys remain under macOS/iCloud management and are never part of a Gewu export. Optional metadata API keys saved in SQLite do travel with the database: keep full backups private.
+
 \begin{quote}
 \textbf{Important}
 
 Never migrate by copying only \texttt{paper\_monitor.sqlite} or only the visible Library folder. Either choice leaves half of the managed state behind.
 \end{quote}
 
-\subsection{See also}\label{see-also-27}
-
-\hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[storage-reference]{Storage Reference} · \hyperref[troubleshooting]{Troubleshooting}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[storage-reference]{Storage Reference} · \hyperref[troubleshooting]{Troubleshooting}
+\end{GewuRelated}
 
 \chapter{My Publications}\label{chapter-14}
 
@@ -2274,9 +2285,9 @@ My Publications. The active profile, DOI-resolved publication list, citation evi
 \item
   \textbf{Enter a name, optional affiliations, or an exact Google Scholar profile URL.} For a name search, use \texttt{Name;\ affiliation\ A;\ affiliation\ B}.
 \item
-  \textbf{Choose \textbf{Find by Name}.} Review candidate profiles carefully.
+  \textbf{Choose \textbf{Find Profile}.} Review candidate profiles carefully.
 \item
-  \textbf{Choose \textbf{Use Profile}.} The saved strip shows the active name and profile photo. Select the photo to open the profile; use the remove control to forget it.
+  \textbf{Choose \textbf{Use Profile}.} The saved strip shows the active name and profile photo. Select the photo to open the profile in Browser; use the remove control to forget it.
 \end{enumerate}
 
 \subsection{Add and update publications}\label{add-and-update-publications}
@@ -2309,7 +2320,7 @@ The report is a generated local reading artifact. Network services may return fe
 
 \subsection{Work with files}\label{work-with-files}
 
-My Publications uses the same Paper Details and flat Paper Files model as Library. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
+My Publications uses the same Paper Details and flat Paper Files model as Library. Expand \textbf{Files · n} within the details to inspect its resources; Library instead has an adjacent Paper Files column. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
 
 \subsection{Read the summary}\label{read-the-summary}
 
@@ -2319,9 +2330,11 @@ The lower summary includes publication counts, identifier coverage, h-index and 
 
 Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.
 
-\subsection{See also}\label{see-also-28}
+The Overleaf option downloads a project ZIP and opens Overleaf in Browser. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.
 
-\hyperref[citation-settings]{Open Source Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[citation-settings]{Open Source Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
+\end{GewuRelated}
 
 \chapter{Journal Monitor}\label{chapter-15}
 
@@ -2371,6 +2384,8 @@ Calendar counts summarize stored day results. A zero count is meaningful only af
 
 Journal Monitor is designed to keep a daily cached record through its scheduled update workflow. A scheduled run and a manual refresh use the same stored day results, so opening a date does not require downloading it again. Use a manual refresh when a scheduled source was missed, partial, or needs verification.
 
+The scheduler belongs to the running local UI service; it does not wake a sleeping Mac or run while that service is stopped. See \hyperref[startup]{When automatic updates run} for the current timing and restart boundaries.
+
 \subsection{Journal logos and mathematical text}\label{journal-logos-and-mathematical-text}
 
 Configured journal logos are downloaded into a local cache and reused from disk. The first successful request may require network access; changing dates and later launches should not repeatedly download the same logo. The cache is presentation data and can be rebuilt without changing subscriptions or papers.
@@ -2392,7 +2407,7 @@ Use \textbf{Journal Filter}, \textbf{Preprint Filter}, and \textbf{Field Filter}
 \begin{itemize}
 \tightlist
 \item
-  \textbf{Open Website} opens the publisher or best known record in the external browser.
+  \textbf{Open Website} opens the publisher or best known record in a Browser tab.
 \item
   \textbf{Add to Library} begins the placement workflow described below; after that, \textbf{Show in Library} returns to the managed paper.
 \item
@@ -2423,9 +2438,9 @@ Per-paper status text and the bottom progress area make completed downloads and 
 ``No matching papers'' and ``source fetch failed'' are different outcomes. Check the source status before concluding that a date is empty.
 \end{quote}
 
-\subsection{See also}\label{see-also-29}
-
-\hyperref[subject-monitor]{Subject Monitor} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[import-files]{Add Papers and Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[subject-monitor]{Subject Monitor} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[import-files]{Add Papers and Files}
+\end{GewuRelated}
 
 \chapter{Subject Monitor}\label{chapter-16}
 
@@ -2509,9 +2524,9 @@ Adding the result preserves the matched subject, score, terms, and discovery pro
 Subject Monitor rejects Zenodo records during ingestion and when cached results are displayed. There is no Zenodo show/hide option.
 \end{quote}
 
-\subsection{See also}\label{see-also-30}
-
-\hyperref[journal-monitor]{Journal Monitor} · \hyperref[network-access]{Publisher and Network Access}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[journal-monitor]{Journal Monitor} · \hyperref[network-access]{Publisher and Network Access}
+\end{GewuRelated}
 
 \chapter{Author Monitor}\label{chapter-17}
 
@@ -2587,22 +2602,22 @@ Deleting an author from Author Monitor removes the monitoring relationship and i
 Google Scholar requests are paced and protected by a cooldown. Repeated manual refreshes during a block do not improve the result.
 \end{quote}
 
-\subsection{See also}\label{see-also-31}
-
-\hyperref[my-publications]{My Publications} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[privacy]{Local Data and Privacy}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[my-publications]{My Publications} · \hyperref[network-access]{Publisher and Network Access} · \hyperref[privacy]{Local Data and Privacy}
+\end{GewuRelated}
 
 \chapter{Browser}\label{chapter-18}
 
 \section{Browse, Bookmark, and Revisit Websites}\label{browser}
 
 \begin{GewuLead}
-Browser is the sixth main tab, immediately after Author Monitor. It displays real websites in a separate native WebKit view, beside a local Bookmarks/History sidebar.
+Browser is the sixth main tab, after Author Monitor. Website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages.
 \end{GewuLead}
 
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Browser overview with public journal bookmarks and Nature sidebar search; no private history is shown. This earlier screenshot predates the compact Home and webpage tab strip described below.
+Browser layout example. Rendered from the current Browser interface code with public sample bookmarks. The native webpage area is a labeled illustration, not a live Google screenshot. Website controls and favicons depend on the loaded site; no private session or history is shown.
 \end{GewuCaption}
 
 \subsection{Search and navigate}\label{search-and-navigate}
@@ -2610,7 +2625,7 @@ Browser overview with public journal bookmarks and Nature sidebar search; no pri
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Open Browser.} Its first use opens Home: the real Google homepage above local Favorites. Google\textquotesingle s logo, search, and account controls use Browser\textquotesingle s own session, not Safari\textquotesingle s. No website is preloaded during App startup.
+  \textbf{Open Browser.} On first use, the main tab opens Home: real Google above local Favorites, using Browser\textquotesingle s own session, not Safari\textquotesingle s. Later switches return to your selected webpage; use the Home button to return to Google. A paper link opens its destination directly in the unused first tab. Nothing is preloaded during App startup.
 \item
   \textbf{Use the address field.} Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use {{\symbolfont ⌘}L} to focus the field.
 \item
@@ -2619,7 +2634,11 @@ Browser overview with public journal bookmarks and Nature sidebar search; no pri
   \textbf{Switch between workspaces.} Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.
 \end{enumerate}
 
+\textbf{Return to the source workspace: {{\symbolfont ⌘}{[}}.} After a website link in Library, My Publications, Journal Monitor, Subject Monitor, or Author Monitor brings you here, press Command-left bracket to return to that workspace\textquotesingle s retained selection and scroll position. It works from the webpage or address field and leaves Browser tabs open; it is not webpage Back. The source lasts for this Browser detour only: manually leaving Browser clears it, and entering Browser directly does not create one. Close any open dialog first.
+
 \textbf{Instant Home, online search.} Each tab lazily retains Home and a browsing view. Home returns without reloading; Reload refreshes it, including account state. App restart, interrupted loads and process termination need a connection. Search/sign-in remain online. Tabs share Browser\textquotesingle s persistent profile, without saved HTML/password copies or replayed forms.
+
+When you search or follow a link from Home, Home remains visible while the destination begins loading, then gives way to that destination. It should not flash the page you visited before Home. A cancelled or failed pending navigation leaves Home available rather than presenting that older page as the result.
 
 {{\symbolfont ⌘}F} opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native \textbf{Gewu Insight.app}; opening the local UI in a separate web browser does not embed another browser engine.
 
@@ -2627,7 +2646,7 @@ Browser overview with public journal bookmarks and Nature sidebar search; no pri
 
 \subsection{Use multiple webpage tabs}\label{use-multiple-webpage-tabs}
 
-Below the address toolbar, tabs show icons, titles and \textbf{×}. The top-right \textbf{+} (\textbf{New Tab}, {{\symbolfont ⌘}T}) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.
+Below the address toolbar, adjoining rectangular tabs show icons, titles and \textbf{×} above the webpage column only. The sidebar begins directly below the toolbar; it is not pushed down by the webpage tabs. The top-right \textbf{+} (\textbf{New Tab}, {{\symbolfont ⌘}T}) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.
 
 Right-click links for \textbf{Open Link in New Tab}, or Command-click. New-window links also create tabs, including inline PDFs. Bookmarks/Favorites/History offer \textbf{Open in New Tab}. New tabs are selected immediately; ordinary clicks use the current tab.
 
@@ -2671,6 +2690,12 @@ History groups loaded main pages by Today, Yesterday, and date, with names, site
 
 \textbf{Clear History} confirms Last hour, Last 24 hours, Last 7 days, or All history. It preserves bookmarks, downloads, cookies, and sign-ins. History remains until deleted; authorization callbacks and recognized signed-download URLs are excluded.
 
+\subsection{Address suggestions from your history}\label{address-suggestions-from-your-history}
+
+As you type in the toolbar address field, Gewu searches saved local visit titles and URLs. Address prefixes rank first, followed by matching titles; visit frequency and recency help order the results. A matching address can complete the typed prefix with its remaining text selected. These are local history suggestions, not live Google suggestions, and typing does not send a suggestion request to a search engine.
+
+Use {{\symbolfont ↑}}/{{\symbolfont ↓}}, then Enter to open a result, or click it to open directly. Escape dismisses suggestions and restores your typed query. Without a chosen completion, Enter opens an address or searches Google normally. Clearing history also removes those visits from suggestions; bookmark search remains a separate sidebar control.
+
 \subsection{Read PDFs and save downloads}\label{read-pdfs-and-save-downloads}
 
 Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or \textbf{Share \textgreater{} Save Download}; unsupported attachments use a save sheet. This uses Browser\textquotesingle s session, not Python\textquotesingle s downloader. For HTML viewers, use the site\textquotesingle s PDF link. Downloads create no Library paper or Gewu Key: \hyperref[import-files]{import explicitly}. Library PDFs still open in macOS Preview.
@@ -2691,10 +2716,12 @@ Bookmarks/history use \hyperref[privacy]{local SQLite}; cookies/cache use Browse
 
 A macOS prompt for \textbf{Gewu Insight WebCrypto Master Key} concerns WebKit\textquotesingle s protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.
 
-\begin{quote}
-\textbf{Compatibility}
+\textbf{Password versus passkey.} A Password entry contains a text password; a Passkey entry is a different sign-in credential and may show only a creation date. A passkey cannot be inserted as text into a password field. Use the website\textquotesingle s passkey sign-in flow where supported, or select a genuine Password entry yourself. See \hyperref[troubleshooting]{AutoFill troubleshooting}; the trigger is not a guarantee that macOS or a particular website can fill the field.
 
-Some sites reject embedded browsers. Use \textbf{Open in Safari}; it opens the address without transferring Browser cookies. Never bypass paywalls, CAPTCHAs, or access controls. Paper-related Open Website and Google Scholar actions elsewhere still use external browsers.
+\begin{quote}
+\textbf{Website links}
+
+Publisher, Google Scholar, author/profile, preprint, citation-source, Note and remote-PDF links open here, as does Overleaf export. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use \textbf{Open in Safari}; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.
 \end{quote}
 
 \chapter{Settings and Safety}\label{chapter-19}
@@ -2736,14 +2763,16 @@ NASA ADS & Optional API token for astronomy and physics coverage. \\
 \item
   \textbf{Paste the credential into its service field.}
 \item
-  \textbf{Save the settings.}
+  \textbf{Choose \textbf{Save} beside that service.} Each service has its own Save, Test, and Clear controls.
 \item
-  \textbf{Run a small metadata refresh.} Confirm the service appears in the citation panel.
+  \textbf{Choose \textbf{Test} and read the status underneath.} This checks service access; it does not refresh every paper. Then refresh one paper to inspect the available citation evidence.
 \end{enumerate}
 
 A configured field shows fixed round dots by default, while the detailed status below continues to report saving, connection, or quota information. The dots do not expose the key or its length. Click \textbf{Show} inside the field to reveal the saved key, or inspect a newly typed key; click \textbf{Hide} to mask it again. A saved key is retrieved only on Show, and its displayed value is cleared on Hide or when settings closes. Type a replacement and choose \textbf{Save} to change the key; \textbf{Clear} removes the locally saved key. A configured environment key can remain available. Avoid screenshots or screen sharing while a key is visible.
 
 Semantic Scholar sends its key in the official \texttt{x-api-key} header. Requests share a low-rate queue and use exponential backoff after rate limits or temporary failures.
+
+OpenAlex status reports the remaining daily free allowance and its reset time when available. Gewu uses only that free allowance and falls back to other metadata sources when it is exhausted; it does not spend paid OpenAlex credits. A saved key is not proof that every remote request will succeed.
 
 \begin{quote}
 \textbf{Important}
@@ -2751,9 +2780,9 @@ Semantic Scholar sends its key in the official \texttt{x-api-key} header. Reques
 Credentials are local-only: store them in local SQLite or approved environment variables. Do not place keys in source files, logs, exported reports, tests, or Git.
 \end{quote}
 
-\subsection{See also}\label{see-also-32}
-
-\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[field-settings]{Field Settings} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[network-access]{Publisher and Network Access}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[field-settings]{Field Settings} · \hyperref[privacy]{Local Data and Privacy} · \hyperref[network-access]{Publisher and Network Access}
+\end{GewuRelated}
 
 \section{arXiv Scope Settings}\label{arxiv-scope-settings}
 
@@ -2791,9 +2820,9 @@ You may select several groups under Physics, or combine groups across primary su
 The category checkboxes in Journal Monitor are display filters. They do not narrow the discovery scope selected here.
 \end{quote}
 
-\subsection{See also}\label{see-also-33}
-
-\hyperref[journal-monitor]{Journal Monitor} · \hyperref[field-settings]{Field Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[journal-monitor]{Journal Monitor} · \hyperref[field-settings]{Field Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[network-access]{Publisher and Network Access}
+\end{GewuRelated}
 
 \section{Field Settings}\label{field-settings}
 
@@ -2865,9 +2894,9 @@ Unclassified records\strut
 Use \textbf{Restore Defaults} to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in \textbf{arXiv Scope Settings}.
 \end{quote}
 
-\subsection{See also}\label{see-also-34}
-
-\hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[arxiv-scope-settings]{arXiv Scope Settings} · \hyperref[citation-settings]{Open Source Settings} · \hyperref[journal-monitor]{Journal Monitor} · \hyperref[subject-monitor]{Subject Monitor}
+\end{GewuRelated}
 
 \section{Quick Look Settings}\label{quick-look-settings}
 
@@ -2914,9 +2943,9 @@ Mode & Behavior \\
 When the macOS panel is used, keyboard focus remains in Gewu Insight so \texttt{{\symbolfont ↑}} and \texttt{{\symbolfont ↓}} continue changing the selected Library or Paper Files item instead of turning into page-navigation commands in the system panel.
 \end{quote}
 
-\subsection{See also}\label{see-also-35}
-
-\hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[paper-files]{Understand Paper Files} · \hyperref[navigation]{Navigate with Mouse and Keyboard}
+\end{GewuRelated}
 
 \section{Naming and PDF Rename Rules}\label{naming}
 
@@ -2966,9 +2995,9 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 Changing a Paper Files property or choosing \textbf{Set as Default} does not rename that file. A rename occurs only through a naming or rename action.
 \end{quote}
 
-\subsection{See also}\label{see-also-36}
-
-\hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[versions-current]{Choose File Types and the Default File} · \hyperref[organize]{Folders, Shortcuts, and Spaces}
+\end{GewuRelated}
 
 \section{How Gewu Insight Stores Files}\label{storage-model}
 
@@ -3010,9 +3039,9 @@ When the same work appears in more than one Library folder, those locations can 
 Do not manually move an Associated Files bundle or replace an alias in Finder. Use Gewu Insight so the database and physical paths change together.
 \end{quote}
 
-\subsection{See also}\label{see-also-37}
-
-\hyperref[storage-reference]{Storage Reference} · \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[paper-files]{Understand Paper Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[storage-reference]{Storage Reference} · \hyperref[desktop-copy]{Make a Portable Desktop Copy} · \hyperref[paper-files]{Understand Paper Files}
+\end{GewuRelated}
 
 \section{Local Data and Privacy}\label{privacy}
 
@@ -3044,9 +3073,9 @@ Metadata refresh, citation counts, journal/subject/author discovery, profile ima
 
 Optional service credentials belong only in Open Source Settings or approved environment variables. They must not appear in a screenshot, support message, Git commit, or exported diagnostic file.
 
-\subsection{See also}\label{see-also-38}
-
-\hyperref[citation-settings]{Open Source Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[citation-settings]{Open Source Settings} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[network-access]{Publisher and Network Access}
+\end{GewuRelated}
 
 \part{Product Identity}\label{part-4}
 
@@ -3139,9 +3168,9 @@ Mark & Role \\
 
 Together the three registers establish the product\textquotesingle s visual identity: the icon is contemporary and operational; the calligraphy is personal and gestural; the seal-script watermark is historical in reference but restrained in use. Their common purpose is to make the name visible without turning the research workspace into a themed illustration.
 
-\section{See also}\label{see-also-39}
-
-\hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup, Monitor Cache, and Text Size}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[welcome]{Welcome} · \hyperref[personal-research-workspace]{The Personal Research Workspace} · \hyperref[startup]{Startup, Monitor Cache, and Text Size}
+\end{GewuRelated}
 
 \part{Technical and Operational Reference}\label{part-5}
 
@@ -3164,26 +3193,39 @@ Shortcut & Action \\
 \texttt{{\symbolfont ↑}} / \texttt{{\symbolfont ↓}} & Move through the focused Library or Paper Files list; on the source rail, move among Library, shortcuts, and Spaces and open the highlighted source. \\
 \texttt{{\symbolfont →}} & Enter the highlighted source from the vertical rail, enter a folder, or move from a selected paper into Paper Files. \\
 \texttt{{\symbolfont ←}} & Leave Paper Files for the selected paper, return to a parent folder, or move from the leftmost Library column to the source rail. \\
-\texttt{Space} & Open or close Quick Look for the selected Paper Files item. \\
+\texttt{Space} & Open or close Quick Look for the selected local paper/Paper Files item, including available monitor PDFs; not while editing text. \\
 \texttt{Esc} & Dismiss an active transient control or return focus where supported. \\
 \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V} & Toggle List View and Table View. \\
 \texttt{{\symbolfont ⌘}}\texttt{L} & Focus the address/search field in Browser; otherwise open Folder Loader. \\
 \texttt{{\symbolfont ⌘}}\texttt{D} & In Browser, bookmark the current page. \\
 \texttt{{\symbolfont ⌘}}\texttt{R} & In Browser, reload the current page. \\
-\texttt{{\symbolfont ⌘}}\texttt{F} & In Browser, find text on the current page. \\
+\texttt{{\symbolfont ⌘}}\texttt{F} & In Browser, Find on Page. In Library, My Publications, and the three Monitors, focus the current workspace search. \\
+\texttt{{\symbolfont ⌘}}\texttt{T} & In Browser, open a new webpage tab at Home. \\
+\texttt{{\symbolfont ⌘}}\texttt{{[}} & Return from Browser to the source workspace; keep its position and webpage tabs. \\
 \texttt{{\symbolfont ⌘}}\texttt{,} & Show Open Source Settings. \\
-\texttt{{\symbolfont ⌘}}\texttt{W} & Close the current window. \\
+\texttt{{\symbolfont ⌘}}\texttt{W} & In Browser, close the selected webpage tab; closing the last creates Home. Outside Browser, dismiss active Quick Look first, otherwise close the current window. \\
+\texttt{{\symbolfont ⌘}}\texttt{Q} & Quit Gewu Insight. Save webpage drafts first; open Browser tabs are not restored after quitting. \\
 \end{longtable}
 \GewuTableEnd
 }
+
+\section{Monitor keyboard navigation}\label{monitor-keyboard-navigation}
+
+In a Journal or Subject calendar, Left/Right moves one day and Up/Down moves one week. Enter selects the date and enters the papers. In the paper area, Up/Down selects papers, Left/Right changes the journal or subject, and Escape returns to the calendar. Space opens an available local PDF in Quick Look.
+
+In Author Monitor, Left selects the author rail and Right selects its papers; Up/Down moves through the active pane. Up from the first item enters the main-tab navigation level. At that level, Left/Right chooses a main tab and Down or Enter returns to its content. These commands do not apply while typing in an input.
+
+\section{Browser keyboard context}\label{browser-keyboard-context}
+
+Find on Page uses Enter for the next match, Shift-Enter for the previous match, and Escape to close. In address suggestions, Up/Down selects a result and Escape restores your query. A focused webpage tab uses Left/Right to change tabs. These contexts are separate from Library navigation; {{\symbolfont ⌘}L} in Browser does not open Folder Loader.
 
 \section{Paper Files mouse behavior}\label{paper-files-mouse-behavior}
 
 Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.
 
-\section{See also}\label{see-also-40}
-
-\hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
+\end{GewuRelated}
 
 \chapter{Publisher and Network Access}\label{network-access}
 
@@ -3223,9 +3265,9 @@ Semantic Scholar, Google Scholar, and some publisher sources use shared pacing, 
 Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access control. Use your authorized browser session or attach a file you obtained legitimately.
 \end{quote}
 
-\section{See also}\label{see-also-41}
-
-\hyperref[journal-monitor]{Journal Monitor} · \hyperref[download-sync]{Download and Sync Versions} · \hyperref[troubleshooting]{Troubleshooting}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[journal-monitor]{Journal Monitor} · \hyperref[download-sync]{Download and Sync Versions} · \hyperref[troubleshooting]{Troubleshooting}
+\end{GewuRelated}
 
 \chapter{Startup, Monitor Cache, and Text Size}\label{startup}
 
@@ -3247,6 +3289,32 @@ If the local UI server exits unexpectedly while the macOS window remains open, t
 
 A brief reload during recovery does not mean the SQLite database was rebuilt or that another copy of Gewu Insight should be opened. If repeated recovery never reaches a healthy Library view, use the launcher log steps below.
 
+Recovery reloads the workspace, so Browser\textquotesingle s memory-only tabs and unsubmitted forms can be lost. Bookmarks and history already saved in SQLite remain. Save work on websites regularly; recovery is not a web-session or draft backup.
+
+\section{When automatic updates run}\label{when-automatic-updates-run}
+
+Automatic monitoring runs inside the local UI service, with startup delays, periodic checks, and saved completion/retry state. Keep the Mac awake and the service running. Closing a window does not necessarily stop that service. Quitting the App stops a server it started; a separately launched server must be stopped separately. A late launch checks work that is due rather than guaranteeing a run at an exact minute.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Monitor & Current automatic schedule \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Journal Monitor & Daily work becomes due from 09:00 in the Mac\textquotesingle s local time zone; stored completion and pending retry state determine what still needs work. \\
+Subject Monitor & Daily work becomes due from 09:00 local time; incomplete sources have their own bounded retry state. \\
+Author Monitor & Checks due authors from 10:00 local time; already checked authors are not blindly fetched again on every scheduler tick. \\
+arXiv & Uses its separate announcement-ready schedule and buffer, not the journal\textquotesingle s 09:00 rule. Read the displayed update/countdown state. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+These are local scheduler rules, not guarantees of remote source completion or a hosted monitoring service. Manual Refresh remains available for the selected scope; repeated broad refreshes can worsen a source\textquotesingle s rate limit.
+
 \section{If the app cannot start}\label{if-the-app-cannot-start}
 
 \begin{enumerate}
@@ -3267,6 +3335,8 @@ A brief reload during recovery does not mean the SQLite database was rebuilt or 
 
 Choose \textbf{Setting \textgreater{} Clear Monitor Cache} if a monitor still shows stale downloaded images or rendered web assets after an app update. This clears disposable monitor presentation cache, not the SQLite database, saved paper records, or managed PDFs.
 
+This is not Browser\textquotesingle s Clear History command and does not clear Browser sign-in cookies or Apple Passwords. Use \textbf{Browser \textgreater{} History \textgreater{} Clear History} for visit records only.
+
 Monitor cache and macOS app identity are separate. Clearing Monitor Cache cannot repair a stale Dock tile. After replacing the app bundle, quit every running copy and open the rebuilt \textbf{Gewu Insight.app}. If a permanently pinned Dock tile still points to an older bundle at another path, remove that tile and add the current app again.
 
 \section{Choose a comfortable text size}\label{choose-a-comfortable-text-size}
@@ -3275,9 +3345,9 @@ Choose \textbf{Setting \textgreater{} Font Size}, then select \textbf{Compact}, 
 
 \textbf{Cancel}, the Escape key, or clicking outside the sheet restores the previously saved size. Choose \textbf{Save} to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.
 
-\section{See also}\label{see-also-42}
-
-\hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
+\end{GewuRelated}
 
 \chapter{Troubleshooting}\label{troubleshooting}
 
@@ -3314,7 +3384,7 @@ A large or previously unseen PDF may need an initial structural read and thumbna
 \item
   Open Paper Files and verify every file type.
 \item
-  Correct a mislabeled Corrected Published Version, Published Version, Accepted Manuscript, or Preprint; set annotation separately.
+  Correct a mislabeled Corrected published version, Published version, Accepted manuscript, or Preprint; expand the size footer to set annotation separately.
 \item
   Choose \textbf{Set as Default} for the desired valid file, or choose \textbf{Use Automatic Selection} to resume automatic selection.
 \end{enumerate}
@@ -3325,7 +3395,7 @@ Compare file size and classification. New downloads use exact SHA-256 and PDF co
 
 \section{A monitor shows no papers}\label{a-monitor-shows-no-papers}
 
-Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, retry only failed source tasks. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.
+Read the source status. An empty successful source is not the same as a failed fetch. In Subject Monitor, allow scheduled source-level retries to finish, or use the selected subject\textquotesingle s refresh command when a manual retry is needed. In Journal Monitor, confirm the date and filters. If a VPN is involved, test a direct connection without repeatedly refreshing.
 
 \section{A journal count and the visible cards disagree}\label{a-journal-count-and-the-visible-cards-disagree}
 
@@ -3345,7 +3415,21 @@ Open the live or previous Loader log and the result guide. Confirm the metadata 
 
 \section{A default file cannot be deleted}\label{a-default-file-cannot-be-deleted}
 
-Choose another valid file with \textbf{Set as Default} first, or choose \textbf{Use Automatic Selection}; then delete the former non-default file. An \textbf{Invalid File} remains an audit record and is never eligible to become default.
+The preferred Default and the protected physical primary file are not always the same resource. \textbf{Set as Default} changes the reading preference, not the Library\textquotesingle s compatibility primary path; switching defaults does not guarantee that the old file becomes deletable. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An \textbf{Invalid file} remains an audit record and is never eligible to become default.
+
+\section{A website link opens Browser instead of Safari}\label{a-website-link-opens-browser-instead-of-safari}
+
+This is now the normal action for web links in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Browser selects a new webpage tab, or reuses its unused first tab. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged. Use Browser\textquotesingle s explicit \textbf{Open in Safari} only when you want the external browser.
+
+\section{Browser Home needs a connection or a website will not load}\label{browser-home-needs-a-connection-or-a-website-will-not-load}
+
+A warm Home returns instantly from memory; it is not an offline copy of Google. First use after quitting, an explicit Reload, or a terminated WebKit process needs a connection. Search results and account actions always require the website. Read the actual load error, check the destination and Clash connection route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.
+
+\section{AutoFill does not appear or does not fill}\label{autofill-does-not-appear-or-does-not-fill}
+
+Automatic triggering is deliberately limited to an explicit click in a clearly marked login field. Ordinary email, search, registration, verification-code, and uncertain fields do not qualify. Cancellation uses up the automatic offer for that field kind/site during the App session. Right-click the actual input and choose \textbf{AutoFill \textgreater{} Passwords} to retry manually.
+
+Unlock and select the appropriate entry yourself. If the item says \textbf{Passkey} and shows a creation date, it is not a text password. If a real Password entry closes without filling, macOS or that website may not support the return path in this embedded view. Gewu does not read your vault, relay credentials, or submit forms to work around it. Use the website\textquotesingle s supported login flow or Safari; do not send passwords or unmasked credential screenshots in a support report.
 
 \begin{quote}
 \textbf{Important}
@@ -3353,9 +3437,9 @@ Choose another valid file with \textbf{Set as Default} first, or choose \textbf{
 Before any manual filesystem repair, quit the app and make a full backup of the database and managed files together.
 \end{quote}
 
-\section{See also}\label{see-also-43}
-
-\hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup, Monitor Cache, and Text Size} · \hyperref[network-access]{Publisher and Network Access}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[startup]{Startup, Monitor Cache, and Text Size} · \hyperref[network-access]{Publisher and Network Access}
+\end{GewuRelated}
 
 \chapter{Storage Reference}\label{storage-reference}
 
@@ -3373,7 +3457,7 @@ Location & Purpose \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-\nolinkurl{data/paper_monitor.sqlite} & {Authoritative database for papers, identities, relationships, settings, and operational state.} \\
+\nolinkurl{data/paper_monitor.sqlite} & {Authoritative database for papers, identities, relationships, settings, operational state, Browser bookmarks, and visit history. May contain saved metadata API keys; treat backups as private.} \\
 \nolinkurl{data/cache/journal_logos} & {Rebuildable local image cache for configured Journal Monitor logos.} \\
 \nolinkurl{data/Library} & {Visible main Library root and compatibility primary files.} \\
 \nolinkurl{data/Spaces} & {Independent Space roots.} \\
@@ -3387,6 +3471,8 @@ Location & Purpose \\
 }
 
 Quick Look page thumbnails use a separate, automatically trimmed temporary cache. It is rebuildable preview data, not part of the Library, Associated Files, or the SQLite record, so it does not belong in a research backup.
+
+Browser website data and its disposable favicon cache are managed by macOS outside the project. They are separate from SQLite bookmarks/history and from the monitor caches listed above. See \hyperref[backup-migrate]{Browser and credential backup boundaries} before moving to another Mac.
 
 \section{Associated Files layout}\label{associated-files-layout}
 
@@ -3402,9 +3488,9 @@ SQLite is the only source of truth. JSON, HTML, Markdown, Word, LaTeX, and PDF o
 Do not delete, rebuild, or ``clean'' the database because a generated JSON file looks stale. Diagnose the selected record and local path first.
 \end{quote}
 
-\section{See also}\label{see-also-44}
-
-\hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy}
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[storage-model]{How Gewu Insight Stores Files} · \hyperref[backup-migrate]{Back Up or Move to Another Mac} · \hyperref[privacy]{Local Data and Privacy}
+\end{GewuRelated}
 
 \Needspace{7\baselineskip}
 \section*{Copyright and product notice}

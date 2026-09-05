@@ -2,6 +2,7 @@
 #import <Quartz/Quartz.h>
 #import <WebKit/WebKit.h>
 #import "GewuBrowserController.h"
+#import "GewuWorkspaceNavigation.h"
 #include <string.h>
 
 static const NSTimeInterval GewuInsightServerStartupTimeout = 120.0;
@@ -628,6 +629,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     configuration.userContentController = userContentController;
     self.webView = [[GewuInsightWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
     self.webView.UIDelegate = self;
+    self.webView.navigationDelegate = self;
 
     self.window = [[GewuInsightWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 1280, 860)
@@ -2367,10 +2369,44 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     }
 }
 
+- (void)openWorkspaceWebsiteRequest:(WKNavigationAction *)action {
+    if (!GewuWorkspaceWebsiteRequest(action.request, action.sourceFrame.request.URL,
+                                    action.sourceFrame.isMainFrame, self.url)) return;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@[action.request.URL.absoluteString] options:0 error:nil];
+    if (!data) return;
+    NSString *argument = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSString *script = [NSString stringWithFormat:@"window.openWebsite && window.openWebsite((%@)[0])", argument];
+    [self.webView evaluateJavaScript:script completionHandler:nil];
+}
+
+- (void)webView:(WKWebView *)webView
+decidePolicyForNavigationAction:(WKNavigationAction *)action
+decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *url = action.request.URL;
+    BOOL webURL = [@[@"http", @"https"] containsObject:url.scheme.lowercaseString];
+    if (webView == self.webView && webURL && !GewuWorkspaceSameOrigin(url, self.url)
+        && (!action.targetFrame || action.targetFrame.isMainFrame)) {
+        // Never navigate the privileged workspace into a remote document.
+        // Only body-free GET destinations are forwarded; forms are not replayed.
+        decisionHandler(WKNavigationActionPolicyCancel);
+        [self openWorkspaceWebsiteRequest:action];
+        return;
+    }
+    // Local downloads/Preview and the independent publisher download webview
+    // retain their existing policies. This is not a subresource interceptor.
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+
 - (WKWebView *)webView:(WKWebView *)webView
 createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
    forNavigationAction:(WKNavigationAction *)navigationAction
         windowFeatures:(WKWindowFeatures *)windowFeatures {
+    if (webView == self.webView) {
+        [self openWorkspaceWebsiteRequest:navigationAction];
+        // Browser constructs an isolated configuration via its normal command
+        // path, never the workspace configuration supplied to this delegate.
+        return nil;
+    }
     if (!navigationAction.targetFrame.isMainFrame && navigationAction.request.URL) {
         [[NSWorkspace sharedWorkspace] openURL:navigationAction.request.URL];
     }

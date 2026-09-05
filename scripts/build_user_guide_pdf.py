@@ -361,10 +361,17 @@ def clean_guide_html() -> str:
     for result in body.select("p.result"):
         result.string = f"GEWURESULTSTART{result.get_text(' ', strip=True)}GEWURESULTEND"
 
-    for link_group in body.select(".see-links"):
-        links = link_group.find_all("a")
-        for link in links[1:]:
-            link.insert_before(" · ")
+    # Related-topic links are navigation, not numbered chapters/TOC entries.
+    # Keep them compact and attached to the preceding content in the PDF.
+    for related in body.select(".see-also"):
+        paragraph = _new_tag(output, "p", "GEWURELATEDSTART")
+        paragraph.append(_new_tag(output, "strong", "See also: "))
+        for index, link in enumerate(related.select(".see-links a")):
+            if index:
+                paragraph.append(" · ")
+            paragraph.append(link.extract())
+        paragraph.append("GEWURELATEDEND")
+        related.replace_with(paragraph)
 
     for image in body.select("img[src]"):
         source_path = IMAGE_ROUTES.get(str(image.get("src")))
@@ -465,10 +472,11 @@ def latex_preamble(version: str, build: str) -> str:
 \RedeclareSectionCommand[beforeskip=1.35ex plus .25ex minus .15ex,afterskip=.3ex]{{subsection}}
 \renewcommand*{{\chapterformat}}{{\color{{GewuBlue}}\rule[-2pt]{{1.7mm}}{{23pt}}\hspace{{3mm}}\thechapter\enskip}}
 \renewcommand*{{\sectionformat}}{{\thesection\enskip}}
-\pretocmd{{\section}}{{\Needspace{{5\baselineskip}}}}{{}}{{}}
-\pretocmd{{\subsection}}{{\Needspace{{4\baselineskip}}}}{{}}{{}}
+\pretocmd{{\section}}{{\Needspace{{9\baselineskip}}}}{{}}{{}}
+\pretocmd{{\subsection}}{{\Needspace{{6\baselineskip}}}}{{}}{{}}
 \pretocmd{{\subsubsection}}{{\Needspace{{3\baselineskip}}}}{{}}{{}}
 \raggedbottom
+\newenvironment{{GewuRelated}}{{\par\nobreak\vspace{{3pt}}\nobreak\begingroup\small\sffamily\begin{{samepage}}\noindent}}{{\par\end{{samepage}}\endgroup}}
 
 \pagestyle{{fancy}}
 \fancyhf{{}}
@@ -614,6 +622,11 @@ def prepare_latex_body(source: str) -> str:
         "GEWUCAPTIONSTART", "\\begin{GewuCaption}\n"
     ).replace(
         "GEWUCAPTIONEND", "\n\\end{GewuCaption}"
+    )
+    source = source.replace(
+        "GEWURELATEDSTART", "\\begin{GewuRelated}\n"
+    ).replace(
+        "GEWURELATEDEND", "\n\\end{GewuRelated}"
     )
 
     source = source.replace(

@@ -34533,7 +34533,7 @@ INDEX_HTML = """<!doctype html>
       <div class="internal-browser" id="internalBrowser" aria-hidden="true">
         <div class="internal-browser-bar">
           <button class="smallbtn" id="closeInternalBrowser" type="button">Back</button>
-          <button class="smallbtn" id="openExternalBrowser" type="button">External Browser</button>
+          <button class="smallbtn" id="openExternalBrowser" type="button">Open in Browser</button>
           <div class="internal-browser-title"><strong id="internalBrowserTitle">Publisher page</strong><span id="internalBrowserUrl"></span></div>
         </div>
         <iframe id="internalBrowserFrame" title="Publisher page" sandbox="allow-scripts allow-forms allow-modals allow-downloads"></iframe>
@@ -43435,11 +43435,7 @@ INDEX_HTML = """<!doctype html>
       const url = scholarProfileExternalUrl(state.myPublicationScholarProfile || {});
       if (!url) return;
       try {
-        await fetch("/api/open-url", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({url})
-        });
+        openWebsite(url);
       } catch (error) {
         state.myPublicationSearchStatus = error.message || "Could not open Google Scholar profile";
         updateMyPublicationSearchStatusText();
@@ -45158,7 +45154,7 @@ INDEX_HTML = """<!doctype html>
     function wirePreprintIdentifierControls(root, paper) {
       root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
         const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryExternalUrl(url, "Opening preprint...", "Preprint opened");
+        openLibraryWebsiteURL(url, "Opening preprint in Browser...");
       });
       root?.querySelector('[data-action="download-arxiv-latest"]')?.addEventListener("click", (event) => {
         downloadArxivPreprintVersions(paper, "latest", event.currentTarget);
@@ -45713,9 +45709,9 @@ INDEX_HTML = """<!doctype html>
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
-      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
-      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url, "Opening Google Scholar in Browser..."));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
@@ -45903,9 +45899,9 @@ INDEX_HTML = """<!doctype html>
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
       });
-      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryPageExternally(paper));
+      root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
-      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryExternalUrl(paper.google_scholar_url, "Opening Google Scholar...", "Google Scholar opened"));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url, "Opening Google Scholar in Browser..."));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireLibraryFileLocationLinks(root);
       wirePaperFilesPanel(root, paper);
@@ -46426,7 +46422,7 @@ INDEX_HTML = """<!doctype html>
       state.myPublicationSearchStatus = "Exporting publication list...";
       updateMyPublicationSearchStatusText();
       if (format === "overleaf") {
-        window.open("https://www.overleaf.com/project", "_blank", "noopener");
+        openWebsite("https://www.overleaf.com/project");
       }
       try {
         const exportOrder = visibleMyPublicationRows()
@@ -51188,7 +51184,7 @@ INDEX_HTML = """<!doctype html>
             (item) => Number(item.id) === Number(link.dataset.authorAvatarLink || 0)
           );
           const destination = authorMonitorAvatarDestination(author);
-          if (destination) openUrlExternally(destination);
+          if (destination) openWebsite(destination);
         });
       });
     }
@@ -51874,8 +51870,8 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="author-preview-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="author-download-pdf"]')?.addEventListener("click", () => downloadAuthorMonitorPdf(paper));
-      root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openUrlExternally(paper.url));
-      root.querySelector('[data-action="author-open-scholar"]')?.addEventListener("click", () => openUrlExternally(paper.google_scholar_url));
+      root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openWebsite(paper.url));
+      root.querySelector('[data-action="author-open-scholar"]')?.addEventListener("click", () => openWebsite(paper.google_scholar_url));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
@@ -53167,8 +53163,8 @@ INDEX_HTML = """<!doctype html>
           });
         }
         if (button.dataset.action === "find-author-identifiers") findMissingAuthorMonitorIdentifiers(author);
-        if (button.dataset.action === "open-author-profile") openUrlExternally(author.url);
-        if (button.dataset.action === "open-author-homepage") openUrlExternally(author.homepage_url);
+        if (button.dataset.action === "open-author-profile") openWebsite(author.url);
+        if (button.dataset.action === "open-author-homepage") openWebsite(author.homepage_url);
         if (button.dataset.action === "edit-author-homepage") openAuthorHomepageEditor(author);
         if (button.dataset.action === "edit-author-photo") chooseAuthorMonitorPhoto(author);
         if (button.dataset.action === "remove-author") {
@@ -53221,7 +53217,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <p class="abstract">${inlineLatexMarkup(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
-              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Safari">↗ Open Website</button>` : ""}
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Browser">↗ Open Website</button>` : ""}
               <span class="library-add-control">
                 <button class="action${inLibrary ? " primary" : ""}" data-action="add-library" data-library-state="${inLibrary ? "show" : "add"}" type="button" aria-haspopup="${inLibrary ? "false" : "menu"}" aria-expanded="false" title="${inLibrary ? "Show in Library" : "Add a shortcut to Library"}">${inLibrary ? "Show in Library" : "Add to Library"}</button>
                 <div class="library-add-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div>
@@ -53237,7 +53233,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
-      if (openPageButton) openPageButton.addEventListener("click", () => openUrlExternally(paper.url));
+      if (openPageButton) openPageButton.addEventListener("click", () => openWebsite(paper.url));
       article.addEventListener("click", () => {
         if (["report", "theme"].includes(state.mode)) {
           state.primaryKeyboardLayer = "content";
@@ -53446,13 +53442,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     function openInternalBrowser(url, title) {
-      if (!url) return;
-      state.internalBrowserUrl = url;
-      $("internalBrowserTitle").textContent = title || "Publisher page";
-      $("internalBrowserUrl").textContent = url;
-      $("internalBrowserFrame").src = `/api/page-proxy?url=${encodeURIComponent(url)}`;
-      $("internalBrowser").classList.add("open");
-      $("internalBrowser").setAttribute("aria-hidden", "false");
+      // Legacy callers must not bring back the retired proxy iframe.
+      return openWebsite(url);
     }
 
     function closeInternalBrowser() {
@@ -53464,36 +53455,58 @@ INDEX_HTML = """<!doctype html>
 
     async function openExternalBrowser() {
       if (!state.internalBrowserUrl) return;
-      await openUrlExternally(state.internalBrowserUrl);
+      const url = state.internalBrowserUrl;
+      closeInternalBrowser();
+      openWebsite(url);
     }
 
-    async function openUrlExternally(url) {
+    function openWebsite(url) {
       if (!url) return;
-      return fetch("/api/open-url", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({url, app: "Safari"})
-      });
+      try {
+        if (!window.gewuBrowser?.openURL) throw new Error("Browser is not ready. Please retry.");
+        return window.gewuBrowser.openURL(url);
+      } catch (error) {
+        showMonitorStatusMessage(error.message || "Could not open website");
+        return null;
+      }
     }
 
-    async function openLibraryPageExternally(paper) {
+    function wireWorkspaceWebsiteLinks() {
+      // One delegated handler also covers dynamically rendered citations and
+      // Note links. Local APIs/downloads, fragments and Browser chrome keep
+      // their original behavior. Capture prevents a row's selection handler
+      // from switching the workspace back after opening its link.
+      const route = (event) => {
+        if (event.defaultPrevented || (event.type === "click" ? event.button !== 0 : event.button !== 1)) return;
+        const link = event.target.closest?.("a[href]");
+        if (!link || link.closest("#gewuBrowser") || link.hasAttribute("download")) return;
+        let url;
+        try { url = new URL(link.href, window.location.href); } catch (_) { return; }
+        if (!["http:", "https:"].includes(url.protocol) || url.origin === window.location.origin) return;
+        event.preventDefault(); event.stopPropagation();
+        openWebsite(url.href);
+      };
+      document.addEventListener("click", route, true);
+      document.addEventListener("auxclick", route, true);
+    }
+
+    async function openLibraryWebsite(paper) {
       if (!paper?.url) return;
-      await openLibraryExternalUrl(paper.url, "Opening in external browser...", "Opened in external browser");
+      await openLibraryWebsiteURL(paper.url);
     }
 
-    async function openLibraryExternalUrl(url, pendingText, successText) {
+    async function openLibraryWebsiteURL(url, pendingText) {
       if (!url) return;
       const status = $("libraryDetailStatus");
       if (status) {
-        status.textContent = pendingText || "Opening in external browser...";
+        status.textContent = pendingText || "Opening in Browser...";
         status.className = "library-detail-status";
       }
       try {
-        const res = await openUrlExternally(url);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "open failed");
+        const destination = openWebsite(url);
+        if (!destination) throw new Error("Could not open website");
         if (status) {
-          status.textContent = successText || "Opened in external browser";
+          status.textContent = `Opening in ${destination}...`;
           status.className = "library-detail-status ok";
         }
       } catch (error) {
@@ -53882,28 +53895,12 @@ INDEX_HTML = """<!doctype html>
       `;
       $("analysisBody").innerHTML = markdownToHtml(content || "The analysis file is empty.");
       $("analysisBody").classList.toggle("comments-report", isCommentsReport);
-      wireAnalysisLinks();
       $("analysisBackdrop").classList.add("open");
       $("workspace").classList.add("note-open");
       $("workspace").style.setProperty("--note-width", `${state.noteWidth}px`);
       $("analysisPanel").classList.add("open");
       $("analysisPanel").setAttribute("aria-hidden", "false");
       updateReportPanelToggle();
-    }
-
-    function wireAnalysisLinks() {
-      $("analysisBody")?.querySelectorAll('a[data-open-external="safari"]').forEach((link) => {
-        link.addEventListener("click", async (event) => {
-          event.preventDefault();
-          const url = link.getAttribute("href") || "";
-          if (!url) return;
-          await fetch("/api/open-url", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({url, app: "Safari"})
-          });
-        });
-      });
     }
 
     function closeAnalysis() {
@@ -53999,7 +53996,7 @@ INDEX_HTML = """<!doctype html>
 
     function inlineMarkdown(value) {
       return escapeHtml(value)
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, `<a href="$2" data-open-external="safari">$1</a>`)
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, `<a href="$2" target="_blank" rel="noreferrer">$1</a>`)
         .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
         .replace(/`([^`]+)`/g, "<code>$1</code>");
     }
@@ -56445,17 +56442,40 @@ INDEX_HTML = """<!doctype html>
       renderAutoMonitorStatus();
     }
 
-    function setPrimaryView(view) {
+    function captureBrowserWorkspaceReturn() {
+      const mode = state.mode;
+      if (!["library", "report", "theme", "author"].includes(mode)) return null;
+      const view = mode === "library" && state.libraryTab === "my-publications" ? "my-publications" : mode;
+      const focus = document.activeElement;
+      // Snapshot only workspace viewport geometry, once per outbound link. Do
+      // not copy paper data, rebuild DOM, fetch records, or inspect web pages.
+      const selector = "#papers, .sidebar, .library-columns, .library-column-body, .library-table-body, "
+        + ".library-detail, .library-resource-body, .library-tab-scroll, .library-search-results-body, "
+        + ".my-publications-table-wrap, .my-publications-stat-list, .author-monitor-authors, "
+        + ".author-monitor-paper-list, .author-monitor-detail-body, .author-monitor-conference-cards, #analysisPanel";
+      const scroll = [...document.querySelectorAll(selector)].map(element => ({element, top:element.scrollTop, left:element.scrollLeft}));
+      return () => {
+        if (state.mode !== "browser") return;
+        state.mode = mode;
+        setPrimaryView(view, {preserveViewport:true});
+        if (focus?.isConnected) focus.focus({preventScroll:true});
+        for (const {element, top, left} of scroll) {
+          if (element.isConnected) { element.scrollTop = top; element.scrollLeft = left; }
+        }
+      };
+    }
+
+    function setPrimaryView(view, options = {}) {
       window.gewuBrowser?.setActive(view === "browser");
       const isLibrarySurface = view === "library" || view === "my-publications";
       const app = document.querySelector(".app");
       const switchingToMonitor = ["report", "theme", "author"].includes(view) && !app?.classList.contains(`${view}-mode`);
       const paperRoot = $("papers");
       const renderedMonitorMode = paperRoot?.dataset.monitorMode || "";
-      if (["report", "theme"].includes(renderedMonitorMode) && renderedMonitorMode !== view) {
+      if (view !== "browser" && ["report", "theme"].includes(renderedMonitorMode) && renderedMonitorMode !== view) {
         stashCurrentMonitorPaperSurface(paperRoot);
       }
-      if (switchingToMonitor) {
+      if (switchingToMonitor && !options.preserveViewport) {
         const sidebar = document.querySelector(".sidebar");
         if (sidebar) sidebar.scrollTop = 0;
       }
@@ -57067,6 +57087,7 @@ INDEX_HTML = """<!doctype html>
     window.openIdentifierRecoveryWindow = openIdentifierRecoveryWindow;
     window.setLibraryContentView = setLibraryContentViewFromMenu;
     window.toggleLibraryContentView = toggleLibraryContentViewFromMenu;
+    wireWorkspaceWebsiteLinks();
 
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");
