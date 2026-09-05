@@ -1,5 +1,47 @@
 # Browser password AutoFill: integration status
 
+## Current scope: conservative system-picker trigger (2026-09-06)
+
+The user has now explicitly authorized **triggering only**, not another attempt
+to implement credential delivery. This supersedes the pause below only for this
+bounded feature. The historical site-matched integration remains unimplemented.
+
+- A real, unmodified single mouse click must land on the active top-level HTTPS
+  input. An isolated, on-demand script checks explicit `autocomplete` semantics:
+  `username` needs additional login context; `current-password` must be a password
+  input. Search, ordinary email, new-password, registration/recovery, OTP,
+  embedded frames, hidden/disabled inputs and uncertain cases are rejected.
+- A second check confirms the same input, origin and semantics. No field values
+  or page text are read. There are no persistent page listeners, polling,
+  message handlers, cookie changes or new credential/provider APIs.
+- Native navigation, intervening clicks/keys/drags/scrolling, inactive windows
+  and expired checks invalidate the request. An in-memory cap permits at most
+  one attempt per HTTPS origin and field kind during the App session, including
+  cancellation/unavailable menus; manual right-click remains unchanged.
+- AppKit's public menu model does not contain the injected Passwords item on
+  this Mac. The item's **menu-only accessibility node** does. The implementation
+  walks only the issued context menu, recognizes AutoFill > Passwords, and uses
+  its public press action. It never accesses a window tree, requests system-wide
+  Accessibility access, inspects a password picker, or invokes private selectors.
+  Unrecognized or unavailable entries are not pressed. English and Chinese menu
+  labels are recognized; other localizations fail closed.
+- Only the OS-owned menu entry is invoked. Authentication, account selection,
+  site matching and text delivery remain with macOS/WebKit; filling and Safari
+  parity are explicitly **not** claimed. No form is submitted automatically.
+
+Validation: 53 synthetic DOM checks (value getters throw), plus 11 real
+WebKit/AppKit synthetic trigger checks, including drag/double-click/cancellation,
+search/email exclusions and repeat suppression. The final system action in the
+native test is replaced by a counter: **zero credential requests or actual fills**.
+This proves the trigger reaches the native Passwords item, not successful login.
+All 696 product tests pass (28.372 s), including 8 native menu-boundary checks.
+The original universal App was rebuilt and gracefully restarted with the user's
+approval; health, code signature and bundled-script/PDF equality checks pass.
+No OS/SDK upgrade, signing-identity change, Apple contact or vault access is
+authorized by this feature. The earlier unrelated Home changes remain intact.
+
+## Historical research record (not current runtime status)
+
 Historical checkpoint notice (2026-09-05): this note is restored to the state
 at 21:13:01.970 Asia/Shanghai, when the assistant asked the user to test native
 username/password filling. It had not yet been updated for the native-menu

@@ -1,17 +1,28 @@
 #import "GewuBrowserController.h"
 #import "GewuBrowserNavigation.h"
 #import "GewuBrowserFavicons.h"
+#import "GewuBrowserSession.h"
+#import "GewuBrowserAutoFill.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 // Right-clicking an editable document must keep AppKit's insertion target in
 // this WebView, not the separate workspace/address-bar WebView. Leave all text
 // handling to WebKit; never intercept credential values or the system picker.
 @interface GewuBrowserWebView : WKWebView
+@property(nonatomic, weak) GewuBrowserAutoFill *loginTrigger;
 @end
 @implementation GewuBrowserWebView
 - (void)willOpenMenu:(NSMenu *)menu withEvent:(NSEvent *)event {
     if (self.window && !self.hidden) [self.window makeFirstResponder:self];
     [super willOpenMenu:menu withEvent:event];
+    // Retain WebKit's own target/action and link request; only describe where
+    // our UI delegate will place the new page. Never inspect editable fields.
+    for (NSMenuItem *item in menu.itemArray) {
+        if (item.tag == WebMenuItemTagOpenLinkInNewWindow && !item.hasSubmenu
+            && [@[@"Open Link in New Window", @"在新窗口中打开链接", @"在新視窗中打開連結"] containsObject:item.title])
+            item.title = @"Open Link in New Tab";
+    }
+    [self.loginTrigger nativeMenuWillOpen:menu inView:self event:event];
 }
 @end
 
@@ -21,40 +32,209 @@
 - (BOOL)acceptsFirstResponder { return NO; }
 @end
 
-@interface GewuBrowserController ()
-@property(nonatomic, strong, readwrite) WKWebView *webView;
-@property(nonatomic) BOOL active;
-@property(nonatomic) BOOL visible;
-@property(nonatomic) BOOL initializing;
-@property(nonatomic) BOOL invalidated;
+@interface GewuBrowserPage : NSObject
+@property(nonatomic, strong) WKWebView *view;
 @property(nonatomic) BOOL reloadNavigation;
 @property(nonatomic) BOOL navigationRequestedDownload;
+@property(nonatomic) BOOL pendingRequestedDownload;
 @property(nonatomic) BOOL attemptedHTTPSRecovery;
 @property(nonatomic, copy) NSURLRequest *mainNavigationRequest;
 @property(nonatomic, strong) NSURL *failedURL;
 @property(nonatomic, copy) NSString *visitID;
+@property(nonatomic) BOOL homeZoomApplied;
+@property(nonatomic) double previousPageZoom;
+@property(nonatomic) BOOL ready;
+@property(nonatomic) BOOL terminated;
+@property(nonatomic) BOOL historyTraversal;
+@property(nonatomic) BOOL allowsInitialBlank;
+@property(nonatomic, copy) NSString *errorMessage;
+@end
+@implementation GewuBrowserPage
+@end
+
+@interface GewuBrowserTab : NSObject
+@property(nonatomic, copy) NSString *identifier;
+@property(nonatomic, strong) GewuBrowserPage *homePage;
+@property(nonatomic, strong) GewuBrowserPage *contentPage;
+@property(nonatomic, strong) GewuBrowserPage *currentPage;
+@property(nonatomic, strong) GewuBrowserSession *session;
+// Logical navigation may use the retained content view while Home is still
+// presented. Never reveal that view's previous document during a new request.
+@property(nonatomic) BOOL contentPendingFromHome;
+@property(nonatomic, strong) WKNavigation *pendingHomeNavigation;
+@end
+@implementation GewuBrowserTab
+- (instancetype)init {
+    if ((self = [super init])) {
+        _identifier = NSUUID.UUID.UUIDString;
+        _session = [[GewuBrowserSession alloc] init];
+    }
+    return self;
+}
+@end
+
+@interface GewuBrowserController ()
+@property(nonatomic, strong, readwrite) WKWebView *webView;
+@property(nonatomic, strong) GewuBrowserPage *currentPage;
+@property(nonatomic, strong) GewuBrowserPage *homePage;
+@property(nonatomic, strong) GewuBrowserPage *contentPage;
+@property(nonatomic, strong) GewuBrowserSession *session;
+@property(nonatomic, strong) NSMutableArray<GewuBrowserTab *> *tabs;
+@property(nonatomic, strong) GewuBrowserTab *selectedTab;
+@property(nonatomic, strong) WKWebsiteDataStore *browserDataStore;
+@property(nonatomic) BOOL active;
+@property(nonatomic) BOOL visible;
+@property(nonatomic) BOOL initializing;
+@property(nonatomic) BOOL invalidated;
 @property(nonatomic, strong) id keyMonitor;
 @property(nonatomic, strong) NSMapTable<WKDownload *, NSMutableDictionary *> *downloads;
 @property(nonatomic, strong) GewuBrowserFavicons *favicons;
 @property(nonatomic, strong) NSView *suggestionsView;
 @property(nonatomic, copy) NSArray<NSDictionary *> *suggestionItems;
+@property(nonatomic) NSUInteger homeFitGeneration;
+@property(nonatomic, strong) GewuBrowserAutoFill *loginTrigger;
 @end
 
 @implementation GewuBrowserController
+
+- (void)ensureTabModel {
+    if (!self.tabs) self.tabs = [NSMutableArray array];
+    if (!self.selectedTab) {
+        self.selectedTab = [[GewuBrowserTab alloc] init];
+        [self.tabs addObject:self.selectedTab];
+    }
+}
+- (GewuBrowserPage *)currentPage { return self.selectedTab.currentPage; }
+- (void)setCurrentPage:(GewuBrowserPage *)page { [self ensureTabModel]; self.selectedTab.currentPage = page; }
+- (GewuBrowserPage *)homePage { return self.selectedTab.homePage; }
+- (void)setHomePage:(GewuBrowserPage *)page { [self ensureTabModel]; self.selectedTab.homePage = page; }
+- (GewuBrowserPage *)contentPage { return self.selectedTab.contentPage; }
+- (void)setContentPage:(GewuBrowserPage *)page { [self ensureTabModel]; self.selectedTab.contentPage = page; }
+- (GewuBrowserSession *)session { return self.selectedTab.session; }
+- (void)setSession:(GewuBrowserSession *)session { [self ensureTabModel]; self.selectedTab.session = session; }
+
+- (GewuBrowserTab *)tabForPage:(GewuBrowserPage *)page {
+    if (!page) return nil;
+    for (GewuBrowserTab *tab in self.tabs) if (tab.homePage == page || tab.contentPage == page) return tab;
+    return nil;
+}
+- (GewuBrowserPage *)pageForView:(WKWebView *)view {
+    if (!view) return nil;
+    for (GewuBrowserTab *tab in self.tabs) {
+        if (tab.homePage.view == view) return tab.homePage;
+        if (tab.contentPage.view == view) return tab.contentPage;
+    }
+    return nil;
+}
+- (GewuBrowserPage *)presentedPageForTab:(GewuBrowserTab *)tab {
+    return tab.contentPendingFromHome ? tab.homePage : tab.currentPage;
+}
+- (void)updatePageVisibility {
+    GewuBrowserPage *presented = [self presentedPageForTab:self.selectedTab];
+    self.homePage.view.hidden = !self.visible || presented != self.homePage;
+    self.contentPage.view.hidden = !self.visible || presented != self.contentPage;
+}
+- (void)returnToRetainedHomeInTab:(GewuBrowserTab *)tab {
+    if (!tab.contentPendingFromHome) return;
+    tab.contentPendingFromHome = NO; tab.pendingHomeNavigation = nil;
+    tab.currentPage = tab.homePage;
+    tab.contentPage.view.hidden = YES;
+    if (tab == self.selectedTab) {
+        self.webView = tab.homePage.view;
+        [self updatePageVisibility]; [self emitState];
+    } else [self emitTabs];
+}
+- (void)emitTabs {
+    NSMutableArray *items = [NSMutableArray array];
+    for (GewuBrowserTab *tab in self.tabs) {
+        GewuBrowserPage *page = tab.currentPage;
+        GewuBrowserPage *presented = [self presentedPageForTab:tab];
+        NSString *url = (tab.contentPendingFromHome ? presented.view.URL : (page.failedURL ?: page.view.URL ?: page.mainNavigationRequest.URL)).absoluteString ?: @"";
+        NSString *title = presented.view.title;
+        if (!title.length) title = GewuBrowserGoogleHome([NSURL URLWithString:url]) || !url.length ? @"Home" : [NSURL URLWithString:url].host ?: @"New Tab";
+        [items addObject:@{@"id":tab.identifier, @"title":title, @"url":url, @"loading":@(page.view.loading || (tab.contentPendingFromHome && !page.errorMessage.length))}];
+    }
+    [self emit:@{@"event":@"tabs", @"tabs":items, @"selected":self.selectedTab.identifier ?: @""}];
+}
+- (void)selectTab:(GewuBrowserTab *)tab {
+    if (!tab || ![self.tabs containsObject:tab] || tab == self.selectedTab) return;
+    [self.loginTrigger cancelPending];
+    self.homeFitGeneration++;
+    NSRect previousFrame = [self presentedPageForTab:self.selectedTab].view.frame;
+    // Tab switches do not stop loads, replay requests, or replace documents.
+    self.homePage.view.hidden = YES; self.contentPage.view.hidden = YES;
+    self.suggestionsView.hidden = YES;
+    self.selectedTab = tab;
+    self.webView = tab.currentPage.view;
+    if (!GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom];
+    if (NSIsEmptyRect(self.webView.frame)) self.webView.frame = previousFrame;
+    [self updatePageVisibility];
+    [self.workspace.window makeFirstResponder:self.workspace];
+    [self emitState];
+}
+- (GewuBrowserTab *)addTabWithRequest:(NSURLRequest *)request configuration:(WKWebViewConfiguration *)configuration {
+    if (self.tabs.count >= 32) {
+        [self emit:@{@"event":@"error", @"message":@"Close a tab before opening another (32 tabs maximum). Existing pages are kept."}];
+        return nil;
+    }
+    GewuBrowserTab *tab = [[GewuBrowserTab alloc] init];
+    GewuBrowserPage *page = configuration ? [self makePageWithConfiguration:configuration] : [self makePage];
+    if (!request && !configuration) tab.homePage = page;
+    else tab.contentPage = page;
+    tab.currentPage = page;
+    page.allowsInitialBlank = configuration != nil;
+    page.mainNavigationRequest = request;
+    [self.tabs addObject:tab];
+    [self selectTab:tab];
+    if (!configuration) {
+        if (request) [page.view loadRequest:request];
+        else [self showHomeRecordingVisit:YES];
+    }
+    [self emitState];
+    return tab;
+}
+- (void)disposePage:(GewuBrowserPage *)page {
+    if (!page) return;
+    for (NSString *key in @[@"URL", @"title", @"loading", @"estimatedProgress", @"canGoBack", @"canGoForward"])
+        [page.view removeObserver:self forKeyPath:key];
+    page.view.navigationDelegate = nil; page.view.UIDelegate = nil;
+    [page.view stopLoading]; [page.view removeFromSuperview];
+}
+- (void)closeTab:(GewuBrowserTab *)tab {
+    if (!tab || ![self.tabs containsObject:tab]) return;
+    [self.loginTrigger cancelPending];
+    NSInteger index = [self.tabs indexOfObject:tab];
+    if (self.tabs.count == 1) [self addTabWithRequest:nil configuration:nil];
+    if (tab == self.selectedTab) [self selectTab:self.tabs[index > 0 ? index - 1 : 1]];
+    [self.tabs removeObject:tab];
+    [self disposePage:tab.homePage]; [self disposePage:tab.contentPage];
+    [tab.session.entries removeAllObjects];
+    [self emitState];
+}
 
 - (instancetype)initWithWorkspace:(WKWebView *)workspace {
     self = [super init];
     if (self) {
         _workspace = workspace;
         _downloads = [NSMapTable strongToStrongObjectsMapTable];
+        [self ensureTabModel];
         __weak typeof(self) weakSelf = self;
+        NSString *probePath = [NSBundle.mainBundle pathForResource:@"GewuBrowserLoginProbe" ofType:@"js"];
+        NSString *probe = probePath ? [NSString stringWithContentsOfFile:probePath encoding:NSUTF8StringEncoding error:nil] : @"";
+        _loginTrigger = [[GewuBrowserAutoFill alloc] initWithProbeScript:probe canUseView:^BOOL(WKWebView *view) {
+            typeof(self) self = weakSelf;
+            return self && !self.invalidated && self.active && self.visible && self.webView == view;
+        }];
         _favicons = [[GewuBrowserFavicons alloc] init];
         _favicons.onIcon = ^(NSString *host, NSString *dataURL) {
             [weakSelf emit:@{@"event":@"favicon", @"host":host, @"data_url":dataURL}];
         };
-        _keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown) handler:^NSEvent *(NSEvent *event) {
+        _keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDown | NSEventMaskScrollWheel) handler:^NSEvent *(NSEvent *event) {
             GewuBrowserController *self = weakSelf;
             if (!self.active || event.window != self.workspace.window || self.workspace.window.attachedSheet) return event;
+            if (event.type == NSEventTypeLeftMouseUp) { [self.loginTrigger considerMouseUp:event inView:self.webView]; return event; }
+            [self.loginTrigger noteInputEvent:event];
+            if (event.type == NSEventTypeScrollWheel || event.type == NSEventTypeLeftMouseDragged) return event;
             if (event.type != NSEventTypeKeyDown) {
                 if (self.suggestionsView && !self.suggestionsView.hidden) {
                     NSPoint point = [self.suggestionsView convertPoint:event.locationInWindow fromView:nil];
@@ -67,6 +247,11 @@
             }
             BOOL command = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
             NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+            if (command && !(event.modifierFlags & (NSEventModifierFlagOption | NSEventModifierFlagControl))
+                && [@[@"t", @"w"] containsObject:key]) {
+                [self handleCommand:@{@"action":[key isEqualToString:@"t"] ? @"new-tab" : @"close-tab", @"tab_id":self.selectedTab.identifier}];
+                return nil;
+            }
             if (command && ([@[@"l", @"d"] containsObject:key])) {
                 [self.workspace.window makeFirstResponder:self.workspace];
                 [self emit:@{ @"event": [key isEqualToString:@"l"] ? @"focus-address" : @"bookmark" }];
@@ -89,43 +274,203 @@
 
 - (void)emitState {
     if (!self.webView) return;
-    [self emit:@{ @"event": @"state", @"url": (self.failedURL ?: self.webView.URL).absoluteString ?: @"",
-        @"title": self.webView.title ?: @"", @"loading": @(self.webView.loading),
-        @"progress": @(self.webView.estimatedProgress), @"canBack": @(self.webView.canGoBack),
-        @"canForward": @(self.webView.canGoForward) }];
+    BOOL pending = self.selectedTab.contentPendingFromHome;
+    WKWebView *presented = [self presentedPageForTab:self.selectedTab].view;
+    [self emit:@{ @"event": @"state", @"url": (pending ? presented.URL : (self.currentPage.failedURL ?: self.webView.URL)).absoluteString ?: @"",
+        @"title": presented.title ?: @"", @"loading": @(self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
+        @"progress": @(self.webView.estimatedProgress), @"canBack": @(self.session.index > 0),
+        @"canForward": @(self.session.index + 1 < self.session.entries.count),
+        @"tab_id":self.selectedTab.identifier ?: @"", @"error":self.currentPage.errorMessage ?: @"" }];
+    [self emitTabs];
 }
 
-- (void)ensureWebView {
-    if (self.webView || self.initializing || self.invalidated) return;
-    self.initializing = YES;
+- (GewuBrowserPage *)makePage {
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
     // Dedicated persistent profile. No Safari cookie import, app script handlers,
     // process-wide proxy overrides, HTML rewriting, or background publisher driver.
     NSUUID *profile = [[NSUUID alloc] initWithUUIDString:@"19E88B78-44C0-4C42-B496-F2C7F625B507"];
-    configuration.websiteDataStore = [WKWebsiteDataStore dataStoreForIdentifier:profile];
+    if (!self.browserDataStore) self.browserDataStore = [WKWebsiteDataStore dataStoreForIdentifier:profile];
+    configuration.websiteDataStore = self.browserDataStore;
     // Keep WebKit's system-generated OS/engine/version tokens. The compatibility
     // suffix prevents sites from mistaking desktop WKWebView for a text-only
     // client; retain our own product token rather than hiding the embedding app.
     configuration.applicationNameForUserAgent = @"Safari/605.1.15 GewuInsight/0.1";
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = NO;
     configuration.userContentController = [[WKUserContentController alloc] init];
-    self.webView = [[GewuBrowserWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
-    self.webView.navigationDelegate = self;
-    self.webView.UIDelegate = self;
-    self.webView.allowsBackForwardNavigationGestures = YES;
-    self.webView.hidden = YES;
-    self.webView.accessibilityLabel = @"Browser webpage";
+    return [self makePageWithConfiguration:configuration];
+}
+
+- (GewuBrowserPage *)makePageWithConfiguration:(WKWebViewConfiguration *)configuration {
+    // Popup configurations MUST be the exact WebKit-supplied configuration.
+    // All openers are our isolated external views, never the trusted workspace.
+    GewuBrowserPage *page = [[GewuBrowserPage alloc] init];
+    page.view = [[GewuBrowserWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+    ((GewuBrowserWebView *)page.view).loginTrigger = self.loginTrigger;
+    page.view.navigationDelegate = self;
+    page.view.UIDelegate = self;
+    page.view.allowsBackForwardNavigationGestures = YES;
+    page.view.hidden = YES;
+    page.view.accessibilityLabel = @"Browser webpage";
     for (NSString *key in @[@"URL", @"title", @"loading", @"estimatedProgress", @"canGoBack", @"canGoForward"]) {
-        [self.webView addObserver:self forKeyPath:key options:NSKeyValueObservingOptionNew context:NULL];
+        [page.view addObserver:self forKeyPath:key options:NSKeyValueObservingOptionNew context:NULL];
     }
-    [self.workspace.superview addSubview:self.webView positioned:NSWindowAbove relativeTo:self.workspace];
+    [self.workspace.superview addSubview:page.view positioned:NSWindowAbove relativeTo:self.workspace];
+    return page;
+}
+
+- (void)ensureWebView {
+    if (self.webView || self.initializing || self.invalidated) return;
+    self.initializing = YES;
+    [self ensureTabModel];
+    self.homePage = [self makePage];
+    self.currentPage = self.homePage;
+    self.webView = self.homePage.view;
     self.initializing = NO;
     [self emit:@{ @"event": @"ready" }];
 }
 
+- (void)activatePage:(GewuBrowserPage *)page {
+    if (page == self.currentPage && !self.selectedTab.contentPendingFromHome) return;
+    [self.loginTrigger cancelPending];
+    self.homeFitGeneration++;
+    [self.webView stopLoading];
+    self.homePage.view.hidden = YES; self.contentPage.view.hidden = YES;
+    self.selectedTab.contentPendingFromHome = NO; self.selectedTab.pendingHomeNavigation = nil;
+    self.suggestionsView.hidden = YES;
+    NSRect previousFrame = self.webView.frame;
+    self.currentPage = page;
+    self.webView = page.view;
+    // A cached Home keeps its fitted dimensions until local chrome sends the
+    // next layout, avoiding an intermediate full-height Home and zoom flash.
+    if (NSIsEmptyRect(self.webView.frame)) self.webView.frame = previousFrame;
+    [self updatePageVisibility];
+    [self emit:@{@"event":@"navigation-start"}];
+    [self emitState];
+}
+
+- (void)showHomeRecordingVisit:(BOOL)record {
+    if (!self.homePage) self.homePage = [self makePage];
+    [self activatePage:self.homePage];
+    if (record) [self.session recordSurface:self.homePage item:nil home:YES traversal:NO];
+    [self emit:@{@"event":@"navigation-start"}];
+    // No request, reload, reconstructed HTML, or credential copying on a warm
+    // Home. Explicit Reload is separate. Cold/terminated pages load on demand.
+    if (!self.homePage.ready || self.homePage.terminated || !GewuBrowserGoogleHome(self.webView.URL)) {
+        if (!self.webView.loading) [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://www.google.com/"]]];
+    }
+    [self emitState];
+}
+
+- (void)openContentRequest:(NSURLRequest *)request {
+    if (!self.contentPage) self.contentPage = [self makePage];
+    BOOL fromHome = self.selectedTab.contentPendingFromHome || (self.currentPage == self.homePage
+        && self.homePage.ready && GewuBrowserGoogleHome(self.homePage.view.URL));
+    if (fromHome) {
+        [self.loginTrigger cancelPending]; self.homeFitGeneration++;
+        self.suggestionsView.hidden = YES;
+        self.selectedTab.contentPendingFromHome = YES;
+        self.currentPage = self.contentPage; self.webView = self.contentPage.view;
+        if (NSIsEmptyRect(self.webView.frame)) self.webView.frame = self.homePage.view.frame;
+        [self updatePageVisibility];
+    } else [self activatePage:self.contentPage];
+    self.currentPage.historyTraversal = NO;
+    self.currentPage.attemptedHTTPSRecovery = NO;
+    self.currentPage.failedURL = nil; self.currentPage.errorMessage = nil;
+    self.currentPage.mainNavigationRequest = request;
+    [self emit:@{@"event":@"navigation-start"}];
+    WKNavigation *navigation = [self.webView loadRequest:request];
+    if (fromHome) self.selectedTab.pendingHomeNavigation = navigation;
+    [self emitState];
+}
+
+- (void)moveInSession:(NSInteger)offset {
+    GewuBrowserSessionEntry *entry = [self.session move:offset];
+    if (!entry) return;
+    if (entry.home) [self showHomeRecordingVisit:NO];
+    else {
+        [self activatePage:entry.surface];
+        if (self.webView.backForwardList.currentItem != entry.item) {
+            self.currentPage.historyTraversal = YES;
+            [self.webView goToBackForwardListItem:entry.item];
+        }
+        [self emitState];
+    }
+}
+
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
-    if (object == self.webView) { [self emitState]; return; }
-    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+    if (object == self.webView) {
+        if ([keyPath isEqualToString:@"URL"]) [self.loginTrigger cancelPending];
+        if ([keyPath isEqualToString:@"URL"] && !GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom];
+        if ([keyPath isEqualToString:@"URL"]) {
+            WKWebView *view = self.webView;
+            // Same-document navigation (pushState/hash changes) has no commit
+            // callback. Wait for WebKit's history item to catch up to its URL.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!self.invalidated && view == self.webView && !view.loading
+                    && [view.URL isEqual:view.backForwardList.currentItem.URL]) [self recordCurrentHistory];
+            });
+        }
+        [self emitState]; return;
+    }
+    // A retained Home may update its title or progress while hidden. Never let
+    // it overwrite the visible page's address, controls or navigation state.
+    GewuBrowserPage *page = [self pageForView:object];
+    if (page) {
+        if ([keyPath isEqualToString:@"URL"] && !page.view.loading
+            && [page.view.URL isEqual:page.view.backForwardList.currentItem.URL]) [self recordHistoryForPage:page];
+        [self emitTabs];
+    } else
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+- (void)restorePageZoom {
+    self.homeFitGeneration++;
+    if (self.currentPage.homeZoomApplied) {
+        self.webView.pageZoom = self.currentPage.previousPageZoom;
+        [self.webView evaluateJavaScript:@"document.getElementById('gewu-insight-home-surface')?.remove()" completionHandler:nil];
+    }
+    self.currentPage.homeZoomApplied = NO;
+}
+
+- (void)fitHomeGeneration:(NSUInteger)generation attempts:(NSUInteger)attempts {
+    if (generation != self.homeFitGeneration || !self.visible || self.invalidated || self.webView.loading
+        || !GewuBrowserGoogleHome(self.webView.URL)) return;
+    // Hide only Home's secondary language/region/footer chrome. Return
+    // dimensions only: no form reads, input/scroll handlers or focus changes.
+    NSString *geometry = @"(() => { const u = new URL(location.href);"
+        "if (u.protocol !== 'https:' || !['google.com','www.google.com'].includes(u.hostname) || u.port || !['/','/webhp'].includes(u.pathname) || u.searchParams.has('q')) return null;"
+        "if (!document.getElementById('gewu-insight-home-surface')) {"
+        "const s = document.createElement('style'); s.id = 'gewu-insight-home-surface';"
+        "s.textContent = 'footer, #fbar, [role=contentinfo], #SIvCob, #gws-output-pages-elements-homepage_additional_languages__als { display: none !important; }';"
+        "document.head.appendChild(s); }"
+        "return {width:innerWidth,height:innerHeight,contentWidth:document.documentElement.scrollWidth,contentHeight:document.documentElement.scrollHeight}; })()";
+    [self.webView evaluateJavaScript:geometry completionHandler:^(id value, NSError *error) {
+        if (error || ![value isKindOfClass:NSDictionary.class] || generation != self.homeFitGeneration
+            || !self.visible || self.invalidated || self.webView.loading || !GewuBrowserGoogleHome(self.webView.URL)) return;
+        double zoom = GewuBrowserHomeFitZoom(self.webView.pageZoom, [value[@"width"] doubleValue], [value[@"height"] doubleValue],
+            [value[@"contentWidth"] doubleValue], [value[@"contentHeight"] doubleValue]);
+        if (fabs(zoom - self.webView.pageZoom) < .001) return;
+        self.webView.pageZoom = zoom;
+        if (attempts > 1) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            [self fitHomeGeneration:generation attempts:attempts - 1];
+        });
+    }];
+}
+
+- (void)scheduleHomeFit {
+    if (!self.visible || self.webView.loading || !GewuBrowserGoogleHome(self.webView.URL)) return;
+    if (!self.currentPage.homeZoomApplied) self.currentPage.previousPageZoom = self.webView.pageZoom;
+    self.currentPage.homeZoomApplied = YES;
+    NSUInteger generation = ++self.homeFitGeneration;
+    // Coalesce live window/sidebar resizing, then fit at most three times.
+    // Nothing polls in the background or runs on ordinary webpages.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        if (generation != self.homeFitGeneration || self.invalidated || !self.visible || !GewuBrowserGoogleHome(self.webView.URL)) return;
+        self.webView.pageZoom = self.currentPage.previousPageZoom;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            [self fitHomeGeneration:generation attempts:3];
+        });
+    });
 }
 
 - (void)handleCommand:(NSDictionary *)command {
@@ -146,9 +491,13 @@
         NSRect rect = NSMakeRect(x, self.workspace.bounds.size.height - top - height, width, height);
         rect = NSIntersectionRect(rect, self.workspace.bounds);
         if (rect.size.width < 1 || rect.size.height < 1) shown = NO;
-        self.webView.frame = rect;
-        self.webView.hidden = !shown;
+        WKWebView *presented = [self presentedPageForTab:self.selectedTab].view;
+        BOOL resized = !NSEqualSizes(presented.frame.size, rect.size) || (shown && !self.visible);
+        presented.frame = rect;
         self.visible = shown;
+        [self updatePageVisibility];
+        if (!shown || resized) [self.loginTrigger cancelPending];
+        if (resized) [self scheduleHomeFit];
         if (!shown) self.suggestionsView.hidden = YES;
         if (!shown && [self.workspace.window.firstResponder isKindOfClass:NSView.class]
             && [(NSView *)self.workspace.window.firstResponder isDescendantOf:self.webView]) {
@@ -158,21 +507,38 @@
     }
     if (!self.active) return;
     [self ensureWebView];
-    if ([action isEqualToString:@"navigate"] || [action isEqualToString:@"home"]) {
-        NSString *value = [action isEqualToString:@"home"] ? @"https://www.google.com/" : command[@"url"];
+    if ([action isEqualToString:@"new-tab"]) {
+        NSString *value = [command[@"url"] isKindOfClass:NSString.class] ? command[@"url"] : nil;
+        NSURL *url = value.length ? [NSURL URLWithString:value] : nil;
+        if (value.length && !GewuBrowserPublicURL(url)) return;
+        [self addTabWithRequest:url ? [NSURLRequest requestWithURL:url] : nil configuration:nil];
+        if (!url) [self emit:@{@"event":@"focus-address"}];
+    } else if ([@[@"select-tab", @"close-tab"] containsObject:action]) {
+        NSString *identifier = [command[@"tab_id"] isKindOfClass:NSString.class] ? command[@"tab_id"] : @"";
+        for (GewuBrowserTab *tab in self.tabs.copy) if ([tab.identifier isEqualToString:identifier]) {
+            if ([action isEqualToString:@"select-tab"]) [self selectTab:tab]; else [self closeTab:tab];
+            break;
+        }
+    } else if ([action isEqualToString:@"home"]) { [self showHomeRecordingVisit:YES]; }
+    else if ([action isEqualToString:@"navigate"]) {
+        NSString *value = command[@"url"];
         NSURL *url = [value isKindOfClass:NSString.class] ? [NSURL URLWithString:value] : nil;
         if (!GewuBrowserPublicURL(url)) { [self emit:@{ @"event": @"error", @"message": @"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser." }]; return; }
-        self.attemptedHTTPSRecovery = NO;
-        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
-    } else if ([action isEqualToString:@"back"]) { [self.webView goBack]; }
-    else if ([action isEqualToString:@"forward"]) { [self.webView goForward]; }
+        if ([url.absoluteString isEqualToString:@"https://www.google.com/"]) [self showHomeRecordingVisit:YES];
+        else [self openContentRequest:[NSURLRequest requestWithURL:url]];
+    } else if ([action isEqualToString:@"back"]) { [self moveInSession:-1]; }
+    else if ([action isEqualToString:@"forward"]) { [self moveInSession:1]; }
     else if ([action isEqualToString:@"reload"]) {
-        self.attemptedHTTPSRecovery = NO;
-        if (self.failedURL && [self.mainNavigationRequest.HTTPMethod isEqualToString:@"GET"]) [self.webView loadRequest:[NSURLRequest requestWithURL:self.failedURL]];
+        self.currentPage.attemptedHTTPSRecovery = NO;
+        if (self.selectedTab.contentPendingFromHome) {
+            // The reused view still owns the previous document before commit;
+            // reload that pending request, not the old document's URL.
+            self.selectedTab.pendingHomeNavigation = [self.webView loadRequest:self.currentPage.mainNavigationRequest];
+        } else if (self.currentPage.failedURL && [self.currentPage.mainNavigationRequest.HTTPMethod isEqualToString:@"GET"]) [self.webView loadRequest:[NSURLRequest requestWithURL:self.currentPage.failedURL]];
         else [self.webView reload];
     }
-    else if ([action isEqualToString:@"stop"]) { [self.webView stopLoading]; }
-    else if ([action isEqualToString:@"focus"]) { [self.workspace.window makeFirstResponder:self.webView]; }
+    else if ([action isEqualToString:@"stop"]) { [self.webView stopLoading]; [self returnToRetainedHomeInTab:self.selectedTab]; }
+    else if ([action isEqualToString:@"focus"]) { [self.workspace.window makeFirstResponder:[self presentedPageForTab:self.selectedTab].view]; }
     else if ([action isEqualToString:@"suggestions"]) { [self showAddressSuggestions:command]; }
     else if ([action isEqualToString:@"editor"]) { [self presentEditor:command]; }
     else if ([action isEqualToString:@"confirm"]) { [self presentConfirmation:command]; }
@@ -198,7 +564,7 @@
         [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint([command[@"x"] doubleValue] * scale, self.workspace.bounds.size.height - [command[@"y"] doubleValue] * scale) inView:self.workspace];
     }
     else if ([action isEqualToString:@"external"]) {
-        NSURL *url = self.failedURL ?: self.webView.URL;
+        NSURL *url = self.currentPage.failedURL ?: self.webView.URL;
         if (GewuBrowserPublicURL(url)) {
             NSURL *safari = [[NSWorkspace sharedWorkspace] URLForApplicationWithBundleIdentifier:@"com.apple.Safari"];
             if (safari) [[NSWorkspace sharedWorkspace] openURLs:@[url] withApplicationAtURL:safari configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
@@ -393,17 +759,64 @@
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-    NSURL *url = action.request.URL;
-    if ([url.absoluteString isEqualToString:@"about:blank"] && !action.targetFrame.isMainFrame) { decisionHandler(WKNavigationActionPolicyAllow); return; }
-    if (!GewuBrowserPublicURL(url)) {
-        if (action.targetFrame.isMainFrame || !action.targetFrame) [self emit:@{ @"event": @"error", @"message": @"This address cannot be opened here. Use Open in Safari for application links or special sign-in flows." }];
+    GewuBrowserPage *page = [self pageForView:webView];
+    GewuBrowserTab *tab = [self tabForPage:page];
+    // Home stays on screen during a pending GET. A second explicit search or
+    // link replaces that request, without exposing the old content document.
+    if (tab == self.selectedTab && tab.contentPendingFromHome && page == tab.homePage
+        && action.targetFrame.isMainFrame && GewuBrowserPublicURL(action.request.URL)
+        && !GewuBrowserGoogleHome(action.request.URL) && GewuBrowserCanRetainHomeForRequest(action.request)
+        && (action.navigationType == WKNavigationTypeFormSubmitted || action.navigationType == WKNavigationTypeLinkActivated)) {
+        decisionHandler(WKNavigationActionPolicyCancel);
+        if (action.navigationType == WKNavigationTypeLinkActivated
+            && ((action.modifierFlags & NSEventModifierFlagCommand) || action.buttonNumber == 2)) {
+            GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
+            opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+        } else {
+            [self openContentRequest:action.request];
+            self.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+        }
+        return;
+    }
+    if (!page || (page != tab.currentPage && (action.targetFrame.isMainFrame || !action.targetFrame))) {
         decisionHandler(WKNavigationActionPolicyCancel); return;
     }
+    NSURL *url = action.request.URL;
+    if ([url.absoluteString isEqualToString:@"about:blank"] && (!action.targetFrame.isMainFrame || page.allowsInitialBlank)) { decisionHandler(WKNavigationActionPolicyAllow); return; }
+    if (!GewuBrowserPublicURL(url)) {
+        BOOL wasActive = webView == self.webView;
+        if (action.targetFrame.isMainFrame || !action.targetFrame) [self returnToRetainedHomeInTab:tab];
+        if (wasActive && (action.targetFrame.isMainFrame || !action.targetFrame)) [self emit:@{ @"event": @"error", @"message": @"This address cannot be opened here. Use Open in Safari for application links or special sign-in flows." }];
+        decisionHandler(WKNavigationActionPolicyCancel); return;
+    }
+    if (webView == self.webView && action.targetFrame && action.navigationType == WKNavigationTypeLinkActivated
+        && ((action.modifierFlags & NSEventModifierFlagCommand) || action.buttonNumber == 2)
+        && GewuBrowserCanRetainHomeForRequest(action.request)) {
+        decisionHandler(WKNavigationActionPolicyCancel);
+        GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
+        opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+        return;
+    }
+    // target=_blank is handled by createWebView using WebKit's configuration,
+    // not replayed in the opener (including forms and window.opener flows).
+    if (!action.targetFrame) { decisionHandler(WKNavigationActionPolicyAllow); return; }
     if (action.targetFrame.isMainFrame || !action.targetFrame) {
-        self.mainNavigationRequest = action.request;
-        self.navigationRequestedDownload = action.shouldPerformDownload;
-        self.reloadNavigation = action.navigationType == WKNavigationTypeReload;
-        if (action.navigationType != WKNavigationTypeOther) self.attemptedHTTPSRecovery = NO;
+        // Preserve the live Home document when following an ordinary GET
+        // search/link. Never intercept/reconstruct a POST or a streamed body.
+        if (webView == self.webView && self.currentPage == self.homePage && self.homePage.ready
+            && GewuBrowserGoogleHome(webView.URL) && !GewuBrowserGoogleHome(url)
+            && GewuBrowserCanRetainHomeForRequest(action.request)) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [self openContentRequest:action.request];
+            self.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+            return;
+        }
+        page.mainNavigationRequest = action.request;
+        page.navigationRequestedDownload = action.shouldPerformDownload || page.pendingRequestedDownload;
+        page.pendingRequestedDownload = NO;
+        page.reloadNavigation = action.navigationType == WKNavigationTypeReload;
+        page.historyTraversal = action.navigationType == WKNavigationTypeBackForward;
+        if (action.navigationType != WKNavigationTypeOther) page.attemptedHTTPSRecovery = NO;
     }
     // Defer HTML download attributes until MIME is known, including URLs without
     // a .pdf suffix. Explicit Save Download still uses WKDownload directly.
@@ -411,58 +824,138 @@
 }
 
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)windowFeatures {
-    // Normal target=_blank links stay in this Browser surface and its back stack.
-    // Do not create an untracked window or expose workspace bridges to a popup.
-    if (GewuBrowserPublicURL(action.request.URL)) [self.webView loadRequest:action.request];
-    return nil;
+    if (webView != self.webView || !self.active || !self.visible || action.targetFrame
+        || !(GewuBrowserPublicURL(action.request.URL) || [action.request.URL.absoluteString isEqualToString:@"about:blank"])) return nil;
+    GewuBrowserTab *tab = [self addTabWithRequest:action.request configuration:configuration];
+    tab.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+    return tab.currentPage.view;
+}
+- (void)webViewDidClose:(WKWebView *)webView {
+    GewuBrowserPage *page = [self pageForView:webView];
+    if (page.allowsInitialBlank) [self closeTab:[self tabForPage:page]];
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)response decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     if (!GewuBrowserPublicURL(response.response.URL)) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
+    GewuBrowserPage *page = [self pageForView:webView];
+    if (!page) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
     decisionHandler(GewuBrowserResponsePolicy(response.response, response.canShowMIMEType,
-        response.forMainFrame && self.navigationRequestedDownload));
+        response.forMainFrame && page.navigationRequestedDownload));
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
-    self.failedURL = nil;
-    if (!self.reloadNavigation || !self.visitID) self.visitID = NSUUID.UUID.UUIDString;
-    self.reloadNavigation = NO;
-    [self emit:@{ @"event": @"navigation-start" }];
+    GewuBrowserPage *page = [self pageForView:webView];
+    GewuBrowserTab *tab = [self tabForPage:page];
+    if (!page || page != tab.currentPage) return;
+    if (tab.contentPendingFromHome && tab.pendingHomeNavigation && tab.pendingHomeNavigation != navigation) return;
+    page.failedURL = nil; page.errorMessage = nil;
+    if (!page.reloadNavigation || !page.visitID) page.visitID = NSUUID.UUID.UUIDString;
+    page.reloadNavigation = NO;
+    if (webView == self.webView) {
+        [self.loginTrigger cancelPending];
+        [self emit:@{ @"event": @"navigation-start" }];
+    }
+    [self emitTabs];
+}
+
+- (void)recordCurrentHistory {
+    [self recordHistoryForPage:self.currentPage];
+}
+- (void)recordHistoryForPage:(GewuBrowserPage *)page {
+    GewuBrowserTab *tab = [self tabForPage:page];
+    if (!tab || page != tab.currentPage || tab.contentPendingFromHome) return;
+    WKBackForwardList *list = page.view.backForwardList;
+    NSMutableArray *items = [list.backList mutableCopy];
+    [items addObjectsFromArray:list.forwardList];
+    if (list.currentItem) [items addObject:list.currentItem];
+    [tab.session pruneSurface:page validItems:items];
+    [tab.session recordSurface:page item:list.currentItem
+        home:page == tab.homePage && GewuBrowserGoogleHome(page.view.URL)
+        traversal:page.historyTraversal];
+    page.historyTraversal = NO;
+    if (tab == self.selectedTab) [self emitState]; else [self emitTabs];
+}
+
+- (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
+    GewuBrowserPage *page = [self pageForView:webView];
+    GewuBrowserTab *tab = [self tabForPage:page];
+    if (!page || page != tab.currentPage) return;
+    if (tab.contentPendingFromHome) {
+        if (tab.pendingHomeNavigation && navigation != tab.pendingHomeNavigation) return;
+        // Commit replaces the old document. Provisional starts, redirects and
+        // URL/progress notifications must never reveal the reused view early.
+        tab.contentPendingFromHome = NO; tab.pendingHomeNavigation = nil;
+        tab.homePage.view.hidden = YES;
+        if (tab == self.selectedTab) [self updatePageVisibility];
+    }
+    page.ready = NO; page.terminated = NO;
+    [self recordHistoryForPage:page];
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    self.attemptedHTTPSRecovery = NO;
-    [self emitState];
+    GewuBrowserPage *page = [self pageForView:webView];
+    GewuBrowserTab *tab = [self tabForPage:page];
+    if (!page || page != tab.currentPage || tab.contentPendingFromHome) return;
+    page.ready = YES; page.terminated = NO; page.attemptedHTTPSRecovery = NO;
+    if (webView == self.webView) { [self emitState]; [self scheduleHomeFit]; } else [self emitTabs];
     NSURL *pageURL = webView.URL;
     if (GewuBrowserPublicURL(pageURL)) {
         [webView evaluateJavaScript:@"Array.from(document.querySelectorAll('link[rel]')).find(x => x.rel.toLowerCase().split(/\\s+/).includes('icon'))?.href || ''" completionHandler:^(id value, NSError *error) {
             if (!error && [value isKindOfClass:NSString.class]) [self.favicons preferIcon:[NSURL URLWithString:value] forPage:pageURL];
+            // The tab strip also needs an icon when this site is not bookmarked.
+            if ([self pageForView:webView]) [self.favicons requestURL:pageURL];
         }];
     }
-    if (GewuBrowserPublicURL(webView.URL)) [self emit:@{ @"event": @"visit", @"event_id": self.visitID ?: NSUUID.UUID.UUIDString,
+    if (GewuBrowserPublicURL(webView.URL)) [self emit:@{ @"event": @"visit", @"event_id": page.visitID ?: NSUUID.UUID.UUIDString,
         @"url": webView.URL.absoluteString, @"title": webView.title ?: webView.URL.host ?: @"Webpage" }];
 }
 
 - (void)navigationFailed:(NSError *)error {
+    [self navigationFailed:error inPage:self.currentPage];
+}
+- (void)navigationFailed:(NSError *)error inPage:(GewuBrowserPage *)page {
+    if (![self tabForPage:page]) return;
     if (error.code == NSURLErrorCancelled || (error.code == 102 && [error.domain isEqualToString:WKErrorDomain])) return;
-    NSURL *secureURL = GewuBrowserHTTPSRecoveryURL(error, self.mainNavigationRequest, self.attemptedHTTPSRecovery);
+    NSURL *secureURL = GewuBrowserHTTPSRecoveryURL(error, page.mainNavigationRequest, page.attemptedHTTPSRecovery);
     if (GewuBrowserPublicURL(secureURL)) {
-        self.attemptedHTTPSRecovery = YES;
-        [self.webView loadRequest:[NSURLRequest requestWithURL:secureURL]];
+        page.attemptedHTTPSRecovery = YES;
+        WKNavigation *navigation = [page.view loadRequest:[NSURLRequest requestWithURL:secureURL]];
+        GewuBrowserTab *tab = [self tabForPage:page];
+        if (tab.contentPendingFromHome) tab.pendingHomeNavigation = navigation;
         return;
     }
     id failed = error.userInfo[NSURLErrorFailingURLErrorKey];
-    self.failedURL = [failed isKindOfClass:NSURL.class] && GewuBrowserPublicURL(failed) ? failed : self.mainNavigationRequest.URL;
-    [self emit:@{ @"event": @"error", @"message": GewuBrowserNavigationErrorMessage(error) }];
-    [self emitState];
+    page.failedURL = [failed isKindOfClass:NSURL.class] && GewuBrowserPublicURL(failed) ? failed : page.mainNavigationRequest.URL;
+    page.errorMessage = GewuBrowserNavigationErrorMessage(error);
+    if (page == self.currentPage) [self emitState]; else [self emitTabs];
 }
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self navigationFailed:error]; }
-- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error { [self navigationFailed:error]; }
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    GewuBrowserPage *page = [self pageForView:webView];
+    GewuBrowserTab *tab = [self tabForPage:page];
+    if (tab.contentPendingFromHome) {
+        if (page != tab.currentPage || (tab.pendingHomeNavigation && navigation != tab.pendingHomeNavigation)) return;
+        if (error.code == NSURLErrorCancelled || (error.code == 102 && [error.domain isEqualToString:WKErrorDomain])) {
+            [self returnToRetainedHomeInTab:tab]; return;
+        }
+    }
+    [self navigationFailed:error inPage:page];
+}
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    GewuBrowserPage *page = [self pageForView:webView];
+    if ([self tabForPage:page].contentPendingFromHome) return;
+    [self navigationFailed:error inPage:page];
+}
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    GewuBrowserPage *page = [self pageForView:webView];
+    page.terminated = YES; page.ready = NO;
+    page.errorMessage = @"The webpage process stopped. Reload to continue; your bookmarks and history are safe.";
+    if (webView != self.webView) { [self emitTabs]; return; }
+    [self emitState];
     [self emit:@{ @"event": @"error", @"message": @"The webpage process stopped. Reload to continue; your bookmarks and history are safe." }];
 }
 
 - (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
+    if (webView != self.webView || !self.active || self.workspace.window.attachedSheet) { completionHandler(); return; }
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = frame.request.URL.host ?: @"Website message";
     alert.informativeText = [message substringToIndex:MIN(message.length, 2000)];
@@ -470,6 +963,7 @@
     [alert beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse response) { completionHandler(); }];
 }
 - (void)webView:(WKWebView *)webView runJavaScriptConfirmPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL))completionHandler {
+    if (webView != self.webView || !self.active || self.workspace.window.attachedSheet) { completionHandler(NO); return; }
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = frame.request.URL.host ?: @"Website confirmation";
     alert.informativeText = [message substringToIndex:MIN(message.length, 2000)];
@@ -477,6 +971,7 @@
     [alert beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse response) { completionHandler(response == NSAlertFirstButtonReturn); }];
 }
 - (void)webView:(WKWebView *)webView runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSString *))completionHandler {
+    if (webView != self.webView || !self.active || self.workspace.window.attachedSheet) { completionHandler(nil); return; }
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = frame.request.URL.host ?: @"Website input";
     alert.informativeText = [prompt substringToIndex:MIN(prompt.length, 2000)];
@@ -486,6 +981,7 @@
     [alert beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse response) { completionHandler(response == NSAlertFirstButtonReturn ? input.stringValue : nil); }];
 }
 - (void)webView:(WKWebView *)webView runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSArray<NSURL *> *))completionHandler {
+    if (webView != self.webView || !self.active || self.workspace.window.attachedSheet) { completionHandler(nil); return; }
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.message = [NSString stringWithFormat:@"Choose files to upload to %@", frame.request.URL.host ?: @"this website"];
     panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
@@ -498,8 +994,12 @@
     download.delegate = self;
     [self.downloads setObject:[NSMutableDictionary dictionary] forKey:download];
 }
-- (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction didBecomeDownload:(WKDownload *)download { [self registerDownload:download]; }
-- (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse didBecomeDownload:(WKDownload *)download { [self registerDownload:download]; }
+- (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction didBecomeDownload:(WKDownload *)download {
+    [self registerDownload:download]; [self returnToRetainedHomeInTab:[self tabForPage:[self pageForView:webView]]];
+}
+- (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse didBecomeDownload:(WKDownload *)download {
+    [self registerDownload:download]; [self returnToRetainedHomeInTab:[self tabForPage:[self pageForView:webView]]];
+}
 - (void)download:(WKDownload *)download willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request decisionHandler:(void (^)(WKDownloadRedirectPolicy))decisionHandler {
     decisionHandler(GewuBrowserPublicURL(request.URL) ? WKDownloadRedirectPolicyAllow : WKDownloadRedirectPolicyCancel);
 }
@@ -553,13 +1053,16 @@
 - (void)invalidate {
     if (self.invalidated) return;
     self.invalidated = YES;
+    [self.loginTrigger cancelPending];
     if (self.keyMonitor) [NSEvent removeMonitor:self.keyMonitor];
     self.keyMonitor = nil;
     [self.favicons invalidate];
     [self.suggestionsView removeFromSuperview]; self.suggestionsView = nil; self.suggestionItems = nil;
-    for (NSString *key in @[@"URL", @"title", @"loading", @"estimatedProgress", @"canGoBack", @"canGoForward"]) [self.webView removeObserver:self forKeyPath:key];
     for (WKDownload *download in self.downloads.keyEnumerator.allObjects) [download cancel:nil];
-    [self.webView stopLoading]; [self.webView removeFromSuperview];
-    self.webView.navigationDelegate = nil; self.webView.UIDelegate = nil;
+    for (GewuBrowserTab *tab in self.tabs) {
+        [self disposePage:tab.homePage]; [self disposePage:tab.contentPage];
+        [tab.session.entries removeAllObjects];
+    }
+    [self.tabs removeAllObjects]; self.selectedTab = nil; self.webView = nil; self.browserDataStore = nil;
 }
 @end

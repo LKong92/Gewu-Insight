@@ -13,6 +13,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BrowserNativeNavigationTests(unittest.TestCase):
+    def test_tabs_preserve_webkit_configuration_and_do_not_hook_password_delivery(self):
+        source = (ROOT / "scripts/GewuBrowserController.m").read_text()
+        popup = source.split('- (WKWebView *)webView:', 1)[1].split('- (void)webViewDidClose:', 1)[0]
+        self.assertIn('configuration:configuration', popup)
+        self.assertNotIn('loadRequest:', popup)
+        self.assertIn('WebMenuItemTagOpenLinkInNewWindow', source)
+        self.assertIn('Open Link in New Tab', source)
+        switch = source.split('- (void)selectTab:', 1)[1].split('- (GewuBrowserTab *)addTabWithRequest:', 1)[0]
+        self.assertNotIn('stopLoading', switch)
+        self.assertNotIn('loadRequest:', switch)
+        self.assertIn('self.webView == view', source)
+        ui = (ROOT / 'paper_monitor/browser_ui.js').read_text()
+        renderer = ui.split('function renderTabs()', 1)[1].split('function newTab(', 1)[0]
+        self.assertIn('existing.get(tab.id)', renderer)
+        self.assertNotIn('.focus(', renderer)
+
+    def test_home_only_hides_secondary_google_footer(self):
+        source = (ROOT / 'scripts/GewuBrowserController.m').read_text()
+        fit = source.split('- (void)fitHomeGeneration:', 1)[1].split('- (void)scheduleHomeFit', 1)[0]
+        self.assertIn('#SIvCob', fit)
+        self.assertIn('#fbar', fit)
+        self.assertIn('display: none !important', fit)
+        self.assertIn("u.searchParams.has('q')", fit)
+        self.assertNotIn('removeChild', fit)
+
+    def test_home_fit_is_bounded_geometry_only_and_restores_ordinary_pages(self):
+        source = (ROOT / "scripts/GewuBrowserController.m").read_text()
+        fit = source.split('- (void)fitHomeGeneration:', 1)[1].split('- (void)handleCommand:', 1)[0]
+        self.assertIn('document.documentElement.scrollHeight', fit)
+        self.assertIn('GewuBrowserGoogleHome(self.webView.URL)', fit)
+        self.assertIn('generation != self.homeFitGeneration', fit)
+        self.assertIn('attempts:3', fit)
+        self.assertNotIn('addEventListener', fit)
+        self.assertNotIn('setInterval', fit)
+        self.assertNotIn('makeFirstResponder', fit)
+        self.assertNotIn('querySelector', fit)
+        self.assertIn('[role=contentinfo]', fit)
+        self.assertIn("u.searchParams.has('q')", fit)
+        self.assertIn("gewu-insight-home-surface')?.remove()", source)
+        self.assertIn('self.webView.pageZoom = self.currentPage.previousPageZoom', source)
+        self.assertIn('!GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom]', source)
+
     def test_context_menu_keeps_system_insertion_target_in_remote_webview(self):
         native = (ROOT / "scripts/GewuBrowserController.m").read_text()
         view = native.split("@implementation GewuBrowserWebView", 1)[1].split("@end", 1)[0]
@@ -41,15 +83,32 @@ class BrowserNativeNavigationTests(unittest.TestCase):
         source = (ROOT / "scripts/GewuBrowserController.m").read_text()
         policy = source.split("decidePolicyForNavigationAction:", 1)[1].split("createWebViewWithConfiguration:", 1)[0]
         self.assertNotIn("WKNavigationActionPolicyDownload", policy)
-        self.assertIn("self.navigationRequestedDownload = action.shouldPerformDownload", policy)
+        self.assertIn("page.navigationRequestedDownload = action.shouldPerformDownload", policy)
         self.assertIn("GewuBrowserResponsePolicy(response.response, response.canShowMIMEType", source)
-        self.assertIn("GewuBrowserHTTPSRecoveryURL(error, self.mainNavigationRequest", source)
-        self.assertIn("NSURL *url = self.failedURL ?: self.webView.URL", source)
+        self.assertIn("GewuBrowserHTTPSRecoveryURL(error, page.mainNavigationRequest", source)
+        self.assertIn("NSURL *url = self.currentPage.failedURL ?: self.webView.URL", source)
         self.assertNotIn("NSURLSession", source)
         plist = plistlib.loads((ROOT / "Gewu Insight.app/Contents/Info.plist").read_bytes())
         ats = plist.get("NSAppTransportSecurity", {})
         self.assertFalse(ats.get("NSAllowsArbitraryLoads", False))
         self.assertFalse(ats.get("NSAllowsArbitraryLoadsInWebContent", False))
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("xcrun"), "macOS compiler required")
+    def test_home_reuse_and_navigation_with_fake_surfaces(self):
+        with tempfile.TemporaryDirectory(prefix="gewu-home-session-test-") as directory:
+            executable = Path(directory) / "home-test"
+            env = dict(os.environ, CLANG_MODULE_CACHE_PATH=str(Path(directory) / "modules"))
+            build = subprocess.run([
+                "xcrun", "clang", "-fobjc-arc", "-framework", "Cocoa", "-framework", "WebKit",
+                "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-I", str(ROOT / "scripts"),
+                str(ROOT / "tests/browser_home_session_probe.m"), str(ROOT / "scripts/GewuBrowserFavicons.m"),
+                str(ROOT / "scripts/GewuBrowserAutoFill.m"),
+                "-o", str(executable),
+            ], capture_output=True, text=True, env=env, timeout=90)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("checks passed", result.stdout)
 
     def test_favicons_are_bounded_private_and_passwords_remain_system_owned(self):
         source = (ROOT / "scripts/GewuBrowserFavicons.m").read_text()

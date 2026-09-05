@@ -38,10 +38,12 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     -framework UniformTypeIdentifiers \
     "$SOURCE" \
     "$PROJECT_DIR/scripts/GewuBrowserController.m" \
+    "$PROJECT_DIR/scripts/GewuBrowserAutoFill.m" \
     "$PROJECT_DIR/scripts/GewuBrowserFavicons.m" \
     -o "$OUTPUT"
 
 chmod +x "$OUTPUT"
+cp "$PROJECT_DIR/scripts/GewuBrowserLoginProbe.js" "$APP/Contents/Resources/GewuBrowserLoginProbe.js"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
 cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"

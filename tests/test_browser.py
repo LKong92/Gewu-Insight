@@ -307,6 +307,60 @@ assert.deepEqual(model.favoriteContents(nodes,null,3).items,[]);
         self.assertNotIn('browserFavoritesFolder', ui)
         self.assertNotIn('browser-favorites-heading', css)
 
+    def test_webpage_tabs_are_square_contiguous_and_inside_main_column(self):
+        ui = (ROOT / "paper_monitor/browser_ui.js").read_text()
+        css = (ROOT / "paper_monitor/browser_ui.css").read_text()
+        markup = ui.split('root.innerHTML = `', 1)[1].split('document.body.append(root)', 1)[0]
+        self.assertLess(markup.index('</aside>'), markup.index('id="browserTabs"'))
+        self.assertLess(markup.index('class="browser-page-column"'), markup.index('id="browserTabs"'))
+        self.assertLess(markup.index('id="browserTabs"'), markup.index('id="browserViewport"'))
+        bar = css.split('.browser-tabs {', 1)[1].split('}', 1)[0]
+        tab = css.split('.browser-web-tab {', 1)[1].split('}', 1)[0]
+        self.assertIn('padding: 0', bar)
+        self.assertIn('gap: 0', bar)
+        self.assertIn('border-radius: 0', tab)
+        self.assertNotIn('max-width', tab)
+        self.assertEqual(ui.count('column.clientHeight - $("browserTabs").offsetHeight'), 2)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js required")
+    def test_home_geometry_fits_favorites_and_pages_without_losing_items(self):
+        script = "const assert = require('node:assert/strict'); const model = require(" + json.dumps(str(ROOT / "paper_monitor/browser_ui.js")) + ");\n" + r'''
+const regular = model.homeLayout(1200, 850, 26);
+assert.equal(regular.pages, 1);
+assert.equal(regular.height, 332);
+assert.ok(850 - regular.height > 500, 'Google receives the remaining height');
+for (const width of [320, 650, 900, 1200, 1800]) {
+  for (const height of [450, 600, 850, 1000]) {
+    for (const count of [1, 26, 60, 501]) {
+      for (const nested of [false, true]) {
+        const fit = model.homeLayout(width, height, count, nested);
+        assert.ok(fit.height < height && fit.columns >= 1);
+        assert.ok(fit.pages * fit.capacity >= count);
+        const source = Array.from({length:count}, (_, i) => i), visible = [];
+        for (let page = 0; page < fit.pages; page++) visible.push(...source.slice(page*fit.capacity, (page+1)*fit.capacity));
+        assert.deepEqual(visible, source, 'all favorites including Add Favorite remain reachable');
+      }
+    }
+  }
+}
+assert.ok(model.homeLayout(650, 450, 26).pages > 1);
+'''
+        result = subprocess.run([shutil.which("node"), "-"], input=script, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_home_seam_and_footer_geometry_have_one_layout_authority(self):
+        ui = (ROOT / "paper_monitor/browser_ui.js").read_text()
+        css = (ROOT / "paper_monitor/browser_ui.css").read_text()
+        favorites = css.split('.browser-favorites {', 1)[1].split('}', 1)[0]
+        self.assertIn('overflow: hidden', favorites)
+        self.assertIn('border: 0', favorites)
+        self.assertIn('background: #fff', favorites)
+        self.assertNotIn('42vh', css)
+        self.assertIn('--browser-footer-height', css)
+        self.assertIn('root.querySelector(".browser-sidebar-footer").offsetHeight', ui)
+        self.assertIn('layoutObserver.observe(element)', ui)
+        self.assertIn('aria-label="Favorites pages"', ui)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js required")
     def test_address_inline_completion_preserves_typed_prefix_and_search(self):
         script = "const assert = require('node:assert/strict'); const model = require(" + json.dumps(str(ROOT / "paper_monitor/browser_ui.js")) + ");\n" + r'''

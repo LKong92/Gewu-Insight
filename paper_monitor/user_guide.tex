@@ -2602,7 +2602,7 @@ Browser is the sixth main tab, immediately after Author Monitor. It displays rea
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Home combines the real Google page with local Favorites. This example uses a public Journals folder and Nature sidebar search. Bottom controls stay readable even in a narrow sidebar; private pages and history are not shown.
+Browser overview with public journal bookmarks and Nature sidebar search; no private history is shown. This earlier screenshot predates the compact Home and webpage tab strip described below.
 \end{GewuCaption}
 
 \subsection{Search and navigate}\label{search-and-navigate}
@@ -2610,18 +2610,28 @@ Home combines the real Google page with local Favorites. This example uses a pub
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Open Browser.} Its first use opens Home: the real Google homepage above a local Favorites grid. Google supplies its logo, search, and sign-in/account controls using Browser\textquotesingle s own session, not Safari\textquotesingle s. No website is preloaded during App startup.
+  \textbf{Open Browser.} Its first use opens Home: the real Google homepage above local Favorites. Google\textquotesingle s logo, search, and account controls use Browser\textquotesingle s own session, not Safari\textquotesingle s. No website is preloaded during App startup.
 \item
   \textbf{Use the address field.} Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use {{\symbolfont ⌘}L} to focus the field.
 \item
-  \textbf{Navigate normally.} Back, Forward, Reload/Stop, and Home sit in the compact toolbar. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height. Links requesting a new window stay in this Browser surface and its back stack.
+  \textbf{Navigate normally.} Back, Forward, Reload/Stop, and Home act on the selected webpage tab. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height.
 \item
   \textbf{Switch between workspaces.} Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.
 \end{enumerate}
 
+\textbf{Instant Home, online search.} Each tab lazily retains Home and a browsing view. Home returns without reloading; Reload refreshes it, including account state. App restart, interrupted loads and process termination need a connection. Search/sign-in remain online. Tabs share Browser\textquotesingle s persistent profile, without saved HTML/password copies or replayed forms.
+
 {{\symbolfont ⌘}F} opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native \textbf{Gewu Insight.app}; opening the local UI in a separate web browser does not embed another browser engine.
 
-\textbf{Choose your Favorites.} Home recognizes an existing Favorites/Favourites folder, including supported localized or imported names. Use its folder selector to choose a different bookmark folder, or \textbf{Create Favorites Folder} if none exists. Tiles are the folder\textquotesingle s direct children, not duplicate records. Open a child folder and use its breadcrumb to return; use \textbf{Add Favorite} to enter a link, or right-click a tile to edit it. The folder choice is saved locally. Deleting a chosen folder asks you to choose again rather than silently displaying another folder. Favorites stays available with the sidebar hidden or History selected. Google receives no Favorites list from Gewu.
+\textbf{Favorites on Home.} Favorites/Favourites (including localized names) supplies the tiles; use \textbf{Create Favorites Folder} if missing. Open nested folders and return through breadcrumbs; use \textbf{Add Favorite} or right-click to edit. Google\textquotesingle s real logo/search/account controls remain; secondary language/region/footer links are hidden only on Home. Native zoom fits Google above the divider-free tiles. Other pages keep normal zoom/scrolling. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Bookmarks are not sent to Google.
+
+\subsection{Use multiple webpage tabs}\label{use-multiple-webpage-tabs}
+
+Below the address toolbar, tabs show icons, titles and \textbf{×}. The top-right \textbf{+} (\textbf{New Tab}, {{\symbolfont ⌘}T}) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.
+
+Right-click links for \textbf{Open Link in New Tab}, or Command-click. New-window links also create tabs, including inline PDFs. Bookmarks/Favorites/History offer \textbf{Open in New Tab}. New tabs are selected immediately; ordinary clicks use the current tab.
+
+\textbf{×} or {{\symbolfont ⌘}W} closes a tab; closing the last opens Home. Left/Right switches focused tabs. Up to 32 tabs stay in memory, not restored after App quit. Save drafts before closing; bookmarks, history, downloads and sign-ins remain. AutoFill only triggers in the visible page.
 
 \subsection{Save and organize bookmarks}\label{save-and-organize-bookmarks}
 
@@ -2653,44 +2663,38 @@ Imports go into \textbf{Imported Bookmarks}, retaining folders, order, names, an
 
 \subsection{Website icons}\label{website-icons}
 
-Visible bookmark rows and Favorites tiles request website icons directly from the corresponding sites, with at most two requests in flight. Icons share a local cache; unavailable icons show a globe in the sidebar or a letter on Home. Visiting a page may supply its nonstandard icon address. Gewu does not send your bookmark list to an external icon service, fetch entire article pages for icons, or attach cookies or credentials. The disposable icon cache is separate from SQLite bookmarks.
+Bookmarks, Favorites and webpage tabs use a disposable local icon cache, separate from SQLite. Icons come directly from sites (at most two concurrent requests), without cookies, credentials, whole-article fetching or third-party icon services. Visits may supply a nonstandard icon URL. Missing icons use globes or Home initials; bookmark lists are never sent to an icon service.
 
 \subsection{Revisit and clear history}\label{revisit-and-clear-history}
 
-History groups successfully loaded main pages by Today, Yesterday, and date. It includes names, sites, and visit times, supports search, and loads older records in pages. Image/script requests and main-tab switching do not create visits. Reloading the same navigation updates its existing record rather than adding duplicates.
+History groups loaded main pages by Today, Yesterday, and date, with names, sites, visit times, search, and pagination. Subresources, main-tab switches, and cached Home returns add no visits; Reload updates the existing record. Click to revisit; right-click to bookmark or delete a visit.
 
-Click a history entry to revisit it. Its context menu can add a bookmark or delete that visit. \textbf{Clear History} offers Last hour, Last 24 hours, Last 7 days, and All history, with confirmation. It preserves bookmarks, downloaded files, cookies, and website sign-ins. Ordinary history is retained until you delete it; authorization callbacks and recognized signed-download URLs are excluded from saved history.
+\textbf{Clear History} confirms Last hour, Last 24 hours, Last 7 days, or All history. It preserves bookmarks, downloads, cookies, and sign-ins. History remains until deleted; authorization callbacks and recognized signed-download URLs are excluded.
 
 \subsection{Read PDFs and save downloads}\label{read-pdfs-and-save-downloads}
 
-Viewable PDF responses open inline, even when a publisher labels the PDF as an attachment or its link requests a download. Back and Forward retain the article/PDF navigation. Use the download button or \textbf{Share \textgreater{} Save Download} to save explicitly. Other attachments and unsupported formats open the native save sheet. Both viewing and downloading use Browser\textquotesingle s website session, not the Python publisher downloader.
-
-A saved download is not automatically added to Library and does not create a paper or Gewu Key. \hyperref[import-files]{Import it explicitly} when wanted. Existing Library PDF opening in macOS Preview is unchanged. A website may require its own Download link to obtain an actual PDF rather than an HTML viewer.
+Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or \textbf{Share \textgreater{} Save Download}; unsupported attachments use a save sheet. This uses Browser\textquotesingle s session, not Python\textquotesingle s downloader. For HTML viewers, use the site\textquotesingle s PDF link. Downloads create no Library paper or Gewu Key: \hyperref[import-files]{import explicitly}. Library PDFs still open in macOS Preview.
 
 \subsection{System networking and Clash rules}\label{system-networking-and-clash-rules}
 
-Browser uses macOS WebKit networking without an App-specific proxy override. If system proxy or TUN routing sends traffic into Clash, its active rules choose DIRECT or a proxy. The \textbf{System network} footer describes this policy, not a verified route. Gewu Insight does not change Clash settings.
-
-DIRECT still needs a school-recognized network exit or authorized institutional login. PDF, login, and CDN domains match rules separately; Chrome-only extensions or Safari/Chrome-only process rules are not inherited. Check actual Clash connections, not just homepage access. See \hyperref[network-access]{Publisher and Network Access} for the distinction between traffic capture and routing rules.
+WebKit follows macOS networking without changing proxies/Clash. When system proxy or TUN routes traffic to Clash, its rules choose DIRECT/proxy. \textbf{System network} is policy, not proof of routing. DIRECT needs a school-recognized exit or institutional login. PDF/login/CDN domains match separately; browser-specific extensions/process rules are not inherited. Verify Clash connections; see \hyperref[network-access]{Publisher and Network Access}.
 
 \subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
 
-Bookmarks and history live in \hyperref[privacy]{local SQLite}, separate from paper records. Cookies and cache use an independent persistent WebKit profile. Safari data and extensions are not automatically imported or synchronized. Browsing and search requests go to the websites you visit.
-
-External pages receive no Library or credential bridge. Local app addresses, files, and application schemes are blocked. An HTTP bookmark or redirect blocked by macOS may retry once as a same-host HTTPS GET; forms are not replayed, and certificate checks are never bypassed. Failures show a specific reason and error code. The local server rejects cross-site API requests and unrecognized hosts.
+Bookmarks/history use \hyperref[privacy]{local SQLite}; cookies/cache use Browser\textquotesingle s persistent profile, not Safari synchronization. Browsing/search reaches websites, but external pages have no Library/credential bridge. Local/file/application addresses are blocked. HTTP recovery retries once as same-host HTTPS GET, without replaying forms or bypassing certificates; errors include reason/code. The local server rejects cross-site API requests and unrecognized hosts.
 
 \subsection{Use macOS Passwords}\label{use-macos-passwords}
 
-The key-shaped \textbf{Open Passwords} button opens Apple\textquotesingle s Passwords app on supported Macs. Unlock and choose credentials there yourself; on older macOS versions, use Passwords in System Settings. Gewu does not create a password vault, import or export passwords, read the system password list, or relay passwords through its local UI API.
+\textbf{Open Passwords} opens Apple\textquotesingle s app (or use Passwords in System Settings on older Macs). Unlock and choose credentials there yourself. Gewu has no password vault and never imports, exports, lists or relays credentials.
 
-\textbf{Automatic password filling is not implemented.} On the tested macOS 15.1.1, focusing Google\textquotesingle s username field does not provide Safari\textquotesingle s saved-account suggestions. Apple\textquotesingle s normal App password API requires a trusted App/website association; it is not an arbitrary-website password lookup. WebAuthn/passkey prompts are a different capability. Safari/Chrome password extensions are not inherited by this WKWebView. Open Passwords lets you choose and copy a credential yourself; use \textbf{Open in Safari} when Safari AutoFill is needed. Gewu does not inspect your vault or add false associated-domain claims.
+\textbf{Conservative AutoFill trigger.} A single, unmodified click on an explicitly marked HTTPS login username or current-password input can open \textbf{AutoFill \textgreater{} Passwords}. Search, ordinary email, registration, codes, embedded frames and uncertain fields are skipped, as are keyboard focus, double-clicks and dragging. Each field kind is offered once per site per App session, including cancellation; right-click AutoFill retries manually. Navigation or intervening input cancels a pending trigger. macOS handles authentication, selection and filling; Gewu never reads credentials or submits login. Site matching, Safari-style suggestions and successful filling are not guaranteed.
 
 A macOS prompt for \textbf{Gewu Insight WebCrypto Master Key} concerns WebKit\textquotesingle s protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.
 
 \begin{quote}
 \textbf{Compatibility}
 
-Some sign-in providers or publisher checks reject embedded browsers. Use \textbf{Open in Safari} for those cases; it opens the address but does not transfer Browser cookies. Do not bypass a paywall, CAPTCHA, or access control. Existing Open Website and Google Scholar actions elsewhere in the App still use their previous external-browser workflow in this first Browser release.
+Some sites reject embedded browsers. Use \textbf{Open in Safari}; it opens the address without transferring Browser cookies. Never bypass paywalls, CAPTCHAs, or access controls. Paper-related Open Website and Google Scholar actions elsewhere still use external browsers.
 \end{quote}
 
 \chapter{Settings and Safety}\label{chapter-19}

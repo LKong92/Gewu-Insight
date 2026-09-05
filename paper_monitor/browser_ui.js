@@ -91,7 +91,19 @@
     }
     return {folder, trail:[folder], items:nodes.filter(node => node.parent_id === folder.id)};
   }
-  const model = {address, droppedURL, bookmarkTree, folderChoices, dayLabel, escape, microtaskScheduler, isGoogleHome, favoritesFolder, favoriteContents, inlineCompletion};
+  // Match the tile metrics in browser_ui.css. Reserve most of Home for Google;
+  // overflow is paged, never clipped or turned into a second vertical scroller.
+  function homeLayout(width, height, count, nested = false) {
+    const columns = Math.max(1, Math.floor((Math.min(1100, width) - 48 + 12) / 100));
+    const overhead = 14 + (nested ? 30 : 0);
+    const budget = Math.max(140 + overhead, height * .44);
+    const needed = Math.max(1, Math.ceil(count / columns));
+    let rows = Math.max(1, Math.min(needed, Math.floor((budget - overhead) / 106)));
+    if (rows < needed) rows = Math.max(1, Math.floor((budget - overhead - 26) / 106));
+    const capacity = rows * columns, pages = Math.max(1, Math.ceil(count / capacity));
+    return {columns, capacity, pages, height:rows * 106 + overhead + (pages > 1 ? 26 : 0)};
+  }
+  const model = {address, droppedURL, bookmarkTree, folderChoices, dayLabel, escape, microtaskScheduler, isGoogleHome, favoritesFolder, favoriteContents, inlineCompletion, homeLayout};
   if (typeof module !== "undefined" && module.exports) module.exports = model;
   if (typeof document === "undefined") return;
 
@@ -100,8 +112,9 @@
   const native = payload => { if (bridge()) bridge().postMessage(payload); };
   const data = {active:false, opened:false, loaded:false, tab:"bookmarks", bookmarks:[], history:[], more:false,
     preferences:{}, expanded:new Set(), width:250, hidden:false, url:"", title:"", loading:false,
-    query:"", selected:null, favoritePath:null, home:false, fetching:0, layout:"", editor:null, confirm:null, searchTimer:null, persistTimer:null,
-    addressQuery:"", suggestions:[], suggestionIndex:-1, suggestionGeneration:0, addressTimer:null, composing:false};
+    query:"", selected:null, favoritePath:null, favoritePage:0, favoriteLayout:"", home:false, fetching:0, layout:"", editor:null, confirm:null, searchTimer:null, persistTimer:null,
+    addressQuery:"", suggestions:[], suggestionIndex:-1, suggestionGeneration:0, addressTimer:null, composing:false,
+    browserTabs:[], browserTab:"", tabsSignature:"", tabChrome:new Map()};
   const icons = {
     back:'<path d="m14 5-7 7 7 7"/>', forward:'<path d="m10 5 7 7-7 7"/>',
     reload:'<path d="M19 8a8 8 0 1 0 1 7M19 3v6h-6"/>', stop:'<path d="m6 6 12 12M18 6 6 18"/>',
@@ -133,6 +146,7 @@
       ${button("browserAddBookmark", "Add Bookmark (⌘D)", "bookmark")}
       ${button("browserPasswords", "Open Passwords", "key")}
       ${button("browserShare", "Share and page actions", "share")}
+      ${button("browserNewTab", "New Tab (⌘T)", "plus")}
     </div>
     <div class="browser-body">
       <aside id="browserSidebar" class="browser-sidebar" aria-label="Browser sidebar">
@@ -150,6 +164,7 @@
         <div id="browserResize" class="browser-sidebar-resize" role="separator" tabindex="0" aria-label="Resize browser sidebar" aria-orientation="vertical"></div>
       </aside>
       <div class="browser-page-column">
+        <div id="browserTabs" class="browser-tabs" role="tablist" aria-label="Webpage tabs"></div>
         <div id="browserFindBar" class="browser-find" hidden><input id="browserFindInput" placeholder="Find on page" aria-label="Find on page"><button id="browserFindPrevious" title="Previous match">↑</button><button id="browserFindNext" title="Next match">↓</button><span id="browserFindResult"></span><button id="browserFindClose" aria-label="Close find">×</button></div>
         <div id="browserMessage" class="browser-message" role="status" hidden><span id="browserMessageText"></span><button id="browserMessageDismiss" aria-label="Dismiss message">×</button></div>
         <div id="browserViewport" class="browser-viewport"><div class="browser-native-placeholder">${icon("globe")}<strong>Browser</strong><span id="browserNativeHint">Opening the native web browser.</span></div></div>
@@ -157,6 +172,7 @@
           <div class="browser-favorites-inner">
             <nav id="browserFavoritesTrail" class="browser-favorites-trail" aria-label="Favorite folders" hidden></nav>
             <div id="browserFavoritesGrid" class="browser-favorites-grid"></div>
+            <nav id="browserFavoritesPages" class="browser-favorites-pages" aria-label="Favorites pages" hidden>${button("browserFavoritesPrevious", "Previous favorites", "back")}<span id="browserFavoritesPage" aria-live="polite"></span>${button("browserFavoritesNext", "Next favorites", "forward")}</nav>
           </div>
         </section>
         <div class="browser-page-footer"><span title="Uses the system network. Actual DIRECT or proxy routing is determined by your network and Clash configuration.">System network</span><span id="browserPageTitle"></span>${button("browserDownload", "Save Download", "download")}${button("browserExternal", "Open in Safari", "external")}</div>
@@ -186,11 +202,24 @@
     favoritesIconObserver.disconnect();
     const folder = favoritesFolder(data.bookmarks);
     const contents = favoriteContents(data.bookmarks, folder, data.favoritePath);
+    if (data.favoritePath !== (contents.folder?.id || null)) data.favoritePage = 0;
     data.favoritePath = contents.folder?.id || null;
+    const column = root.querySelector(".browser-page-column");
+    const available = column.clientHeight - $("browserTabs").offsetHeight - root.querySelector(".browser-page-footer").offsetHeight - $("browserFindBar").offsetHeight - $("browserMessage").offsetHeight;
+    const fit = homeLayout(column.clientWidth, available, contents.items.length + 1, contents.trail.length > 1);
+    data.favoriteLayout = `${column.clientWidth}:${available}`;
+    data.favoritePage = Math.max(0, Math.min(data.favoritePage, fit.pages - 1));
+    root.style.setProperty("--browser-favorites-height", fit.height + "px");
+    root.style.setProperty("--browser-favorites-columns", fit.columns);
+    $("browserFavoritesPages").hidden = fit.pages === 1;
+    $("browserFavoritesPage").textContent = `${data.favoritePage + 1} / ${fit.pages}`;
+    $("browserFavoritesPrevious").disabled = data.favoritePage === 0;
+    $("browserFavoritesNext").disabled = data.favoritePage === fit.pages - 1;
     $("browserFavoritesTrail").hidden = contents.trail.length < 2;
     $("browserFavoritesTrail").innerHTML = contents.trail.map((item, index) => `${index ? '<span aria-hidden="true">/</span>' : ''}<button data-favorite-folder="${item.id}" ${index === contents.trail.length - 1 ? 'aria-current="page"' : ''}>${escape(item.title)}</button>`).join("");
-    $("browserFavoritesGrid").innerHTML = contents.items.map(node => `<button class="browser-favorite-tile" data-favorite-id="${node.id}" title="${escape(node.url || node.title)}"><span class="browser-favorite-icon ${node.kind}" aria-hidden="true">${bookmarkIcon(node, true)}</span><span class="browser-favorite-title">${escape(node.title)}</span></button>`).join("") +
-      (folder ? `<button class="browser-favorite-tile browser-favorite-add" id="browserAddFavorite" title="Add a bookmark to this folder"><span class="browser-favorite-icon">${icon("plus")}</span><span class="browser-favorite-title">Add Favorite</span></button>` : '<div class="browser-favorites-empty">Websites in your Favorites folder appear here.<button id="browserCreateFavorites">Create Favorites Folder</button></div>');
+    const tiles = contents.items.map(node => `<button class="browser-favorite-tile" data-favorite-id="${node.id}" title="${escape(node.url || node.title)}"><span class="browser-favorite-icon ${node.kind}" aria-hidden="true">${bookmarkIcon(node, true)}</span><span class="browser-favorite-title">${escape(node.title)}</span></button>`);
+    tiles.push(folder ? `<button class="browser-favorite-tile browser-favorite-add" id="browserAddFavorite" title="Add a bookmark to this folder"><span class="browser-favorite-icon">${icon("plus")}</span><span class="browser-favorite-title">Add Favorite</span></button>` : '<div class="browser-favorites-empty">Websites in your Favorites folder appear here.<button id="browserCreateFavorites">Create Favorites Folder</button></div>');
+    $("browserFavoritesGrid").innerHTML = tiles.slice(data.favoritePage * fit.capacity, (data.favoritePage + 1) * fit.capacity).join("");
     $("browserAddFavorite")?.addEventListener("click", () => edit({title:"New Favorite",url:"https://"}, "bookmark", contents.folder.id).catch(fail));
     $("browserCreateFavorites")?.addEventListener("click", async () => {
       try {
@@ -209,6 +238,42 @@
     if (home) renderFavorites();
     scheduleLayout();
   }
+
+  function renderTabs() {
+    const signature = JSON.stringify([data.browserTab, data.browserTabs]);
+    if (signature === data.tabsSignature) return;
+    data.tabsSignature = signature;
+    const list = $("browserTabs");
+    const existing = new Map([...list.children].map(element => [element.dataset.browserTab, element]));
+    data.browserTabs.forEach((tab, index) => {
+      const selected = tab.id === data.browserTab;
+      let host = ""; try { host = new URL(tab.url).hostname; } catch (_) {}
+      const saved = siteIcons.get(host);
+      let element = existing.get(tab.id);
+      if (!element) {
+        element = document.createElement('div'); element.dataset.browserTab = tab.id;
+        element.setAttribute('role','tab');
+        element.innerHTML = '<span class="browser-tab-icon" aria-hidden="true"></span><span class="browser-tab-title"></span><button class="browser-tab-close" title="Close Tab (⌘W)">×</button>';
+      }
+      element.className = 'browser-web-tab' + (selected ? ' selected' : '');
+      element.tabIndex = selected ? 0 : -1; element.setAttribute('aria-selected', String(selected));
+      element.setAttribute('aria-label',tab.title || 'New Tab'); element.title = (tab.title || 'New Tab') + (tab.url ? '\n'+tab.url : '');
+      const glyph = element.querySelector('.browser-tab-icon');
+      glyph.classList.toggle('loading', Boolean(tab.loading));
+      const markup = tab.loading ? icon('reload') : saved ? `<img alt="" src="${escape(saved)}">` : icon(isGoogleHome(tab.url) ? 'home' : 'globe');
+      if (glyph.innerHTML !== markup) glyph.innerHTML = markup;
+      element.querySelector('.browser-tab-title').textContent = tab.title || 'New Tab';
+      const close = element.querySelector('.browser-tab-close'); close.dataset.closeTab = tab.id;
+      close.tabIndex = selected ? 0 : -1; close.setAttribute('aria-label','Close '+(tab.title || 'tab'));
+      if (list.children[index] !== element) list.insertBefore(element, list.children[index] || null);
+      existing.delete(tab.id);
+    });
+    for (const element of existing.values()) element.remove();
+    // Keep stable tab nodes, never focus() in a background title/icon callback.
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({block:"nearest", inline:"nearest"});
+  }
+
+  function newTab(url) { closeContext(); closeSuggestions(); native({action:"new-tab", ...(url ? {url} : {})}); }
 
   function message(text, error = false) {
     $("browserMessageText").textContent = text || "";
@@ -286,6 +351,13 @@
     });
   }
   function layout() {
+    if (data.active) {
+      const footer = data.hidden ? 33 : root.querySelector(".browser-sidebar-footer").offsetHeight;
+      root.style.setProperty("--browser-footer-height", footer + "px");
+      const column = root.querySelector(".browser-page-column");
+      const available = column.clientHeight - $("browserTabs").offsetHeight - root.querySelector(".browser-page-footer").offsetHeight - $("browserFindBar").offsetHeight - $("browserMessage").offsetHeight;
+      if (data.home && data.favoriteLayout !== `${column.clientWidth}:${available}`) renderFavorites();
+    }
     const rect = $("browserViewport").getBoundingClientRect();
     const active = data.active;
     const payload = {action:"layout", active, visible:active && !visibleDialog(), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
@@ -348,11 +420,11 @@
     event.preventDefault(); closeContext();
     const menu = $("browserContext");
     const items = node ? [
-      ...(node.kind === "bookmark" ? [["Open", () => navigate(node.url)]] : [["New Folder", () => edit(null, "folder", node.id)]]),
+      ...(node.kind === "bookmark" ? [["Open", () => navigate(node.url)], ["Open in New Tab", () => newTab(node.url)]] : [["New Folder", () => edit(null, "folder", node.id)]]),
       [node.kind === "folder" ? "Rename or Move" : "Edit Bookmark", () => edit(node)],
       ...(node.kind === "folder" ? [["Export Folder", () => exportBookmarks(node.id)]] : []),
       ["Delete", () => remove(node)]
-    ] : visit ? [["Open", () => navigate(visit.url)], ["Add Bookmark", () => edit({title:visit.title, url:visit.url})],
+    ] : visit ? [["Open", () => navigate(visit.url)], ["Open in New Tab", () => newTab(visit.url)], ["Add Bookmark", () => edit({title:visit.title, url:visit.url})],
       ["Delete Visit", async () => { await api("clear_history", {id:visit.id}); await refresh(); }]] : [["New Folder", () => edit(null, "folder", 0)], ["Add Bookmark", () => edit()]];
     menu.replaceChildren();
     items.forEach(([title, handler]) => {
@@ -371,6 +443,7 @@
     if (event.event === "favicon") {
       const value = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(event.data_url || "") && event.data_url.length < 90000 ? event.data_url : "";
       siteIcons.set(event.host, value);
+      data.tabsSignature = ""; renderTabs();
       for (const element of root.querySelectorAll('[data-icon-host]')) if (element.dataset.iconHost === event.host && value) {
         const img = document.createElement("img"); img.alt = ""; img.src = value; element.replaceChildren(img);
       }
@@ -382,10 +455,26 @@
         await refresh(); persist({expanded:[...data.expanded],tab:"bookmarks"});
         message(`Imported ${info.imported} bookmarks · ${info.folders_created} folders created · ${info.duplicates} duplicates reused · ${info.skipped} unsupported or sensitive links skipped. Existing bookmarks were kept.`);
       }).catch(fail);
+    } else if (event.event === "tabs") {
+      data.browserTabs = event.tabs || [];
+      for (const id of data.tabChrome.keys()) if (!data.browserTabs.some(tab => tab.id === id)) data.tabChrome.delete(id);
+      renderTabs();
     } else if (event.event === "state") {
-      data.url = event.url || data.url; data.title = event.title || ""; data.loading = event.loading;
+      const switched = event.tab_id && event.tab_id !== data.browserTab;
+      if (switched) {
+        if (data.browserTab) data.tabChrome.set(data.browserTab, {favoritePath:data.favoritePath, favoritePage:data.favoritePage});
+        data.browserTab = event.tab_id;
+        Object.assign(data, data.tabChrome.get(data.browserTab) || {favoritePath:null, favoritePage:0});
+        closeSuggestions(); closeContext();
+        $("browserFindBar").hidden = true; $("browserFindInput").value = ""; $("browserFindResult").textContent = "";
+        message(event.error || "", Boolean(event.error));
+        // Force geometry delivery even when two tabs happen to have equal frames.
+        data.layout = ""; data.favoriteLayout = ""; scheduleLayout();
+      }
+      data.url = event.url ?? data.url; data.title = event.title || ""; data.loading = event.loading;
       updateHome();
-      if (document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
+      if (switched && data.home) renderFavorites();
+      if (switched || document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
       $("browserSiteIcon").href = data.url || "#";
       $("browserSiteIcon").title = data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
       $("browserBack").disabled = !event.canBack; $("browserForward").disabled = !event.canForward;
@@ -394,6 +483,7 @@
       $("browserReload").setAttribute("aria-label", $("browserReload").title);
       $("browserProgress").style.width = (event.loading ? Math.max(3, event.progress * 100) : 0) + "%";
       $("browserPageTitle").textContent = data.title;
+      if (event.error) message(event.error, true);
     } else if (event.event === "navigation-start") { message(""); }
     else if (event.event === "visit") {
       api("visit", {event_id:event.event_id, url:event.url, title:event.title}).then(() => {
@@ -433,16 +523,41 @@
   $("browserImportBookmarks").onclick = () => native({action:"import-bookmarks"});
   $("browserExportBookmarks").onclick = () => exportBookmarks().catch(fail);
   $("browserPasswords").onclick = () => native({action:"passwords"});
+  $("browserNewTab").onclick = () => newTab();
+  $("browserTabs").onclick = event => {
+    const close = event.target.closest("[data-close-tab]");
+    const tab = event.target.closest("[data-browser-tab]");
+    if (!tab) return;
+    closeSuggestions(); closeContext();
+    native({action:close ? "close-tab" : "select-tab", tab_id:tab.dataset.browserTab});
+  };
+  $("browserTabs").onauxclick = event => {
+    const tab = event.target.closest("[data-browser-tab]");
+    if (event.button === 1 && tab) { event.preventDefault(); native({action:"close-tab",tab_id:tab.dataset.browserTab}); }
+  };
+  $("browserTabs").onkeydown = event => {
+    if (event.target.closest("[data-close-tab]")) return;
+    const index = data.browserTabs.findIndex(tab => tab.id === data.browserTab);
+    let target = index;
+    if (event.key === "ArrowRight") target = (index + 1) % data.browserTabs.length;
+    else if (event.key === "ArrowLeft") target = (index - 1 + data.browserTabs.length) % data.browserTabs.length;
+    else if (event.key === "Home") target = 0;
+    else if (event.key === "End") target = data.browserTabs.length - 1;
+    else if (["Delete", "Backspace"].includes(event.key)) { event.preventDefault(); native({action:"close-tab",tab_id:data.browserTab}); return; }
+    else return;
+    event.preventDefault();
+    if (data.browserTabs[target]) native({action:"select-tab",tab_id:data.browserTabs[target].id});
+  };
   $("browserFavoritesTrail").onclick = event => {
     const button = event.target.closest("[data-favorite-folder]");
-    if (button) { data.favoritePath = Number(button.dataset.favoriteFolder); renderFavorites(); }
+    if (button) { data.favoritePath = Number(button.dataset.favoriteFolder); data.favoritePage = 0; renderFavorites(); }
   };
   $("browserFavoritesGrid").onclick = event => {
     const button = event.target.closest("[data-favorite-id]");
     const node = data.bookmarks.find(item => item.id === Number(button?.dataset.favoriteId));
     if (!node) return;
-    if (node.kind === "folder") { data.favoritePath = node.id; renderFavorites(); }
-    else navigate(node.url);
+    if (node.kind === "folder") { data.favoritePath = node.id; data.favoritePage = 0; renderFavorites(); }
+    else if (event.metaKey) newTab(node.url); else navigate(node.url);
   };
   $("browserFavoritesGrid").oncontextmenu = event => {
     const button = event.target.closest("[data-favorite-id]");
@@ -525,8 +640,8 @@
       if (node.kind === "folder") {
         if (data.expanded.has(node.id)) data.expanded.delete(node.id); else data.expanded.add(node.id);
         persist({expanded:[...data.expanded]}); render();
-      } else { navigate(node.url); render(); }
-    } else if (visit) { navigate(data.history.find(n => n.id === Number(visit.dataset.historyId)).url); }
+      } else { if (event.metaKey) newTab(node.url); else navigate(node.url); render(); }
+    } else if (visit) { const url = data.history.find(n => n.id === Number(visit.dataset.historyId)).url; if (event.metaKey) newTab(url); else navigate(url); }
   };
   $("browserCollection").oncontextmenu = event => {
     const row = event.target.closest("[data-bookmark-id]"), visit = event.target.closest("[data-history-id]");
@@ -597,7 +712,10 @@
   $("browserFindInput").onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); find(event.shiftKey); } };
   $("browserFindNext").onclick = () => find(); $("browserFindPrevious").onclick = () => find(true);
   $("browserFindClose").onclick = () => { $("browserFindBar").hidden = true; scheduleLayout(); };
-  new ResizeObserver(scheduleLayout).observe($("browserViewport"));
+  $("browserFavoritesPrevious").onclick = () => { data.favoritePage--; renderFavorites(); };
+  $("browserFavoritesNext").onclick = () => { data.favoritePage++; renderFavorites(); };
+  const layoutObserver = new ResizeObserver(scheduleLayout);
+  for (const element of [$("browserViewport"), root.querySelector(".browser-sidebar-footer"), root.querySelector(".browser-page-column")]) layoutObserver.observe(element);
   new MutationObserver(() => { if (data.active) scheduleLayout(); }).observe(document.body, {subtree:true, childList:true, attributes:true, attributeFilter:["class","hidden","open","aria-hidden"]});
   addEventListener("resize", () => { scheduleLayout(); if (data.suggestions.length) showSuggestions(); });
   $("browserBack").disabled = true; $("browserForward").disabled = true;

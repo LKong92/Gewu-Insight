@@ -15,6 +15,15 @@ static NSHTTPURLResponse *response(NSString *mime, NSString *disposition) {
 
 int main(void) {
     @autoreleasepool {
+        for (NSString *url in @[@"https://www.google.com/", @"https://google.com/webhp?hl=en", @"https://www.google.com/?authuser=0"])
+            check(GewuBrowserGoogleHome([NSURL URLWithString:url]), @"only the real Google homepage can be fitted");
+        for (NSString *url in @[@"https://www.google.com/search?q=paper", @"https://www.google.com/?q=", @"https://accounts.google.com/", @"https://www.google.com.evil.example/", @"http://www.google.com/", @"https://user@www.google.com/", @"https://www.google.com:8765/", @"https://www.nature.com/a.pdf"])
+            check(!GewuBrowserGoogleHome([NSURL URLWithString:url]), @"search, sign-in, publishers and unrelated pages keep normal zoom");
+        check(GewuBrowserHomeFitZoom(1, 1000, 520, 1000, 600) < .87, @"fit the complete homepage without hiding overflow");
+        check(GewuBrowserHomeFitZoom(.85, 1000, 610, 1000, 610) == .85, @"a fitted page stays stable");
+        check(GewuBrowserHomeFitZoom(1, 1000, 700, 1000, 600) == 1, @"no unnecessary magnification");
+        check(GewuBrowserHomeFitZoom(1, 0, 0, 0, 0) == 1, @"ignore unavailable geometry");
+        check(GewuBrowserHomeFitZoom(1, 1000, NAN, 1000, 600) == 1, @"ignore nonfinite geometry");
         check(GewuBrowserResponsePolicy(response(@"application/pdf", nil), YES, NO) == WKNavigationResponsePolicyAllow, @"inline PDF");
         check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment; filename=paper.pdf"), YES, NO) == WKNavigationResponsePolicyAllow, @"attachment PDF stays inline");
         check(GewuBrowserResponsePolicy(response(@"application/pdf", @"attachment"), YES, YES) == WKNavigationResponsePolicyAllow, @"download attribute PDF stays inline after MIME is known");

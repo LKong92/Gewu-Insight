@@ -63,15 +63,37 @@ The sixth main tab, **Browser**, provides a visible native WebKit browser with
 the real Google homepage above a local Favorites folder grid, nested bookmarks,
 searchable local history, inline PDFs, and session-aware downloads. Home preserves
 Google's own search and account controls; other pages use the full browsing area.
-Favorites supports folder selection and nested navigation without copying bookmarks.
+After its first load, Home is retained in memory and the Home button reuses it
+without reloading. Reload remains explicit. First use after quitting the App or
+losing the webpage process still needs a connection, as do searches and sign-in.
+This is session reuse, not a downloaded offline Google site or password copy.
+Home uses the fixed Favorites folder with nested navigation, no divider, and
+no vertical Favorites scrolling; excess tiles use Previous/Next controls.
+Only Google Home is fitted with native page zoom. Other webpages retain normal
+zoom and scrolling. Sidebar and page status bars share the same bottom height.
+Home hides Google's secondary language, region and footer links while retaining
+its real logo, search and account controls. A separate tab strip sits below the
+address toolbar. Use the top-right **New Tab** (+ / ⌘T), a tab's × (⌘W), or
+**Open Link in New Tab** in a webpage context menu. Command-click links also
+opens a tab; bookmarks, Favorites and History have **Open in New Tab** actions.
+Each tab retains its document, position and independent Back/Forward history;
+switching tabs does not reload or stop another tab's load. Each tab lazily keeps
+at most a Home and a browsing surface, with the same persistent Browser profile
+for sign-ins. Tabs are memory-only, up to 32, and not restored after App quit.
+Closing the final tab opens a fresh Home; bookmarks and saved history remain.
 The sidebar can be resized or hidden, with Import, Export, New Folder, and Search
 at its bottom. Bookmarks and
 folders support Safari/Chrome HTML import/export (including a Safari ZIP with
 one bookmark HTML file), and visible sites use a bounded local favicon cache.
 The Passwords toolbar button opens macOS Passwords without creating a password
-vault; Safari-equivalent automatic password filling is not implemented. Apple's
-ordinary App password APIs require an App/website association, and browser password
-extensions are not inherited by a plain WKWebView. Viewable PDF attachments
+vault. A deliberate, unmodified click on a clearly marked HTTPS login username
+or current-password field can invoke the system's native AutoFill > Passwords
+menu action. Search, ordinary email, registration, verification-code and uncertain
+fields are excluded. Each field kind is offered at most once per site per App
+session, including cancellation; right-click AutoFill remains available manually.
+This only triggers the system picker: site matching, authentication and actual
+filling remain system/site-dependent, not Safari-equivalent guaranteed AutoFill.
+No credential values, password lists or clipboard data are read. Viewable PDF attachments
 stay inline; legacy HTTP GET redirects can retry once over HTTPS without
 disabling certificate checks. Bookmarks and
 history live in SQLite; cookies and cache use an independent persistent WebKit

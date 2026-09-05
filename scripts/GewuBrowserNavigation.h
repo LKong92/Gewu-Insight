@@ -1,6 +1,29 @@
 #import <Foundation/Foundation.h>
 #import <WebKit/WebKit.h>
 #import <arpa/inet.h>
+#import <math.h>
+
+// Home fitting must never affect search results, account pages, or publishers.
+static inline BOOL GewuBrowserGoogleHome(NSURL *url) {
+    if (![url.scheme.lowercaseString isEqualToString:@"https"] || url.user.length || url.password.length
+        || (url.port && url.port.integerValue != 443)
+        || ![@[@"google.com", @"www.google.com"] containsObject:url.host.lowercaseString]
+        || ![@[@"", @"/", @"/webhp"] containsObject:url.path]) return NO;
+    for (NSURLQueryItem *item in [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO].queryItems)
+        if ([item.name isEqualToString:@"q"]) return NO;
+    return YES;
+}
+
+static inline double GewuBrowserHomeFitZoom(double zoom, double width, double height, double contentWidth, double contentHeight) {
+    if (!isfinite(zoom) || !isfinite(width) || !isfinite(height) || !isfinite(contentWidth) || !isfinite(contentHeight)
+        || zoom <= 0 || width <= 2 || height <= 2 || contentWidth <= 0 || contentHeight <= 0) return zoom;
+    if (contentWidth <= width && contentHeight <= height) return zoom;
+    return MAX(.25, zoom * MIN((width - 2) / MAX(width, contentWidth), (height - 2) / MAX(height, contentHeight)));
+}
+
+static inline BOOL GewuBrowserCanRetainHomeForRequest(NSURLRequest *request) {
+    return [request.HTTPMethod isEqualToString:@"GET"] && !request.HTTPBody.length && !request.HTTPBodyStream;
+}
 
 static inline BOOL GewuBrowserPublicURL(NSURL *url) {
     if (!url || ![@[@"http", @"https"] containsObject:url.scheme.lowercaseString]
