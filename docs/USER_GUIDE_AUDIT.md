@@ -2,44 +2,56 @@
 
 ## Scope and method
 
-Reviewed all 47 registered in-app topics, their navigation and cross-links,
-the seven existing workspace illustrations, the PDF builder, and the guide's
-packaging/serving paths. Compared the current implementation and product tests
-with the comprehensive-guide baseline `23768f0`, the subsequent file/settings/
-monitor/startup changes, and Browser commits `6ce13bc` and `0fd77e9`. This edition
-also describes the uncommitted five-workspace website-routing change documented
-in [Workspace Browser links](WORKSPACE_BROWSER_LINKS.md).
+Re-audited all 47 registered in-app topics against product checkpoint
+`f3fe6fc` (retained startup fix) and `7a6f703` (Website Links and the restored
+PDF preview). Read the complete topic contents and compared them with native
+menus, the actual UI handlers, settings persistence, file-resource controls,
+publication export selection, citation aggregation, and the HTML-to-PDF builder.
+The original App's Setting/PDF Rename and Author Monitor menus were also checked.
+The seven existing illustrations remain real original-App captures; the discarded
+iframe-transition and PDF.js experiments are not part of this guide or product.
 
 This is a documentation audit, not a new end-to-end certification of every
 publisher, account, downloader, or migration. A reviewed topic without a text
 change means its documented contract still matches the inspected code/tests;
 it does not mean a live network operation was repeated on personal data.
 
-## Corrections and additions
+## Current re-audit corrections
 
-- Distinguish five research views from the sixth Browser workspace and its
-  isolated WebKit session; visits/downloads are not automatic paper imports.
-- Replace retired attachment roles with the actual File type choices; explain
-  the compact card footer before Annotation/Source edits.
-- Correct My Publications' **Find Profile**, its Files panel location, and the
-  Overleaf ZIP/manual-import boundary.
-- Explain the protected physical primary file separately from the preferred
-  Default. Changing a reading preference is not a deletion bypass.
-- Complete Browser coverage: warm versus cold Home, transition behavior,
-  right-column rectangular tabs, local address-history suggestions, bookmark
-  transfer, inline PDF/download boundaries, and explicit Safari fallback.
-- Correct context-dependent Command-W/Command-L/Command-F and add Command-T,
-  quit/draft warnings, and monitor keyboard navigation.
-- Add local automatic-update timing, recovery limitations, cache distinctions,
-  and Browser-specific troubleshooting without promising credential filling.
-- Explain SQLite/API-key backup sensitivity, Browser profile versus project
-  backup, and Apple Passwords/passkey ownership.
-- Document per-service Save/Test/Clear and the implemented OpenAlex free-only
-  policy; do not hard-code transient remaining quotas or service guarantees.
-- In the PDF, present related-topic links as compact navigation instead of
-  numbered sections/TOC entries. Reserve more space for headings and their
-  opening text; tighten the repetitive Guided Tour state paragraph to avoid
-  a page containing only its related links. All link targets remain intact.
+- Make Journal, My Publications, Browser, Overleaf and Website Links agree on
+  built-in versus system-default routing; direct Browser navigation is separate.
+- Correct startup order: the opaque branded native view is installed before the
+  window is shown, then fades when Library is ready.
+- Remove unverified PDF speed claims. Document the existing switching flash,
+  native Quick Look choice, Save/Restore Default behavior, reader controls,
+  200-page button/160-image limits, other formats and truncated text previews.
+- Explain Library's folder Color, Add to My Publications, Remove Shortcut,
+  Remove Empty Space and Table View's unavailability during active search.
+- Identify blank-space Paper Files menus for Add File/Sync Versions separately
+  from card menus. Distinguish Library's expandable card footer from the always
+  visible metadata controls inside My Publications' expanded Files panel.
+- Document My Publications' Manual Metadata/Save Metadata and per-author marks.
+  Exports follow visible filtered/sorted rows and omit Hide entries; Overleaf ZIP
+  is copied to Desktop and uploaded manually by the user.
+- Correct citation sources: saved Google Scholar counts are supported; PubMed
+  is indexing data. Source buttons select saved totals, while the histogram
+  remains OpenAlex. Explain that merged totals are estimates across versions,
+  not a proven globally deduplicated citing-paper count.
+- Add Author Monitor's Date/Citations sorting, Conferences popover, single-author
+  refresh, single-paper/author missing-identifier lookups, exact full-Scholar
+  refresh entry point and Remove from Monitor label.
+- Describe Note's independent scroll, divider, Hide list/Show list and the
+  difference between closing a drawer and deleting its saved note.
+- Clarify settings persistence individually: Field/Quick Look/PDF Rename defaults
+  save immediately; Font Size defaults are preview-only until Save; arXiv defaults
+  also still require Save. Naming Rule affects new unnamed placements and does
+  not bulk-rename existing PDFs; PDF template Save and batch application differ.
+- Explain Print Guide: the complete packaged PDF opens in Preview, not just the
+  current topic; the browser-hosted guide opens the PDF in a browser tab.
+
+The 47-topic anchors and seven original screenshots are preserved. Product
+Identity chapters 4-1 through 4-4 retain their continuous flow in the builder.
+This audit changes documentation only and does not attempt another PDF renderer.
 
 ## Complete topic inventory
 
@@ -61,13 +73,13 @@ Evidence names below refer to the current implementation or product tests;
 | [State and Scope](../paper_monitor/user_guide.html#state-and-scope) | Retain distinct successful-empty, incomplete and failed states; monitor state tests. |
 | [Library Layout](../paper_monitor/user_guide.html#library-layout) | Existing compact Paper Files/current details image remains applicable; layout/navigation tests. |
 | [Navigation](../paper_monitor/user_guide.html#navigation) | Retain row/default double-click, rail focus, Quick Look and independent scroll; navigation/interactions tests. |
-| [Folders, Shortcuts, Spaces](../paper_monitor/user_guide.html#organize) | Retain shared placement, copies/moves, independent Space roots and protected relationships; file-operation tests. |
-| [Search and Views](../paper_monitor/user_guide.html#search-views) | Retain scoped search and List/Table behavior; `currentSurfaceSearchScope`, search/view handlers. |
+| [Folders, Shortcuts, Spaces](../paper_monitor/user_guide.html#organize) | Add folder Color, Remove Shortcut/Empty Space and Add to My Publications; shared placement/file-operation handlers. |
+| [Search and Views](../paper_monitor/user_guide.html#search-views) | Clarify that active Library search disables Table View; `currentSurfaceSearchScope`, search/view handlers. |
 | [Add Papers and Files](../paper_monitor/user_guide.html#import-files) | Retain metadata-only and file-backed routes; `test_library_add_targets.py`, ingress tests. |
-| [Paper Details](../paper_monitor/user_guide.html#paper-details) | Retain aligned author details, visible undefined key, Library's removed duplicate Files panel; details tests. Web links follow Website Links (built-in default or system default). |
+| [Paper Details](../paper_monitor/user_guide.html#paper-details) | Correct citation sources, version-aware estimate and OpenAlex histogram; `citation_metrics`, `wireCitationSourceSelector`. Retain metadata/key/file distinctions and Website Links routing. |
 | [Identifiers](../paper_monitor/user_guide.html#identifiers) | Retain explicit DOI/arXiv editing, refresh and source actions; metadata tests, identifier-control handlers. |
 | [Paper Files](../paper_monitor/user_guide.html#paper-files) | Retain independently collapsed metadata, size-footer edge, default/physical-primary guard and native local-file opening. |
-| [Quick Look](../paper_monitor/user_guide.html#quick-look) | Retain on-demand native preview and temporary thumbnails; Quick Look settings/performance tests. |
+| [Quick Look](../paper_monitor/user_guide.html#quick-look) | Restored embedded viewer, real load/paint distinction, native alternative, controls and bounded thumbnail/text display; `renderLibraryQuickLookPages`, `renderLibraryQuickLookThumbs`, native magnification. |
 | [File Types and Default](../paper_monitor/user_guide.html#versions-current) | Explain footer expansion; all ten labels checked against `paperFileRoleOptions` and `PAPER_FILE_TYPES`. |
 | [Attachments](../paper_monitor/user_guide.html#attachments) | Retain import-first/classify-later, independent metadata and add-file flow; resource/ingress tests. |
 | [Download and Sync](../paper_monitor/user_guide.html#download-sync) | Retain arXiv revisions, PDF validation, atomic saves and duplicate/annotation boundaries; PDF ingress/fingerprint tests. |
@@ -77,23 +89,23 @@ Evidence names below refer to the current implementation or product tests;
 | [Loader Maintenance](../paper_monitor/user_guide.html#loader-maintenance) | Retain refresh/identifier retry and stop/log semantics; Loader handlers and importer tests. |
 | [Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Retain real-file export and verified manifest; desktop-copy/file-operation tests. |
 | [Backup and Migration](../paper_monitor/user_guide.html#backup-migrate) | Clarify quit versus close, database/file consistency, Browser profile exclusion and API-key sensitivity. |
-| [My Publications](../paper_monitor/user_guide.html#my-publications) | Fix Find Profile; describe Files · n, Browser profile link and manual Overleaf ZIP upload. Publication/export handlers. |
-| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain Nature example, counts independent of filters, subscriptions, provenance, figures and Add/Show Library; add scheduler boundary. |
+| [My Publications](../paper_monitor/user_guide.html#my-publications) | Find Profile, Manual Metadata, individual author marks, Files controls, Library add, visible-row export scope and Desktop Overleaf ZIP; publication/render/export handlers. |
+| [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain Nature example, counts, subscriptions and provenance; clarify Website Links, Refresh This Journal and Note drawer controls. |
 | [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Retain keyword groups, matching scores, saved results after Library add, superscript incomplete marker and Zenodo exclusion; theme/UI tests. |
-| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Retain Hong Ding example, profile matching, New/Read All scope and aligned details; author/read-all/details tests. |
+| [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Retain Hong Ding, profile matching and New/Read All; add Date/Citations, Conferences, author/identifier refresh and exact profile menu labels. |
 | [Browser](../paper_monitor/user_guide.html#browser) | Expand current navigation, tabs, history suggestions, lifecycle and credential limits; Browser store/native/policy/layout tests. |
 | [Open Source Settings](../paper_monitor/user_guide.html#citation-settings) | Preserve old anchor for links; complete Save/Test/Clear, masks/Show, status and free-only budget behavior. Source settings tests. |
 | [arXiv Scopes](../paper_monitor/user_guide.html#arxiv-scope-settings) | Retain multi-archive discovery versus display filters, defaults and saved-paper preservation; arXiv scope/schedule tests. |
-| [Field Settings](../paper_monitor/user_guide.html#field-settings) | Retain canonical fields versus visible grouping and Restore Defaults; field settings tests. |
-| [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Retain page width/actual size/fit behavior; native PDF preview/settings tests. |
+| [Field Settings](../paper_monitor/user_guide.html#field-settings) | Clarify Save, unsaved close and immediate Restore Defaults; preserve canonical classification versus visible grouping. |
+| [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Three mode labels, Save/unsaved-close and immediate Restore Default; `saveQuickLookSettings`, `resetQuickLookSettings`, shared preview routing. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Built-in default or macOS default browser; Save, unsaved close, Restore Default, persistence, research-link scope, Preview/Finder and Browser exceptions. |
-| [Naming](../paper_monitor/user_guide.html#naming) | Token list checked against `PDF_RENAME_TEMPLATE_TOKENS`; display rule and PDF template remain distinct. Rename UI tests. |
+| [Naming](../paper_monitor/user_guide.html#naming) | New unnamed placements versus explicit file rename; tokens, sample, Save/Default and batch rename checked against native menu, settings and rename handlers. |
 | [Storage Model](../paper_monitor/user_guide.html#storage-model) | Retain managed roots, associated bundles and identity independent of filenames; storage/file-operation tests. |
 | [Privacy](../paper_monitor/user_guide.html#privacy) | Retain local-first, network access, private exports and credentials; Browser/profile details cross-referenced. |
 | [Visual Identity](../paper_monitor/user_guide.html#visual-identity) | Retain supplied branding, cultural interpretation and exact provenance links; identity/asset guide tests. No new licensing assertion. |
 | [Keyboard](../paper_monitor/user_guide.html#keyboard) | Correct Browser/window/Quick Look contexts; add tab and monitor navigation. Native key monitor and UI keyboard handlers. |
 | [Network Access](../paper_monitor/user_guide.html#network-access) | Retain direct WebKit versus Python requests, actual Clash routing verification and access-control limits. No speed/parity guarantee. |
-| [Startup and Cache](../paper_monitor/user_guide.html#startup) | Add local schedule, memory-only Browser recovery loss and Monitor Cache versus history distinction; scheduler/native recovery tests. |
+| [Startup and Cache](../paper_monitor/user_guide.html#startup) | Correct native first-frame startup order and Font Size Restore Default/Save; retain schedule, recovery and cache/history distinctions. |
 | [Troubleshooting](../paper_monitor/user_guide.html#troubleshooting) | Correct deletion and retry advice; add Browser routing/Home/sign-in/AutoFill cases without causal overclaims. |
 | [Storage Reference](../paper_monitor/user_guide.html#storage-reference) | Add Browser SQLite state, external OS profile/cache and backup sensitivity; storage/browser store/controller. |
 
@@ -122,6 +134,44 @@ The original App became responsive after the intervening system WebCrypto
 keychain wait. Both remaining photos were recaptured and reviewed, and final
 packaging is complete. No keychain authorization or credential was operated;
 only ordinary workspace selection was used to frame the screenshots.
+
+## September 6 functional re-audit verification
+
+- All 26 existing User Guide unit tests pass; six PDF hierarchy/identity/link
+  structure checks pass. The PDF builder compiles and `git diff --check` passes.
+- An isolated browser opened every one of the 47 topics at 1280 and 800 px,
+  with one active topic, no horizontal overflow, no missing images and no script
+  errors. Five newly documented operations are searchable. Native whole-guide
+  PDF dispatch and the browser-hosted PDF link both pass. No external requests
+  or formal profile/database operations were used for this probe.
+- The generated PDF contains 77 pages, 711 named destinations and 314 links,
+  with no broken internal targets or text outside the checked page margins.
+  All 77 pages were rendered with system Poppler and visually reviewed; Chinese
+  glyphs, screenshots, tables and links are present. The initial bundled Poppler
+  lacked Chinese CMaps; system Poppler rendered without warnings.
+- Compact TOC spacing is scoped to the contents list in the builder. Author
+  prose and the keyboard reference were tightened to remove short tail pages;
+  Field Settings' related links now stay with its explanation. Product Identity
+  4-1/4-2 share page 67 and 4-3/4-4 share page 68, with numbering preserved.
+- PDF SHA-256: `1e422c74d133b9331420201f0857d0f3e07afa8aeaf6fc78538bb56eb0b81747`.
+- Original and worktree universal App bundles were rebuilt and pass strict
+  signature verification. The source, HTTP-served and both bundled PDFs have
+  the SHA-256 above; the served HTML matches the edited source byte for byte.
+  The original App's Help > User Guide displays the September 6 Functional
+  review edition. The service reports healthy; no restart was performed for
+  this documentation update.
+- Live native Print Guide clicking could not be completed: Computer Use
+  returned `AXError.apiDisabled` after the guide window opened. The actual
+  guide was visually inspected, and the isolated native-dispatch/browser-link
+  checks pass, but opening this edition in Preview through the live button is
+  not claimed. No accessibility/security setting was changed.
+- The startup-only commit `f3fe6fc` was created before this audit as requested.
+  The user subsequently requested committing these guide/build/package changes
+  and pushing both this revision and the startup commit to `origin/main`.
+  Prior guide/App backup: `/private/tmp/gewu-guide-reaudit/before-original-guide-and-app.tgz`.
+
+The sections below document prior editions; their page counts and hashes are
+historical, not claims about the current re-audit output.
 
 ## Edition and verification
 

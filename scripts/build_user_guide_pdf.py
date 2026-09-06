@@ -561,9 +561,14 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 
 \clearpage
 \section*{{Contents}}
+% Keep the complete navigation list compact without changing body typography.
+\begingroup
+\setstretch{{0.96}}
+\setlength{{\parskip}}{{0pt}}
 \makeatletter
 \@starttoc{{toc}}
 \makeatother
+\endgroup
 \clearpage
 \RaggedRight
 """

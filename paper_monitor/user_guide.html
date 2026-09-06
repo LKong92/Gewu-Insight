@@ -653,7 +653,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Guide revision · September 6, 2026</p>
+          <p class="guide-revision">Guide revision · September 6, 2026 · Functional review</p>
 
           <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -752,7 +752,7 @@
           </table>
 
           <h2>Open this guide again</h2>
-          <p>Choose <span class="ui">Help &gt; User Guide</span>. The guide opens in its own window and works without an internet connection.</p>
+          <p>Choose <span class="ui">Help &gt; User Guide</span>. The guide opens in its own window and works without an internet connection. Search filters the topic list; choose a result to read it, or use Previous and Next to follow the manual. Select <span class="ui">Print Guide</span> to open the complete, fixed-layout PDF in macOS Preview, where you can print or save a copy. In a separately hosted web UI, that button opens the PDF in a browser tab. It opens the whole guide, not just the topic currently on screen.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#guided-tour">Guided Tour</a><a href="#first-session">Your First Session</a><a href="#system-overview">System Architecture at a Glance</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
@@ -1357,8 +1357,13 @@
 
           <p>Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press <kbd>←</kbd> from the leftmost content column to focus this rail, use <kbd>↑</kbd> and <kbd>↓</kbd> to open another source, then press <kbd>→</kbd> to enter its content.</p>
 
+          <h2>Color folders and remove navigation entries</h2>
+          <p>Control-click an ordinary folder and choose <span class="ui">Color</span> to change its folder color. Protected roots do not offer this command. On the source rail, <span class="ui">Remove Shortcut</span> removes only the shortcut, leaving its folder and papers intact. <span class="ui">Remove Empty Space</span> works only after both its managed contents and remaining files are empty; move the Space into Library if you want to keep its hierarchy.</p>
+
           <h2>Work with several entries</h2>
           <p>Command-click to add or remove individual entries from a selection. Shift-click, or hold Shift while using the arrow keys, to extend a range in the current folder. Copy the selected entries with <kbd>⌘</kbd><kbd>C</kbd>, paste into the active destination with <kbd>⌘</kbd><kbd>V</kbd>, or press <kbd>Delete</kbd> to apply the normal reference-aware deletion rules.</p>
+
+          <p>To include an existing Library paper in your own publication list, select one or more paper rows, Control-click, and choose <span class="ui">Add to My Publications</span>. This adds the publication relationship to the same paper and Gewu Key; it does not remove the Library placement. Review authorship roles in My Publications afterward.</p>
 
           <h2>Copy a paper to another folder</h2>
           <p>A Library copy creates another reference to the same paper record rather than a second unrelated identity. The local filesystem may use a secondary symbolic link where appropriate. Paper versions and attachments remain associated with the work.</p>
@@ -1392,7 +1397,7 @@
           </ol>
 
           <h2>Switch views</h2>
-          <p>Choose <span class="ui">View &gt; List View</span> or <span class="ui">View &gt; Table View</span>. You can also use <kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd>. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files.</p>
+          <p>Choose <span class="ui">View &gt; List View</span> or <span class="ui">View &gt; Table View</span>. You can also use <kbd>⇧</kbd><kbd>⌘</kbd><kbd>V</kbd>. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.</p>
 
           <h2>Sort a folder</h2>
           <p>Control-click the folder contents and choose <span class="ui">Sort by Name</span> or <span class="ui">Sort by Modified Time</span>. Sorting changes presentation, not the paper identity.</p>
@@ -1451,7 +1456,7 @@
           <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable, human-visible storage handle for a cataloged work record. It is not a DOI, arXiv identifier, or the database's relational primary key.</p>
 
           <h2>Compare citation sources</h2>
-          <p><span class="ui">Merged Citations</span> brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and PubMed when those services have a match. Select a source label to inspect that source’s count and evidence. The headline is a merged best estimate; counts from different services are not added together.</p>
+          <p><span class="ui">Merged Citations</span> brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and saved Google Scholar data when those services have a match. Select a source label to show its saved count in the headline; this does not start a refresh. The merged estimate compares published, preprint, and already-merged records rather than simply adding every provider's total. Separate published/preprint estimates can be combined, so this is not a verified count of unique citing papers. The yearly histogram uses OpenAlex data and does not switch provider when you select another count. PubMed Details supplies identifiers and indexing information, not another citation-count source.</p>
 
           <h2>Inspect influential citations</h2>
           <p>When Semantic Scholar reports an <span class="ui">Influential</span> count, select it to inspect citing papers that Semantic Scholar classifies as especially meaningful to the cited work. This is Semantic Scholar’s classification, not a score calculated by Gewu Insight. The list can include citation context, intent, citing authors, venue, year, and citation counts when the service supplies them.</p>
@@ -1512,7 +1517,7 @@
             <li>Double-click a card to open it.</li>
             <li>Double-click the paper row to the left to open the paper's Default file, independently of the highlighted resource card. PDFs open in macOS Preview. If an old unclassified import has no Default, its available current file still opens.</li>
             <li>Press <kbd>Space</kbd> to use Quick Look.</li>
-            <li>Control-click for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, default-file controls, type controls, add/sync actions, or deletion where allowed.</li>
+            <li>Control-click a card for <span class="ui">Open</span>, <span class="ui">Quick Look</span>, <span class="ui">Show in Finder</span>, default-file controls, <span class="ui">Change File Type</span>, or <span class="ui">Delete from Paper Files</span> where allowed. Control-click blank space in Paper Files for <span class="ui">Add File</span> and, when the paper has an arXiv identifier, <span class="ui">Sync Versions</span>. Those bundle-wide commands do not appear on an individual file card.</li>
             <li>Press <kbd>Delete</kbd> or <kbd>Backspace</kbd> while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.</li>
           </ul>
 
@@ -1544,14 +1549,19 @@
           <p>With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue moving through Library or Paper Files while the system panel follows the selection. Rapid navigation is serialized so an older preview request cannot replace a newer selection.</p>
 
           <h2>Read the built-in PDF loading sequence</h2>
-          <p>The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails begin after the main document is ready, so a large PDF can already be readable while the thumbnail strip is still filling in.</p>
+          <p>The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails are scheduled after the embedded document reports loading, so the document and thumbnail strip may appear at different times. That loading signal is not a guarantee that every PDF page has finished painting.</p>
 
           <p>On the first open, the app may still need to inspect the PDF and render thumbnail pages. Later opens can reuse stable local-file validators, remembered page information, and a bounded thumbnail cache. The cache is automatically trimmed and can always be rebuilt; it is not part of the paper record or a substitute for the PDF.</p>
+
+          <h2>Read and navigate the built-in viewer</h2>
+          <p>The PDF opens at page width. Scroll the document, click a page thumbnail to jump, or use a trackpad pinch to zoom the PDF. The document and thumbnail strip scroll independently. Drag the preview title bar to reposition it, or its resize corner to change the reading area. The strip provides page buttons for the first 200 pages; thumbnail images are limited to the first 160. The document remains scrollable beyond that range; use <span class="ui">Open in Preview</span> for the full reader's navigation and tools.</p>
+          <p>Supported images, audio, video, and text files can also be inspected inside the workspace. A long text preview may end with [Preview truncated]; use Open File to read the complete original. Other formats show a file card with <span class="ui">Open File</span>; that opens the file in its macOS application. Choose a native mode in <a href="#quick-look-settings">Quick Look Settings</a> for formats better handled by system Quick Look.</p>
+          <p>Switching between PDFs in the built-in viewer can briefly flash while the next document loads. It does not guarantee the same switching speed or continuity as macOS Quick Look. For rapid comparison, try <span class="ui">macOS Quick Look for all files</span>.</p>
 
           <h2>Choose Quick Look or Preview</h2>
           <table class="plain-table">
             <tr><th>Use</th><th>Best for</th></tr>
-            <tr><td><span class="ui">Built-in Quick Look</span></td><td>Fast PDF inspection, keyboard comparison among versions, and a preview that remains inside the workspace.</td></tr>
+            <tr><td><span class="ui">Built-in Quick Look</span></td><td>PDF inspection and keyboard comparison among versions while remaining inside the workspace.</td></tr>
             <tr><td><span class="ui">macOS Quick Look</span></td><td>System-native preview support for presentations, media, images, PDFs, and other formats supported by macOS.</td></tr>
             <tr><td><span class="ui">Open in Preview</span></td><td>Full macOS Preview tools, annotation, export, printing, and a separate reading window.</td></tr>
           </table>
@@ -1584,7 +1594,7 @@
           <p>Choose <span class="ui">Use Automatic Selection</span> for a manually selected default. Gewu Insight evaluates the eligible file types again.</p>
 
           <h2>Classify files without collapsing annotation state</h2>
-          <p>File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. File type uses exactly these labels:</p>
+          <p>In Library, File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. In My Publications, expand Files to see all three controls directly. File type uses exactly these labels:</p>
           <ul>
             <li><span class="ui">Preprint</span>, <span class="ui">Accepted manuscript</span>, <span class="ui">Published version</span>, and <span class="ui">Corrected published version</span></li>
             <li><span class="ui">Correction notice</span>, <span class="ui">Supplementary material</span>, and <span class="ui">Peer review file</span></li>
@@ -1607,10 +1617,10 @@
 
           <h2>Add a file to the paper</h2>
           <ol class="steps">
-            <li><strong>Control-click the Paper Files area and choose <span class="ui">Add File</span>.</strong> In My Publications, expand Files and use Add File.</li>
+            <li><strong>Control-click blank space in the Paper Files area and choose <span class="ui">Add File</span>.</strong> In My Publications, expand Files and use Add File.</li>
             <li><strong>Select one or more local files.</strong> Confirm the file chooser.</li>
             <li><strong>Wait for the new row.</strong> A new item begins as <span class="ui">Unknown</span> unless its source proves a more specific type.</li>
-            <li><strong>Select its compact controls.</strong> Choose File type; click the size footer to expand Annotation and Source when needed.</li>
+            <li><strong>Select its compact controls.</strong> Choose File type; in Library, click the size footer to expand Annotation and Source. My Publications shows those controls directly in its Files panel.</li>
           </ol>
 
           <h2>Attachment types</h2>
@@ -1640,7 +1650,7 @@
           <h2>Download arXiv files</h2>
           <ul>
             <li>Use the download icon in the <span class="ui">arXiv</span> row to retrieve the latest arXiv PDF.</li>
-            <li>Choose <span class="ui">Sync Versions</span> to retrieve all available arXiv revisions such as v1, v2, and v3.</li>
+            <li>Control-click blank space in Paper Files and choose <span class="ui">Sync Versions</span> to retrieve all available arXiv revisions such as v1, v2, and v3. In My Publications, use Sync Versions inside the expanded Files panel. The command is available when the paper has an arXiv identifier.</li>
             <li>Each revision is labeled with its arXiv version when known.</li>
           </ul>
 
@@ -1855,8 +1865,10 @@
           <ol class="steps">
             <li><strong>Enter a name, optional affiliations, or an exact Google Scholar profile URL.</strong> For a name search, use <code>Name; affiliation A; affiliation B</code>.</li>
             <li><strong>Choose <span class="ui">Find Profile</span>.</strong> Review candidate profiles carefully.</li>
-            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile in Browser; use the remove control to forget it.</li>
+            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile using <a href="#website-link-settings">Website Links</a>; use the remove control to forget it.</li>
           </ol>
+
+          <p>Already have the paper in Library? Control-click its row and choose <span class="ui">Add to My Publications</span>. Multiple selected papers can be added together. The publication list and Library then refer to the same work, files, and Gewu Key.</p>
 
           <h2>Add and update publications</h2>
           <ul>
@@ -1870,19 +1882,23 @@
             <li>Use <span class="ui">Hide</span> or <span class="ui">Show</span> in the context menu to control export inclusion. Use <span class="ui">Open in Finder</span> or <span class="ui">Delete</span> for the corresponding local action.</li>
           </ul>
 
+          <h2>Edit manual records and author marks</h2>
+          <p>A publication without either a DOI or arXiv identifier exposes <span class="ui">Manual Metadata</span>. Edit Title, Authors, Journal, Date, Volume, Issue, and Pages, then choose <span class="ui">Save Metadata</span>. Separate author names with semicolons or new lines. Once an identifier is present, use identifier-based metadata controls instead.</p>
+          <p>Select an author name in the publication's author list to inspect affiliations and set <span class="ui">First author</span>, <span class="ui">Co-first author</span>, or <span class="ui">Corresponding author</span> for that named author. Checkbox changes save immediately. These individual author marks are separate from the publication's Co-1st, Co-corr., and Rev. summary controls.</p>
+
           <h2>Build a citation-comments report</h2>
           <p><span class="ui">Comments</span> gathers citing-paper metadata and available Semantic Scholar citation-context sentences, then writes a local report that groups strong praise, positive impact statements, cautions, and unmatched citing records. It helps you review how later literature describes a publication; it does not modify the publication metadata or replace your own notes.</p>
           <p>The report is a generated local reading artifact. Network services may return fewer contexts than citation records, and a temporary rate limit can leave some entries without quoted context. Reopen or rebuild the report later to retry the available sources; an existing report remains on disk until you deliberately replace or remove it.</p>
 
           <h2>Work with files</h2>
-          <p>My Publications uses the same Paper Details and flat Paper Files model as Library. Expand <span class="ui">Files · n</span> within the details to inspect its resources; Library instead has an adjacent Paper Files column. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
+          <p>My Publications uses the same Paper Details and flat Paper Files model as Library. Expand <span class="ui">Files · n</span> within the details to inspect its resources; Library instead has an adjacent Paper Files column. The publication Files panel shows File type, Annotation, and Source controls directly; the size-footer expansion belongs to Library cards. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.</p>
 
           <h2>Read the summary</h2>
           <p>The lower summary includes publication counts, identifier coverage, h-index and i10 information, journal distribution, merged citation maxima, and major-paper role counts. Select a role statistic to filter the table where supported.</p>
 
           <h2>Export a list</h2>
-          <p>Choose <span class="ui">Export List</span>, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.</p>
-          <p>The Overleaf option downloads a project ZIP and opens Overleaf in Browser. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.</p>
+          <p>Choose <span class="ui">Export List</span>, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. The export follows the current visible table, including its search, role/journal filters, and row order, and excludes rows marked Hide. Clear filters and search first if you want the full included list. Exporting never replaces the SQLite source.</p>
+          <p>The Overleaf option creates a project ZIP, copies it to the Desktop, and opens Overleaf using <a href="#website-link-settings">Website Links</a>. The status message reports the saved path. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#citation-settings">Open Source Settings</a><a href="#paper-details">Use Paper Details</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
@@ -1901,7 +1917,7 @@
           <ol class="steps">
             <li><strong>Select a day in the calendar.</strong> Small numbers below a day show stored result counts.</li>
             <li><strong>Choose <span class="ui">Refresh</span>.</strong> The app requests all configured journal sources for that date.</li>
-            <li><strong>Use <span class="ui">Refresh This Journal</span> when only the active journal needs another attempt.</strong> This avoids re-requesting journals that are already complete.</li>
+            <li><strong>Control-click the journal in Journal Filter and use <span class="ui">Refresh This Journal</span> when only that journal needs another attempt.</strong> This avoids re-requesting journals that are already complete.</li>
             <li><strong>Choose <span class="ui">arXiv</span> separately if needed.</strong> This keeps journal and preprint work explicit.</li>
             <li><strong>Watch the bottom status area.</strong> It reports the current source and completion without changing the page height.</li>
           </ol>
@@ -1936,11 +1952,14 @@
 
           <h2>Act on a result</h2>
           <ul>
-            <li><span class="ui">Open Website</span> opens the publisher or best known record in a Browser tab.</li>
+            <li><span class="ui">Open Website</span> opens the publisher or best known record using <a href="#website-link-settings">Website Links</a>: a new built-in Browser tab by default, or the macOS default browser when selected.</li>
             <li><span class="ui">Add to Library</span> begins the placement workflow described below; after that, <span class="ui">Show in Library</span> returns to the managed paper.</li>
             <li><span class="ui">Download</span> retrieves the paper file. <span class="ui">PDF</span> opens an existing local PDF in Preview, and <span class="ui">Delete PDF</span> removes that managed download and resets its status.</li>
             <li>When a reading note exists, <span class="ui">Note</span> opens it in the right-side drawer. The list compresses but keeps its own scroll position. <span class="ui">Delete Note</span> removes the note and resets analysis status.</li>
           </ul>
+
+          <h2>Read an existing Note</h2>
+          <p><span class="ui">Note</span> appears when a reading note has already been generated. It opens the saved note on demand in a right-side drawer; the report area compresses and each side scrolls independently. Drag the divider to resize the note. <span class="ui">Hide list</span> gives the note more space; <span class="ui">Show list</span> restores the report. Closing the drawer keeps the note. <span class="ui">Delete Note</span> is a separate action that removes it and resets its analysis status. Links in the note follow <a href="#website-link-settings">Website Links</a>.</p>
 
           <h2>Add a Journal result to Library</h2>
           <ol class="steps">
@@ -2031,19 +2050,22 @@
           </ol>
 
           <h2>Understand profile and publication sources</h2>
-          <p>A Google Scholar profile is refreshed through Google Scholar and follows the shared Scholar pacing and cooldown. A ResearchGate URL identifies the public profile, but its publication list is matched separately to a publication-data author. Gewu Insight uses OpenAlex for that match when it is configured and automatically falls back to Semantic Scholar when OpenAlex is unavailable. Confirm the proposed person rather than assuming similar names are identical.</p>
+          <p>Google Scholar profiles refresh through Scholar with shared pacing and cooldown. A ResearchGate URL identifies the public profile; its publications are matched separately through OpenAlex when configured. If unavailable, Gewu Insight automatically falls back to Semantic Scholar. Confirm the proposed person, especially for similar names.</p>
 
-          <p>If no publication-data match can be verified, the ResearchGate profile and homepage can still be saved, but automatic publication refresh remains unavailable until a match is supplied. The profile source, publication metadata provider, and per-paper citation source remain distinct evidence; a fallback does not silently turn the ResearchGate profile into a different author identity.</p>
+          <p>Without a verified publication-data match, the ResearchGate profile and homepage can be saved, but automatic publication refresh remains unavailable. Profile, publication, and citation sources remain distinct evidence; a fallback does not change the author identity.</p>
 
           <h2>Review updates</h2>
-          <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.</p>
-          <p>Control-click <span class="ui">New</span> and choose <span class="ui">Read All</span> to clear the blue unread dots. With one author selected, this marks all new publications for that author as read, including those not currently scrolled into view; other authors keep their unread state, even for a shared paper. With <span class="ui">All Authors</span> selected, it marks all authors' new publications as read. The action preserves papers and Library placements. The New filter stays active, so newly read papers leave that filtered view; click New again to see all publications. Read state persists after reopening the app.</p>
+          <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Select <span class="ui">Date</span> or <span class="ui">Citations</span> to sort; selecting the active sort reverses its direction. <span class="ui">Conferences · n</span> opens conference publications in a separate, independently scrolling popover, so they are not missing from the ordinary article list. Close the popover with its close control or Escape.</p>
+          <p>Control-click <span class="ui">New</span> and choose <span class="ui">Read All</span>. For one selected author, it marks every unread publication as read, including offscreen papers; other authors keep their unread state, even for a shared paper. With <span class="ui">All Authors</span> selected, it marks all authors' new publications as read. Papers and Library placements are preserved. The New filter remains active; click New again to see read papers. Read state persists after reopening.</p>
+
+          <h2>Refresh one author or find missing identifiers</h2>
+          <p>Control-click the author and choose <span class="ui">Refresh This Author</span> to update that person's publications. <span class="ui">Find Missing Identifiers</span> checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose <span class="ui">Find Missing Identifier</span>; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from <span class="ui">Get Identifier from Files</span>, which uses an available local PDF.</p>
 
           <h2>Update citation profiles</h2>
-          <p><span class="ui">Update All Citations</span> is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.</p>
+          <p>For a Google Scholar author, Control-click the author, choose <span class="ui">Update All Scholar Citations</span>, review the request estimate, then confirm <span class="ui">Update All Citations</span>. This updates that author’s full profile paper by paper and can take a long time. Follow the bottom progress status until it finishes.</p>
 
           <h2>Manage the profile image</h2>
-          <p>Control-click an author and choose <span class="ui">Edit Homepage</span> or <span class="ui">Change Photo</span>. A downloaded Google Scholar avatar is saved locally, and local photo bytes are prepared when the service starts so opening Author Monitor does not need to reopen SQLite or contact the image host for every row. A manual photo takes precedence. If no valid local photo exists, the list can use initials until you explicitly refresh or replace the profile image.</p>
+          <p>Control-click an author and choose <span class="ui">Edit Homepage</span> to edit the website, or <span class="ui">Change Photo</span> / <span class="ui">Add Photo</span> to choose a local portrait. Downloaded Scholar avatars are saved locally. Opening the author list does not need to reopen SQLite or contact the image host for every row; a manual photo takes precedence. Without a valid local photo, the list can show initials until you refresh or replace the image.</p>
 
           <h2>Discovery entries and managed papers</h2>
           <p>An Author Monitor result is a cataloged shared record, with a Gewu Key shown in its details even before it has Library placements or local files. A missing key displays <code>(undefined)</code> until record data is available. Add to Library preserves the existing key and updates the view; downloading or attaching a file creates a resource relationship.</p>
@@ -2057,7 +2079,7 @@
           <p>The author-publication relationship and canonical identity remain intact. Adding a placement does not automatically download a PDF, and a paper already managed elsewhere is reused rather than duplicated.</p>
 
           <h2>Remove a monitored author</h2>
-          <p>Deleting an author from Author Monitor removes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.</p>
+          <p>Control-click the author and choose <span class="ui">Remove from Monitor</span>. Removing an author deletes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.</p>
 
           <div class="note"><span class="callout-title">Note</span>Google Scholar requests are paced and protected by a cooldown. Repeated manual refreshes during a block do not improve the result.</div>
 
@@ -2147,7 +2169,7 @@
           <p><strong>Conservative AutoFill trigger.</strong> A single, unmodified click on an explicitly marked HTTPS login username or current-password input can open <span class="ui">AutoFill &gt; Passwords</span>. Search, ordinary email, registration, codes, embedded frames and uncertain fields are skipped, as are keyboard focus, double-clicks and dragging. Each field kind is offered once per site per App session, including cancellation; right-click AutoFill retries manually. Navigation or intervening input cancels a pending trigger. macOS handles authentication, selection and filling; Gewu never reads credentials or submits login. Site matching, Safari-style suggestions and successful filling are not guaranteed.</p>
           <p>A macOS prompt for <span class="ui">Gewu Insight WebCrypto Master Key</span> concerns WebKit's protection of locally stored webpage cryptographic keys, not a metadata API key. Local development rebuilds can require renewed keychain permission. Handle this system prompt yourself; do not share your Mac password or delete the key to suppress the dialog.</p>
           <p><strong>Password versus passkey.</strong> A Password entry contains a text password; a Passkey entry is a different sign-in credential and may show only a creation date. A passkey cannot be inserted as text into a password field. Use the website's passkey sign-in flow where supported, or select a genuine Password entry yourself. See <a href="#troubleshooting">AutoFill troubleshooting</a>; the trigger is not a guarantee that macOS or a particular website can fill the field.</p>
-          <div class="important"><span class="callout-title">Website links</span>Publisher, Google Scholar, author/profile, preprint, citation-source, Note and remote-PDF links open here, as does Overleaf export. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use <span class="ui">Open in Safari</span>; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.</div>
+          <div class="important"><span class="callout-title">Website links</span>Publisher, Google Scholar, author/profile, preprint, citation-source, Note, remote-PDF and Overleaf links from research views follow <a href="#website-link-settings">Website Links</a>. They open here by default; System Default Browser sends them to the browser chosen in macOS. Navigation already inside Browser stays in Browser. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use <span class="ui">Open in Safari</span>; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.</div>
         </article>
 
         <article class="help-topic guide-topic" id="citation-settings" data-group="Settings and Safety" data-title="Open Source Settings" data-keywords="OpenAlex API key Semantic Scholar NASA ADS token Crossref DataCite local SQLite environment security">
@@ -2212,10 +2234,10 @@
         <article class="help-topic guide-topic" id="field-settings" data-group="Settings and Safety" data-title="Field Settings" data-keywords="field settings discipline classification standalone other fields all fields physics quantum information materials chemistry astronomy astrophysics particle nuclear mathematics computer science biology medicine statistics economics finance electrical engineering earth environmental social sciences">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Choose Which Research Fields Appear Separately</h1>
-          <p class="lead">Gewu Insight keeps a detailed canonical field classification while letting each workspace decide which fields deserve their own visible filter.</p>
+          <p class="lead">Choose which research fields appear as separate filters across the workspaces.</p>
 
           <h2>Open Field Settings</h2>
-          <p>Choose <span class="ui">Setting &gt; Field Settings</span>. Select a field to show it as a separate filter and label. Clear it to collect that field under <span class="ui">Other Fields</span>.</p>
+          <p>Choose <span class="ui">Setting &gt; Field Settings</span>. Select a field to show it as a separate filter and label. Clear it to collect that field under <span class="ui">Other Fields</span>, then choose <span class="ui">Save</span>. Closing without saving leaves the earlier presentation in effect.</p>
 
           <h2>Default organization</h2>
           <table class="plain-table">
@@ -2231,10 +2253,10 @@
             <li><span class="ui">Other Fields</span> appears immediately above <span class="ui">All Fields</span>.</li>
             <li><span class="ui">All Fields</span> is always the final choice and includes every classified paper.</li>
             <li>Changing this setting updates field filters, counts, badges, and Paper Details across Journal Monitor, Subject Monitor, Library, My Publications, and Author Monitor.</li>
-            <li>The setting changes presentation, not evidence. Canonical field assignments remain in SQLite and become visible again if a field is later selected.</li>
+            <li>Canonical field assignments stay in SQLite and reappear when a field is selected again.</li>
           </ul>
 
-          <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
+          <div class="note"><span class="callout-title">Note</span>Use <span class="ui">Restore Defaults</span> to save the four-field default immediately. Field Settings do not change arXiv discovery coverage; configure that separately in <span class="ui">arXiv Scope Settings</span>.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#arxiv-scope-settings">arXiv Scope Settings</a><a href="#citation-settings">Open Source Settings</a><a href="#journal-monitor">Journal Monitor</a><a href="#subject-monitor">Subject Monitor</a></div></div>
         </article>
@@ -2245,7 +2267,7 @@
           <p class="lead">Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look, or divide the work by file format.</p>
 
           <h2>Open Quick Look Settings</h2>
-          <p>Choose <span class="ui">Setting &gt; Quick Look Settings</span>. The setting applies to Space-bar previews in both Library and Spaces. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.</p>
+          <p>Choose <span class="ui">Setting &gt; Quick Look Settings</span>. Select a mode and choose <span class="ui">Save</span>. The setting applies to Space-bar previews in Library, Spaces, Paper Files, and the other research views when a local file is available. Closing without saving leaves the previous mode in effect. <span class="ui">Restore Default</span> immediately saves Gewu Insight for all files. The saved mode persists after restarting the App; it does not change Open in Preview. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.</p>
 
           <table class="plain-table">
             <tr><th>Mode</th><th>Behavior</th></tr>
@@ -2256,9 +2278,9 @@
 
           <h2>Choose a mode for your workflow</h2>
           <ul>
-            <li>Use the default when you want one consistent, contained workspace and the optimized built-in PDF reader.</li>
+            <li>Use the default when you want one consistent, contained workspace with an embedded PDF reader.</li>
             <li>Use the mixed mode when PDFs are your main reading material but presentations, video, audio, and images should use native macOS preview support.</li>
-            <li>Use the all-native mode when system Quick Look compatibility matters more than keeping the preview embedded in Gewu Insight.</li>
+            <li>Use the all-native mode for the macOS Quick Look panel, including when you prefer its behavior during rapid PDF switching. In the native App, this is separate from opening the full Preview application.</li>
           </ul>
 
           <div class="note"><span class="callout-title">Note</span>When the macOS panel is used, keyboard focus remains in Gewu Insight so <kbd>↑</kbd> and <kbd>↓</kbd> continue changing the selected Library or Paper Files item instead of turning into page-navigation commands in the system panel.</div>
@@ -2275,7 +2297,7 @@
             <tr><td><span class="ui">Gewu Insight Browser</span> (default)</td><td>Opens a new built-in Browser tab, preserving existing pages. Press <kbd>⌘</kbd><kbd>[</kbd> to return to the source workspace.</td></tr>
             <tr><td><span class="ui">System Default Browser</span></td><td>Opens the website in the default web browser selected in macOS. Your current Gewu workspace stays in place.</td></tr>
           </tbody></table>
-          <p>This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: <span class="ui">Open Website</span>, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, and links inside Note. <span class="ui">Restore Default</span> saves Gewu Insight Browser as the preference.</p>
+          <p>This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: <span class="ui">Open Website</span>, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, Overleaf, and links inside Note. <span class="ui">Restore Default</span> saves Gewu Insight Browser as the preference.</p>
           <p>Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain their own actions. Browsing directly inside the Browser tab stays there. Its explicit <span class="ui">Open in Safari</span> command still opens Safari. Selecting a different browser does not transfer website sign-ins, cookies, or existing tabs. When using the local UI in a separate web browser, the built-in option opens an ordinary tab in that browser.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#browser">Browse, Bookmark, and Revisit Websites</a><a href="#paper-details">Use Paper Details</a><a href="#quick-look-settings">Quick Look Settings</a></div></div>
         </article>
@@ -2283,10 +2305,10 @@
         <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Set Naming and PDF Rename Rules</h1>
-          <p class="lead">Display naming and physical PDF renaming are separate choices. Review metadata before applying either one in bulk.</p>
+          <p class="lead">Display naming and physical PDF renaming are separate choices. Review metadata before renaming files.</p>
 
           <h2>Choose the Library naming rule</h2>
-          <p>Choose <span class="ui">Setting &gt; Naming Rule &gt; Use Title</span> or <span class="ui">Use Citation</span>. This changes the preferred managed display/name rule where applicable.</p>
+          <p>Choose <span class="ui">Setting &gt; Naming Rule &gt; Use Title</span> or <span class="ui">Use Citation</span>. The choice is saved immediately and supplies the default name for a newly added Library placement that has no name yet. It does not rename the existing collection. The default rule is Use Citation; physical PDF renaming uses the separate template below.</p>
 
           <h2>Configure PDF renaming</h2>
           <p>Open <span class="ui">Setting &gt; PDF Rename Settings</span>. A template can use tokens such as:</p>
@@ -2298,12 +2320,14 @@
             <li><code>{doi}</code></li>
           </ul>
 
+          <p>Edit <span class="ui">Filename Template</span> and inspect the sample <span class="ui">Preview</span>, then choose <span class="ui">Save</span> or press Return. <span class="ui">Default</span> immediately saves the standard <code>{author}_{year}_{title}</code> template. Saving a template does not rename existing PDFs; apply it through the Library rename action below.</p>
+
           <h2>Rename one item from metadata</h2>
           <ol class="steps">
             <li><strong>Confirm its DOI, title, author, journal, and year.</strong></li>
             <li><strong>Control-click the item.</strong></li>
             <li><strong>Choose <span class="ui">Auto rename from Metadata</span>.</strong></li>
-            <li><strong>Verify the result in the Library and Finder.</strong></li>
+            <li><strong>Verify the result in the Library and Finder.</strong> To rename several PDFs, select only local PDF paper rows, Control-click, and choose <span class="ui">Auto rename n selected</span>. Each file uses its own metadata; the progress message reports renamed, already named, and skipped items.</li>
           </ol>
 
           <div class="note"><span class="callout-title">Note</span>Changing a Paper Files property or choosing <span class="ui">Set as Default</span> does not rename that file. A rename occurs only through a naming or rename action.</div>
@@ -2451,8 +2475,7 @@
           <h2>Browser keyboard context</h2>
           <p>Find on Page uses Enter for the next match, Shift-Enter for the previous match, and Escape to close. In address suggestions, Up/Down selects a result and Escape restores your query. A focused webpage tab uses Left/Right to change tabs. These contexts are separate from Library navigation; <span class="key">⌘L</span> in Browser does not open Folder Loader.</p>
 
-          <h2>Paper Files mouse behavior</h2>
-          <p>Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.</p>
+          <p><strong>Paper Files mouse behavior:</strong> single-click selects, double-click opens, and Control-click opens the context menu.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#paper-files">Understand Paper Files</a></div></div>
         </article>
@@ -2487,10 +2510,10 @@
         <article class="help-topic guide-topic" id="startup" data-group="Reference" data-title="Startup, Monitor Cache, and Text Size" data-keywords="launch local server port 8765 could not start log migration 120 seconds restart recovery failure sheet clear monitor cache stale interface overlay font size compact standard large larger extra large">
           <p class="topic-kicker">Reference</p>
           <h1>Manage Startup, Monitor Cache, and Text Size</h1>
-          <p class="lead">The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.</p>
+          <p class="lead">The macOS app shows its branded startup view immediately, starts or connects to the local UI service, and reveals the workspace when Library is ready.</p>
 
           <h2>Normal startup</h2>
-          <p>The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.</p>
+          <p>The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.</p>
 
           <p>The first launch after an additive database upgrade can take longer because the existing SQLite records are migrated and older provenance or file metadata is backfilled. The native launcher allows up to 120 seconds for this preparation. Keep the single startup panel open rather than launching a second copy; the migration preserves the existing database and managed files.</p>
 
@@ -2531,7 +2554,7 @@
           <h2>Choose a comfortable text size</h2>
           <p>Choose <span class="ui">Setting &gt; Font Size</span>, then select <span class="ui">Compact</span>, <span class="ui">Standard</span>, <span class="ui">Large</span>, <span class="ui">Larger</span>, or <span class="ui">Extra Large</span>. The workspace previews the choice immediately while keeping panel dimensions, icons, and window controls unchanged.</p>
 
-          <p><span class="ui">Cancel</span>, the Escape key, or clicking outside the sheet restores the previously saved size. Choose <span class="ui">Save</span> to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.</p>
+          <p><span class="ui">Cancel</span>, the Escape key, or clicking outside the sheet restores the previously saved size. <span class="ui">Restore Default</span> previews Standard and still requires Save. Choose <span class="ui">Save</span> to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#troubleshooting">Troubleshooting</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
@@ -2554,6 +2577,9 @@
 
           <h2>Quick Look is slow on the first open</h2>
           <p>A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use <span class="ui">Open in Preview</span> to check whether the file itself is valid.</p>
+
+          <h2>PDF switching flashes in built-in Quick Look</h2>
+          <p>The built-in preview can flash as it loads another PDF. Open <span class="ui">Setting &gt; Quick Look Settings</span>, choose <span class="ui">macOS Quick Look for all files</span>, and Save to use the system panel for rapid comparison. Up and Down still follow the selected files. This changes the preview method; it does not alter your PDF files or default-file choices.</p>
 
           <h2>The wrong file is the default</h2>
           <ol>

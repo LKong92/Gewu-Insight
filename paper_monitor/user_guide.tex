@@ -166,9 +166,14 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 
 \clearpage
 \section*{Contents}
+% Keep the complete navigation list compact without changing body typography.
+\begingroup
+\setstretch{0.96}
+\setlength{\parskip}{0pt}
 \makeatletter
 \@starttoc{toc}
 \makeatother
+\endgroup
 \clearpage
 \RaggedRight
 \part{Orientation}\label{part-1}
@@ -179,7 +184,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Guide revision · September 6, 2026
+Guide revision · September 6, 2026 · Functional review
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -384,7 +389,7 @@ Prepare an upgrade or move to another Mac & Read \hyperref[backup-migrate]{Back 
 
 \section{Open this guide again}\label{open-this-guide-again}
 
-Choose \textbf{Help \textgreater{} User Guide}. The guide opens in its own window and works without an internet connection.
+Choose \textbf{Help \textgreater{} User Guide}. The guide opens in its own window and works without an internet connection. Search filters the topic list; choose a result to read it, or use Previous and Next to follow the manual. Select \textbf{Print Guide} to open the complete, fixed-layout PDF in macOS Preview, where you can print or save a copy. In a separately hosted web UI, that button opens the PDF in a browser tab. It opens the whole guide, not just the topic currently on screen.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[guided-tour]{Guided Tour} · \hyperref[first-session]{Your First Session} · \hyperref[system-overview]{System Architecture at a Glance} · \hyperref[storage-model]{How Gewu Insight Stores Files}
@@ -1485,9 +1490,15 @@ Space & An independent project, course, collaboration, or temporary collection. 
 
 Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press \texttt{{\symbolfont ←}} from the leftmost content column to focus this rail, use \texttt{{\symbolfont ↑}} and \texttt{{\symbolfont ↓}} to open another source, then press \texttt{{\symbolfont →}} to enter its content.
 
+\subsection{Color folders and remove navigation entries}\label{color-folders-and-remove-navigation-entries}
+
+Control-click an ordinary folder and choose \textbf{Color} to change its folder color. Protected roots do not offer this command. On the source rail, \textbf{Remove Shortcut} removes only the shortcut, leaving its folder and papers intact. \textbf{Remove Empty Space} works only after both its managed contents and remaining files are empty; move the Space into Library if you want to keep its hierarchy.
+
 \subsection{Work with several entries}\label{work-with-several-entries}
 
 Command-click to add or remove individual entries from a selection. Shift-click, or hold Shift while using the arrow keys, to extend a range in the current folder. Copy the selected entries with \texttt{{\symbolfont ⌘}}\texttt{C}, paste into the active destination with \texttt{{\symbolfont ⌘}}\texttt{V}, or press \texttt{Delete} to apply the normal reference-aware deletion rules.
+
+To include an existing Library paper in your own publication list, select one or more paper rows, Control-click, and choose \textbf{Add to My Publications}. This adds the publication relationship to the same paper and Gewu Key; it does not remove the Library placement. Review authorship roles in My Publications afterward.
 
 \subsection{Copy a paper to another folder}\label{copy-a-paper-to-another-folder}
 
@@ -1543,7 +1554,7 @@ Search locates items across the managed collection. List View emphasizes browsin
 
 \subsection{Switch views}\label{switch-views}
 
-Choose \textbf{View \textgreater{} List View} or \textbf{View \textgreater{} Table View}. You can also use \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V}. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files.
+Choose \textbf{View \textgreater{} List View} or \textbf{View \textgreater{} Table View}. You can also use \texttt{{\symbolfont ⇧}}\texttt{{\symbolfont ⌘}}\texttt{V}. Table columns can be sorted or resized where available; changing the view does not rename, move, or rewrite files. Active Library search uses its result list and disables Table View. Clear the search to use Table View for the current folder again.
 
 \subsection{Sort a folder}\label{sort-a-folder}
 
@@ -1644,7 +1655,7 @@ The title appears once at the top. The rows below include authors, journal, date
 
 \subsection{Compare citation sources}\label{compare-citation-sources}
 
-\textbf{Merged Citations} brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and PubMed when those services have a match. Select a source label to inspect that source's count and evidence. The headline is a merged best estimate; counts from different services are not added together.
+\textbf{Merged Citations} brings together the counts returned by OpenAlex, Semantic Scholar, Crossref, NASA ADS, and saved Google Scholar data when those services have a match. Select a source label to show its saved count in the headline; this does not start a refresh. The merged estimate compares published, preprint, and already-merged records rather than simply adding every provider\textquotesingle s total. Separate published/preprint estimates can be combined, so this is not a verified count of unique citing papers. The yearly histogram uses OpenAlex data and does not switch provider when you select another count. PubMed Details supplies identifiers and indexing information, not another citation-count source.
 
 \subsection{Inspect influential citations}\label{inspect-influential-citations}
 
@@ -1745,7 +1756,7 @@ The Paper Files column is a flat peer list, not a hierarchy of version or attach
 \item
   Press \texttt{Space} to use Quick Look.
 \item
-  Control-click for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, default-file controls, type controls, add/sync actions, or deletion where allowed.
+  Control-click a card for \textbf{Open}, \textbf{Quick Look}, \textbf{Show in Finder}, default-file controls, \textbf{Change File Type}, or \textbf{Delete from Paper Files} where allowed. Control-click blank space in Paper Files for \textbf{Add File} and, when the paper has an arXiv identifier, \textbf{Sync Versions}. Those bundle-wide commands do not appear on an individual file card.
 \item
   Press \texttt{Delete} or \texttt{Backspace} while Paper Files has keyboard focus to remove only the selected removable resource after confirmation. This does not delete the parent paper or its other files.
 \end{itemize}
@@ -1788,9 +1799,17 @@ With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue mov
 
 \subsection{Read the built-in PDF loading sequence}\label{read-the-built-in-pdf-loading-sequence}
 
-The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails begin after the main document is ready, so a large PDF can already be readable while the thumbnail strip is still filling in.
+The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails are scheduled after the embedded document reports loading, so the document and thumbnail strip may appear at different times. That loading signal is not a guarantee that every PDF page has finished painting.
 
 On the first open, the app may still need to inspect the PDF and render thumbnail pages. Later opens can reuse stable local-file validators, remembered page information, and a bounded thumbnail cache. The cache is automatically trimmed and can always be rebuilt; it is not part of the paper record or a substitute for the PDF.
+
+\subsection{Read and navigate the built-in viewer}\label{read-and-navigate-the-built-in-viewer}
+
+The PDF opens at page width. Scroll the document, click a page thumbnail to jump, or use a trackpad pinch to zoom the PDF. The document and thumbnail strip scroll independently. Drag the preview title bar to reposition it, or its resize corner to change the reading area. The strip provides page buttons for the first 200 pages; thumbnail images are limited to the first 160. The document remains scrollable beyond that range; use \textbf{Open in Preview} for the full reader\textquotesingle s navigation and tools.
+
+Supported images, audio, video, and text files can also be inspected inside the workspace. A long text preview may end with {[}Preview truncated{]}; use Open File to read the complete original. Other formats show a file card with \textbf{Open File}; that opens the file in its macOS application. Choose a native mode in \hyperref[quick-look-settings]{Quick Look Settings} for formats better handled by system Quick Look.
+
+Switching between PDFs in the built-in viewer can briefly flash while the next document loads. It does not guarantee the same switching speed or continuity as macOS Quick Look. For rapid comparison, try \textbf{macOS Quick Look for all files}.
 
 \subsection{Choose Quick Look or Preview}\label{choose-quick-look-or-preview}
 
@@ -1804,7 +1823,7 @@ Use & Best for \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
-\textbf{Built-in Quick Look} & Fast PDF inspection, keyboard comparison among versions, and a preview that remains inside the workspace. \\
+\textbf{Built-in Quick Look} & PDF inspection and keyboard comparison among versions while remaining inside the workspace. \\
 \textbf{macOS Quick Look} & System-native preview support for presentations, media, images, PDFs, and other formats supported by macOS. \\
 \textbf{Open in Preview} & Full macOS Preview tools, annotation, export, printing, and a separate reading window. \\
 \end{longtable}
@@ -1857,7 +1876,7 @@ Choose \textbf{Use Automatic Selection} for a manually selected default. Gewu In
 
 \subsection{Classify files without collapsing annotation state}\label{classify-files-without-collapsing-annotation-state}
 
-File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. File type uses exactly these labels:
+In Library, File type stays visible on each card. Click the size footer to reveal Annotation and Source, then change each control independently. In My Publications, expand Files to see all three controls directly. File type uses exactly these labels:
 
 \begin{itemize}
 \tightlist
@@ -1894,13 +1913,13 @@ Import first, classify afterward. This keeps the add operation simple and lets y
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Control-click the Paper Files area and choose \textbf{Add File}.} In My Publications, expand Files and use Add File.
+  \textbf{Control-click blank space in the Paper Files area and choose \textbf{Add File}.} In My Publications, expand Files and use Add File.
 \item
   \textbf{Select one or more local files.} Confirm the file chooser.
 \item
   \textbf{Wait for the new row.} A new item begins as \textbf{Unknown} unless its source proves a more specific type.
 \item
-  \textbf{Select its compact controls.} Choose File type; click the size footer to expand Annotation and Source when needed.
+  \textbf{Select its compact controls.} Choose File type; in Library, click the size footer to expand Annotation and Source. My Publications shows those controls directly in its Files panel.
 \end{enumerate}
 
 \subsection{Attachment types}\label{attachment-types}
@@ -1948,7 +1967,7 @@ Downloads add a version to the paper bundle. They do not silently overwrite a di
 \item
   Use the download icon in the \textbf{arXiv} row to retrieve the latest arXiv PDF.
 \item
-  Choose \textbf{Sync Versions} to retrieve all available arXiv revisions such as v1, v2, and v3.
+  Control-click blank space in Paper Files and choose \textbf{Sync Versions} to retrieve all available arXiv revisions such as v1, v2, and v3. In My Publications, use Sync Versions inside the expanded Files panel. The command is available when the paper has an arXiv identifier.
 \item
   Each revision is labeled with its arXiv version when known.
 \end{itemize}
@@ -2300,8 +2319,10 @@ My Publications. The active profile, DOI-resolved publication list, citation evi
 \item
   \textbf{Choose \textbf{Find Profile}.} Review candidate profiles carefully.
 \item
-  \textbf{Choose \textbf{Use Profile}.} The saved strip shows the active name and profile photo. Select the photo to open the profile in Browser; use the remove control to forget it.
+  \textbf{Choose \textbf{Use Profile}.} The saved strip shows the active name and profile photo. Select the photo to open the profile using \hyperref[website-link-settings]{Website Links}; use the remove control to forget it.
 \end{enumerate}
+
+Already have the paper in Library? Control-click its row and choose \textbf{Add to My Publications}. Multiple selected papers can be added together. The publication list and Library then refer to the same work, files, and Gewu Key.
 
 \subsection{Add and update publications}\label{add-and-update-publications}
 
@@ -2325,6 +2346,12 @@ My Publications. The active profile, DOI-resolved publication list, citation evi
   Use \textbf{Hide} or \textbf{Show} in the context menu to control export inclusion. Use \textbf{Open in Finder} or \textbf{Delete} for the corresponding local action.
 \end{itemize}
 
+\subsection{Edit manual records and author marks}\label{edit-manual-records-and-author-marks}
+
+A publication without either a DOI or arXiv identifier exposes \textbf{Manual Metadata}. Edit Title, Authors, Journal, Date, Volume, Issue, and Pages, then choose \textbf{Save Metadata}. Separate author names with semicolons or new lines. Once an identifier is present, use identifier-based metadata controls instead.
+
+Select an author name in the publication\textquotesingle s author list to inspect affiliations and set \textbf{First author}, \textbf{Co-first author}, or \textbf{Corresponding author} for that named author. Checkbox changes save immediately. These individual author marks are separate from the publication\textquotesingle s Co-1st, Co-corr., and Rev. summary controls.
+
 \subsection{Build a citation-comments report}\label{build-a-citation-comments-report}
 
 \textbf{Comments} gathers citing-paper metadata and available Semantic Scholar citation-context sentences, then writes a local report that groups strong praise, positive impact statements, cautions, and unmatched citing records. It helps you review how later literature describes a publication; it does not modify the publication metadata or replace your own notes.
@@ -2333,7 +2360,7 @@ The report is a generated local reading artifact. Network services may return fe
 
 \subsection{Work with files}\label{work-with-files}
 
-My Publications uses the same Paper Details and flat Paper Files model as Library. Expand \textbf{Files · n} within the details to inspect its resources; Library instead has an adjacent Paper Files column. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
+My Publications uses the same Paper Details and flat Paper Files model as Library. Expand \textbf{Files · n} within the details to inspect its resources; Library instead has an adjacent Paper Files column. The publication Files panel shows File type, Annotation, and Source controls directly; the size-footer expansion belongs to Library cards. A publication can keep a default PDF, earlier versions, supplements, notes, presentations, data, and other attachments under the same Gewu Key.
 
 \subsection{Read the summary}\label{read-the-summary}
 
@@ -2341,9 +2368,9 @@ The lower summary includes publication counts, identifier coverage, h-index and 
 
 \subsection{Export a list}\label{export-a-list}
 
-Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. Exports use the saved manual order where that format supports it and never replace the SQLite source.
+Choose \textbf{Export List}, then select LaTeX PDF, LaTeX source, Overleaf project ZIP, or Word document. Papers excluded from export remain visible in My Publications but are omitted from the generated list. The export follows the current visible table, including its search, role/journal filters, and row order, and excludes rows marked Hide. Clear filters and search first if you want the full included list. Exporting never replaces the SQLite source.
 
-The Overleaf option downloads a project ZIP and opens Overleaf in Browser. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.
+The Overleaf option creates a project ZIP, copies it to the Desktop, and opens Overleaf using \hyperref[website-link-settings]{Website Links}. The status message reports the saved path. It does not upload your files or create an Overleaf project automatically; import the ZIP yourself on the website.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[citation-settings]{Open Source Settings} · \hyperref[paper-details]{Use Paper Details} · \hyperref[privacy]{Local Data and Privacy}
@@ -2372,7 +2399,7 @@ Journal Monitor. Nature is selected for August 12, 2026, with scientific figures
 \item
   \textbf{Choose \textbf{Refresh}.} The app requests all configured journal sources for that date.
 \item
-  \textbf{Use \textbf{Refresh This Journal} when only the active journal needs another attempt.} This avoids re-requesting journals that are already complete.
+  \textbf{Control-click the journal in Journal Filter and use \textbf{Refresh This Journal} when only that journal needs another attempt.} This avoids re-requesting journals that are already complete.
 \item
   \textbf{Choose \textbf{arXiv} separately if needed.} This keeps journal and preprint work explicit.
 \item
@@ -2420,7 +2447,7 @@ Use \textbf{Journal Filter}, \textbf{Preprint Filter}, and \textbf{Field Filter}
 \begin{itemize}
 \tightlist
 \item
-  \textbf{Open Website} opens the publisher or best known record in a Browser tab.
+  \textbf{Open Website} opens the publisher or best known record using \hyperref[website-link-settings]{Website Links}: a new built-in Browser tab by default, or the macOS default browser when selected.
 \item
   \textbf{Add to Library} begins the placement workflow described below; after that, \textbf{Show in Library} returns to the managed paper.
 \item
@@ -2428,6 +2455,10 @@ Use \textbf{Journal Filter}, \textbf{Preprint Filter}, and \textbf{Field Filter}
 \item
   When a reading note exists, \textbf{Note} opens it in the right-side drawer. The list compresses but keeps its own scroll position. \textbf{Delete Note} removes the note and resets analysis status.
 \end{itemize}
+
+\subsection{Read an existing Note}\label{read-an-existing-note}
+
+\textbf{Note} appears when a reading note has already been generated. It opens the saved note on demand in a right-side drawer; the report area compresses and each side scrolls independently. Drag the divider to resize the note. \textbf{Hide list} gives the note more space; \textbf{Show list} restores the report. Closing the drawer keeps the note. \textbf{Delete Note} is a separate action that removes it and resets its analysis status. Links in the note follow \hyperref[website-link-settings]{Website Links}.
 
 \subsection{Add a Journal result to Library}\label{add-a-journal-result-to-library}
 
@@ -2569,23 +2600,27 @@ Author Monitor. Hong Ding\textquotesingle s profile is selected. The paper title
 
 \subsection{Understand profile and publication sources}\label{understand-profile-and-publication-sources}
 
-A Google Scholar profile is refreshed through Google Scholar and follows the shared Scholar pacing and cooldown. A ResearchGate URL identifies the public profile, but its publication list is matched separately to a publication-data author. Gewu Insight uses OpenAlex for that match when it is configured and automatically falls back to Semantic Scholar when OpenAlex is unavailable. Confirm the proposed person rather than assuming similar names are identical.
+Google Scholar profiles refresh through Scholar with shared pacing and cooldown. A ResearchGate URL identifies the public profile; its publications are matched separately through OpenAlex when configured. If unavailable, Gewu Insight automatically falls back to Semantic Scholar. Confirm the proposed person, especially for similar names.
 
-If no publication-data match can be verified, the ResearchGate profile and homepage can still be saved, but automatic publication refresh remains unavailable until a match is supplied. The profile source, publication metadata provider, and per-paper citation source remain distinct evidence; a fallback does not silently turn the ResearchGate profile into a different author identity.
+Without a verified publication-data match, the ResearchGate profile and homepage can be saved, but automatic publication refresh remains unavailable. Profile, publication, and citation sources remain distinct evidence; a fallback does not change the author identity.
 
 \subsection{Review updates}\label{review-updates}
 
-Later refreshes can mark newly discovered publications as unread. Use the \textbf{New} filter and other author/result controls to focus the list. Conference or related popovers provide additional context where available.
+Later refreshes can mark newly discovered publications as unread. Use the \textbf{New} filter and other author/result controls to focus the list. Select \textbf{Date} or \textbf{Citations} to sort; selecting the active sort reverses its direction. \textbf{Conferences · n} opens conference publications in a separate, independently scrolling popover, so they are not missing from the ordinary article list. Close the popover with its close control or Escape.
 
-Control-click \textbf{New} and choose \textbf{Read All} to clear the blue unread dots. With one author selected, this marks all new publications for that author as read, including those not currently scrolled into view; other authors keep their unread state, even for a shared paper. With \textbf{All Authors} selected, it marks all authors\textquotesingle{} new publications as read. The action preserves papers and Library placements. The New filter stays active, so newly read papers leave that filtered view; click New again to see all publications. Read state persists after reopening the app.
+Control-click \textbf{New} and choose \textbf{Read All}. For one selected author, it marks every unread publication as read, including offscreen papers; other authors keep their unread state, even for a shared paper. With \textbf{All Authors} selected, it marks all authors\textquotesingle{} new publications as read. Papers and Library placements are preserved. The New filter remains active; click New again to see read papers. Read state persists after reopening.
+
+\subsection{Refresh one author or find missing identifiers}\label{refresh-one-author-or-find-missing-identifiers}
+
+Control-click the author and choose \textbf{Refresh This Author} to update that person\textquotesingle s publications. \textbf{Find Missing Identifiers} checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose \textbf{Find Missing Identifier}; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from \textbf{Get Identifier from Files}, which uses an available local PDF.
 
 \subsection{Update citation profiles}\label{update-citation-profiles}
 
-\textbf{Update All Citations} is an explicit full-profile operation. It walks the monitored profile and refreshes citation information paper by paper, so it can take a long time and should not be treated as a quick page reload. Start it only when you intend to update the whole profile, then let the bottom progress status finish.
+For a Google Scholar author, Control-click the author, choose \textbf{Update All Scholar Citations}, review the request estimate, then confirm \textbf{Update All Citations}. This updates that author's full profile paper by paper and can take a long time. Follow the bottom progress status until it finishes.
 
 \subsection{Manage the profile image}\label{manage-the-profile-image}
 
-Control-click an author and choose \textbf{Edit Homepage} or \textbf{Change Photo}. A downloaded Google Scholar avatar is saved locally, and local photo bytes are prepared when the service starts so opening Author Monitor does not need to reopen SQLite or contact the image host for every row. A manual photo takes precedence. If no valid local photo exists, the list can use initials until you explicitly refresh or replace the profile image.
+Control-click an author and choose \textbf{Edit Homepage} to edit the website, or \textbf{Change Photo} / \textbf{Add Photo} to choose a local portrait. Downloaded Scholar avatars are saved locally. Opening the author list does not need to reopen SQLite or contact the image host for every row; a manual photo takes precedence. Without a valid local photo, the list can show initials until you refresh or replace the image.
 
 \subsection{Discovery entries and managed papers}\label{discovery-entries-and-managed-papers}
 
@@ -2607,7 +2642,7 @@ The author-publication relationship and canonical identity remain intact. Adding
 
 \subsection{Remove a monitored author}\label{remove-a-monitored-author}
 
-Deleting an author from Author Monitor removes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.
+Control-click the author and choose \textbf{Remove from Monitor}. Removing an author deletes the monitoring relationship and its monitor state. It does not delete papers already added to Library, their managed PDFs, or their Paper Files bundles.
 
 \begin{quote}
 \textbf{Note}
@@ -2760,7 +2795,7 @@ A macOS prompt for \textbf{Gewu Insight WebCrypto Master Key} concerns WebKit\te
 \begin{quote}
 \textbf{Website links}
 
-Publisher, Google Scholar, author/profile, preprint, citation-source, Note and remote-PDF links open here, as does Overleaf export. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use \textbf{Open in Safari}; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.
+Publisher, Google Scholar, author/profile, preprint, citation-source, Note, remote-PDF and Overleaf links from research views follow \hyperref[website-link-settings]{Website Links}. They open here by default; System Default Browser sends them to the browser chosen in macOS. Navigation already inside Browser stays in Browser. Local PDF/Preview and Finder actions stay native. For incompatible sites, explicitly use \textbf{Open in Safari}; cookies are not transferred. The browser-hosted UI opens ordinary tabs. Never bypass access controls.
 \end{quote}
 
 \chapter{Settings and Safety}\label{chapter-19}
@@ -2866,12 +2901,12 @@ The category checkboxes in Journal Monitor are display filters. They do not narr
 \section{Field Settings}\label{field-settings}
 
 \begin{GewuLead}
-Gewu Insight keeps a detailed canonical field classification while letting each workspace decide which fields deserve their own visible filter.
+Choose which research fields appear as separate filters across the workspaces.
 \end{GewuLead}
 
 \subsection{Open Field Settings}\label{open-field-settings}
 
-Choose \textbf{Setting \textgreater{} Field Settings}. Select a field to show it as a separate filter and label. Clear it to collect that field under \textbf{Other Fields}.
+Choose \textbf{Setting \textgreater{} Field Settings}. Select a field to show it as a separate filter and label. Clear it to collect that field under \textbf{Other Fields}, then choose \textbf{Save}. Closing without saving leaves the earlier presentation in effect.
 
 \subsection{Default organization}\label{default-organization}
 
@@ -2924,13 +2959,13 @@ Unclassified records\strut
 \item
   Changing this setting updates field filters, counts, badges, and Paper Details across Journal Monitor, Subject Monitor, Library, My Publications, and Author Monitor.
 \item
-  The setting changes presentation, not evidence. Canonical field assignments remain in SQLite and become visible again if a field is later selected.
+  Canonical field assignments stay in SQLite and reappear when a field is selected again.
 \end{itemize}
 
 \begin{quote}
 \textbf{Note}
 
-Use \textbf{Restore Defaults} to return to the four-field default. Field Settings do not change arXiv discovery coverage; configure that separately in \textbf{arXiv Scope Settings}.
+Use \textbf{Restore Defaults} to save the four-field default immediately. Field Settings do not change arXiv discovery coverage; configure that separately in \textbf{arXiv Scope Settings}.
 \end{quote}
 
 \begin{GewuRelated}
@@ -2945,7 +2980,7 @@ Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look
 
 \subsection{Open Quick Look Settings}\label{open-quick-look-settings}
 
-Choose \textbf{Setting \textgreater{} Quick Look Settings}. The setting applies to Space-bar previews in both Library and Spaces. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.
+Choose \textbf{Setting \textgreater{} Quick Look Settings}. Select a mode and choose \textbf{Save}. The setting applies to Space-bar previews in Library, Spaces, Paper Files, and the other research views when a local file is available. Closing without saving leaves the previous mode in effect. \textbf{Restore Default} immediately saves Gewu Insight for all files. The saved mode persists after restarting the App; it does not change Open in Preview. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -2969,11 +3004,11 @@ Mode & Behavior \\
 \begin{itemize}
 \tightlist
 \item
-  Use the default when you want one consistent, contained workspace and the optimized built-in PDF reader.
+  Use the default when you want one consistent, contained workspace with an embedded PDF reader.
 \item
   Use the mixed mode when PDFs are your main reading material but presentations, video, audio, and images should use native macOS preview support.
 \item
-  Use the all-native mode when system Quick Look compatibility matters more than keeping the preview embedded in Gewu Insight.
+  Use the all-native mode for the macOS Quick Look panel, including when you prefer its behavior during rapid PDF switching. In the native App, this is separate from opening the full Preview application.
 \end{itemize}
 
 \begin{quote}
@@ -3010,7 +3045,7 @@ Option & Behavior \\
 \GewuTableEnd
 }
 
-This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: \textbf{Open Website}, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, and links inside Note. \textbf{Restore Default} saves Gewu Insight Browser as the preference.
+This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: \textbf{Open Website}, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, Overleaf, and links inside Note. \textbf{Restore Default} saves Gewu Insight Browser as the preference.
 
 Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain their own actions. Browsing directly inside the Browser tab stays there. Its explicit \textbf{Open in Safari} command still opens Safari. Selecting a different browser does not transfer website sign-ins, cookies, or existing tabs. When using the local UI in a separate web browser, the built-in option opens an ordinary tab in that browser.
 
@@ -3021,12 +3056,12 @@ Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain 
 \section{Naming and PDF Rename Rules}\label{naming}
 
 \begin{GewuLead}
-Display naming and physical PDF renaming are separate choices. Review metadata before applying either one in bulk.
+Display naming and physical PDF renaming are separate choices. Review metadata before renaming files.
 \end{GewuLead}
 
 \subsection{Choose the Library naming rule}\label{choose-the-library-naming-rule}
 
-Choose \textbf{Setting \textgreater{} Naming Rule \textgreater{} Use Title} or \textbf{Use Citation}. This changes the preferred managed display/name rule where applicable.
+Choose \textbf{Setting \textgreater{} Naming Rule \textgreater{} Use Title} or \textbf{Use Citation}. The choice is saved immediately and supplies the default name for a newly added Library placement that has no name yet. It does not rename the existing collection. The default rule is Use Citation; physical PDF renaming uses the separate template below.
 
 \subsection{Configure PDF renaming}\label{configure-pdf-renaming}
 
@@ -3046,6 +3081,8 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
   \texttt{\{doi\}}
 \end{itemize}
 
+Edit \textbf{Filename Template} and inspect the sample \textbf{Preview}, then choose \textbf{Save} or press Return. \textbf{Default} immediately saves the standard \texttt{\{author\}\_\{year\}\_\{title\}} template. Saving a template does not rename existing PDFs; apply it through the Library rename action below.
+
 \subsection{Rename one item from metadata}\label{rename-one-item-from-metadata}
 
 \begin{enumerate}
@@ -3057,7 +3094,7 @@ Open \textbf{Setting \textgreater{} PDF Rename Settings}. A template can use tok
 \item
   \textbf{Choose \textbf{Auto rename from Metadata}.}
 \item
-  \textbf{Verify the result in the Library and Finder.}
+  \textbf{Verify the result in the Library and Finder.} To rename several PDFs, select only local PDF paper rows, Control-click, and choose \textbf{Auto rename n selected}. Each file uses its own metadata; the progress message reports renamed, already named, and skipped items.
 \end{enumerate}
 
 \begin{quote}
@@ -3291,9 +3328,7 @@ In Author Monitor, Left selects the author rail and Right selects its papers; Up
 
 Find on Page uses Enter for the next match, Shift-Enter for the previous match, and Escape to close. In address suggestions, Up/Down selects a result and Escape restores your query. A focused webpage tab uses Left/Right to change tabs. These contexts are separate from Library navigation; {{\symbolfont ⌘}L} in Browser does not open Folder Loader.
 
-\section{Paper Files mouse behavior}\label{paper-files-mouse-behavior}
-
-Single-click selects. Double-click opens. Control-click opens the Paper Files context menu. This is intentionally different from a one-click launcher.
+\textbf{Paper Files mouse behavior:} single-click selects, double-click opens, and Control-click opens the context menu.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[paper-files]{Understand Paper Files}
@@ -3344,12 +3379,12 @@ Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access con
 \chapter{Startup, Monitor Cache, and Text Size}\label{startup}
 
 \begin{GewuLead}
-The macOS app starts a local UI server, waits for the Library bootstrap, and then opens the main window.
+The macOS app shows its branded startup view immediately, starts or connects to the local UI service, and reveals the workspace when Library is ready.
 \end{GewuLead}
 
 \section{Normal startup}\label{normal-startup}
 
-The startup panel remains visible while the local service becomes ready and the first Library view is prepared. It may show more than one status message, but the panel should remain visually stable.
+The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.
 
 The first launch after an additive database upgrade can take longer because the existing SQLite records are migrated and older provenance or file metadata is backfilled. The native launcher allows up to 120 seconds for this preparation. Keep the single startup panel open rather than launching a second copy; the migration preserves the existing database and managed files.
 
@@ -3415,7 +3450,7 @@ Monitor cache and macOS app identity are separate. Clearing Monitor Cache cannot
 
 Choose \textbf{Setting \textgreater{} Font Size}, then select \textbf{Compact}, \textbf{Standard}, \textbf{Large}, \textbf{Larger}, or \textbf{Extra Large}. The workspace previews the choice immediately while keeping panel dimensions, icons, and window controls unchanged.
 
-\textbf{Cancel}, the Escape key, or clicking outside the sheet restores the previously saved size. Choose \textbf{Save} to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.
+\textbf{Cancel}, the Escape key, or clicking outside the sheet restores the previously saved size. \textbf{Restore Default} previews Standard and still requires Save. Choose \textbf{Save} to keep the preference in the local SQLite settings. New app sessions apply the saved size automatically.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[troubleshooting]{Troubleshooting} · \hyperref[privacy]{Local Data and Privacy}
@@ -3448,6 +3483,10 @@ This label is a path-state warning, not a failed metadata lookup: SQLite still k
 \section{Quick Look is slow on the first open}\label{quick-look-is-slow-on-the-first-open}
 
 A large or previously unseen PDF may need an initial structural read and thumbnail render. The main document should appear before the full thumbnail strip. Leave the preview open briefly instead of pressing Space repeatedly; later opens can reuse page information and cached thumbnails. If the viewer never produces a page, use \textbf{Open in Preview} to check whether the file itself is valid.
+
+\section{PDF switching flashes in built-in Quick Look}\label{pdf-switching-flashes-in-built-in-quick-look}
+
+The built-in preview can flash as it loads another PDF. Open \textbf{Setting \textgreater{} Quick Look Settings}, choose \textbf{macOS Quick Look for all files}, and Save to use the system panel for rapid comparison. Up and Down still follow the selected files. This changes the preview method; it does not alter your PDF files or default-file choices.
 
 \section{The wrong file is the default}\label{the-wrong-file-is-the-default}
 
