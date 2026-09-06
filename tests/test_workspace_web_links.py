@@ -21,8 +21,10 @@ class WorkspaceWebLinkTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_audited_entry_points_have_no_server_side_safari_bypass(self):
-        self.assertNotIn('/api/open-url', INDEX_HTML)
+    def test_audited_entry_points_use_the_preference_router(self):
+        self.assertEqual(INDEX_HTML.count('fetch("/api/open-url"'), 1)
+        self.assertIn('state.websiteLinkBrowser === "system"', INDEX_HTML)
+        self.assertIn('JSON.stringify({url, app: "default"})', INDEX_HTML)
         self.assertNotIn('window.open(', INDEX_HTML)
         self.assertNotIn('openUrlExternally', INDEX_HTML)
         self.assertNotIn('Open publisher page in Safari', INDEX_HTML)
@@ -31,7 +33,7 @@ class WorkspaceWebLinkTests(unittest.TestCase):
             'openWebsite(author.url)', 'openWebsite(author.homepage_url)',
             'openWebsite(destination)', 'openLibraryWebsite(paper)',
             'openLibraryWebsiteURL(paper.google_scholar_url',
-            'openLibraryWebsiteURL(url, "Opening preprint in Browser...")',
+            'openLibraryWebsiteURL(url)',
             'openWebsite("https://www.overleaf.com/project")',
         ]:
             self.assertIn(route, INDEX_HTML)

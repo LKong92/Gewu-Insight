@@ -2,7 +2,7 @@
 
 ## Scope and method
 
-Reviewed all 46 registered in-app topics, their navigation and cross-links,
+Reviewed all 47 registered in-app topics, their navigation and cross-links,
 the seven existing workspace illustrations, the PDF builder, and the guide's
 packaging/serving paths. Compared the current implementation and product tests
 with the comprehensive-guide baseline `23768f0`, the subsequent file/settings/
@@ -64,7 +64,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Folders, Shortcuts, Spaces](../paper_monitor/user_guide.html#organize) | Retain shared placement, copies/moves, independent Space roots and protected relationships; file-operation tests. |
 | [Search and Views](../paper_monitor/user_guide.html#search-views) | Retain scoped search and List/Table behavior; `currentSurfaceSearchScope`, search/view handlers. |
 | [Add Papers and Files](../paper_monitor/user_guide.html#import-files) | Retain metadata-only and file-backed routes; `test_library_add_targets.py`, ingress tests. |
-| [Paper Details](../paper_monitor/user_guide.html#paper-details) | Retain aligned author details, visible undefined key, Library's removed duplicate Files panel; details tests. Web links now Browser. |
+| [Paper Details](../paper_monitor/user_guide.html#paper-details) | Retain aligned author details, visible undefined key, Library's removed duplicate Files panel; details tests. Web links follow Website Links (built-in default or system default). |
 | [Identifiers](../paper_monitor/user_guide.html#identifiers) | Retain explicit DOI/arXiv editing, refresh and source actions; metadata tests, identifier-control handlers. |
 | [Paper Files](../paper_monitor/user_guide.html#paper-files) | Retain independently collapsed metadata, size-footer edge, default/physical-primary guard and native local-file opening. |
 | [Quick Look](../paper_monitor/user_guide.html#quick-look) | Retain on-demand native preview and temporary thumbnails; Quick Look settings/performance tests. |
@@ -86,6 +86,7 @@ Evidence names below refer to the current implementation or product tests;
 | [arXiv Scopes](../paper_monitor/user_guide.html#arxiv-scope-settings) | Retain multi-archive discovery versus display filters, defaults and saved-paper preservation; arXiv scope/schedule tests. |
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Retain canonical fields versus visible grouping and Restore Defaults; field settings tests. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Retain page width/actual size/fit behavior; native PDF preview/settings tests. |
+| [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Built-in default or macOS default browser; Save, unsaved close, Restore Default, persistence, research-link scope, Preview/Finder and Browser exceptions. |
 | [Naming](../paper_monitor/user_guide.html#naming) | Token list checked against `PDF_RENAME_TEMPLATE_TOKENS`; display rule and PDF template remain distinct. Rename UI tests. |
 | [Storage Model](../paper_monitor/user_guide.html#storage-model) | Retain managed roots, associated bundles and identity independent of filenames; storage/file-operation tests. |
 | [Privacy](../paper_monitor/user_guide.html#privacy) | Retain local-first, network access, private exports and credentials; Browser/profile details cross-referenced. |
@@ -319,3 +320,32 @@ states. Update relevant illustrations only with explicitly safe example data.
 Regenerate the PDF from HTML, inspect changed pages, run guide tests and PDF
 structure checks, then package and compare the App's PDF with the source PDF.
 Do not describe a planned or unverified integration as a supported feature.
+
+## Website link destination preference (017)
+
+Added Setting > Website Links and a guide topic with Save, unsaved close,
+Restore Default and restart persistence. Updated Paper Details, Browser and
+Troubleshooting cross-links to describe the built-in default and macOS default
+browser option. Existing real-App illustrations are retained unchanged.
+
+All 733 product tests pass (35.467 seconds); six PDF structure functions also
+pass when executed directly (pytest is not installed in the project venv).
+The 77-page PDF has 701 named destinations and 301 valid internal links. Pages
+35, 55, 62, 63 and 75 were rendered and inspected; Product Identity still flows
+on pages 66–67. The worktree App was rebuilt and packaged without launching it.
+Initial tests needed the project venv and scoped escalation for loopback sockets
+and an ephemeral headless Chrome process. Synthetic DOM checks cover both
+routing choices, all five workspaces and modified clicks; the actual dialog
+HTML/CSS fits three viewport sizes. No synthetic capture replaces a guide image.
+The 11 named product files have now been synchronized to the original project
+and its universal App rebuilt/signed in place. With fresh user saved-drafts
+approval, the original App was restarted at 14:12:58 (App 55381, sole UI 55389).
+Live checks confirmed Website Links below Quick Look Settings, system Save and
+reopen, and Restore Default. Library Open Website for the public Preskill paper
+(Quantum 2, 79, 2018) opened Safari in system mode, then the same webpage loaded
+in the built-in Browser after restoring default. Command-[ returned to the
+selected paper. The external test tab was closed; builtin is saved and the
+settings dialog is left open. Health, served HTML/PDF and resource hashes pass.
+Only normal UI preference/history/selection changes occurred; no direct research
+data, credential or benchmark operations. These validation runs did not commit or push;
+subsequent commit/push was explicitly requested by the user.

@@ -108,6 +108,31 @@ const primary = 'function captureBrowserWorkspaceReturn(' + workspace.split('fun
     assert.deepEqual(snapshot.commands.filter(p=>p.url),[{action:'new-tab',url:'https://example.org/next'}]);
     assert.deepEqual(snapshot.statusMessages,[]);
     assert.deepEqual(errors,[]);
+    // The external preference uses the same real delegated links, including
+    // modified clicks, and must never create or select a native Browser tab.
+    await page.evaluate(()=>{
+      state.websiteLinkBrowser='system';window.launches=[];
+      window.fetch=async(url,options)=>{
+        if(url==='/api/open-url') launches.push(JSON.parse(options.body));
+        return {ok:true,json:async()=>({status:'opened'})};
+      };
+    });
+    for(const mode of ['library','my-publications','report','theme','author']) {
+      for(const options of [{},{button:'middle'},{modifiers:['Meta']}]) {
+        const result=await fromSource(mode,'https://example.org/external-'+mode,options);
+        assert.equal(result.mode,mode==='my-publications'?'library':mode);
+        assert.deepEqual(result.commands.filter(p=>p.url),[]);
+        assert.equal(await page.evaluate(()=>launches.at(-1).app),'default');
+      }
+    }
+    assert.equal(await page.evaluate(()=>launches.length),15);
+    // Direct Browser actions remain internal even while research links use
+    // the system default browser.
+    await page.evaluate(()=>{commands.length=0;gewuBrowser.openURL('https://example.org/bookmark');});
+    assert.deepEqual(await page.evaluate(()=>commands.filter(p=>p.url)),[{action:'new-tab',url:'https://example.org/bookmark'}]);
+    assert.equal(await page.evaluate(()=>launches.length),15);
+    assert.deepEqual(errors,[]);
     console.log('Workspace Browser DOM routing passed: cold direct destination, five modes and return, dynamic anchors, modified clicks, identical retained DOM, restored source focus/scroll and no return navigation; zero external launches.');
+    console.log('System-default preference passed: 15 intercepted external requests across five workspaces and plain/middle/Command clicks, with no internal tab navigation; direct Browser actions remain internal.');
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

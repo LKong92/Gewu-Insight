@@ -612,6 +612,7 @@
             <button class="topic-link" data-topic="arxiv-scope-settings">arXiv Scope Settings</button>
             <button class="topic-link" data-topic="field-settings">Field Settings</button>
             <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
+            <button class="topic-link" data-topic="website-link-settings">Website Links</button>
             <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
             <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
             <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
@@ -1438,7 +1439,7 @@
             <tr><th>Action</th><th>What it does</th></tr>
             <tr><td><span class="ui">Open in Preview</span></td><td>Opens the preferred local PDF in macOS Preview.</td></tr>
             <tr><td><span class="ui">Download</span></td><td>Retrieves the best available paper file without overwriting a different preserved version.</td></tr>
-            <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page in a Browser tab.</td></tr>
+            <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page using <a href="#website-link-settings">Website Links</a>: Gewu Insight Browser by default, or the system default browser.</td></tr>
             <tr><td><span class="ui">Google Scholar</span></td><td>Searches for the work in Google Scholar.</td></tr>
             <tr><td><span class="ui">Get Identifier from Files</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
           </table>
@@ -2066,7 +2067,7 @@
         <article class="help-topic guide-topic" id="browser" data-group="Browser" data-title="Browse, Bookmark, and Revisit Websites" data-keywords="browser Google Safari WebKit bookmarks favorites folders history address autocomplete suggestions tabs Home PDF download VPN Clash DIRECT proxy TUN network sidebar password passkey autofill">
           <p class="topic-kicker">Browser</p>
           <h1>Browse, Bookmark, and Revisit Websites</h1>
-          <p class="lead">Browser is the sixth main tab, after Author Monitor. Website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages.</p>
+          <p class="lead">Browser is the sixth main tab, after Author Monitor. By default, website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages. Choose <a href="#website-link-settings">Setting &gt; Website Links</a> to use the system default browser instead.</p>
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/browser.png" alt="Real Gewu Browser displaying Nature research articles, actual Nature bookmarks and website icons, and the compact B menu">
             <figcaption><strong>Browser in use.</strong> Captured from the original App displaying Nature's research articles. The real bookmark collection is filtered to Nature; website icons, the webpage tab, and the compact B menu are visible. This is a live interface capture, not a generated demonstration.</figcaption>
@@ -2263,6 +2264,20 @@
           <div class="note"><span class="callout-title">Note</span>When the macOS panel is used, keyboard focus remains in Gewu Insight so <kbd>↑</kbd> and <kbd>↓</kbd> continue changing the selected Library or Paper Files item instead of turning into page-navigation commands in the system panel.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#quick-look">Preview Files with Quick Look</a><a href="#paper-files">Understand Paper Files</a><a href="#navigation">Navigate with Mouse and Keyboard</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="website-link-settings" data-group="Settings and Safety" data-title="Website Links" data-keywords="website links default browser external system Safari Chrome built-in open website Google Scholar DOI Note">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Choose Where Website Links Open</h1>
+          <p class="lead">Choose one browser preference for website actions across your research workspaces.</p>
+          <p>Open <span class="ui">Setting &gt; Website Links</span>, select an option, and click <span class="ui">Save</span>. The choice applies to the next website action and is remembered after restarting Gewu Insight. Closing the dialog without saving leaves the previous preference in effect.</p>
+          <table class="feature-table"><thead><tr><th>Option</th><th>Behavior</th></tr></thead><tbody>
+            <tr><td><span class="ui">Gewu Insight Browser</span> (default)</td><td>Opens a new built-in Browser tab, preserving existing pages. Press <kbd>⌘</kbd><kbd>[</kbd> to return to the source workspace.</td></tr>
+            <tr><td><span class="ui">System Default Browser</span></td><td>Opens the website in the default web browser selected in macOS. Your current Gewu workspace stays in place.</td></tr>
+          </tbody></table>
+          <p>This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: <span class="ui">Open Website</span>, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, and links inside Note. <span class="ui">Restore Default</span> saves Gewu Insight Browser as the preference.</p>
+          <p>Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain their own actions. Browsing directly inside the Browser tab stays there. Its explicit <span class="ui">Open in Safari</span> command still opens Safari. Selecting a different browser does not transfer website sign-ins, cookies, or existing tabs. When using the local UI in a separate web browser, the built-in option opens an ordinary tab in that browser.</p>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#browser">Browse, Bookmark, and Revisit Websites</a><a href="#paper-details">Use Paper Details</a><a href="#quick-look-settings">Quick Look Settings</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">
@@ -2568,8 +2583,8 @@
           <h2>A default file cannot be deleted</h2>
           <p>The preferred Default and the protected physical primary file are not always the same resource. <span class="ui">Set as Default</span> changes the reading preference, not the Library's compatibility primary path; switching defaults does not guarantee that the old file becomes deletable. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An <span class="ui">Invalid file</span> remains an audit record and is never eligible to become default.</p>
 
-          <h2>A website link opens Browser instead of Safari</h2>
-          <p>This is now the normal action for web links in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Browser selects a new webpage tab, or reuses its unused first tab. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged. Use Browser's explicit <span class="ui">Open in Safari</span> only when you want the external browser.</p>
+          <h2>Change where website links open</h2>
+          <p>Open <a href="#website-link-settings">Setting &gt; Website Links</a> and save <span class="ui">System Default Browser</span> to use the browser selected in macOS. The default, <span class="ui">Gewu Insight Browser</span>, opens a new built-in webpage tab or reuses its unused first tab. This covers website actions in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged.</p>
 
           <h2>Home works offline but a website will not load</h2>
           <p>Home displays local Favorites without a Google request. Missing site icons fall back to initials; they do not prevent opening Home. Search results and account actions require a connection. Read the load error, check the destination and Clash route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.</p>

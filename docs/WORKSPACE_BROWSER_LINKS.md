@@ -2,7 +2,7 @@
 
 ## Routing contract
 
-In the native App, a website action from the five research workspaces selects
+By default in the native App, a website action from the five research workspaces selects
 Browser and opens a foreground webpage tab. Existing Browser pages, drafts and
 per-tab navigation sessions are not replaced. On the first website action, the
 unused initial tab opens the destination directly without requesting Google
@@ -13,6 +13,21 @@ The workspace's paper selection, author selection, date and Library placement
 are not changed by this routing. Normal mode switching retains the source
 surface; no paper reload or database mutation is added by the link handler.
 Normal Browser visits still enter local history after navigation commits.
+
+**Setting > Website Links** offers **Gewu Insight Browser** (default) and
+**System Default Browser**. Save applies to the next research website action;
+closing without saving keeps the prior choice. Restore Default saves the built-in
+choice. The validated `website_link_browser` enum lives in SQLite app_settings,
+with no schema migration. The initial HTML embeds that enum so the first click
+after a reload uses the saved preference without an asynchronous startup race.
+
+The system option routes the same audited buttons, dynamic anchors and native
+GET/popup fallback through `/api/open-url` with `app: default`. On macOS the
+server calls `open URL` without specifying an application; macOS selects its
+current default web browser. The route validates public HTTP(S) URLs with the
+existing Browser validator and reports launch failures. It never selects the
+Browser tab, changes the source workspace, creates internal tabs or records an
+internal Browser visit. Existing cookies, sign-ins and webpages are not moved.
 
 ## Return to the source workspace
 
@@ -38,7 +53,7 @@ does not change Preview shortcuts or Browser's Back/Forward toolbar actions.
 
 ## Audited entries
 
-| Surface | Website entries routed into Browser |
+| Surface | Website entries following Website Links |
 | --- | --- |
 | Library | Paper Details Open Website and Google Scholar; preprint identifier's open action; shared citation/source links |
 | My Publications | Paper Details Open Website and Google Scholar; saved Scholar-profile entry; preprint open action; Overleaf Project export's website entry; shared citation/source links |
@@ -60,7 +75,7 @@ and future plain links/window.open calls that bypass those handlers.
 
 - Local PDF/Open in Preview, file double-click, Finder reveal/folder opening,
   Quick Look, import/export files, and download-to-Library workflows are unchanged.
-- A remote PDF is a Browser navigation. Existing MIME-aware inline PDF/download
+- A remote PDF follows Website Links. With the built-in choice, existing MIME-aware inline PDF/download
   handling decides how it is displayed/saved; this does not import a Library paper.
 - Local API links, in-page anchors, explicit download anchors and Browser's own
   chrome are excluded from the delegated DOM handler. Native navigation policy
@@ -68,11 +83,10 @@ and future plain links/window.open calls that bypass those handlers.
 - Browser's explicit **Open in Safari** escape hatch remains external. The Help
   menu's repository link and separate User Guide/Loader windows are outside the
   five-workspace routing change. User Guide PDFs continue to open in Preview.
-- The CLI/browser-hosted UI has no embedded WebKit bridge: website actions open
-  ordinary tabs in that same browser. Popup restrictions can still apply. They
-  no longer call `/api/open-url` to launch Safari on the server. The legacy API
-  and CLI `--open` startup behavior remain for compatibility, without research
-  workspace callers.
+- The CLI/browser-hosted UI has no embedded WebKit bridge: the built-in choice
+  opens ordinary tabs in that same browser; popup restrictions can still apply.
+  The system choice calls the local server's OS default-browser route. The
+  legacy explicit Safari API option and CLI `--open` startup behavior remain.
 - Only public HTTP(S) URLs are navigable in the native Browser. Local/private
   addresses, unsupported schemes and embedded URL credentials remain blocked.
   The native workspace fallback requires a trusted main-frame source and a

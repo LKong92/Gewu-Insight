@@ -1719,6 +1719,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     pdfRenameSettingsItem.target = self;
     NSMenuItem *quickLookSettingsItem = [settingMenu addItemWithTitle:@"Quick Look Settings" action:@selector(openQuickLookSettings:) keyEquivalent:@""];
     quickLookSettingsItem.target = self;
+    NSMenuItem *websiteLinkSettingsItem = [settingMenu addItemWithTitle:@"Website Links" action:@selector(openWebsiteLinkSettings:) keyEquivalent:@""];
+    websiteLinkSettingsItem.target = self;
     NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
     arxivSettingsItem.target = self;
     NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Open Source Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
@@ -1962,6 +1964,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openFontSizeSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openFontSizeSettings && window.openFontSizeSettings()" completionHandler:nil];
+}
+
+- (void)openWebsiteLinkSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openWebsiteLinkSettings && window.openWebsiteLinkSettings()" completionHandler:nil];
 }
 
 - (void)openLibraryLoader:(id)sender {

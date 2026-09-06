@@ -38,7 +38,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from .browser_store import BrowserStore
+from .browser_store import BrowserStore, browser_url
 from .config import (
     AppConfig,
     DEFAULT_ASSOCIATED_FILES_DIR,
@@ -227,6 +227,8 @@ LIBRARY_RECYCLE_FOLDER_NAME = "Recycle"
 LIBRARY_NAMING_RULE_SETTING = "library_naming_rule"
 PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
 QUICK_LOOK_MODE_SETTING = "quick_look_mode"
+WEBSITE_LINK_BROWSER_SETTING = "website_link_browser"
+WEBSITE_LINK_BROWSERS = {"builtin", "system"}
 FONT_SIZE_SCALE_SETTING = "font_size_scale"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
@@ -540,7 +542,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 self.handle_about_calligraphy()
                 return
             if parsed.path == "/":
-                self.send_text(INDEX_HTML, content_type="text/html; charset=utf-8")
+                storage = Storage(self.configured_db_path)
+                try:
+                    html = workspace_html(storage)
+                finally:
+                    storage.close()
+                self.send_text(html, content_type="text/html; charset=utf-8")
                 return
             if parsed.path == "/user-guide":
                 self.send_text(load_user_guide_html(), content_type="text/html; charset=utf-8")
@@ -664,6 +671,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_get_quick_look_settings()
+                return
+            if parsed.path == "/api/settings/website-links":
+                self.handle_get_website_link_settings()
                 return
             if parsed.path == "/api/settings/font-size":
                 self.handle_get_font_size_settings()
@@ -831,6 +841,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/settings/quick-look":
                 self.handle_set_quick_look_settings(payload)
+                return
+            if parsed.path == "/api/settings/website-links":
+                self.handle_set_website_link_settings(payload)
                 return
             if parsed.path == "/api/settings/font-size":
                 self.handle_set_font_size_settings(payload)
@@ -3699,6 +3712,27 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             storage.close()
         self.send_json(response)
 
+    def handle_get_website_link_settings(self) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            response = website_link_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(response)
+
+    def handle_set_website_link_settings(self, payload: dict[str, Any]) -> None:
+        browser = str(payload.get("browser") or "").strip().lower()
+        if browser not in WEBSITE_LINK_BROWSERS:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown website browser")
+            return
+        storage = Storage(self.configured_db_path)
+        try:
+            storage.set_setting(WEBSITE_LINK_BROWSER_SETTING, browser)
+            response = website_link_settings_payload(storage)
+        finally:
+            storage.close()
+        self.send_json(response)
+
     def handle_get_font_size_settings(self) -> None:
         storage = Storage(self.configured_db_path)
         try:
@@ -4813,6 +4847,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_open_url(self, payload: dict[str, Any]) -> None:
         url = str(payload.get("url") or "")
+        if str(payload.get("app") or "").lower() == "default":
+            # The user-selected external route uses the OS default, never a
+            # hard-coded browser or the Python BROWSER environment on macOS.
+            try:
+                url = browser_url(url)
+            except ValueError as error:
+                self.send_error_json(HTTPStatus.BAD_REQUEST, str(error))
+                return
+            try:
+                if sys.platform == "darwin":
+                    subprocess.run(["open", url], check=True, timeout=15)
+                elif not webbrowser.open(url):
+                    raise OSError("No default browser accepted the website")
+            except (OSError, subprocess.SubprocessError):
+                self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not open the system default browser")
+                return
+            self.send_json({"status": "opened", "url": url})
+            return
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid http(s) URL is required")
@@ -13084,6 +13136,18 @@ def quick_look_settings_payload(storage: Storage) -> dict[str, Any]:
         "default_mode": DEFAULT_QUICK_LOOK_MODE,
         "modes": sorted(QUICK_LOOK_MODES),
     }
+
+
+def website_link_settings_payload(storage: Storage) -> dict[str, str]:
+    browser = storage.get_setting(WEBSITE_LINK_BROWSER_SETTING, "builtin")
+    return {"browser": browser if browser in WEBSITE_LINK_BROWSERS else "builtin"}
+
+
+def workspace_html(storage: Storage) -> str:
+    # Embed only the validated enum so even the first click after reload uses
+    # SQLite's preference, without delaying browser-hosted popup gestures.
+    browser = website_link_settings_payload(storage)["browser"]
+    return INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1)
 
 
 def normalize_font_size_scale(value: Any) -> int:
@@ -32569,6 +32633,7 @@ INDEX_HTML = """<!doctype html>
     .app.loader-window-mode #fieldSettingsBackdrop,
     .app.loader-window-mode #pdfRenameSettingsBackdrop,
     .app.loader-window-mode #quickLookSettingsBackdrop,
+    .app.loader-window-mode #websiteLinkSettingsBackdrop,
     .app.loader-window-mode #fontSizeSettingsBackdrop {
       display: none !important;
     }
@@ -34844,6 +34909,41 @@ INDEX_HTML = """<!doctype html>
           </div>
         </section>
       </div>
+      <div class="settings-backdrop" id="websiteLinkSettingsBackdrop" aria-hidden="true">
+        <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="websiteLinkSettingsTitle">
+          <div class="settings-modal-head">
+            <div>
+              <h2 id="websiteLinkSettingsTitle">Website Links</h2>
+              <p>Choose where website buttons and links open.</p>
+            </div>
+            <button class="settings-modal-close" id="closeWebsiteLinkSettings" type="button" title="Close settings">×</button>
+          </div>
+          <div class="settings-modal-body">
+            <div class="citation-source-setting">
+              <div class="citation-source-setting-head"><strong>Open Websites In</strong><span>Applies to research workspaces</span></div>
+              <div class="quick-look-mode-options" id="websiteLinkBrowserOptions">
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="website-link-browser" value="builtin" checked>
+                  <span class="quick-look-mode-copy"><strong>Gewu Insight Browser</strong><span>Opens websites in the built-in Browser tab.</span></span>
+                </label>
+                <label class="quick-look-mode-option">
+                  <input type="radio" name="website-link-browser" value="system">
+                  <span class="quick-look-mode-copy"><strong>System Default Browser</strong><span>Opens websites in the default web browser selected in macOS.</span></span>
+                </label>
+              </div>
+              <p class="field-settings-note">Includes Library, My Publications, Journal Monitor, Subject Monitor, Author Monitor, and their Note links.</p>
+              <div class="field-settings-note">
+                <span>Default: Gewu Insight Browser.</span>
+                <span class="field-settings-actions">
+                  <button class="smallbtn" id="resetWebsiteLinkSettings" type="button">Restore Default</button>
+                  <button class="smallbtn" id="saveWebsiteLinkSettings" type="button">Save</button>
+                </span>
+              </div>
+              <div class="citation-settings-status" id="websiteLinkSettingsStatus"></div>
+            </div>
+          </div>
+        </section>
+      </div>
       <div class="settings-backdrop" id="fontSizeSettingsBackdrop" aria-hidden="true">
         <section class="settings-modal preferences-modal" role="dialog" aria-modal="true" aria-labelledby="fontSizeSettingsTitle">
           <div class="settings-modal-head">
@@ -35048,6 +35148,8 @@ INDEX_HTML = """<!doctype html>
       quickLookMode: "builtin_all",
       quickLookSettingsLoaded: false,
       quickLookSettingsPromise: null,
+      websiteLinkBrowser: "builtin",
+      websiteLinkSettingsBusy: false,
       fontSizeScale: 100,
       fontSizeSettingsLoaded: false,
       fontSizeSettingsPromise: null,
@@ -45178,7 +45280,7 @@ INDEX_HTML = """<!doctype html>
     function wirePreprintIdentifierControls(root, paper) {
       root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
         const url = event.currentTarget?.dataset?.preprintUrl || "";
-        openLibraryWebsiteURL(url, "Opening preprint in Browser...");
+        openLibraryWebsiteURL(url);
       });
       root?.querySelector('[data-action="download-arxiv-latest"]')?.addEventListener("click", (event) => {
         downloadArxivPreprintVersions(paper, "latest", event.currentTarget);
@@ -45735,7 +45837,7 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
-      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url, "Opening Google Scholar in Browser..."));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       wireLibraryFolderOccurrenceControls(root);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);
@@ -45925,7 +46027,7 @@ INDEX_HTML = """<!doctype html>
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
-      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url, "Opening Google Scholar in Browser..."));
+      root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
       root.querySelector('[data-action="publication-comments"]')?.addEventListener("click", () => openMyPublicationComments(publication.id));
       wireLibraryFileLocationLinks(root);
       wirePaperFilesPanel(root, paper);
@@ -53241,7 +53343,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <p class="abstract">${inlineLatexMarkup(paper.abstract || "No abstract available.")}</p>
             <div class="actions">
-              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher page in Browser">↗ Open Website</button>` : ""}
+              ${paper.url ? `<button class="action" data-action="open-page" title="Open publisher website">↗ Open Website</button>` : ""}
               <span class="library-add-control">
                 <button class="action${inLibrary ? " primary" : ""}" data-action="add-library" data-library-state="${inLibrary ? "show" : "add"}" type="button" aria-haspopup="${inLibrary ? "false" : "menu"}" aria-expanded="false" title="${inLibrary ? "Show in Library" : "Add a shortcut to Library"}">${inLibrary ? "Show in Library" : "Add to Library"}</button>
                 <div class="library-add-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div>
@@ -53487,8 +53589,25 @@ INDEX_HTML = """<!doctype html>
     function openWebsite(url) {
       if (!url) return;
       try {
+        if (state.websiteLinkBrowser === "system") return openSystemWebsite(url);
         if (!window.gewuBrowser?.openURL) throw new Error("Browser is not ready. Please retry.");
         return window.gewuBrowser.openURL(url);
+      } catch (error) {
+        showMonitorStatusMessage(error.message || "Could not open website");
+        return null;
+      }
+    }
+
+    async function openSystemWebsite(url) {
+      try {
+        const res = await fetch("/api/open-url", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({url, app: "default"})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not open the system default browser");
+        return "system default browser";
       } catch (error) {
         showMonitorStatusMessage(error.message || "Could not open website");
         return null;
@@ -53519,15 +53638,15 @@ INDEX_HTML = """<!doctype html>
       await openLibraryWebsiteURL(paper.url);
     }
 
-    async function openLibraryWebsiteURL(url, pendingText) {
+    async function openLibraryWebsiteURL(url) {
       if (!url) return;
       const status = $("libraryDetailStatus");
       if (status) {
-        status.textContent = pendingText || "Opening in Browser...";
+        status.textContent = "Opening website...";
         status.className = "library-detail-status";
       }
       try {
-        const destination = openWebsite(url);
+        const destination = await openWebsite(url);
         if (!destination) throw new Error("Could not open website");
         if (status) {
           status.textContent = `Opening in ${destination}...`;
@@ -54159,6 +54278,71 @@ INDEX_HTML = """<!doctype html>
 
     function resetQuickLookSettings() {
       saveQuickLookSettings("builtin_all");
+    }
+
+    function applyWebsiteLinkSettings(settings = {}) {
+      state.websiteLinkBrowser = settings.browser === "system" ? "system" : "builtin";
+      document.querySelectorAll('input[name="website-link-browser"]').forEach((input) => {
+        input.checked = input.value === state.websiteLinkBrowser;
+      });
+    }
+
+    function setWebsiteLinkSettingsBusy(busy) {
+      state.websiteLinkSettingsBusy = busy;
+      $("websiteLinkBrowserOptions").querySelectorAll("input").forEach(input => { input.disabled = busy; });
+      $("saveWebsiteLinkSettings").disabled = busy;
+      $("resetWebsiteLinkSettings").disabled = busy;
+    }
+
+    async function openWebsiteLinkSettings() {
+      const backdrop = $("websiteLinkSettingsBackdrop");
+      if (!backdrop || state.websiteLinkSettingsBusy) return;
+      applyWebsiteLinkSettings({browser: state.websiteLinkBrowser});
+      backdrop.classList.add("open");
+      backdrop.setAttribute("aria-hidden", "false");
+      focusDialogSurface(backdrop);
+      setWebsiteLinkSettingsBusy(true);
+      const status = $("websiteLinkSettingsStatus");
+      status.textContent = "Loading website settings...";
+      status.className = "citation-settings-status";
+      try {
+        applyWebsiteLinkSettings(await fetchJson("/api/settings/website-links"));
+        status.textContent = "Choose a browser, then Save. The choice applies to the next website you open.";
+      } catch (error) {
+        status.textContent = error.message || "Could not load website settings";
+        status.className = "citation-settings-status err";
+      } finally {
+        setWebsiteLinkSettingsBusy(false);
+      }
+    }
+
+    function closeWebsiteLinkSettings() {
+      $("websiteLinkSettingsBackdrop").classList.remove("open");
+      $("websiteLinkSettingsBackdrop").setAttribute("aria-hidden", "true");
+    }
+
+    async function saveWebsiteLinkSettings(browserOverride = null) {
+      if (state.websiteLinkSettingsBusy) return;
+      const browser = browserOverride || document.querySelector('input[name="website-link-browser"]:checked')?.value;
+      setWebsiteLinkSettingsBusy(true);
+      const status = $("websiteLinkSettingsStatus");
+      status.textContent = "Saving website settings...";
+      status.className = "citation-settings-status";
+      try {
+        const res = await fetch("/api/settings/website-links", {
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({browser})
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save website settings");
+        applyWebsiteLinkSettings(data);
+        status.textContent = "Website browser preference saved.";
+        status.className = "citation-settings-status ok";
+      } catch (error) {
+        status.textContent = error.message || "Could not save website settings";
+        status.className = "citation-settings-status err";
+      } finally {
+        setWebsiteLinkSettingsBusy(false);
+      }
     }
 
     function renderFontSizeSettingsSelection(scale = state.fontSizeScale) {
@@ -56812,6 +56996,12 @@ INDEX_HTML = """<!doctype html>
     });
     $("saveQuickLookSettings").addEventListener("click", () => saveQuickLookSettings());
     $("resetQuickLookSettings").addEventListener("click", resetQuickLookSettings);
+    $("closeWebsiteLinkSettings").addEventListener("click", closeWebsiteLinkSettings);
+    $("websiteLinkSettingsBackdrop").addEventListener("click", (event) => {
+      if (event.target === $("websiteLinkSettingsBackdrop")) closeWebsiteLinkSettings();
+    });
+    $("saveWebsiteLinkSettings").addEventListener("click", () => saveWebsiteLinkSettings());
+    $("resetWebsiteLinkSettings").addEventListener("click", () => saveWebsiteLinkSettings("builtin"));
     $("closeFontSizeSettings").addEventListener("click", () => closeFontSizeSettings());
     $("fontSizeSettingsBackdrop").addEventListener("click", (event) => {
       if (event.target === $("fontSizeSettingsBackdrop")) closeFontSizeSettings();
@@ -56914,6 +57104,12 @@ INDEX_HTML = """<!doctype html>
         event.preventDefault();
         event.stopPropagation();
         closeQuickLookSettings();
+        return;
+      }
+      if ($("websiteLinkSettingsBackdrop").classList.contains("open")) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeWebsiteLinkSettings();
         return;
       }
       if ($("fontSizeSettingsBackdrop").classList.contains("open")) {
@@ -57105,6 +57301,7 @@ INDEX_HTML = """<!doctype html>
     window.openArxivSettings = openArxivSettings;
     window.openFieldSettings = openFieldSettings;
     window.openQuickLookSettings = openQuickLookSettings;
+    window.openWebsiteLinkSettings = openWebsiteLinkSettings;
     window.openFontSizeSettings = openFontSizeSettings;
     window.openPdfRenameSettings = openPdfRenameSettings;
     window.openLibraryLoader = openLibraryLoader;

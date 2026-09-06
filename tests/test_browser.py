@@ -254,6 +254,27 @@ class BrowserApiTests(unittest.TestCase):
         self.assertEqual(self.request("/api/health", headers={"Sec-Fetch-Site":"cross-site"})[0], 403)
         self.assertEqual(self.request("/api/health")[0], 200)
 
+    def test_website_preference_dispatch_initial_page_and_external_request(self):
+        headers = {"Origin": f"http://127.0.0.1:{self.server.server_port}", "Content-Type": "application/json"}
+        status, content = self.request("/api/settings/website-links")
+        self.assertEqual((status, json.loads(content)), (200, {"browser": "builtin"}))
+        status, content = self.request("/api/settings/website-links", {"browser": "system"}, headers)
+        self.assertEqual((status, json.loads(content)), (200, {"browser": "system"}))
+        status, content = self.request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'websiteLinkBrowser: "system",', content)
+        bad_headers = {**headers, "Origin": "https://example.org"}
+        self.assertEqual(self.request("/api/settings/website-links", {"browser": "builtin"}, bad_headers)[0], 403)
+        self.assertEqual(self.request("/api/settings/website-links", {"browser": "unknown"}, headers)[0], 400)
+        with patch("paper_monitor.ui_server.subprocess.run") as launch:
+            self.assertEqual(self.request("/api/open-url", {"url": "https://example.org/", "app": "default"}, bad_headers)[0], 403)
+            launch.assert_not_called()
+            with patch("paper_monitor.ui_server.sys.platform", "darwin"):
+                self.assertEqual(self.request("/api/open-url", {"url": "https://example.org/", "app": "default"}, headers)[0], 200)
+            launch.assert_called_once_with(["open", "https://example.org/"], check=True, timeout=15)
+        self.assertEqual(self.request("/api/settings/website-links", {"browser": "builtin"}, headers)[0], 200)
+        self.assertIn(b'websiteLinkBrowser: "builtin",', self.request("/")[1])
+
     def test_bookmark_interchange_api_roundtrip(self):
         headers = {"Origin":f"http://127.0.0.1:{self.server.server_port}", "X-Gewu-Browser":"1", "Content-Type":"application/json"}
         document = b'<DL><DT><H3>Folder</H3><DL><DT><A HREF="https://example.org/">Paper</A></DL></DL>'
