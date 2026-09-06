@@ -1259,8 +1259,8 @@
           <p class="lead">The Library uses a Finder-style column view, but the database—not the visible folder alone—defines the paper and its relationships.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/library-paper-files.png" alt="Library column view with a selected paper, its Paper Files bundle, and Paper Details">
-            <figcaption><strong>Library and Paper Files.</strong> The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and citation evidence stay connected in the adjacent views.</figcaption>
+            <img src="/user-guide-assets/library-paper-files.png" alt="Real Library view of Fermi-level flat band in a Kagome magnet, with Preprint and Published version files">
+            <figcaption><strong>Library and Paper Files.</strong> This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected.</figcaption>
           </figure>
 
           <h2>Read the columns from left to right</h2>
@@ -2068,8 +2068,8 @@
           <h1>Browse, Bookmark, and Revisit Websites</h1>
           <p class="lead">Browser is the sixth main tab, after Author Monitor. Website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages.</p>
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/browser.png" alt="Local Favorites-only Home with adjoining webpage tabs above the right column and aligned sidebar controls">
-            <figcaption><strong>Browser Home example.</strong> Rendered from the current interface code with public sample bookmarks and fallback initials. Home is local; the address field opens websites or searches Google. No private bookmarks, session or history is shown.</figcaption>
+            <img src="/user-guide-assets/browser.png" alt="Real Gewu Browser displaying Nature research articles, actual Nature bookmarks and website icons, and the compact B menu">
+            <figcaption><strong>Browser in use.</strong> Captured from the original App displaying Nature's research articles. The real bookmark collection is filtered to Nature; website icons, the webpage tab, and the compact B menu are visible. This is a live interface capture, not a generated demonstration.</figcaption>
           </figure>
 
           <h2>Search and navigate</h2>
@@ -2091,7 +2091,7 @@
           <p><span class="ui">×</span> or <span class="key">⌘W</span> closes a tab; closing the last opens Home. Left/Right switches focused tabs. Up to 32 tabs stay in memory, not restored after App quit. Save drafts before closing; bookmarks, history, downloads and sign-ins remain. AutoFill only triggers in the visible page.</p>
 
           <h2>Save and organize bookmarks</h2>
-          <p>The sidebar's top tabs switch between <span class="ui">Bookmarks</span> and <span class="ui">History</span>, without a repeated heading. <span class="ui">Import</span>, <span class="ui">Export</span>, <span class="ui">+</span> (New Folder), and Search sit along the bottom; History shows Clear History and Search there instead. Drag the sidebar's right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.</p>
+          <p>The sidebar's top tabs switch between <span class="ui">Bookmarks</span> and <span class="ui">History</span>, without a repeated heading. The compact <span class="ui">B</span> (Bookmarks menu), <span class="ui">+</span> (New Folder), and Search sit along the bottom, even at the minimum sidebar width. History shows Clear History and Search there instead. Drag the sidebar's right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.</p>
           <ol class="steps">
             <li><strong>Add a page.</strong> Use the bookmark toolbar button, <span class="ui">Share &gt; Add Bookmark</span>, or <span class="key">⌘D</span>. The native sheet starts with the page title and address.</li>
             <li><strong>Choose a location.</strong> Edit the name or address and choose a folder under <span class="ui">Add to</span>. The previous destination is remembered. Saving the same address in the same folder reuses the existing bookmark.</li>
@@ -2102,9 +2102,24 @@
           <p>Search filters bookmark names and addresses. Right-click a bookmark for <span class="ui">Open</span>, <span class="ui">Edit Bookmark</span>, or <span class="ui">Delete</span>. Deleting a folder requires confirmation and removes its contained bookmarks, not websites, browsing history, downloaded files, or papers. A bookmark is a saved link, not an offline webpage copy.</p>
 
           <h2>Import and export bookmarks</h2>
-          <p>Choose <span class="ui">Import</span> at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with <span class="ui">File &gt; Export Bookmarks</span> produce HTML; newer Safari versions may use <span class="ui">File &gt; Export Browsing Data to File</span> and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use <span class="ui">Bookmark Manager &gt; menu &gt; Export Bookmarks</span>.</p>
+          <p>Choose <span class="ui">B &gt; Import</span> at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with <span class="ui">File &gt; Export Bookmarks</span> produce HTML; newer Safari versions may use <span class="ui">File &gt; Export Browsing Data to File</span> and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use <span class="ui">Bookmark Manager &gt; menu &gt; Export Bookmarks</span>.</p>
           <p>Imports go into <span class="ui">Imported Bookmarks</span>, retaining folders, order, names, and supported links. Repeating an import merges matching folder names and reuses the same URL in the same folder; existing bookmarks are not overwritten. The result reports added bookmarks, new folders, duplicates, and skipped links. Local addresses, application links, and recognized authorization links are skipped. Limits are 10 MB, 20,000 source entries, and 64 folder levels; invalid files do not partially import.</p>
-          <p><span class="ui">Export</span> saves the full tree as standard bookmark HTML; right-click a folder for <span class="ui">Export Folder</span>. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private. Import/export is on demand, not ongoing Safari or Chrome synchronization.</p>
+          <p><span class="ui">B &gt; Export</span> saves the full tree as standard bookmark HTML; right-click a folder for <span class="ui">Export Folder</span>. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private.</p>
+
+          <h2>Sync one source folder into Gewu</h2>
+          <ol class="steps">
+            <li><strong>Choose <span class="ui">B &gt; Sync from Safari</span> or <span class="ui">Sync from Chrome</span>.</strong> This is a manual, one-way operation, not a background watcher or a write-back to either browser.</li>
+            <li><strong>Select the source bookmark file.</strong> For Safari, choose <code>~/Library/Safari/Bookmarks.plist</code>. For Chrome, choose <code>Bookmarks</code> in the intended profile under <code>~/Library/Application Support/Google/Chrome/</code>, such as Default or Profile 1. The picker remembers the last chosen location; select the same file for later refreshes. Only this explicitly selected bookmark file is read.</li>
+            <li><strong>Choose one folder.</strong> The next sheet lists source folder paths and bookmark counts. <span class="ui">Sync Selected Folder</span> includes that folder and its descendants, not its siblings or the whole profile. Cancel leaves Gewu bookmarks unchanged.</li>
+            <li><strong>Review the result.</strong> New links and folders are added. Stable source identifiers allow later source title/address changes to update entries created by sync. Pre-existing matches and items edited or moved in Gewu are kept. Source deletions do not delete local bookmarks. The result reports additions, updates, local changes kept, and skipped links.</li>
+          </ol>
+          <p>The selected folder is placed at the Bookmarks root; matching folder names and same-folder URLs are reused. Sync tracking lives in SQLite, independently of papers and website sessions. Legacy source entries without stable identifiers merge by folder/name/URL rather than overwriting local edits. Switching source files or profiles is a separate source. Limits match import (10 MB, 20,000 entries, 64 levels), with at most 2,000 folders in the chooser. Invalid input or a failed transaction leaves no partial sync.</p>
+          <p>If macOS denies Safari file access, use a Safari bookmark HTML export with <span class="ui">B &gt; Import</span>. No privacy settings are changed, and no password, cookie, history, or cloud-account databases are read. Only bookmarks already saved in the chosen local source file are available.</p>
+
+          <h2>Navigate Browser with arrows</h2>
+          <p>From the top <span class="ui">Browser</span> workspace tab, press Down to enter the toolbar. Left/Right moves among available toolbar controls; Enter activates one. At the address field, Enter or typing starts editing; its arrows then edit text or browse address suggestions. Escape returns to the toolbar. Up from the toolbar returns to the top Browser tab, where Left/Right changes workspaces. The Library exception is unchanged: Up within Library content does not ascend to its top workspace tab.</p>
+          <p>Down from the toolbar selects the current webpage tab. Left/Right selects adjacent webpage tabs; Down enters Favorites or the native webpage. Favorites uses directional tile selection and Enter to open. At the left edge, Left enters the visible sidebar on its currently active Bookmarks/History tab; Down traverses its list and footer controls. Right returns to the main area. A hidden sidebar is never selected. In the sidebar header, Left focuses the other collection tab and Enter activates it.</p>
+          <p>Inside an ordinary webpage, arrows remain WebKit scrolling controls. Once Up reaches the document top, it can hand focus back to webpage tabs; two more Up presses reach the top Browser tab. Left at a document's left boundary can enter the visible sidebar. Inputs, editable text, framed/PDF content, and recognized or uncertain custom widgets keep their own keys; no form values are read or filled. A boundary check runs only after an eligible arrow press, without background polling. Use <span class="key">⌘L</span>, then Escape, to return to the toolbar from a document that retains its own arrows.</p>
 
           <h2>Website icons</h2>
           <p>Bookmarks, Favorites and webpage tabs use a disposable local icon cache, separate from SQLite. Icons come directly from sites (at most two concurrent requests), without cookies, credentials, whole-article fetching or third-party icon services. Visits may supply a nonstandard icon URL. Missing icons use globes or Home initials; bookmark lists are never sent to an icon service.</p>
@@ -2396,6 +2411,7 @@
 
           <table class="plain-table">
             <tr><th>Shortcut</th><th>Action</th></tr>
+            <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>←</kbd> / <kbd>→</kbd>, Enter</td><td>In Browser chrome, move between the top workspace tab, toolbar, webpage tabs, Favorites, and visible sidebar; Enter activates the focused control. Native webpages retain scrolling and editing keys. Up at an ordinary document's top can return to Browser chrome; ⌘L then Escape also returns to the toolbar.</td></tr>
             <tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Move through the focused Library or Paper Files list; on the source rail, move among Library, shortcuts, and Spaces and open the highlighted source.</td></tr>
             <tr><td><kbd>→</kbd></td><td>Enter the highlighted source from the vertical rail, enter a folder, or move from a selected paper into Paper Files.</td></tr>
             <tr><td><kbd>←</kbd></td><td>Leave Paper Files for the selected paper, return to a parent folder, or move from the leftmost Library column to the source rail.</td></tr>

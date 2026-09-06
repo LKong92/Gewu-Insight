@@ -1,4 +1,5 @@
-// Documentation-only rendering of current product chrome with synthetic data.
+// Test/reference rendering of current product chrome with synthetic data.
+// User Guide screenshots must be captured from the original App, not this fixture.
 // No live website, native App, user profile, SQLite, history, or credentials.
 // Requires Playwright; GEWU_TEST_CHROME may select an installed Chrome binary.
 const fs = require('node:fs');
@@ -35,6 +36,7 @@ const root = path.resolve(__dirname, '..');
         ], history:[], preferences:{sidebar_width:270,expanded:[1]},history_more:false
       })});
     });
+    await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_keyboard.js'),'utf8')});
     await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_ui.js'),'utf8')});
     await page.evaluate(() => {
       gewuBrowser.setActive(true);
@@ -56,7 +58,7 @@ const root = path.resolve(__dirname, '..');
     assert.equal(geometry.toolbar,geometry.sidebar);
     assert.equal(geometry.tabs,geometry.sidebarRight);
     assert.ok(Math.abs(geometry.leftFooter-geometry.rightFooter)<1);
-    const output = path.join(root,'assets/user-guide/screenshots/browser.png');
+    const output = path.join(require('node:os').tmpdir(),'gewu-browser-layout-example.png');
     await page.screenshot({path:output});
     console.log(`Rendered current Browser layout example: ${output}`);
   } finally { await browser.close(); }

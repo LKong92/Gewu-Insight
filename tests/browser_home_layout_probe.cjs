@@ -25,6 +25,7 @@ const root = path.resolve(__dirname, '..');
         history:[],preferences:{sidebar_width:250},history_more:false
       })});
     });
+    await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_keyboard.js'),'utf8')});
     await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_ui.js'),'utf8')});
     console.log('Product UI loaded');
     assert.deepEqual(errors,[]);

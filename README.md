@@ -79,8 +79,18 @@ switching tabs does not reload or stop another tab's load. Each tab lazily keeps
 at most a Home and a browsing surface, with the same persistent Browser profile
 for sign-ins. Tabs are memory-only, up to 32, and not restored after App quit.
 Closing the final tab opens a fresh Home; bookmarks and saved history remain.
-The sidebar can be resized or hidden, with Import, Export, New Folder, and Search
-at its bottom. Bookmarks and
+The sidebar can be resized or hidden, with a compact **B** menu, New Folder,
+and Search at its bottom. B contains Import, Export, Sync from Safari, and
+Sync from Chrome. Manual sync reads one explicitly chosen local bookmark file,
+then one selected folder and its descendants. It adds entries and updates
+source-owned unchanged items while preserving local edits and source deletions;
+it never writes back or reads passwords, history, or cookies. If macOS denies
+Safari file access, use an HTML export with Import. Browser arrows connect its
+toolbar, webpage tabs, Favorites, and visible sidebar to the primary workspace
+tabs; ordinary webpage arrows retain scrolling, with Up at the top returning
+to chrome. Editing/custom controls retain their keys (⌘L then Escape returns
+to the toolbar). Library's existing root-navigation exception is unchanged.
+Bookmarks and
 folders support Safari/Chrome HTML import/export (including a Safari ZIP with
 one bookmark HTML file), and visible sites use a bounded local favicon cache.
 The Passwords toolbar button opens macOS Passwords without creating a password

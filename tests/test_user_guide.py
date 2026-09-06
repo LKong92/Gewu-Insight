@@ -781,7 +781,11 @@ class UserGuideTests(unittest.TestCase):
         self.assertIn("\\chapter{Subject Monitor}", source)
         self.assertIn("\\chapter{Author Monitor}", source)
         self.assertIn("\\part{Product Identity}", source)
-        self.assertIn("\\chapter{Visual Identity and Cultural Elements}", source)
+        for title in ("Visual Identity and Cultural Elements", "The calligraphic name",
+                      "The app icon and the seal-script watermark",
+                      "Why the three marks are used differently"):
+            self.assertIn("\\GewuIdentityChapter{" + title + "}", source)
+            self.assertNotIn("\\chapter{" + title + "}", source)
         self.assertIn("\\part{Technical and Operational Reference}", source)
         self.assertIn("\\chapter{Keyboard Shortcuts}", source)
         self.assertIn("\\chapter{Storage Reference}", source)

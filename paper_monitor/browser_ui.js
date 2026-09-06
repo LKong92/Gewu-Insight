@@ -147,7 +147,7 @@
         </div>
         <div id="browserCollection" class="browser-collection" tabindex="0" role="tabpanel" aria-label="Bookmarks"></div>
         <div class="browser-sidebar-footer">
-          <div id="browserBookmarkTransfer"><button id="browserImportBookmarks">Import</button><button id="browserExportBookmarks">Export</button></div>
+          <div id="browserBookmarkTransfer"><button id="browserBookmarkMenu" title="Bookmarks menu: Import, Export, Sync" aria-label="Bookmarks menu" aria-haspopup="menu" aria-expanded="false">B</button></div>
           <button id="browserNewFolder" title="New Folder" aria-label="New Folder">${icon("plus")}</button>
           <button id="browserClearHistory" hidden>Clear History</button>
           <input id="browserSidebarSearch" class="browser-sidebar-search" type="search" placeholder="Search bookmarks" aria-label="Search bookmarks">
@@ -349,7 +349,7 @@
     }
     const rect = $(data.home ? "browserFavorites" : "browserViewport").getBoundingClientRect();
     const active = data.active;
-    const payload = {action:"layout", active, visible:active && !visibleDialog(), canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
+    const payload = {action:"layout", active, visible:active && !visibleDialog(), sidebarVisible:!data.hidden, canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
     const signature = JSON.stringify(payload);
     if (signature !== data.layout) { data.layout = signature; native(payload); }
   }
@@ -435,7 +435,29 @@
     const result = await confirm({title:"Clear History", button:"Clear History", history:true, message:"Choose the browsing history to remove. Bookmarks, downloads, cookies, and website sign-ins will be kept."});
     if (result.confirmed) { await api("clear_history", {range:result.range}); await refresh(); }
   }
-  function closeContext() { $("browserContext").hidden = true; }
+  function closeContext() { $("browserContext").hidden = true; $("browserBookmarkMenu").setAttribute("aria-expanded", "false"); }
+  function bookmarkMenu() {
+    const menu = $("browserContext"), anchor = $("browserBookmarkMenu"), rect = anchor.getBoundingClientRect();
+    closeContext(); menu.replaceChildren(); menu.setAttribute("role", "menu");
+    const startSync = source => {
+      if (data.sourceSyncBusy) return;
+      data.sourceSyncBusy = true; native({action:"read-bookmark-source", source});
+    };
+    for (const [id, title, action] of [
+      ["browserImportBookmarks", "Import…", () => native({action:"import-bookmarks"})],
+      ["browserExportBookmarks", "Export…", () => exportBookmarks()],
+      ["browserSyncSafari", "Sync from Safari…", () => startSync("safari")],
+      ["browserSyncChrome", "Sync from Chrome…", () => startSync("chrome")]
+    ]) {
+      const item = document.createElement("button"); item.id = id; item.textContent = title; item.setAttribute("role", "menuitem");
+      item.disabled = Boolean(data.sourceSyncBusy);
+      item.onclick = () => { closeContext(); anchor.focus(); Promise.resolve(action()).catch(fail); };
+      menu.append(item);
+    }
+    menu.hidden = false; anchor.setAttribute("aria-expanded", "true");
+    menu.style.left = rect.left + "px"; menu.style.top = Math.max(46, rect.top - menu.offsetHeight - 5) + "px";
+    menu.querySelector("button:not(:disabled)")?.focus();
+  }
   function context(event, node, visit) {
     event.preventDefault(); closeContext();
     const menu = $("browserContext");
@@ -460,7 +482,25 @@
   }
 
   global.gewuBrowserNativeEvent = event => {
-    if (event.event === "favicon") {
+    if (event.event === "bookmark-source-cancel") {
+      data.sourceSync = null; data.sourceSyncBusy = false;
+      if (event.message) message(event.message, true);
+    } else if (event.event === "bookmark-source") {
+      data.sourceSync = {source:event.source, source_id:event.source_id, content_base64:event.content_base64};
+      api("preview_bookmark_source", data.sourceSync).then(result => native({action:"choose-bookmark-source-folder", folders:result.folders})).catch(error => {
+        data.sourceSync = null; data.sourceSyncBusy = false; fail(error);
+      });
+    } else if (event.event === "bookmark-source-folder" && data.sourceSync) {
+      const snapshot = data.sourceSync; data.sourceSync = null;
+      message("Syncing selected bookmark folder.");
+      api("sync_bookmarks", {...snapshot, folder_id:event.folder_id}).then(async result => {
+        const info = result.sync_result;
+        data.tab = "bookmarks"; data.query = ""; data.hidden = false; data.expanded.add(info.folder_id);
+        $("browserSidebarSearch").value = "";
+        await refresh(); persist({tab:"bookmarks",sidebar_hidden:false,expanded:[...data.expanded]});
+        message(`Synced ${info.imported} new bookmarks · ${info.updated} updated · ${info.kept_local} local changes kept · ${info.skipped} unsupported or sensitive links skipped. No source or local bookmarks were deleted.`);
+      }).catch(fail).finally(() => { data.sourceSyncBusy = false; });
+    } else if (event.event === "favicon") {
       const value = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(event.data_url || "") && event.data_url.length < 90000 ? event.data_url : "";
       siteIcons.set(event.host, value);
       data.tabsSignature = ""; renderTabs();
@@ -517,6 +557,10 @@
     } else if (event.event === "error") { message(event.message, true); }
     else if (event.event === "download") { message(event.message); }
     else if (event.event === "return-workspace") { returnToWorkspace(); }
+    else if (event.event === "focus-chrome" && data.active && !visibleDialog()) {
+      state.primaryKeyboardLayer = "content"; syncPrimaryKeyboardLayer({focus:false});
+      if (event.destination === "sidebar") keyboard.focusSidebar(); else keyboard.focusTabs();
+    }
     else if (event.event === "focus-address") { closeSuggestions(); $("browserAddress").focus(); $("browserAddress").select(); }
     else if (event.event === "address-suggestion") { navigate(event.url); $("browserAddress").blur(); native({action:"focus"}); }
     else if (event.event === "suggestions-dismissed") { closeSuggestions(); }
@@ -541,13 +585,13 @@
       });
     } else if (event.event === "confirm-result") { const resolve = data.confirm; data.confirm = null; resolve?.(event); }
   };
-  global.gewuBrowser = {open, setActive, openURL};
+  const keyboard = global.createBrowserKeyboard({root, data, native, closeSuggestions, closeContext, visibleDialog});
+  global.gewuBrowser = {open, setActive, openURL, ...keyboard};
   async function exportBookmarks(rootID = null) {
     const result = await api("export_bookmarks", {root_id:rootID});
     native({action:"export-bookmarks", html:result.html});
   }
-  $("browserImportBookmarks").onclick = () => native({action:"import-bookmarks"});
-  $("browserExportBookmarks").onclick = () => exportBookmarks().catch(fail);
+  $("browserBookmarkMenu").onclick = bookmarkMenu;
   $("browserPasswords").onclick = () => native({action:"passwords"});
   $("browserNewTab").onclick = () => newTab();
   $("browserTabs").onclick = event => {

@@ -65,6 +65,8 @@ PART_BY_GROUP = {
 #
 # Keep these rules here, rather than repairing the generated TeX by hand, so
 # every future PDF rebuild preserves the same document logic.
+# Product Identity keeps its 4-1 ... chapter numbering but flows continuously;
+# its short chapters must not each force a new page (user layout rule).
 TOPIC_AS_CHAPTER_GROUPS = {"Start Here", "Understand the System", "Reference"}
 SPLIT_TOPIC_HEADING_GROUPS = {"About Gewu Insight"}
 
@@ -475,6 +477,19 @@ def latex_preamble(version: str, build: str) -> str:
 \pretocmd{{\section}}{{\Needspace{{9\baselineskip}}}}{{}}{{}}
 \pretocmd{{\subsection}}{{\Needspace{{6\baselineskip}}}}{{}}{{}}
 \pretocmd{{\subsubsection}}{{\Needspace{{3\baselineskip}}}}{{}}{{}}
+% Product Identity is one continuous reading sequence. Suppress only the
+% chapter's forced break locally; normal page overflow, numbering, TOC entries
+% and labels are still handled by KOMA-Script. Other parts remain unchanged.
+\newcommand{{\GewuIdentityChapter}}[1]{{%
+  \par\Needspace{{9\baselineskip}}%
+  \let\GewuSavedClearPage\clearpage
+  \let\GewuSavedClearDoublePage\cleardoublepage
+  \let\clearpage\relax
+  \let\cleardoublepage\relax
+  \chapter{{#1}}%
+  \let\clearpage\GewuSavedClearPage
+  \let\cleardoublepage\GewuSavedClearDoublePage
+}}
 \raggedbottom
 \newenvironment{{GewuRelated}}{{\par\nobreak\vspace{{3pt}}\nobreak\begingroup\small\sffamily\begin{{samepage}}\noindent}}{{\par\end{{samepage}}\endgroup}}
 
@@ -580,6 +595,17 @@ def run(command: list[str], *, cwd: Path) -> None:
 
 
 def prepare_latex_body(source: str) -> str:
+    # Scope the continuous-chapter rule by semantic part name, not page numbers
+    # or individual chapter titles. Rebuilding or adding text must preserve it.
+    parts = re.split(r"(\\part\{[^{}]*\})", source)
+    continuous_identity = False
+    for index, part in enumerate(parts):
+        if part.startswith(r"\part{"):
+            continuous_identity = part == r"\part{Product Identity}"
+        elif continuous_identity:
+            parts[index] = part.replace(r"\chapter{", r"\GewuIdentityChapter{")
+    source = "".join(parts)
+
     table_widths = {
         2: [0.27, 0.63],
         3: [0.19, 0.29, 0.36],

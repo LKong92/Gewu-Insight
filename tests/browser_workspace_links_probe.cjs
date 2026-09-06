@@ -32,6 +32,7 @@ const primary = 'function captureBrowserWorkspaceReturn(' + workspace.split('fun
       document.querySelector('#source').onclick=()=>sourceClicks++;
     });
     await page.addStyleTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_ui.css'),'utf8')});
+    await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_keyboard.js'),'utf8')});
     await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_ui.js'),'utf8')});
     await page.addScriptTag({content:primary});
     await page.addScriptTag({content:router+'\nwireWorkspaceWebsiteLinks();'});

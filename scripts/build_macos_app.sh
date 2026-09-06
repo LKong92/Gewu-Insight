@@ -44,6 +44,7 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
 
 chmod +x "$OUTPUT"
 cp "$PROJECT_DIR/scripts/GewuBrowserLoginProbe.js" "$APP/Contents/Resources/GewuBrowserLoginProbe.js"
+cp "$PROJECT_DIR/scripts/GewuBrowserNavigationProbe.js" "$APP/Contents/Resources/GewuBrowserNavigationProbe.js"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"
 cp "$BRAND_ART_SOURCE" "$BRAND_ART_DEST"
 cp "$ABOUT_CALLIGRAPHY_SOURCE" "$ABOUT_CALLIGRAPHY_DEST"

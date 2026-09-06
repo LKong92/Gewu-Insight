@@ -82,6 +82,19 @@
 \pretocmd{\section}{\Needspace{9\baselineskip}}{}{}
 \pretocmd{\subsection}{\Needspace{6\baselineskip}}{}{}
 \pretocmd{\subsubsection}{\Needspace{3\baselineskip}}{}{}
+% Product Identity is one continuous reading sequence. Suppress only the
+% chapter's forced break locally; normal page overflow, numbering, TOC entries
+% and labels are still handled by KOMA-Script. Other parts remain unchanged.
+\newcommand{\GewuIdentityChapter}[1]{%
+  \par\Needspace{9\baselineskip}%
+  \let\GewuSavedClearPage\clearpage
+  \let\GewuSavedClearDoublePage\cleardoublepage
+  \let\clearpage\relax
+  \let\cleardoublepage\relax
+  \chapter{#1}%
+  \let\clearpage\GewuSavedClearPage
+  \let\cleardoublepage\GewuSavedClearDoublePage
+}
 \raggedbottom
 \newenvironment{GewuRelated}{\par\nobreak\vspace{3pt}\nobreak\begingroup\small\sffamily\begin{samepage}\noindent}{\par\end{samepage}\endgroup}
 
@@ -1318,7 +1331,7 @@ The Library uses a Finder-style column view, but the database---not the visible 
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
 
 \begin{GewuCaption}
-Library and Paper Files. The selected paper remains in the managed folder hierarchy while its related files, resolved metadata, and citation evidence stay connected in the adjacent views.
+Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected.
 \end{GewuCaption}
 
 \subsection{Read the columns from left to right}\label{read-the-columns-from-left-to-right}
@@ -2617,7 +2630,7 @@ Browser is the sixth main tab, after Author Monitor. Website links across Librar
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Browser Home example. Rendered from the current interface code with public sample bookmarks and fallback initials. Home is local; the address field opens websites or searches Google. No private bookmarks, session or history is shown.
+Browser in use. Captured from the original App displaying Nature\textquotesingle s research articles. The real bookmark collection is filtered to Nature; website icons, the webpage tab, and the compact B menu are visible. This is a live interface capture, not a generated demonstration.
 \end{GewuCaption}
 
 \subsection{Search and navigate}\label{search-and-navigate}
@@ -2654,7 +2667,7 @@ Right-click links for \textbf{Open Link in New Tab}, or Command-click. New-windo
 
 \subsection{Save and organize bookmarks}\label{save-and-organize-bookmarks}
 
-The sidebar\textquotesingle s top tabs switch between \textbf{Bookmarks} and \textbf{History}, without a repeated heading. \textbf{Import}, \textbf{Export}, \textbf{+} (New Folder), and Search sit along the bottom; History shows Clear History and Search there instead. Drag the sidebar\textquotesingle s right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.
+The sidebar\textquotesingle s top tabs switch between \textbf{Bookmarks} and \textbf{History}, without a repeated heading. The compact \textbf{B} (Bookmarks menu), \textbf{+} (New Folder), and Search sit along the bottom, even at the minimum sidebar width. History shows Clear History and Search there instead. Drag the sidebar\textquotesingle s right edge to resize it or use the toolbar to collapse it. Width, tab, and expanded folders are saved locally.
 
 \begin{enumerate}
 \tightlist
@@ -2674,11 +2687,37 @@ Search filters bookmark names and addresses. Right-click a bookmark for \textbf{
 
 \subsection{Import and export bookmarks}\label{import-and-export-bookmarks}
 
-Choose \textbf{Import} at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with \textbf{File \textgreater{} Export Bookmarks} produce HTML; newer Safari versions may use \textbf{File \textgreater{} Export Browsing Data to File} and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use \textbf{Bookmark Manager \textgreater{} menu \textgreater{} Export Bookmarks}.
+Choose \textbf{B \textgreater{} Import} at the bottom of Bookmarks and select a Safari or Chrome bookmark HTML file. Safari versions with \textbf{File \textgreater{} Export Bookmarks} produce HTML; newer Safari versions may use \textbf{File \textgreater{} Export Browsing Data to File} and produce ZIP. Select bookmarks only when exporting. Gewu accepts a ZIP containing exactly one bookmark HTML file and ignores all other members. In Chrome, use \textbf{Bookmark Manager \textgreater{} menu \textgreater{} Export Bookmarks}.
 
 Imports go into \textbf{Imported Bookmarks}, retaining folders, order, names, and supported links. Repeating an import merges matching folder names and reuses the same URL in the same folder; existing bookmarks are not overwritten. The result reports added bookmarks, new folders, duplicates, and skipped links. Local addresses, application links, and recognized authorization links are skipped. Limits are 10 MB, 20,000 source entries, and 64 folder levels; invalid files do not partially import.
 
-\textbf{Export} saves the full tree as standard bookmark HTML; right-click a folder for \textbf{Export Folder}. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private. Import/export is on demand, not ongoing Safari or Chrome synchronization.
+\textbf{B \textgreater{} Export} saves the full tree as standard bookmark HTML; right-click a folder for \textbf{Export Folder}. Safari and Chrome can import this format. Exports contain no history, cookies, or passwords, but their bookmark names and URLs are readable by anyone with the file. Keep personal exports private.
+
+\subsection{Sync one source folder into Gewu}\label{sync-one-source-folder-into-gewu}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Choose \textbf{B \textgreater{} Sync from Safari} or \textbf{Sync from Chrome}.} This is a manual, one-way operation, not a background watcher or a write-back to either browser.
+\item
+  \textbf{Select the source bookmark file.} For Safari, choose \texttt{\textasciitilde{}/Library/Safari/Bookmarks.plist}. For Chrome, choose \texttt{Bookmarks} in the intended profile under \texttt{\textasciitilde{}/Library/Application\ Support/Google/Chrome/}, such as Default or Profile 1. The picker remembers the last chosen location; select the same file for later refreshes. Only this explicitly selected bookmark file is read.
+\item
+  \textbf{Choose one folder.} The next sheet lists source folder paths and bookmark counts. \textbf{Sync Selected Folder} includes that folder and its descendants, not its siblings or the whole profile. Cancel leaves Gewu bookmarks unchanged.
+\item
+  \textbf{Review the result.} New links and folders are added. Stable source identifiers allow later source title/address changes to update entries created by sync. Pre-existing matches and items edited or moved in Gewu are kept. Source deletions do not delete local bookmarks. The result reports additions, updates, local changes kept, and skipped links.
+\end{enumerate}
+
+The selected folder is placed at the Bookmarks root; matching folder names and same-folder URLs are reused. Sync tracking lives in SQLite, independently of papers and website sessions. Legacy source entries without stable identifiers merge by folder/name/URL rather than overwriting local edits. Switching source files or profiles is a separate source. Limits match import (10 MB, 20,000 entries, 64 levels), with at most 2,000 folders in the chooser. Invalid input or a failed transaction leaves no partial sync.
+
+If macOS denies Safari file access, use a Safari bookmark HTML export with \textbf{B \textgreater{} Import}. No privacy settings are changed, and no password, cookie, history, or cloud-account databases are read. Only bookmarks already saved in the chosen local source file are available.
+
+\subsection{Navigate Browser with arrows}\label{navigate-browser-with-arrows}
+
+From the top \textbf{Browser} workspace tab, press Down to enter the toolbar. Left/Right moves among available toolbar controls; Enter activates one. At the address field, Enter or typing starts editing; its arrows then edit text or browse address suggestions. Escape returns to the toolbar. Up from the toolbar returns to the top Browser tab, where Left/Right changes workspaces. The Library exception is unchanged: Up within Library content does not ascend to its top workspace tab.
+
+Down from the toolbar selects the current webpage tab. Left/Right selects adjacent webpage tabs; Down enters Favorites or the native webpage. Favorites uses directional tile selection and Enter to open. At the left edge, Left enters the visible sidebar on its currently active Bookmarks/History tab; Down traverses its list and footer controls. Right returns to the main area. A hidden sidebar is never selected. In the sidebar header, Left focuses the other collection tab and Enter activates it.
+
+Inside an ordinary webpage, arrows remain WebKit scrolling controls. Once Up reaches the document top, it can hand focus back to webpage tabs; two more Up presses reach the top Browser tab. Left at a document\textquotesingle s left boundary can enter the visible sidebar. Inputs, editable text, framed/PDF content, and recognized or uncertain custom widgets keep their own keys; no form values are read or filled. A boundary check runs only after an eligible arrow press, without background polling. Use {{\symbolfont ⌘}L}, then Escape, to return to the toolbar from a document that retains its own arrows.
 
 \subsection{Website icons}\label{website-icons}
 
@@ -3079,7 +3118,7 @@ Optional service credentials belong only in Open Source Settings or approved env
 
 \part{Product Identity}\label{part-4}
 
-\chapter{Visual Identity and Cultural Elements}\label{visual-identity}
+\GewuIdentityChapter{Visual Identity and Cultural Elements}\label{visual-identity}
 
 \begin{GewuLead}
 Gewu Insight uses three related marks---the calligraphic Chinese name, the app icon, and a seal-script watermark---to connect a contemporary research workspace with the longer Chinese tradition of examining things in order to form insight.
@@ -3087,7 +3126,7 @@ Gewu Insight uses three related marks---the calligraphic Chinese name, the app i
 
 The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.
 
-\chapter{The calligraphic name}\label{the-calligraphic-name}
+\GewuIdentityChapter{The calligraphic name}\label{the-calligraphic-name}
 
 \begin{center}\includegraphics[width=0.84\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/branding/GewuAboutCalligraphy.png}\end{center}
 
@@ -3125,7 +3164,7 @@ The selected glyphs were optically balanced into a common line: scale, spacing, 
 The character links above are retained as provenance for the design process. The source thumbnails do not state a clear open-reuse licence. They should not be treated as public-domain assets merely because they are viewable online. The assembled Gewu Insight product artwork is distributed under the repository\textquotesingle s all-rights-reserved notice.
 \end{quote}
 
-\chapter{The app icon and the seal-script watermark}\label{the-app-icon-and-the-seal-script-watermark}
+\GewuIdentityChapter{The app icon and the seal-script watermark}\label{the-app-icon-and-the-seal-script-watermark}
 
 \section{The app icon}\label{the-app-icon}
 
@@ -3147,7 +3186,7 @@ The 2×2 motif is a digital rendering in \href{https://www.hanyi.com.cn/productd
 The mark is a light-line screen motif inspired by seal composition, not a photograph or facsimile of a historical carved seal. Typeface licensing remains separate from the product artwork.
 \end{GewuCaption}
 
-\chapter{Why the three marks are used differently}\label{why-the-three-marks-are-used-differently}
+\GewuIdentityChapter{Why the three marks are used differently}\label{why-the-three-marks-are-used-differently}
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -3190,6 +3229,7 @@ Shortcut & Action \\
 \endhead
 \bottomrule\noalign{}
 \endlastfoot
+\texttt{{\symbolfont ↑}} / \texttt{{\symbolfont ↓}} / \texttt{{\symbolfont ←}} / \texttt{{\symbolfont →}}, Enter & In Browser chrome, move between the top workspace tab, toolbar, webpage tabs, Favorites, and visible sidebar; Enter activates the focused control. Native webpages retain scrolling and editing keys. Up at an ordinary document\textquotesingle s top can return to Browser chrome; {\symbolfont ⌘}L then Escape also returns to the toolbar. \\
 \texttt{{\symbolfont ↑}} / \texttt{{\symbolfont ↓}} & Move through the focused Library or Paper Files list; on the source rail, move among Library, shortcuts, and Spaces and open the highlighted source. \\
 \texttt{{\symbolfont →}} & Enter the highlighted source from the vertical rail, enter a folder, or move from a selected paper into Paper Files. \\
 \texttt{{\symbolfont ←}} & Leave Paper Files for the selected paper, return to a parent folder, or move from the leftmost Library column to the source rail. \\

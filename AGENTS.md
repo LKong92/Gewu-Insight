@@ -52,6 +52,8 @@
 
 ## Done Criteria
 
+- User Guide screenshots must come from the real original App, without Codex/Computer Use overlays. Use Hong Ding for Author Monitor, Nature with visible figures for Journal Monitor, and already-classified multiple Paper Files for Library.
+- In the PDF, Product Identity chapters 4-1 through 4-4 flow continuously; do not force each onto a new page. Preserve numbering/links and encode this rule in the builder, not only generated TeX.
 - Relevant CLI or UI workflow still works for the changed area.
 - Run `py_compile` for Python code changes when practical.
 - Keep `AGENTS.md` concise and `PROJECT_STATE.md` under 100 lines when updating project context.

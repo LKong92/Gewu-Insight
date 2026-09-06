@@ -4,6 +4,7 @@
 #import "GewuBrowserSession.h"
 #import "GewuBrowserAutoFill.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CommonCrypto/CommonDigest.h>
 
 // Right-clicking an editable document must keep AppKit's insertion target in
 // this WebView, not the separate workspace/address-bar WebView. Leave all text
@@ -83,6 +84,12 @@
 @property(nonatomic) BOOL active;
 @property(nonatomic) BOOL visible;
 @property(nonatomic) BOOL canReturnToWorkspace;
+@property(nonatomic) BOOL sidebarVisible;
+@property(nonatomic) NSUInteger navigationInputGeneration;
+@property(nonatomic) NSTimeInterval lastNavigationArrowTime;
+@property(nonatomic) unsigned short lastNavigationArrowKey;
+@property(nonatomic) BOOL navigationProbePending;
+@property(nonatomic, copy) NSString *navigationProbe;
 @property(nonatomic) BOOL initializing;
 @property(nonatomic) BOOL invalidated;
 @property(nonatomic, strong) id keyMonitor;
@@ -158,6 +165,7 @@
 }
 - (void)selectTab:(GewuBrowserTab *)tab {
     if (!tab || ![self.tabs containsObject:tab] || tab == self.selectedTab) return;
+    self.navigationInputGeneration++;
     [self.loginTrigger cancelPending];
     NSRect previousFrame = [self presentedPageForTab:self.selectedTab].view.frame;
     // Tab switches do not stop loads, replay requests, or replace documents.
@@ -214,6 +222,8 @@
     self = [super init];
     if (self) {
         _workspace = workspace;
+        NSString *navigationPath = [NSBundle.mainBundle pathForResource:@"GewuBrowserNavigationProbe" ofType:@"js"];
+        _navigationProbe = navigationPath ? [NSString stringWithContentsOfFile:navigationPath encoding:NSUTF8StringEncoding error:nil] : @"";
         _downloads = [NSMapTable strongToStrongObjectsMapTable];
         [self ensureTabModel];
         __weak typeof(self) weakSelf = self;
@@ -230,6 +240,13 @@
         _keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDown | NSEventMaskScrollWheel) handler:^NSEvent *(NSEvent *event) {
             GewuBrowserController *self = weakSelf;
             if (!self.active || event.window != self.workspace.window || self.workspace.window.attachedSheet) return event;
+            // WebKit may redispatch the same unhandled arrow through AppKit.
+            // That is one physical press, not intervening input. Remember only
+            // its numeric identity, never event objects or typed characters.
+            BOOL arrow = event.type == NSEventTypeKeyDown && (event.keyCode == 123 || event.keyCode == 126);
+            BOOL redispatchedArrow = arrow && self.lastNavigationArrowTime == event.timestamp && self.lastNavigationArrowKey == event.keyCode;
+            if (!redispatchedArrow) self.navigationInputGeneration++;
+            if (arrow) { self.lastNavigationArrowTime = event.timestamp; self.lastNavigationArrowKey = event.keyCode; }
             if (event.type == NSEventTypeLeftMouseUp) { [self.loginTrigger considerMouseUp:event inView:self.webView]; return event; }
             [self.loginTrigger noteInputEvent:event];
             if (event.type == NSEventTypeScrollWheel || event.type == NSEventTypeLeftMouseDragged) return event;
@@ -244,6 +261,7 @@
                 return event;
             }
             if ([self handleWorkspaceReturnKeyEvent:event]) return nil;
+            if (!redispatchedArrow) [self considerPageArrow:event];
             BOOL command = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
             NSString *key = event.charactersIgnoringModifiers.lowercaseString;
             if (command && !(event.modifierFlags & (NSEventModifierFlagOption | NSEventModifierFlagControl))
@@ -286,6 +304,38 @@
     [self.workspace.window makeFirstResponder:self.workspace];
     [self emit:@{@"event":@"return-workspace"}];
     return YES;
+}
+
+- (void)considerPageArrow:(NSEvent *)event {
+    // Let WebKit dispatch the original event. Only hand focus back after a
+    // bounded, one-shot check; never consume/replay arrows or touch form values.
+    BOOL up = event.keyCode == 126, left = event.keyCode == 123;
+    WKWebView *view = [self presentedPageForTab:self.selectedTab].view;
+    NSResponder *responder = self.workspace.window.firstResponder;
+    if ((!up && !(left && self.sidebarVisible)) || !self.visible || self.navigationProbePending || !self.navigationProbe.length
+        || event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift)
+        || !view || view == self.homePage.view || ![responder isKindOfClass:NSView.class] || ![(NSView *)responder isDescendantOf:view]) return;
+    self.navigationProbePending = YES;
+    NSUInteger generation = self.navigationInputGeneration;
+    NSString *tabID = self.selectedTab.identifier;
+    NSURL *url = view.URL;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        if (generation != self.navigationInputGeneration || self.invalidated) { self.navigationProbePending = NO; return; }
+        NSString *script = [NSString stringWithFormat:@"(%@)(\"%@\")", self.navigationProbe, up ? @"up" : @"left"];
+        [view evaluateJavaScript:script inFrame:nil inContentWorld:[WKContentWorld worldWithName:@"GewuBrowserNavigation"] completionHandler:^(id result, NSError *error) {
+            typeof(self) self = weakSelf;
+            self.navigationProbePending = NO;
+            if (!self || error || ![result isKindOfClass:NSNumber.class] || ![result boolValue] || self.invalidated
+                || generation != self.navigationInputGeneration || !self.active || !self.visible || self.workspace.window.attachedSheet
+                || self.workspace.window.firstResponder != responder || ![self.selectedTab.identifier isEqualToString:tabID]
+                || [self presentedPageForTab:self.selectedTab].view != view || ![view.URL isEqual:url] || (!up && !self.sidebarVisible)) return;
+            [self.workspace.window makeFirstResponder:self.workspace];
+            [self emit:@{@"event":@"focus-chrome", @"destination":up ? @"tabs" : @"sidebar"}];
+        }];
+    });
 }
 
 - (void)emit:(NSDictionary *)event {
@@ -444,6 +494,7 @@
     NSString *action = [command[@"action"] isKindOfClass:NSString.class] ? command[@"action"] : @"";
     if ([action isEqualToString:@"layout"]) {
         self.active = [command[@"active"] boolValue];
+        self.sidebarVisible = [command[@"sidebarVisible"] boolValue];
         self.canReturnToWorkspace = self.active && [command[@"canReturnToWorkspace"] boolValue];
         self.favicons.active = self.active;
         BOOL shown = self.active && [command[@"visible"] boolValue];
@@ -518,6 +569,8 @@
         [self.favicons requestURL:[NSURL URLWithString:url]];
     }
     else if ([action isEqualToString:@"import-bookmarks"]) { [self importBookmarks]; }
+    else if ([action isEqualToString:@"read-bookmark-source"]) { [self readBookmarkSource:command]; }
+    else if ([action isEqualToString:@"choose-bookmark-source-folder"]) { [self chooseBookmarkSourceFolder:command]; }
     else if ([action isEqualToString:@"export-bookmarks"]) { [self exportBookmarks:command]; }
     else if ([action isEqualToString:@"passwords"]) {
         NSURL *passwords = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Passwords"];
@@ -700,6 +753,68 @@
     }];
 }
 
+- (void)readBookmarkSource:(NSDictionary *)command {
+    NSString *source = command[@"source"];
+    if (![@[@"safari", @"chrome"] containsObject:source] || self.workspace.window.attachedSheet) return;
+    BOOL safari = [source isEqualToString:@"safari"];
+    NSString *expected = safari ? @"Bookmarks.plist" : @"Bookmarks";
+    NSString *preference = [@"GewuBookmarkSource-" stringByAppendingString:source];
+    NSString *saved = [NSUserDefaults.standardUserDefaults stringForKey:preference];
+    NSString *path = saved.length ? saved : [NSHomeDirectory() stringByAppendingPathComponent:safari ? @"Library/Safari/Bookmarks.plist" : @"Library/Application Support/Google/Chrome/Default/Bookmarks"];
+    NSOpenPanel *panel = NSOpenPanel.openPanel;
+    panel.title = safari ? @"Sync from Safari" : @"Sync from Chrome";
+    panel.prompt = @"Choose Bookmark File";
+    panel.directoryURL = [NSURL fileURLWithPath:path.stringByDeletingLastPathComponent isDirectory:YES];
+    panel.nameFieldStringValue = expected; panel.showsHiddenFiles = YES;
+    panel.canChooseDirectories = NO; panel.allowsMultipleSelection = NO;
+    panel.message = safari ? @"Choose Safari's Bookmarks.plist. Next, choose one folder to sync into Gewu. This never writes to Safari. If macOS denies access, use Bookmarks menu > Import with a Safari HTML export instead."
+        : @"Choose the Bookmarks file inside the desired Chrome profile (Default or Profile 1, etc.). Next, choose one folder. Only bookmarks are read; Chrome is never modified.";
+    [panel beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse response) {
+        if (response != NSModalResponseOK) { [self emit:@{@"event":@"bookmark-source-cancel"}]; return; }
+        NSURL *url = panel.URL;
+        NSNumber *size = nil, *regular = nil;
+        [url getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        [url getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil];
+        if (![url.lastPathComponent isEqualToString:expected] || !regular.boolValue || !size || size.unsignedLongLongValue > 10 * 1024 * 1024) {
+            [self emit:@{@"event":@"bookmark-source-cancel", @"message":[NSString stringWithFormat:@"Choose %@, no larger than 10 MB. No other profile files are read.", expected]}]; return;
+        }
+        // Explicit user-selected file only. No profile enumeration, passwords,
+        // history, cookies, background watcher, or source write permissions.
+        NSData *content = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:nil];
+        if (!content.length || content.length > 10 * 1024 * 1024) {
+            [self emit:@{@"event":@"bookmark-source-cancel", @"message":@"macOS could not read this bookmark file. Use an HTML bookmark export with Import instead; no privacy settings were changed."}]; return;
+        }
+        [NSUserDefaults.standardUserDefaults setObject:url.path forKey:preference];
+        NSData *identity = [url.URLByStandardizingPath.path dataUsingEncoding:NSUTF8StringEncoding];
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(identity.bytes, (CC_LONG)identity.length, digest);
+        NSMutableString *sourceID = [NSMutableString string];
+        for (NSUInteger i = 0; i < sizeof(digest); i++) [sourceID appendFormat:@"%02x", digest[i]];
+        [self emit:@{@"event":@"bookmark-source", @"source":source, @"source_id":sourceID, @"content_base64":[content base64EncodedStringWithOptions:0]}];
+    }];
+}
+
+- (void)chooseBookmarkSourceFolder:(NSDictionary *)command {
+    NSArray *folders = [command[@"folders"] isKindOfClass:NSArray.class] ? command[@"folders"] : nil;
+    if (!folders.count || folders.count > 2000 || self.workspace.window.attachedSheet) {
+        [self emit:@{@"event":@"bookmark-source-cancel", @"message":@"No selectable source folder was found."}]; return;
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Choose a folder to sync into Gewu";
+    alert.informativeText = @"Only the selected folder and its subfolders are included. Repeat this action to refresh from the same source. Local edits and source deletions are kept; nothing is written back to Safari or Chrome.";
+    [alert addButtonWithTitle:@"Sync Selected Folder"]; [alert addButtonWithTitle:@"Cancel"];
+    NSPopUpButton *choice = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 440, 28) pullsDown:NO];
+    for (NSDictionary *folder in folders) {
+        if (![folder isKindOfClass:NSDictionary.class] || ![folder[@"id"] isKindOfClass:NSString.class] || ![folder[@"title"] isKindOfClass:NSString.class]) continue;
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"%@ (%ld bookmarks)", folder[@"title"], (long)[folder[@"count"] integerValue]] action:nil keyEquivalent:@""];
+        item.representedObject = folder[@"id"]; [choice.menu addItem:item];
+    }
+    if (!choice.numberOfItems) { [self emit:@{@"event":@"bookmark-source-cancel"}]; return; }
+    alert.accessoryView = choice;
+    [alert beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse response) {
+        [self emit:response == NSAlertFirstButtonReturn ? @{@"event":@"bookmark-source-folder", @"folder_id":choice.selectedItem.representedObject} : @{@"event":@"bookmark-source-cancel"}];
+    }];
+}
+
 - (void)shareAction:(NSMenuItem *)sender {
     if (sender.tag == 0) [self emit:@{ @"event": @"bookmark" }];
     else if (sender.tag == 1 && self.webView.URL) {
@@ -801,6 +916,7 @@
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
+    if (webView == self.webView) self.navigationInputGeneration++;
     GewuBrowserPage *page = [self pageForView:webView];
     GewuBrowserTab *tab = [self tabForPage:page];
     if (!page || page != tab.currentPage) return;

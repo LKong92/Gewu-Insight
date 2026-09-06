@@ -98,19 +98,29 @@ Evidence names below refer to the current implementation or product tests;
 
 ## Illustration provenance
 
-Inspected all seven existing workspace images. Library, Space, My Publications,
-Journal Monitor, Subject Monitor, and Author Monitor remain useful as examples
-of the current layout. Counts, dates, and remote metrics are historical examples,
-not current service statistics. Journal Monitor deliberately retains the user's
-Nature page dated August 12, 2026; Author Monitor retains Hong Ding.
+The user's latest screenshot requirements supersede the initial synthetic
+Browser illustration. All User Guide images must be real original-App captures,
+without Computer Use pointers or other overlay windows. Never invent bookmark
+collections or change paper-file classifications just to stage an illustration.
+The synthetic layout renderer now writes only to a temporary example file, not
+to the guide assets. Counts and remote metrics remain dated examples.
 
-Replaced the obsolete Browser image (old Favorites heading/folder selector,
-no webpage tabs) using `scripts/render_browser_guide_example.cjs`. It renders
-the actual current `browser_ui.css` and `browser_ui.js` with generated public
-bookmarks in a fresh headless profile, blocking all network requests. The native
-webpage area is explicitly a labeled placeholder, not a live Google screenshot.
-No personal bookmarks, history, credentials, or live App window were read for
-this replacement. The guide caption and alt text preserve that distinction.
+Current refresh status:
+
+| Image | Real source and review status |
+|---|---|
+| Browser | Original App showing Nature research articles with the actual bookmark tree filtered to Nature and real site icons. Native window-only capture excludes the Computer Use pointer. Replaces the rejected synthetic image. |
+| Library | Fermi-level flat band in a Kagome magnet, arxiv_1906.07140. Two existing files are Preprint and Published version; the latter is Default. No types were changed. Native window-only capture is pointer-free. |
+| Author Monitor | Newly captured with Hong Ding selected. Reviewed without pointer overlay. |
+| Journal Monitor | Newly captured on August 12, 2026 with Nature selected and article figures visible. Reviewed without pointer overlay. |
+| My Publications | Existing real App capture reviewed; no pointer found. |
+| Subject Monitor | Newly captured from the original App on August 27, 2026 with Superconductivity selected, cached papers and the partial-count legend visible. Window-only capture is pointer-free. |
+| Space | Newly captured from the original Tobit Space with Single-shot parity readout of a minimal Kitaev chain selected and Paper Files visible. Window-only capture is pointer-free. |
+
+The original App became responsive after the intervening system WebCrypto
+keychain wait. Both remaining photos were recaptured and reviewed, and final
+packaging is complete. No keychain authorization or credential was operated;
+only ordinary workspace selection was used to frame the screenshots.
 
 ## Edition and verification
 
@@ -252,6 +262,54 @@ opened successfully without operating the verification widget or credentials.
 No private screenshot was saved or used for the guide. The user authorized
 publication after validation. See `BROWSER_EMBEDDED_COMPATIBILITY.md` for evidence
 and limits.
+
+## Browser controls and real-image refresh
+
+The guide now documents the compact B menu, manual one-way selected-folder
+Safari/Chrome sync, and directional Browser navigation with input/widget and
+hidden-sidebar boundaries. The original App is rebuilt and running the feature
+code; 727 product tests and 18 isolated real-WebKit arrow checks pass. Live
+toolbar/Favorites/sidebar and B-menu checks succeeded before the unrelated
+system keychain wait. See `BROWSER_KEYBOARD_AND_BOOKMARK_SYNC.md` for scope and
+validation limits.
+
+HTML, LaTeX and the final 77-page PDF include all six replacement images; the
+clean real My Publications capture is retained. Revised Library page 31,
+Space page 33, Subject page 51 and Browser page 55 were rendered and visually
+checked. All guide images are original-App captures without Computer Use
+overlays. No commit or push.
+
+## Continuous Product Identity layout
+
+The user's standing layout rule is now recorded in AGENTS.md and implemented
+in the PDF builder: short Product Identity chapters 4-1 through 4-4 flow in
+sequence rather than each forcing a new page. Chapters 4-1 and 4-2 share page
+66; 4-3 and 4-4 share page 67. Natural page overflow is allowed. Numbering,
+contents entries, bookmarks and cross-reference labels remain unchanged, and
+other parts retain their existing chapter breaks.
+
+The final pages were rendered and inspected under the PDF skill workflow.
+Six PDF structure checks and Python compile checks passed. All 699 named
+destinations and 295 internal links were inspected with no broken targets;
+the four chapter labels retain their own chapter destinations. The universal
+original App was rebuilt without restarting it, and code-signature verification
+passed. Source, served and bundled PDFs are identical (SHA-256
+`95555aeb67bdf1a8905c54e84166b0e6f0315f578784747cadb96b5078dd598f`).
+The running service serves the current HTML and both final screenshot assets
+byte-for-byte, and its health check is OK. Existing deprecation warnings and
+the existing-icon fallback were non-failing build output. This follow-up did
+not change Browser behavior, operate passwords, import bookmarks or modify
+research data directly.
+
+Pre-commit verification, after explicit commit/push authorization: all 727
+product tests pass again (31.875 seconds). The first rerun found two obsolete
+guide assertions requiring a synthetic Browser caption and the old chapter
+command. Those assertions now enforce real-App provenance, a temporary-only
+demo renderer, and all four continuous Identity chapters; no runtime or PDF
+change was needed. Six PDF structure checks, Python compilation, JavaScript
+syntax, App signature, packaged-resource comparisons and whitespace checks
+also pass. Earlier live/native and headless results above are not fresh reruns
+of credential or publisher workflows.
 
 ## Keeping the next edition aligned
 

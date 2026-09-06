@@ -13,6 +13,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BrowserNativeNavigationTests(unittest.TestCase):
+    def test_arrow_bridge_is_event_bounded_and_bookmark_source_is_read_only(self):
+        source = (ROOT / 'scripts/GewuBrowserController.m').read_text()
+        arrow = source.split('- (void)considerPageArrow:', 1)[1].split('- (', 1)[0]
+        self.assertIn('GewuBrowserNavigation', arrow)
+        self.assertIn('generation != self.navigationInputGeneration', arrow)
+        self.assertIn('self.navigationProbePending', arrow)
+        self.assertIn('redispatchedArrow', source)
+        probe = (ROOT / 'scripts/GewuBrowserNavigationProbe.js').read_text()
+        for forbidden in ['.value', 'innerText', 'textContent', 'addEventListener', 'MutationObserver', 'setInterval']:
+            self.assertNotIn(forbidden, probe)
+        reader = source.split('- (void)readBookmarkSource:', 1)[1].split('- (void)chooseBookmarkSourceFolder:', 1)[0]
+        self.assertIn('beginSheetModalForWindow', reader)
+        self.assertIn('url.lastPathComponent isEqualToString:expected', reader)
+        self.assertIn('dataWithContentsOfURL:url', reader)
+        self.assertNotIn('writeToURL', reader)
+        self.assertNotIn('contentsOfDirectory', reader)
+
     def test_tabs_preserve_webkit_configuration_and_do_not_hook_password_delivery(self):
         source = (ROOT / "scripts/GewuBrowserController.m").read_text()
         popup = source.split('- (WKWebView *)webView:', 1)[1].split('- (void)webViewDidClose:', 1)[0]
@@ -116,8 +133,8 @@ class BrowserNativeNavigationTests(unittest.TestCase):
         self.assertNotIn("ASPasswordCredential", native)
         ui = (ROOT / "paper_monitor/browser_ui.js").read_text()
         self.assertIn("new IntersectionObserver", ui)
-        self.assertIn('id="browserImportBookmarks"', ui)
-        self.assertIn('id="browserExportBookmarks"', ui)
+        self.assertIn('["browserImportBookmarks", "Import…"', ui)
+        self.assertIn('["browserExportBookmarks", "Export…"', ui)
 
 
 if __name__ == "__main__":

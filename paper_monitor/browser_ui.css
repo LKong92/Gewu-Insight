@@ -15,6 +15,7 @@
 #gewuBrowser button:disabled { opacity: .35; cursor: default; }
 #gewuBrowser button:hover:not(:disabled) { background: rgba(40, 55, 75, .07); }
 #gewuBrowser button:focus-visible, #gewuBrowser input:focus-visible, #gewuBrowser [tabindex]:focus-visible { outline: 2px solid #528bc0; outline-offset: -2px; }
+#gewuBrowser.browser-keyboard-active :focus { outline: 2px solid #528bc0; outline-offset: -2px; }
 #gewuBrowser svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .browser-toolbar { display: flex; align-items: center; gap: 5px; padding: 7px 12px; height: 47px; min-height: 47px; border-bottom: 1px solid #dadddf; background: #f6f6f7; }
 .browser-toolbar > button { width: 30px; height: 30px; display: grid; place-items: center; }
@@ -58,6 +59,7 @@
 .browser-site-image img { display: block; width: 16px; height: 16px; object-fit: contain; border-radius: 2px; }
 #browserBookmarkTransfer { display: flex; gap: 3px; flex-shrink: 0; }
 #gewuBrowser #browserBookmarkTransfer button { font-size: 11px; padding: 4px; color: #42556b; }
+#gewuBrowser #browserBookmarkMenu { width: 25px; height: 25px; font-weight: 650; border: 1px solid #cbd2da; border-radius: 4px; }
 #gewuBrowser .browser-entry-icon svg { width: 16px; height: 16px; }
 #gewuBrowser .browser-disclosure { display: grid; place-items: center; width: 13px; height: 22px; flex: 0 0 13px; padding: 0; color: #7b8694; }
 #gewuBrowser .browser-disclosure svg { width: 11px; height: 11px; stroke-width: 2; }
@@ -68,7 +70,7 @@
 .browser-history-row small { font-size: 10px; color: #8c96a3; }
 #gewuBrowser .browser-more { padding: 9px; width: 100%; color: #426a90; }
 .browser-sidebar-footer { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; padding: 3px 6px; font-size: 10px; color: #718095; border-top: 1px solid #dde1e5; }
-@container (max-width: 230px) { .browser-sidebar-footer { flex-wrap: wrap; gap: 4px; } .browser-sidebar-search { flex-basis: 100%; width: 100%; } }
+.browser-sidebar-footer > button { flex-shrink: 0; }
 .browser-sidebar-resize { position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 3; }
 .browser-context { position: fixed; width: 190px; z-index: 5; padding: 4px; border: 1px solid #d0d3d8; border-radius: 7px; background: #f9f9faf5; box-shadow: 0 5px 17px #15223824; }
 #gewuBrowser .browser-context button { display: block; width: 100%; text-align: left; padding: 5px 9px; font-size: 12px; }

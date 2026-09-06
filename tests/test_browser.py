@@ -222,8 +222,23 @@ class BrowserApiTests(unittest.TestCase):
         status, content = self.request("/api/browser", {"action":"save_bookmark", "title":"Example", "url":"https://example.org/"}, headers)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(content)["bookmarks"][0]["title"], "Example")
-        for asset in ["/browser-ui.js", "/browser-ui.css"]:
+        for asset in ["/browser-ui.js", "/browser-ui.css", "/browser-keyboard.js"]:
             self.assertEqual(self.request(asset)[0], 200)
+
+    def test_selected_source_preview_and_sync_over_local_api(self):
+        from tests.test_browser_sync import payload
+        headers = {"Origin":f"http://127.0.0.1:{self.server.server_port}", "X-Gewu-Browser":"1", "Content-Type":"application/json"}
+        status, content = self.request("/api/browser", {**payload(), "action":"preview_bookmark_source"}, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["folders"][1]["title"], "Bookmarks bar / Research")
+        self.assertNotIn(b"https://", content)
+        state_status, state_content = self.request("/api/browser", {"action":"state"}, headers)
+        self.assertEqual(state_status, 200)
+        self.assertEqual(json.loads(state_content)["bookmarks"], [])
+        status, content = self.request("/api/browser", {**payload(), "action":"sync_bookmarks"}, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(content)["sync_result"]["imported"], 1)
+        self.assertEqual({row["title"] for row in json.loads(content)["bookmarks"]}, {"Research", "First", "Empty"})
 
     def test_cross_site_and_dns_rebinding_rejected_before_dispatch(self):
         for headers in [
@@ -296,8 +311,11 @@ assert.deepEqual(model.favoriteContents(nodes,null,3).items,[]);
         css = (ROOT / "paper_monitor/browser_ui.css").read_text()
         self.assertNotIn('browserBookmarkRoot', ui)
         footer = ui.split('<div class="browser-sidebar-footer">')[1].split('<div id="browserResize"')[0]
-        self.assertLess(footer.index('browserImportBookmarks'), footer.index('browserExportBookmarks'))
-        self.assertLess(footer.index('browserExportBookmarks'), footer.index('browserNewFolder'))
+        self.assertNotIn('browserImportBookmarks', footer)
+        self.assertNotIn('browserExportBookmarks', footer)
+        self.assertLess(footer.index('browserBookmarkMenu'), footer.index('browserNewFolder'))
+        for action in ['browserImportBookmarks', 'browserExportBookmarks', 'browserSyncSafari', 'browserSyncChrome']:
+            self.assertIn(action, ui)
         self.assertLess(footer.index('browserNewFolder'), footer.index('browserSidebarSearch'))
         self.assertIn('$("browserCollection"), $("browserBookmarksTab")', ui)
         self.assertIn('root:$("browserFavorites")', ui)

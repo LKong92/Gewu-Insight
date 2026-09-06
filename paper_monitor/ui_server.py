@@ -522,8 +522,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not self.trusted_local_request():
             return
         try:
-            if parsed.path in {"/browser-ui.js", "/browser-ui.css"}:
-                filename = "browser_ui.js" if parsed.path.endswith(".js") else "browser_ui.css"
+            if parsed.path in {"/browser-ui.js", "/browser-ui.css", "/browser-keyboard.js"}:
+                filename = {"/browser-ui.js":"browser_ui.js", "/browser-ui.css":"browser_ui.css", "/browser-keyboard.js":"browser_keyboard.js"}[parsed.path]
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
                 return
@@ -5499,11 +5499,15 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
 
     def handle_browser(self, payload: dict[str, Any]) -> None:
         from .browser_bookmarks import export_bookmarks, import_bookmarks
+        from .browser_sync import source_tree, source_folders, sync_bookmarks
         storage = Storage(self.configured_db_path)
         try:
             browser = BrowserStore(storage.conn)
             action = payload.get("action", "state")
             result: dict[str, Any] = {"ok": True}
+            if action == "preview_bookmark_source":
+                self.send_json({"ok":True, "folders":source_folders(source_tree(payload))})
+                return
             if action == "suggestions":
                 self.send_json({"ok": True, "suggestions": browser.suggestions(payload.get("query", ""))})
                 return
@@ -5511,6 +5515,8 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                 result.update(browser.save_bookmark(payload))
             elif action == "import_bookmarks":
                 result["import_result"] = import_bookmarks(browser, payload)
+            elif action == "sync_bookmarks":
+                result["sync_result"] = sync_bookmarks(browser, payload)
             elif action == "export_bookmarks":
                 result["html"] = export_bookmarks(browser, payload.get("root_id"))
             elif action == "move_bookmark":
@@ -40007,7 +40013,7 @@ INDEX_HTML = """<!doctype html>
       state.primaryKeyboardLayer = "content";
       syncPrimaryKeyboardLayer({focus: false});
       if (state.mode === "browser") {
-        $("browserAddress")?.focus();
+        window.gewuBrowser?.focusToolbar();
         return true;
       }
       if (state.mode === "report" || state.mode === "theme") {
@@ -56871,6 +56877,7 @@ INDEX_HTML = """<!doctype html>
       if (handleLibraryViewShortcut(event)) return;
       if (handleTextClipboardShortcut(event)) return;
       if (handlePrimaryKeyboardNavigation(event)) return;
+      if (window.gewuBrowser?.handleKeydown(event)) return;
       if (handleLibraryKeydown(event)) return;
       if (handleReportKeydown(event)) return;
       if (handleAuthorMonitorKeydown(event)) return;
@@ -57132,6 +57139,7 @@ INDEX_HTML = """<!doctype html>
       updateReportPanelToggle();
     }
   </script>
+  <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
 </body>
 </html>

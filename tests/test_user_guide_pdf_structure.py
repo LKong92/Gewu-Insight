@@ -91,6 +91,36 @@ def test_pdf_preamble_numbers_chapters_within_each_part():
     assert r"\renewcommand{\thechapter}{\arabic{part}-\arabic{chapter}}" in preamble
 
 
+def test_product_identity_chapters_flow_without_changing_other_parts():
+    builder = _builder_module()
+    identity_titles = ["Visual Identity and Cultural Elements", "The calligraphic name",
+                       "The app icon and the seal-script watermark", "Why the three marks are used differently"]
+    identity = "\n".join(r"\chapter{" + title + r"}\label{identity-" + str(i) + "}\nBody."
+                         for i, title in enumerate(identity_titles, 1))
+    before = r"\part{User Manual}\label{part-3}\chapter{Browser}\label{browser}"
+    after = r"\part{Technical and Operational Reference}\label{part-5}\chapter{Keyboard Shortcuts}"
+    result = builder.prepare_latex_body(before + r"\part{Product Identity}\label{part-4}" + identity + after)
+    assert before in result and after in result
+    assert result.count(r"\GewuIdentityChapter{") == 4
+    for i, title in enumerate(identity_titles, 1):
+        assert r"\GewuIdentityChapter{" + title + r"}\label{identity-" + str(i) + "}" in result
+    assert builder.prepare_latex_body(result) == result
+
+
+def test_identity_chapter_break_suppression_is_local_and_keeps_chapter_semantics():
+    preamble = _builder_module().latex_preamble("0.1", "test")
+    start = preamble.index(r"\newcommand{\GewuIdentityChapter}")
+    command = preamble[start:preamble.index(r"\raggedbottom", start)]
+    assert r"\Needspace{9\baselineskip}" in command
+    assert command.index(r"\let\GewuSavedClearPage\clearpage") < command.index(r"\let\clearpage\relax")
+    assert command.index(r"\let\GewuSavedClearDoublePage\cleardoublepage") < command.index(r"\let\cleardoublepage\relax")
+    assert command.index(r"\chapter{#1}") < command.index(r"\let\clearpage\GewuSavedClearPage")
+    assert command.index(r"\chapter{#1}") < command.index(r"\let\cleardoublepage\GewuSavedClearDoublePage")
+    # A group around chapter would lose currentlabel/currentHref before the
+    # following Pandoc label, silently sending cross-references to the old part.
+    assert r"\begingroup" not in command
+
+
 def test_every_registered_screenshot_is_constrained_to_page_width():
     builder = _builder_module()
     for route, path in builder.IMAGE_ROUTES.items():

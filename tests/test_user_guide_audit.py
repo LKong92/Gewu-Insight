@@ -81,14 +81,18 @@ class GuideAuditTests(unittest.TestCase):
                      ui_server.AUTO_AUTHOR_MONITOR_HOUR):
             self.assertIn(f"{hour:02d}:00", self.topic("startup"))
 
-    def test_browser_figure_is_honest_about_generated_content(self):
+    def test_browser_figure_uses_real_app_capture_not_the_synthetic_fixture(self):
         figure = self.soup.find("article", id="browser").find("figure")
         caption = figure.find("figcaption").get_text(" ", strip=True)
-        self.assertIn("current interface code", caption)
-        self.assertIn("public sample bookmarks", caption)
-        self.assertIn("Home is local", caption)
+        self.assertIn("Captured from the original App", caption)
+        self.assertIn("Nature's research articles", caption)
+        self.assertIn("real bookmark collection", caption)
+        self.assertIn("not a generated demonstration", caption)
+        self.assertNotIn("public sample bookmarks", caption)
         self.assertNotIn("earlier screenshot", caption)
         renderer = (ROOT / "scripts/render_browser_guide_example.cjs").read_text()
         self.assertIn("paper_monitor/browser_ui.css", renderer)
         self.assertIn("paper_monitor/browser_ui.js", renderer)
         self.assertIn("route.abort()", renderer)
+        self.assertIn("require('node:os').tmpdir()", renderer)
+        self.assertNotIn("assets/user-guide/screenshots/browser.png", renderer)
