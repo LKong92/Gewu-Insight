@@ -38,19 +38,13 @@ const root = path.resolve(__dirname, '..');
     await page.addScriptTag({content:fs.readFileSync(path.join(root,'paper_monitor/browser_ui.js'),'utf8')});
     await page.evaluate(() => {
       gewuBrowser.setActive(true);
-      gewuBrowserNativeEvent({event:'state',tab_id:'home',url:'https://www.google.com/',loading:false,title:'Google'});
+      gewuBrowserNativeEvent({event:'state',tab_id:'home',home:true,url:'',loading:false,title:'Favorites'});
       gewuBrowserNativeEvent({event:'tabs',selected:'home',tabs:[
-        {id:'home',title:'Home',url:'https://www.google.com/'},
+        {id:'home',title:'Favorites',home:true,url:''},
         {id:'nature',title:'Nature',url:'https://www.nature.com/'},
         {id:'scholar',title:'Google Scholar',url:'https://scholar.google.com/'}]});
     });
     await page.waitForFunction(() => document.querySelectorAll('[data-favorite-id]').length === 6);
-    await page.evaluate(() => {
-      const placeholder = document.createElement('div');
-      placeholder.style.cssText = 'height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:30px;color:#68798c';
-      placeholder.innerHTML = '<div style="font-size:10px;letter-spacing:2px;font-weight:600">ILLUSTRATIVE WEBPAGE AREA</div><h2 style="font-size:30px;font-weight:500;margin:18px 0 10px;color:#344b63">Google Home in native WebKit</h2><p style="font-size:14px;line-height:1.7;max-width:570px;margin:0">The live Google logo, search field, and account controls appear here.<br>Search results, websites, and PDFs use the full area below the tabs.</p><p style="font-size:11px;margin:24px 0 0">Current Browser controls with public sample bookmarks.<br>Website content is represented, not captured; no user session is shown.</p>';
-      document.querySelector('#browserViewport').replaceChildren(placeholder);
-    });
     await page.waitForTimeout(150);
     assert.deepEqual(errors,[]);
     const geometry = await page.evaluate(() => {

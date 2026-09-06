@@ -2,11 +2,10 @@
  * separate native WKWebView. Never embed a remote page under the local origin. */
 (function (global) {
   "use strict";
-  const HOME = "https://www.google.com/";
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   function address(value) {
     const text = String(value || "").trim();
-    if (!text) return HOME;
+    if (!text) return "";
     if (/^[a-z][a-z\d+.-]*:/i.test(text) && !/^https?:/i.test(text)) throw new Error("Use an HTTP or HTTPS website address.");
     if (/^https?:\/\//i.test(text)) return new URL(text).href;
     if (!/\s/.test(text) && /^[^/]+\.[^/]+/.test(text)) return new URL("https://" + text).href;
@@ -56,14 +55,6 @@
       queueMicrotask(() => { pending = false; callback(); });
     };
   }
-  function isGoogleHome(value) {
-    try {
-      const url = new URL(value);
-      return url.protocol === "https:" && !url.username && !url.password && !url.port &&
-        ["google.com", "www.google.com"].includes(url.hostname) &&
-        ["/", "/webhp"].includes(url.pathname) && !url.searchParams.has("q");
-    } catch (_) { return false; }
-  }
   function favoritesFolder(nodes) {
     const folders = nodes.filter(node => node.kind === "folder");
     // Home is fixed to Favorites, never an old arbitrary folder preference or
@@ -91,19 +82,19 @@
     }
     return {folder, trail:[folder], items:nodes.filter(node => node.parent_id === folder.id)};
   }
-  // Match the tile metrics in browser_ui.css. Reserve most of Home for Google;
-  // overflow is paged, never clipped or turned into a second vertical scroller.
+  // Match the tile metrics in browser_ui.css. Favorites owns the entire local
+  // Home; overflow is paged, never clipped or vertically scrolled.
   function homeLayout(width, height, count, nested = false) {
     const columns = Math.max(1, Math.floor((Math.min(1100, width) - 48 + 12) / 100));
-    const overhead = 14 + (nested ? 30 : 0);
-    const budget = Math.max(140 + overhead, height * .44);
+    const overhead = 48 + (nested ? 30 : 0);
+    const budget = Math.max(140 + overhead, height);
     const needed = Math.max(1, Math.ceil(count / columns));
     let rows = Math.max(1, Math.min(needed, Math.floor((budget - overhead) / 106)));
     if (rows < needed) rows = Math.max(1, Math.floor((budget - overhead - 26) / 106));
     const capacity = rows * columns, pages = Math.max(1, Math.ceil(count / capacity));
     return {columns, capacity, pages, height:rows * 106 + overhead + (pages > 1 ? 26 : 0)};
   }
-  const model = {address, droppedURL, bookmarkTree, folderChoices, dayLabel, escape, microtaskScheduler, isGoogleHome, favoritesFolder, favoriteContents, inlineCompletion, homeLayout};
+  const model = {address, droppedURL, bookmarkTree, folderChoices, dayLabel, escape, microtaskScheduler, favoritesFolder, favoriteContents, inlineCompletion, homeLayout};
   if (typeof module !== "undefined" && module.exports) module.exports = model;
   if (typeof document === "undefined") return;
 
@@ -137,7 +128,7 @@
     <div class="browser-toolbar">
       ${button("browserSidebarToggle", "Show or hide sidebar", "sidebar")}
       ${button("browserBack", "Back", "back")}${button("browserForward", "Forward", "forward")}
-      ${button("browserReload", "Reload", "reload")}${button("browserHome", "Home — Google and Favorites", "home")}
+      ${button("browserReload", "Reload", "reload")}${button("browserHome", "Home — Favorites", "home")}
       <form id="browserAddressForm" class="browser-address-form">
         <a id="browserSiteIcon" href="#" draggable="true" title="Drag this page into a bookmark folder" aria-label="Drag page to bookmarks">${icon("globe")}</a>
         <input id="browserAddress" type="text" placeholder="Search Google or enter a website" aria-label="Search Google or enter a website" aria-autocomplete="both" aria-expanded="false" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -209,7 +200,6 @@
     const fit = homeLayout(column.clientWidth, available, contents.items.length + 1, contents.trail.length > 1);
     data.favoriteLayout = `${column.clientWidth}:${available}`;
     data.favoritePage = Math.max(0, Math.min(data.favoritePage, fit.pages - 1));
-    root.style.setProperty("--browser-favorites-height", fit.height + "px");
     root.style.setProperty("--browser-favorites-columns", fit.columns);
     $("browserFavoritesPages").hidden = fit.pages === 1;
     $("browserFavoritesPage").textContent = `${data.favoritePage + 1} / ${fit.pages}`;
@@ -229,8 +219,7 @@
     });
     $("browserFavoritesGrid").querySelectorAll('[data-icon-host]').forEach(element => favoritesIconObserver.observe(element));
   }
-  function updateHome() {
-    const home = isGoogleHome(data.url);
+  function updateHome(home = false) {
     if (data.home === home) return;
     data.home = home;
     root.classList.toggle("browser-at-home", home);
@@ -260,7 +249,7 @@
       element.setAttribute('aria-label',tab.title || 'New Tab'); element.title = (tab.title || 'New Tab') + (tab.url ? '\n'+tab.url : '');
       const glyph = element.querySelector('.browser-tab-icon');
       glyph.classList.toggle('loading', Boolean(tab.loading));
-      const markup = tab.loading ? icon('reload') : saved ? `<img alt="" src="${escape(saved)}">` : icon(isGoogleHome(tab.url) ? 'home' : 'globe');
+      const markup = tab.loading ? icon('reload') : saved ? `<img alt="" src="${escape(saved)}">` : icon(tab.home ? 'home' : 'globe');
       if (glyph.innerHTML !== markup) glyph.innerHTML = markup;
       element.querySelector('.browser-tab-title').textContent = tab.title || 'New Tab';
       const close = element.querySelector('.browser-tab-close'); close.dataset.closeTab = tab.id;
@@ -358,7 +347,7 @@
       const available = column.clientHeight - $("browserTabs").offsetHeight - root.querySelector(".browser-page-footer").offsetHeight - $("browserFindBar").offsetHeight - $("browserMessage").offsetHeight;
       if (data.home && data.favoriteLayout !== `${column.clientWidth}:${available}`) renderFavorites();
     }
-    const rect = $("browserViewport").getBoundingClientRect();
+    const rect = $(data.home ? "browserFavorites" : "browserViewport").getBoundingClientRect();
     const active = data.active;
     const payload = {action:"layout", active, visible:active && !visibleDialog(), canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
     const signature = JSON.stringify(payload);
@@ -377,7 +366,7 @@
       $("browserNativeHint").textContent = "Open Gewu Insight.app to use the embedded browser. Bookmarks and history remain available here.";
       refresh().catch(fail); return;
     }
-    if (!data.opened) { data.opened = true; navigate(HOME); }
+    if (!data.opened) { data.opened = true; native({action:"home"}); }
     refresh().catch(fail);
   }
   function open() {
@@ -421,7 +410,7 @@
       closeSuggestions();
       message("");
       $("browserAddress").value = url;
-      native({action:"navigate", url});
+      native(url ? {action:"navigate", url} : {action:"home"});
     } catch (error) { fail(error); }
   }
   async function edit(node = null, kind = "bookmark", parent = null) {
@@ -503,11 +492,16 @@
         data.layout = ""; data.favoriteLayout = ""; scheduleLayout();
       }
       data.url = event.url ?? data.url; data.title = event.title || ""; data.loading = event.loading;
-      updateHome();
+      updateHome(event.home === true);
       if (switched && data.home) renderFavorites();
       if (switched || document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
       $("browserSiteIcon").href = data.url || "#";
-      $("browserSiteIcon").title = data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
+      $("browserSiteIcon").draggable = Boolean(data.url);
+      $("browserAddBookmark").disabled = !data.url;
+      $("browserDownload").disabled = !data.url;
+      $("browserExternal").disabled = !data.url;
+      $("browserShare").disabled = !data.url;
+      $("browserSiteIcon").title = data.home ? "Local Favorites" : data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
       $("browserBack").disabled = !event.canBack; $("browserForward").disabled = !event.canForward;
       $("browserReload").innerHTML = icon(event.loading ? "stop" : "reload");
       $("browserReload").title = event.loading ? "Stop loading" : "Reload";
@@ -650,7 +644,10 @@
   $("browserSiteIcon").ondragstart = event => { event.dataTransfer.setData("text/uri-list", data.url); event.dataTransfer.setData("text/plain", data.url); event.dataTransfer.effectAllowed = "copy"; };
   $("browserSidebarToggle").onclick = () => { data.hidden = !data.hidden; persist({sidebar_hidden:data.hidden}); render(); };
   for (const [id, action] of [["browserBack","back"],["browserForward","forward"],["browserHome","home"],["browserDownload","download"],["browserExternal","external"]]) $(id).onclick = () => native({action});
-  $("browserReload").onclick = () => native({action:data.loading ? "stop" : "reload"});
+  $("browserReload").onclick = () => {
+    if (data.home && !data.loading) refresh().catch(fail);
+    native({action:data.loading ? "stop" : "reload"});
+  };
   $("browserAddBookmark").onclick = () => edit().catch(fail);
   $("browserShare").onclick = () => { const r = $("browserShare").getBoundingClientRect(); native({action:"share", x:r.x, y:r.bottom, viewportWidth:innerWidth}); };
   $("browserNewFolder").onclick = () => edit(null, "folder", data.bookmarks.find(n => n.id === data.selected && n.kind === "folder")?.id || 0).catch(fail);

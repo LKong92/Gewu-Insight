@@ -516,9 +516,10 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         for phrase in [
-            "genuinely blank part of the title bar",
-            "an app tab, the Library search field, or another top control",
-            "does not change the window size",
+            "double-click only blank title-bar space to zoom or restore the window",
+            "Tabs, search and other controls do not resize it",
+            "compact, flat search control",
+            "Each research workspace retains its own query",
         ]:
             self.assertIn(phrase, guided_tour_text)
 

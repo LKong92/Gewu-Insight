@@ -262,10 +262,11 @@ class BrowserApiTests(unittest.TestCase):
 
 class BrowserUiTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js required")
-    def test_home_and_favorites_use_real_origin_and_canonical_folders(self):
+    def test_home_is_local_and_favorites_use_canonical_folders(self):
         script = "const assert = require('node:assert/strict'); const model = require(" + json.dumps(str(ROOT / "paper_monitor/browser_ui.js")) + ");\n" + r'''
-for (const url of ['https://www.google.com/', 'https://google.com/webhp?hl=en', 'https://www.google.com/?authuser=0']) assert.equal(model.isGoogleHome(url), true);
-for (const url of ['', 'https://www.google.com/search?q=paper', 'https://www.google.com/?q=', 'https://accounts.google.com/', 'https://www.google.com.evil.example/', 'http://www.google.com/', 'https://user@www.google.com/', 'https://www.google.com:8765/', 'https://www.nature.com/a.pdf']) assert.equal(model.isGoogleHome(url), false, url);
+assert.equal(model.address(''), '');
+assert.equal(model.address('https://www.google.com/'), 'https://www.google.com/');
+assert.equal(model.address('quantum paper'), 'https://www.google.com/search?q=quantum%20paper');
 const nodes = [
   {id:1,parent_id:null,kind:'folder',title:'Favorites'},
   {id:2,parent_id:1,kind:'bookmark',title:'Nature',url:'https://www.nature.com/'},
@@ -327,8 +328,8 @@ assert.deepEqual(model.favoriteContents(nodes,null,3).items,[]);
         script = "const assert = require('node:assert/strict'); const model = require(" + json.dumps(str(ROOT / "paper_monitor/browser_ui.js")) + ");\n" + r'''
 const regular = model.homeLayout(1200, 850, 26);
 assert.equal(regular.pages, 1);
-assert.equal(regular.height, 332);
-assert.ok(850 - regular.height > 500, 'Google receives the remaining height');
+assert.equal(regular.height, 366);
+assert.equal(model.homeLayout(1200, 850, 60).pages, 1, 'Favorites can use the entire Home height');
 for (const width of [320, 650, 900, 1200, 1800]) {
   for (const height of [450, 600, 850, 1000]) {
     for (const count of [1, 26, 60, 501]) {

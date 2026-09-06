@@ -30,14 +30,14 @@ const root = path.resolve(__dirname, '..');
     assert.deepEqual(errors,[]);
     await page.evaluate(() => {
       gewuBrowser.setActive(true);
-      gewuBrowserNativeEvent({event:'state',tab_id:'first',url:'https://www.google.com/',loading:false,title:'Google'});
-      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Home',url:'https://www.google.com/'},{id:'second',title:'Nature',url:'https://www.nature.com/'},{id:'third',title:'Google Scholar',url:'https://scholar.google.com/'}]});
+      gewuBrowserNativeEvent({event:'state',tab_id:'first',home:true,url:'',loading:false,title:'Favorites'});
+      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Favorites',home:true,url:''},{id:'second',title:'Nature',url:'https://www.nature.com/'},{id:'third',title:'Google Scholar',url:'https://scholar.google.com/'}]});
     });
     async function checkTabLayout() {
       const geometry = await page.evaluate(() => {
         const q = s=>document.querySelector(s), rect = s=>q(s).getBoundingClientRect();
         const bar=q('#browserTabs'), tabs=[...bar.children], sidebar=rect('#browserSidebar');
-        const style=getComputedStyle(bar), column=rect('.browser-page-column'), viewport=rect('#browserViewport');
+        const style=getComputedStyle(bar), column=rect('.browser-page-column'), viewport=rect(q('#browserFavorites').hidden ? '#browserViewport' : '#browserFavorites');
         return {toolbar:rect('.browser-toolbar').bottom, sidebarTop:sidebar.top, sidebarRight:sidebar.right,
           sidebarHidden:getComputedStyle(q('#browserSidebar')).display==='none',
           barTop:bar.getBoundingClientRect().top, barLeft:bar.getBoundingClientRect().left,
@@ -110,8 +110,8 @@ const root = path.resolve(__dirname, '..');
     await page.evaluate(() => gewuBrowserNativeEvent({event:'state',url:'https://example.org/article',loading:false}));
     assert.equal(await page.locator('#browserFavorites').isVisible(),false);
     await page.evaluate(() => {
-      gewuBrowserNativeEvent({event:'state',tab_id:'first',url:'https://www.google.com/',loading:false,title:'Google'});
-      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Home',url:'https://www.google.com/'},{id:'second',title:'Nature',url:'https://www.nature.com/'},{id:'third',title:'<img src=x onerror=alert(1)>',url:'https://example.org/'}]});
+      gewuBrowserNativeEvent({event:'state',tab_id:'first',home:true,url:'',loading:false,title:'Favorites'});
+      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Favorites',home:true,url:''},{id:'second',title:'Nature',url:'https://www.nature.com/'},{id:'third',title:'<img src=x onerror=alert(1)>',url:'https://example.org/'}]});
     });
     assert.equal(await page.locator('#browserTabs [role=tab]').count(),3);
     assert.equal(await page.locator('#browserTabs [aria-selected=true]').getAttribute('data-browser-tab'),'first');
@@ -119,7 +119,7 @@ const root = path.resolve(__dirname, '..');
     assert.ok(await page.evaluate(() => {
       const first = document.querySelector('[data-browser-tab=first]');
       document.querySelector('#browserAddress').focus();
-      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Home',url:'https://www.google.com/'},{id:'second',title:'Nature (loaded)',url:'https://www.nature.com/'},{id:'third',title:'Public page',url:'https://example.org/'}]});
+      gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Favorites',home:true,url:''},{id:'second',title:'Nature (loaded)',url:'https://www.nature.com/'},{id:'third',title:'Public page',url:'https://example.org/'}]});
       return first === document.querySelector('[data-browser-tab=first]') && document.activeElement.id === 'browserAddress';
     }), 'background updates must retain nodes and input focus');
     await page.click('#browserNewTab');
@@ -131,7 +131,7 @@ const root = path.resolve(__dirname, '..');
     assert.equal(await page.locator('#browserFavorites').isVisible(),false);
     await page.click('[data-close-tab=second]');
     assert.ok(await page.evaluate(()=>browserCommands.some(command=>command.action==='close-tab'&&command.tab_id==='second')));
-    await page.evaluate(() => gewuBrowserNativeEvent({event:'state',tab_id:'first',url:'https://www.google.com/',loading:false,title:'Google'}));
+    await page.evaluate(() => gewuBrowserNativeEvent({event:'state',tab_id:'first',home:true,url:'',loading:false,title:'Favorites'}));
     await page.click('[data-favorite-id="2"]',{button:'right'});
     await page.getByRole('button',{name:'Open in New Tab',exact:true}).click();
     assert.ok(await page.evaluate(()=>browserCommands.some(command=>command.action==='new-tab'&&command.url==='https://example.org/0')));
@@ -144,34 +144,32 @@ const root = path.resolve(__dirname, '..');
     await checkTabLayout();
     await page.screenshot({path:'/private/tmp/gewu-browser-tabs-synthetic.png'});
     for (const count of [1,2]) {
-      await page.evaluate(count => gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Home',url:'https://www.google.com/'},...Array.from({length:count-1},(_,i)=>({id:'other'+i,title:'Public webpage '+i,url:'https://example.org/'+i}))]}), count);
+      await page.evaluate(count => gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Favorites',home:true,url:''},...Array.from({length:count-1},(_,i)=>({id:'other'+i,title:'Public webpage '+i,url:'https://example.org/'+i}))]}), count);
       await page.waitForTimeout(100);
       await checkTabLayout();
     }
     await page.setViewportSize({width:700,height:560});
-    await page.evaluate(() => gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Home',url:'https://www.google.com/'},...Array.from({length:31},(_,i)=>({id:'other'+i,title:'Public webpage '+i,url:'https://example.org/'+i}))]}));
+    await page.evaluate(() => gewuBrowserNativeEvent({event:'tabs',selected:'first',tabs:[{id:'first',title:'Favorites',home:true,url:''},...Array.from({length:31},(_,i)=>({id:'other'+i,title:'Public webpage '+i,url:'https://example.org/'+i}))]}));
     await page.waitForTimeout(100);
     await checkTabLayout();
     assert.ok(await page.evaluate(() => {
       const tabs = document.querySelector('#browserTabs');
       return tabs.scrollWidth > tabs.clientWidth && tabs.scrollHeight <= tabs.clientHeight + 1 && document.querySelector('#browserNewTab').getBoundingClientRect().right <= innerWidth;
     }), 'many tabs must scroll horizontally without hiding New Tab');
-    // Run the real Home geometry/style script against generated HTML under a
-    // routed origin. No request reaches Google; no user browser profile exists.
-    const nativeSource = fs.readFileSync(path.join(root,'scripts/GewuBrowserController.m'),'utf8');
-    const fragment = nativeSource.split('NSString *geometry = ')[1].split('[self.webView evaluateJavaScript:geometry')[0];
-    const script = [...fragment.matchAll(/"(?:\\.|[^"\\])*"/g)].map(match=>JSON.parse(match[0])).join('');
-    const fixture = await browser.newPage();
-    await fixture.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><div id="logo">Synthetic logo</div><input id="search"><button id="account">Account</button><div id="SIvCob">Languages</div><footer id="fbar">Region and footer links</footer>'}));
-    await fixture.goto('https://www.google.com/');
-    await fixture.evaluate(script);
-    assert.equal(await fixture.locator('#fbar').isVisible(),false);
-    assert.equal(await fixture.locator('#SIvCob').isVisible(),false);
-    for (const id of ['logo','search','account']) assert.equal(await fixture.locator('#'+id).isVisible(),true);
-    await fixture.goto('https://www.google.com/search?q=synthetic');
-    await fixture.evaluate(script);
-    assert.equal(await fixture.locator('#fbar').isVisible(),true,'ordinary pages must not receive Home styles');
-    await fixture.close();
+    await page.evaluate(() => gewuBrowserNativeEvent({event:'state',home:false,tab_id:'google',url:'https://www.google.com/',loading:false,title:'Google'}));
+    assert.equal(await page.locator('#browserFavorites').isVisible(),false,'Google opened explicitly is an ordinary webpage');
+    assert.equal(await page.locator('#browserViewport').isVisible(),true);
+    await page.waitForTimeout(100); await checkTabLayout();
+    await page.evaluate(() => gewuBrowserNativeEvent({event:'state',home:true,tab_id:'first',url:'',loading:false,title:'Favorites'}));
+    assert.equal(await page.inputValue('#browserAddress'),'');
+    assert.equal(await page.locator('#browserViewport').isVisible(),false,'no native webpage overlay on local Home');
+    assert.equal(await page.locator('#browserShare').isDisabled(),true);
+    assert.equal(await page.locator('#browserSiteIcon').getAttribute('draggable'),'false');
+    await page.locator('#browserAddress').fill('quantum paper');
+    await page.locator('#browserAddress').press('Enter');
+    assert.ok(await page.evaluate(()=>browserCommands.some(c=>c.action==='navigate'&&c.url==='https://www.google.com/search?q=quantum%20paper')));
+    assert.ok(await page.evaluate(()=>browserCommands.some(c=>c.action==='home')));
+    assert.equal(await page.evaluate(()=>browserCommands.some(c=>c.action==='navigate'&&c.url==='https://www.google.com/')),false,'Home never requests Google');
     console.log('Tabs: square edge-to-edge tabs in the webpage column only, independent sidebar, native viewport geometry, chrome actions, per-tab state and focus passed.');
     assert.deepEqual(errors,[]);
     console.log('Home layout: footer alignment, no vertical overflow, every favorite, and ordinary-page layout passed.');

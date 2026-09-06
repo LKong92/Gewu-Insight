@@ -41,8 +41,6 @@
 @property(nonatomic, copy) NSURLRequest *mainNavigationRequest;
 @property(nonatomic, strong) NSURL *failedURL;
 @property(nonatomic, copy) NSString *visitID;
-@property(nonatomic) BOOL homeZoomApplied;
-@property(nonatomic) double previousPageZoom;
 @property(nonatomic) BOOL ready;
 @property(nonatomic) BOOL terminated;
 @property(nonatomic) BOOL historyTraversal;
@@ -92,7 +90,6 @@
 @property(nonatomic, strong) GewuBrowserFavicons *favicons;
 @property(nonatomic, strong) NSView *suggestionsView;
 @property(nonatomic, copy) NSArray<NSDictionary *> *suggestionItems;
-@property(nonatomic) NSUInteger homeFitGeneration;
 @property(nonatomic, strong) GewuBrowserAutoFill *loginTrigger;
 @end
 
@@ -132,7 +129,8 @@
 }
 - (void)updatePageVisibility {
     GewuBrowserPage *presented = [self presentedPageForTab:self.selectedTab];
-    self.homePage.view.hidden = !self.visible || presented != self.homePage;
+    // Favorites is drawn by the trusted workspace, never by a remote webpage.
+    self.homePage.view.hidden = YES;
     self.contentPage.view.hidden = !self.visible || presented != self.contentPage;
 }
 - (void)returnToRetainedHomeInTab:(GewuBrowserTab *)tab {
@@ -150,24 +148,23 @@
     for (GewuBrowserTab *tab in self.tabs) {
         GewuBrowserPage *page = tab.currentPage;
         GewuBrowserPage *presented = [self presentedPageForTab:tab];
-        NSString *url = (tab.contentPendingFromHome ? presented.view.URL : (page.failedURL ?: page.view.URL ?: page.mainNavigationRequest.URL)).absoluteString ?: @"";
-        NSString *title = presented.view.title;
-        if (!title.length) title = GewuBrowserGoogleHome([NSURL URLWithString:url]) || !url.length ? @"Home" : [NSURL URLWithString:url].host ?: @"New Tab";
-        [items addObject:@{@"id":tab.identifier, @"title":title, @"url":url, @"loading":@(page.view.loading || (tab.contentPendingFromHome && !page.errorMessage.length))}];
+        BOOL home = presented == tab.homePage;
+        NSString *url = home ? @"" : (page.failedURL ?: page.view.URL ?: page.mainNavigationRequest.URL).absoluteString ?: @"";
+        NSString *title = home ? @"Favorites" : presented.view.title;
+        if (!title.length) title = [NSURL URLWithString:url].host ?: @"New Tab";
+        [items addObject:@{@"id":tab.identifier, @"title":title, @"url":url, @"home":@(home), @"loading":@(page.view.loading || (tab.contentPendingFromHome && !page.errorMessage.length))}];
     }
     [self emit:@{@"event":@"tabs", @"tabs":items, @"selected":self.selectedTab.identifier ?: @""}];
 }
 - (void)selectTab:(GewuBrowserTab *)tab {
     if (!tab || ![self.tabs containsObject:tab] || tab == self.selectedTab) return;
     [self.loginTrigger cancelPending];
-    self.homeFitGeneration++;
     NSRect previousFrame = [self presentedPageForTab:self.selectedTab].view.frame;
     // Tab switches do not stop loads, replay requests, or replace documents.
     self.homePage.view.hidden = YES; self.contentPage.view.hidden = YES;
     self.suggestionsView.hidden = YES;
     self.selectedTab = tab;
     self.webView = tab.currentPage.view;
-    if (!GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom];
     if (NSIsEmptyRect(self.webView.frame)) self.webView.frame = previousFrame;
     [self updatePageVisibility];
     [self.workspace.window makeFirstResponder:self.workspace];
@@ -277,9 +274,13 @@
     if (event.type != NSEventTypeKeyDown || !self.active || !self.visible || !self.canReturnToWorkspace
         || !self.workspace.window || event.window != self.workspace.window || self.workspace.window.attachedSheet) return NO;
     NSEventModifierFlags flags = event.modifierFlags;
+    // Input methods may expose a localized/full-width bracket instead of
+    // ASCII. Keep the physical left-bracket key usable with Chinese input,
+    // while also accepting '[' from layouts that put it on another key.
+    BOOL leftBracket = [event.charactersIgnoringModifiers isEqualToString:@"["] || event.keyCode == 33;
     if (!(flags & NSEventModifierFlagCommand)
         || (flags & (NSEventModifierFlagShift | NSEventModifierFlagOption | NSEventModifierFlagControl))
-        || ![event.charactersIgnoringModifiers isEqualToString:@"["]) return NO;
+        || !leftBracket) return NO;
     if (event.isARepeat) return YES;
     self.canReturnToWorkspace = NO;
     [self.workspace.window makeFirstResponder:self.workspace];
@@ -295,8 +296,9 @@
     if (!self.webView) return;
     BOOL pending = self.selectedTab.contentPendingFromHome;
     WKWebView *presented = [self presentedPageForTab:self.selectedTab].view;
-    [self emit:@{ @"event": @"state", @"url": (pending ? presented.URL : (self.currentPage.failedURL ?: self.webView.URL)).absoluteString ?: @"",
-        @"title": presented.title ?: @"", @"loading": @(self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
+    BOOL home = [self presentedPageForTab:self.selectedTab] == self.homePage;
+    [self emit:@{ @"event": @"state", @"url": home ? @"" : (self.currentPage.failedURL ?: self.webView.URL).absoluteString ?: @"",
+        @"home":@(home), @"title": home ? @"Favorites" : presented.title ?: @"", @"loading": @(self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
         @"progress": @(self.webView.estimatedProgress), @"canBack": @(self.session.index > 0),
         @"canForward": @(self.session.index + 1 < self.session.entries.count),
         @"tab_id":self.selectedTab.identifier ?: @"", @"error":self.currentPage.errorMessage ?: @"" }];
@@ -351,7 +353,6 @@
 - (void)activatePage:(GewuBrowserPage *)page {
     if (page == self.currentPage && !self.selectedTab.contentPendingFromHome) return;
     [self.loginTrigger cancelPending];
-    self.homeFitGeneration++;
     [self.webView stopLoading];
     self.homePage.view.hidden = YES; self.contentPage.view.hidden = YES;
     self.selectedTab.contentPendingFromHome = NO; self.selectedTab.pendingHomeNavigation = nil;
@@ -359,8 +360,7 @@
     NSRect previousFrame = self.webView.frame;
     self.currentPage = page;
     self.webView = page.view;
-    // A cached Home keeps its fitted dimensions until local chrome sends the
-    // next layout, avoiding an intermediate full-height Home and zoom flash.
+    // Retain surface geometry until local chrome sends the next layout.
     if (NSIsEmptyRect(self.webView.frame)) self.webView.frame = previousFrame;
     [self updatePageVisibility];
     [self emit:@{@"event":@"navigation-start"}];
@@ -372,20 +372,18 @@
     [self activatePage:self.homePage];
     if (record) [self.session recordSurface:self.homePage item:nil home:YES traversal:NO];
     [self emit:@{@"event":@"navigation-start"}];
-    // No request, reload, reconstructed HTML, or credential copying on a warm
-    // Home. Explicit Reload is separate. Cold/terminated pages load on demand.
-    if (!self.homePage.ready || self.homePage.terminated || !GewuBrowserGoogleHome(self.webView.URL)) {
-        if (!self.webView.loading) [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://www.google.com/"]]];
-    }
+    // The unloaded Home surface is only an in-memory navigation anchor. Local
+    // Favorites needs no Google document, network request or HTML snapshot.
+    self.homePage.ready = YES; self.homePage.terminated = NO;
+    self.homePage.failedURL = nil; self.homePage.errorMessage = nil;
     [self emitState];
 }
 
 - (void)openContentRequest:(NSURLRequest *)request {
     if (!self.contentPage) self.contentPage = [self makePage];
-    BOOL fromHome = self.selectedTab.contentPendingFromHome || (self.currentPage == self.homePage
-        && self.homePage.ready && GewuBrowserGoogleHome(self.homePage.view.URL));
+    BOOL fromHome = self.selectedTab.contentPendingFromHome || (self.currentPage == self.homePage && self.homePage.ready);
     if (fromHome) {
-        [self.loginTrigger cancelPending]; self.homeFitGeneration++;
+        [self.loginTrigger cancelPending];
         self.suggestionsView.hidden = YES;
         self.selectedTab.contentPendingFromHome = YES;
         self.currentPage = self.contentPage; self.webView = self.contentPage.view;
@@ -419,7 +417,6 @@
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
     if (object == self.webView) {
         if ([keyPath isEqualToString:@"URL"]) [self.loginTrigger cancelPending];
-        if ([keyPath isEqualToString:@"URL"] && !GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom];
         if ([keyPath isEqualToString:@"URL"]) {
             WKWebView *view = self.webView;
             // Same-document navigation (pushState/hash changes) has no commit
@@ -442,55 +439,6 @@
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 
-- (void)restorePageZoom {
-    self.homeFitGeneration++;
-    if (self.currentPage.homeZoomApplied) {
-        self.webView.pageZoom = self.currentPage.previousPageZoom;
-        [self.webView evaluateJavaScript:@"document.getElementById('gewu-insight-home-surface')?.remove()" completionHandler:nil];
-    }
-    self.currentPage.homeZoomApplied = NO;
-}
-
-- (void)fitHomeGeneration:(NSUInteger)generation attempts:(NSUInteger)attempts {
-    if (generation != self.homeFitGeneration || !self.visible || self.invalidated || self.webView.loading
-        || !GewuBrowserGoogleHome(self.webView.URL)) return;
-    // Hide only Home's secondary language/region/footer chrome. Return
-    // dimensions only: no form reads, input/scroll handlers or focus changes.
-    NSString *geometry = @"(() => { const u = new URL(location.href);"
-        "if (u.protocol !== 'https:' || !['google.com','www.google.com'].includes(u.hostname) || u.port || !['/','/webhp'].includes(u.pathname) || u.searchParams.has('q')) return null;"
-        "if (!document.getElementById('gewu-insight-home-surface')) {"
-        "const s = document.createElement('style'); s.id = 'gewu-insight-home-surface';"
-        "s.textContent = 'footer, #fbar, [role=contentinfo], #SIvCob, #gws-output-pages-elements-homepage_additional_languages__als { display: none !important; }';"
-        "document.head.appendChild(s); }"
-        "return {width:innerWidth,height:innerHeight,contentWidth:document.documentElement.scrollWidth,contentHeight:document.documentElement.scrollHeight}; })()";
-    [self.webView evaluateJavaScript:geometry completionHandler:^(id value, NSError *error) {
-        if (error || ![value isKindOfClass:NSDictionary.class] || generation != self.homeFitGeneration
-            || !self.visible || self.invalidated || self.webView.loading || !GewuBrowserGoogleHome(self.webView.URL)) return;
-        double zoom = GewuBrowserHomeFitZoom(self.webView.pageZoom, [value[@"width"] doubleValue], [value[@"height"] doubleValue],
-            [value[@"contentWidth"] doubleValue], [value[@"contentHeight"] doubleValue]);
-        if (fabs(zoom - self.webView.pageZoom) < .001) return;
-        self.webView.pageZoom = zoom;
-        if (attempts > 1) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            [self fitHomeGeneration:generation attempts:attempts - 1];
-        });
-    }];
-}
-
-- (void)scheduleHomeFit {
-    if (!self.visible || self.webView.loading || !GewuBrowserGoogleHome(self.webView.URL)) return;
-    if (!self.currentPage.homeZoomApplied) self.currentPage.previousPageZoom = self.webView.pageZoom;
-    self.currentPage.homeZoomApplied = YES;
-    NSUInteger generation = ++self.homeFitGeneration;
-    // Coalesce live window/sidebar resizing, then fit at most three times.
-    // Nothing polls in the background or runs on ordinary webpages.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-        if (generation != self.homeFitGeneration || self.invalidated || !self.visible || !GewuBrowserGoogleHome(self.webView.URL)) return;
-        self.webView.pageZoom = self.currentPage.previousPageZoom;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            [self fitHomeGeneration:generation attempts:3];
-        });
-    });
-}
 
 - (void)handleCommand:(NSDictionary *)command {
     NSString *action = [command[@"action"] isKindOfClass:NSString.class] ? command[@"action"] : @"";
@@ -517,7 +465,6 @@
         self.visible = shown;
         [self updatePageVisibility];
         if (!shown || resized) [self.loginTrigger cancelPending];
-        if (resized) [self scheduleHomeFit];
         if (!shown) self.suggestionsView.hidden = YES;
         if (!shown && [self.workspace.window.firstResponder isKindOfClass:NSView.class]
             && [(NSView *)self.workspace.window.firstResponder isDescendantOf:self.webView]) {
@@ -547,13 +494,14 @@
         NSString *value = command[@"url"];
         NSURL *url = [value isKindOfClass:NSString.class] ? [NSURL URLWithString:value] : nil;
         if (!GewuBrowserPublicURL(url)) { [self emit:@{ @"event": @"error", @"message": @"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser." }]; return; }
-        if ([url.absoluteString isEqualToString:@"https://www.google.com/"]) [self showHomeRecordingVisit:YES];
-        else [self openContentRequest:[NSURLRequest requestWithURL:url]];
+        [self openContentRequest:[NSURLRequest requestWithURL:url]];
     } else if ([action isEqualToString:@"back"]) { [self moveInSession:-1]; }
     else if ([action isEqualToString:@"forward"]) { [self moveInSession:1]; }
     else if ([action isEqualToString:@"reload"]) {
         self.currentPage.attemptedHTTPSRecovery = NO;
-        if (self.selectedTab.contentPendingFromHome) {
+        if (self.currentPage == self.homePage && !self.selectedTab.contentPendingFromHome) {
+            [self showHomeRecordingVisit:NO];
+        } else if (self.selectedTab.contentPendingFromHome) {
             // The reused view still owns the previous document before commit;
             // reload that pending request, not the old document's URL.
             self.selectedTab.pendingHomeNavigation = [self.webView loadRequest:self.currentPage.mainNavigationRequest];
@@ -561,7 +509,7 @@
         else [self.webView reload];
     }
     else if ([action isEqualToString:@"stop"]) { [self.webView stopLoading]; [self returnToRetainedHomeInTab:self.selectedTab]; }
-    else if ([action isEqualToString:@"focus"]) { [self.workspace.window makeFirstResponder:[self presentedPageForTab:self.selectedTab].view]; }
+    else if ([action isEqualToString:@"focus"]) { [self.workspace.window makeFirstResponder:[self presentedPageForTab:self.selectedTab] == self.homePage ? self.workspace : [self presentedPageForTab:self.selectedTab].view]; }
     else if ([action isEqualToString:@"suggestions"]) { [self showAddressSuggestions:command]; }
     else if ([action isEqualToString:@"editor"]) { [self presentEditor:command]; }
     else if ([action isEqualToString:@"confirm"]) { [self presentConfirmation:command]; }
@@ -577,6 +525,7 @@
         else [self emit:@{@"event":@"error", @"message":@"Use Passwords in macOS System Settings on this Mac. Gewu Insight does not read or store website passwords."}];
     }
     else if ([action isEqualToString:@"share"]) {
+        if ([self presentedPageForTab:self.selectedTab] == self.homePage) return;
         NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Page actions"];
         NSArray *titles = @[@"Add Bookmark", @"Copy Link", @"Save Download", @"Open in Safari"];
         for (NSInteger i = 0; i < titles.count; i++) {
@@ -600,6 +549,7 @@
             }];
         }
     } else if ([action isEqualToString:@"find"]) {
+        if ([self presentedPageForTab:self.selectedTab] == self.homePage) return;
         NSString *text = [command[@"text"] isKindOfClass:NSString.class] ? command[@"text"] : @"";
         if (text.length > 500) return;
         WKFindConfiguration *configuration = [[WKFindConfiguration alloc] init];
@@ -784,23 +734,9 @@
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     GewuBrowserPage *page = [self pageForView:webView];
     GewuBrowserTab *tab = [self tabForPage:page];
-    // Home stays on screen during a pending GET. A second explicit search or
-    // link replaces that request, without exposing the old content document.
-    if (tab == self.selectedTab && tab.contentPendingFromHome && page == tab.homePage
-        && action.targetFrame.isMainFrame && GewuBrowserPublicURL(action.request.URL)
-        && !GewuBrowserGoogleHome(action.request.URL) && GewuBrowserCanRetainHomeForRequest(action.request)
-        && (action.navigationType == WKNavigationTypeFormSubmitted || action.navigationType == WKNavigationTypeLinkActivated)) {
-        decisionHandler(WKNavigationActionPolicyCancel);
-        if (action.navigationType == WKNavigationTypeLinkActivated
-            && ((action.modifierFlags & NSEventModifierFlagCommand) || action.buttonNumber == 2)) {
-            GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
-            opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
-        } else {
-            [self openContentRequest:action.request];
-            self.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
-        }
-        return;
-    }
+    // The unloaded Home view is a navigation anchor only. All Favorites and
+    // address actions use the trusted workspace and a separate content view.
+    if (page && page == tab.homePage) { decisionHandler(WKNavigationActionPolicyCancel); return; }
     if (!page || (page != tab.currentPage && (action.targetFrame.isMainFrame || !action.targetFrame))) {
         decisionHandler(WKNavigationActionPolicyCancel); return;
     }
@@ -824,16 +760,6 @@
     // not replayed in the opener (including forms and window.opener flows).
     if (!action.targetFrame) { decisionHandler(WKNavigationActionPolicyAllow); return; }
     if (action.targetFrame.isMainFrame || !action.targetFrame) {
-        // Preserve the live Home document when following an ordinary GET
-        // search/link. Never intercept/reconstruct a POST or a streamed body.
-        if (webView == self.webView && self.currentPage == self.homePage && self.homePage.ready
-            && GewuBrowserGoogleHome(webView.URL) && !GewuBrowserGoogleHome(url)
-            && GewuBrowserCanRetainHomeForRequest(action.request)) {
-            decisionHandler(WKNavigationActionPolicyCancel);
-            [self openContentRequest:action.request];
-            self.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
-            return;
-        }
         page.mainNavigationRequest = action.request;
         page.navigationRequestedDownload = action.shouldPerformDownload || page.pendingRequestedDownload;
         page.pendingRequestedDownload = NO;
@@ -886,14 +812,14 @@
 }
 - (void)recordHistoryForPage:(GewuBrowserPage *)page {
     GewuBrowserTab *tab = [self tabForPage:page];
-    if (!tab || page != tab.currentPage || tab.contentPendingFromHome) return;
+    if (!tab || page != tab.currentPage || tab.contentPendingFromHome || page == tab.homePage) return;
     WKBackForwardList *list = page.view.backForwardList;
     NSMutableArray *items = [list.backList mutableCopy];
     [items addObjectsFromArray:list.forwardList];
     if (list.currentItem) [items addObject:list.currentItem];
     [tab.session pruneSurface:page validItems:items];
     [tab.session recordSurface:page item:list.currentItem
-        home:page == tab.homePage && GewuBrowserGoogleHome(page.view.URL)
+        home:NO
         traversal:page.historyTraversal];
     page.historyTraversal = NO;
     if (tab == self.selectedTab) [self emitState]; else [self emitTabs];
@@ -920,7 +846,7 @@
     GewuBrowserTab *tab = [self tabForPage:page];
     if (!page || page != tab.currentPage || tab.contentPendingFromHome) return;
     page.ready = YES; page.terminated = NO; page.attemptedHTTPSRecovery = NO;
-    if (webView == self.webView) { [self emitState]; [self scheduleHomeFit]; } else [self emitTabs];
+    if (webView == self.webView) { [self emitState]; } else [self emitTabs];
     NSURL *pageURL = webView.URL;
     if (GewuBrowserPublicURL(pageURL)) {
         [webView evaluateJavaScript:@"Array.from(document.querySelectorAll('link[rel]')).find(x => x.rel.toLowerCase().split(/\\s+/).includes('icon'))?.href || ''" completionHandler:^(id value, NSError *error) {
@@ -970,6 +896,7 @@
 }
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
     GewuBrowserPage *page = [self pageForView:webView];
+    if (page == [self tabForPage:page].homePage) return;
     page.terminated = YES; page.ready = NO;
     page.errorMessage = @"The webpage process stopped. Reload to continue; your bookmarks and history are safe.";
     if (webView != self.webView) { [self emitTabs]; return; }

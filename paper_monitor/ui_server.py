@@ -26932,11 +26932,11 @@ INDEX_HTML = """<!doctype html>
     .library-search-tools {
       display: none;
       position: fixed;
-      top: 3px;
+      top: 7px;
       right: 30px;
       z-index: 76;
       width: 292px;
-      height: 32px;
+      height: 26px;
       pointer-events: none;
       -webkit-app-region: no-drag;
     }
@@ -26947,7 +26947,7 @@ INDEX_HTML = """<!doctype html>
       right: 0;
       width: 34px;
       min-width: 34px;
-      height: 32px;
+      height: 26px;
       transition: width 160ms ease;
       pointer-events: auto;
       z-index: 1;
@@ -26956,10 +26956,10 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-icon {
       position: absolute;
-      left: 7px;
+      left: 8px;
       top: 50%;
-      width: 20px;
-      height: 20px;
+      width: 16px;
+      height: 16px;
       color: #667085;
       fill: none;
       stroke: currentColor;
@@ -26976,15 +26976,30 @@ INDEX_HTML = """<!doctype html>
       display: block;
       box-sizing: border-box;
       width: 100%;
-      height: 32px;
-      min-height: 32px;
-      padding-left: 30px;
-      padding-right: 34px;
+      height: 26px;
+      min-height: 26px;
+      margin: 0;
+      padding: 0 28px 0 30px;
+      border: 0;
+      border-bottom: 1px solid rgba(79, 104, 143, .24);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, .48);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 400;
+      line-height: 20px;
+      box-shadow: none;
+      outline: none;
       opacity: 0;
       cursor: pointer;
       transition: opacity 120ms ease;
       pointer-events: auto;
       -webkit-app-region: no-drag;
+    }
+    .library-search-wrap input::placeholder { color: #78869a; opacity: 1; }
+    .library-search-wrap input:focus {
+      border-bottom-color: var(--accent);
+      background: rgba(255, 255, 255, .72);
     }
     .library-search-wrap input[type="search"] {
       appearance: none;
@@ -27010,17 +27025,19 @@ INDEX_HTML = """<!doctype html>
     }
     .library-search-clear {
       position: absolute;
-      right: 5px;
+      right: 4px;
       top: 50%;
       transform: translateY(-50%);
-      width: 24px;
-      min-height: 24px;
+      width: 20px;
+      height: 20px;
+      min-height: 20px;
+      padding: 0;
       border: 0;
-      border-radius: 999px;
+      border-radius: 3px;
       background: transparent;
       color: #667085;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 14px;
       line-height: 1;
       display: none;
       z-index: 4;
@@ -42207,6 +42224,7 @@ INDEX_HTML = """<!doctype html>
       tools.classList.toggle("has-query", Boolean(query));
       tools.dataset.searchScope = scope;
       input.placeholder = surfaceSearchPlaceholder(scope);
+      input.setAttribute("aria-label", input.placeholder);
       if (document.activeElement !== input) input.value = query;
       clear.classList.toggle("open", Boolean(query));
       updateLibraryViewToggle();

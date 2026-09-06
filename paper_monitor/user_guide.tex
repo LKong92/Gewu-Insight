@@ -474,7 +474,7 @@ A Monitor result & Its discovery evidence, report, and available actions. & Addi
 
 Use the six top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Browser instead has a Bookmarks/History sidebar beside a native webpage. Progress messages appear in reserved status areas so the main layout remains stable.
 
-On macOS, double-click only a genuinely blank part of the title bar when you want to zoom or restore the window. Double-clicking an app tab, the Library search field, or another top control is treated as interaction with that control and does not change the window size.
+The compact, flat search control at the top right expands on hover or focus. Each research workspace retains its own query; clear it with ×. On macOS, double-click only blank title-bar space to zoom or restore the window. Tabs, search and other controls do not resize it.
 
 {\def\LTcaptype{none} % do not increment counter
 \GewuTableStart
@@ -2617,7 +2617,7 @@ Browser is the sixth main tab, after Author Monitor. Website links across Librar
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Browser layout example. Rendered from the current Browser interface code with public sample bookmarks. The native webpage area is a labeled illustration, not a live Google screenshot. Website controls and favicons depend on the loaded site; no private session or history is shown.
+Browser Home example. Rendered from the current interface code with public sample bookmarks and fallback initials. Home is local; the address field opens websites or searches Google. No private bookmarks, session or history is shown.
 \end{GewuCaption}
 
 \subsection{Search and navigate}\label{search-and-navigate}
@@ -2625,24 +2625,24 @@ Browser layout example. Rendered from the current Browser interface code with pu
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Open Browser.} On first use, the main tab opens Home: real Google above local Favorites, using Browser\textquotesingle s own session, not Safari\textquotesingle s. Later switches return to your selected webpage; use the Home button to return to Google. A paper link opens its destination directly in the unused first tab. Nothing is preloaded during App startup.
+  \textbf{Open Browser.} On first use, Home displays your local Favorites folder. Later switches return to your selected webpage; use Home to return to Favorites. A paper link opens its destination directly in the unused first tab. No Google webpage is loaded for Home.
 \item
   \textbf{Use the address field.} Enter a website address or search terms. Plain search terms go to Google; an address opens directly. Use {{\symbolfont ⌘}L} to focus the field.
 \item
-  \textbf{Navigate normally.} Back, Forward, Reload/Stop, and Home act on the selected webpage tab. Favorites appears only on Google Home; search results, sign-in pages, websites, and PDFs regain the full content height.
+  \textbf{Navigate normally.} Back, Forward, Reload/Stop, and Home act on the selected tab. Home uses the content area for Favorites; websites, search results, sign-in pages and PDFs use it for browsing.
 \item
   \textbf{Switch between workspaces.} Returning from Library or a Monitor preserves the current page and browsing position without reloading merely because the main tab changed.
 \end{enumerate}
 
-\textbf{Return to the source workspace: {{\symbolfont ⌘}{[}}.} After a website link in Library, My Publications, Journal Monitor, Subject Monitor, or Author Monitor brings you here, press Command-left bracket to return to that workspace\textquotesingle s retained selection and scroll position. It works from the webpage or address field and leaves Browser tabs open; it is not webpage Back. The source lasts for this Browser detour only: manually leaving Browser clears it, and entering Browser directly does not create one. Close any open dialog first.
+\textbf{Return to the source workspace: {{\symbolfont ⌘}{[}}.} After a website link in Library, My Publications, Journal Monitor, Subject Monitor, or Author Monitor brings you here, press Command-left bracket to return to that workspace\textquotesingle s retained selection and scroll position. The physical left-bracket key also works with a Chinese input method selected. It works from the webpage or address field and leaves Browser tabs open; it is not webpage Back. The source lasts for this Browser detour only: manually leaving Browser clears it, and entering Browser directly does not create one. Close any open dialog first.
 
-\textbf{Instant Home, online search.} Each tab lazily retains Home and a browsing view. Home returns without reloading; Reload refreshes it, including account state. App restart, interrupted loads and process termination need a connection. Search/sign-in remain online. Tabs share Browser\textquotesingle s persistent profile, without saved HTML/password copies or replayed forms.
+\textbf{Local Home, online search.} Favorites is available without loading Google, even after restarting the App. Home has no Google logo, search box or account controls; use the toolbar address field to search. Reload on Home refreshes local bookmarks, not a website. Site icons may need a connection; missing icons show initials. Webpages and sign-in remain online and share Browser\textquotesingle s existing profile.
 
 When you search or follow a link from Home, Home remains visible while the destination begins loading, then gives way to that destination. It should not flash the page you visited before Home. A cancelled or failed pending navigation leaves Home available rather than presenting that older page as the result.
 
 {{\symbolfont ⌘}F} opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native \textbf{Gewu Insight.app}; opening the local UI in a separate web browser does not embed another browser engine.
 
-\textbf{Favorites on Home.} Favorites/Favourites (including localized names) supplies the tiles; use \textbf{Create Favorites Folder} if missing. Open nested folders and return through breadcrumbs; use \textbf{Add Favorite} or right-click to edit. Google\textquotesingle s real logo/search/account controls remain; secondary language/region/footer links are hidden only on Home. Native zoom fits Google above the divider-free tiles. Other pages keep normal zoom/scrolling. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Bookmarks are not sent to Google.
+\textbf{Favorites on Home.} Favorites/Favourites (including localized names) supplies the tiles; use \textbf{Create Favorites Folder} if missing. Open nested folders and return through breadcrumbs; use \textbf{Add Favorite} or right-click to edit. The grid uses the whole main area, without a Google section or divider. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Opening google.com explicitly shows an ordinary webpage, without Home-specific styling or zoom. Bookmarks are not sent to Google.
 
 \subsection{Use multiple webpage tabs}\label{use-multiple-webpage-tabs}
 
@@ -3421,9 +3421,9 @@ The preferred Default and the protected physical primary file are not always the
 
 This is now the normal action for web links in all five research views, including publisher arrows, DOI/arXiv links, scholarly profiles, citation-source links, and links inside Note. Browser selects a new webpage tab, or reuses its unused first tab. Existing web pages stay open. Local PDF, Preview, Finder, download, and file-import actions are unchanged. Use Browser\textquotesingle s explicit \textbf{Open in Safari} only when you want the external browser.
 
-\section{Browser Home needs a connection or a website will not load}\label{browser-home-needs-a-connection-or-a-website-will-not-load}
+\section{Home works offline but a website will not load}\label{home-works-offline-but-a-website-will-not-load}
 
-A warm Home returns instantly from memory; it is not an offline copy of Google. First use after quitting, an explicit Reload, or a terminated WebKit process needs a connection. Search results and account actions always require the website. Read the actual load error, check the destination and Clash connection route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.
+Home displays local Favorites without a Google request. Missing site icons fall back to initials; they do not prevent opening Home. Search results and account actions require a connection. Read the load error, check the destination and Clash route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.
 
 \section{AutoFill does not appear or does not fill}\label{autofill-does-not-appear-or-does-not-fill}
 

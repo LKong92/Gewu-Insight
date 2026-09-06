@@ -74,8 +74,33 @@ int main(void) {
         EphemeralTabs *browser = [[EphemeralTabs alloc] initWithWorkspace:workspace];
         [browser.favicons invalidate]; browser.favicons = nil;
         browser.active = YES; browser.visible = YES;
-        [browser ensureWebView]; browser.webView.frame = workspace.frame; browser.webView.hidden = NO;
+        [browser ensureWebView];
+        browser.contentPage = [browser makePage];
+        [browser activatePage:browser.contentPage];
+        browser.webView.frame = workspace.frame;
         [window orderBack:nil];
+        // Dispatch actual AppKit key events through the installed local monitor,
+        // not just the controller method. Synthetic keys target this test window
+        // only; no global input events or real user credentials are involved.
+        __block NSInteger returns = 0;
+        browser.onEvent = ^(NSDictionary *event) {
+            if ([event[@"event"] isEqual:@"return-workspace"]) returns++;
+        };
+        for (NSString *characters in @[@"[", @"【", @"［"]) {
+            for (WKWebView *focus in @[workspace, browser.webView]) {
+                browser.canReturnToWorkspace = YES;
+                [window makeFirstResponder:focus];
+                NSInteger before = returns;
+                NSEvent *key = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint
+                    modifierFlags:NSEventModifierFlagCommand timestamp:0 windowNumber:window.windowNumber
+                    context:nil characters:characters charactersIgnoringModifiers:characters isARepeat:NO keyCode:33];
+                [NSApp sendEvent:key];
+                check(returns == before + 1, "AppKit monitor dispatches English/localized source-return key");
+                check(window.firstResponder == workspace && !browser.canReturnToWorkspace,
+                    "dispatched return restores workspace responder and consumes origin");
+            }
+        }
+        browser.onEvent = nil;
         WKWebView *start = browser.webView;
         GewuBrowserTab *first = browser.selectedTab;
         [start loadHTMLString:@"<!doctype html><title>Start fixture</title><input id=draft value=synthetic-draft><a id=open target=_blank href=https://example.org/target>Open test tab</a>" baseURL:[NSURL URLWithString:@"https://example.org/start-fixture"]];

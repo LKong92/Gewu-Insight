@@ -2288,7 +2288,8 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         )[0]
         self.assertIn("right: 30px;", search_tools_css)
         self.assertIn("width: 292px;", search_tools_css)
-        self.assertIn("height: 32px;", search_tools_css)
+        self.assertIn("height: 26px;", search_tools_css)
+        self.assertIn("top: 7px;", search_tools_css)
         self.assertNotIn('id="librarySearchCount"', html)
         self.assertNotIn("function surfaceSearchResultCount", html)
         self.assertNotIn("surfaceSearchResultCount", search_update)
@@ -2315,6 +2316,16 @@ class AuthorMonitorUiContractTests(unittest.TestCase):
         self.assertIn('input.focus({preventScroll: true})', html)
         self.assertIn("function searchInputCaretIndexFromPoint", html)
         self.assertIn("input.setSelectionRange?.(caret, caret)", html)
+
+    def test_top_search_is_compact_flat_and_keeps_an_accessible_focus_state(self):
+        html = ui_server.INDEX_HTML
+        field = html.split('.library-search-wrap input {', 1)[1].split('}', 1)[0]
+        for style in ['height: 26px;', 'min-height: 26px;', 'font-size: 13px;',
+                      'border: 0;', 'border-radius: 4px;', 'box-shadow: none;']:
+            self.assertIn(style, field)
+        focus = html.split('.library-search-wrap input:focus {', 1)[1].split('}', 1)[0]
+        self.assertIn('border-bottom-color: var(--accent);', focus)
+        self.assertIn('input.setAttribute("aria-label", input.placeholder)', html)
 
     def test_author_paper_card_content_is_vertically_centered_without_paint_clipping(self):
         html = ui_server.INDEX_HTML

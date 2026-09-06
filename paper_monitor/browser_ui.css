@@ -74,9 +74,9 @@
 #gewuBrowser .browser-context button { display: block; width: 100%; text-align: left; padding: 5px 9px; font-size: 12px; }
 .browser-page-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .browser-viewport { flex: 1; min-height: 0; background: #fff; overflow: hidden; }
-.browser-at-home .browser-viewport { flex: 1; }
-.browser-favorites { flex: 0 0 var(--browser-favorites-height, 332px); min-height: 0; overflow: hidden; background: #fff; border: 0; }
-.browser-favorites-inner { max-width: 1100px; margin: 0 auto; padding: 10px 24px 12px; }
+.browser-at-home .browser-viewport { display: none; }
+.browser-favorites { flex: 1; min-height: 0; overflow: hidden; background: #fff; border: 0; display: flex; align-items: center; }
+.browser-favorites-inner { width: 100%; max-width: 1100px; margin: 0 auto; padding: 24px; }
 .browser-favorites-grid { display: grid; grid-template-columns: repeat(var(--browser-favorites-columns, 8), minmax(0, 1fr)); grid-auto-rows: 98px; gap: 8px 12px; }
 #gewuBrowser .browser-favorite-tile { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 4px 3px; border-radius: 9px; }
 .browser-favorite-icon { display: grid; place-items: center; width: 52px; height: 52px; border: 1px solid #e5e9ef; border-radius: 12px; background: #fff; box-shadow: 0 2px 5px #23384b0a; color: #5e7fa1; }

@@ -25,6 +25,12 @@ Browser covers them. Native key handling works with either webpage or chrome
 focus, excludes other windows/modifiers/sheets, and emits only a trusted
 workspace return event. Remote websites receive no new bridge.
 
+The matcher accepts either the ASCII `[` character or the physical left-bracket
+key (macOS key code 33), so localized Chinese/full-width input does not need to
+be switched to English. Modifier, window, sheet and one-shot boundaries are
+unchanged. Real AppKit dispatch tests cover English/full-width brackets from
+both workspace and webpage focus; no global keystrokes are generated.
+
 The checkpoint is one-shot and memory-only. Navigation/new tabs inside Browser
 keep it; manually leaving Browser clears it. Direct Browser entry has no source
 checkpoint. A visible dialog must be dismissed before returning. This command

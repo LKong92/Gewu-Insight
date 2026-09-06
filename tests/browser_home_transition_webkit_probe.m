@@ -13,9 +13,8 @@ static BOOL spin(BOOL (^done)(void)) {
     return done();
 }
 static NSString *fixtureHTML(NSURL *url) {
-    BOOL home = GewuBrowserGoogleHome(url);
-    NSString *title = home ? @"Google fixture" : [url.path isEqual:@"/old"] ? @"Old article fixture" : @"New result fixture";
-    return [NSString stringWithFormat:@"<!doctype html><title>%@</title><body style='background:%@'><h1>%@</h1><form action='https://example.org/new'><input name=q value=synthetic><button>Search</button></form></body>", title, home ? @"white" : [url.path isEqual:@"/old"] ? @"red" : @"#cfe8ff", title];
+    NSString *title = [url.path isEqual:@"/old"] ? @"Old article fixture" : @"New result fixture";
+    return [NSString stringWithFormat:@"<!doctype html><title>%@</title><body style='background:%@'><h1>%@</h1><form action='https://example.org/new'><input name=q value=synthetic><button>Search</button></form></body>", title, [url.path isEqual:@"/old"] ? @"red" : @"#cfe8ff", title];
 }
 @interface FixtureDocuments : NSObject <WKURLSchemeHandler>
 @end
@@ -33,7 +32,6 @@ static NSString *fixtureHTML(NSURL *url) {
 @implementation FixtureHomeView
 - (WKNavigation *)loadRequest:(NSURLRequest *)request {
     self.requests++;
-    if (GewuBrowserGoogleHome(request.URL)) return [self loadHTMLString:fixtureHTML(request.URL) baseURL:request.URL];
     NSURLComponents *url = [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:NO];
     url.scheme = @"gewu-fixture";
     return [super loadRequest:[NSURLRequest requestWithURL:url.URL]];
@@ -65,7 +63,7 @@ static NSString *fixtureHTML(NSURL *url) {
         else decision(WKNavigationActionPolicyAllow);
         return;
     }
-    if (!(GewuBrowserGoogleHome(url) || ([url.host isEqual:@"example.org"] && [@[@"/old", @"/new"] containsObject:url.path]))) {
+    if (!(([url.host isEqual:@"example.org"] && [@[@"/old", @"/new"] containsObject:url.path]))) {
         decision(WKNavigationActionPolicyCancel); return;
     }
     [super webView:view decidePolicyForNavigationAction:action decisionHandler:^(WKNavigationActionPolicy policy) {
@@ -83,7 +81,7 @@ static NSString *fixtureHTML(NSURL *url) {
 - (void)webView:(WKWebView *)view didStartProvisionalNavigation:(WKNavigation *)navigation {
     [super webView:view didStartProvisionalNavigation:navigation];
     if (self.selectedTab.contentPendingFromHome)
-        self.provisionalKeptHome = !self.homePage.view.hidden && view.hidden;
+        self.provisionalKeptHome = self.homePage.view.hidden && view.hidden && [self presentedPageForTab:self.selectedTab] == self.homePage;
 }
 - (void)webView:(WKWebView *)view didCommitNavigation:(WKNavigation *)navigation {
     BOOL pending = self.selectedTab.contentPendingFromHome;
@@ -105,32 +103,32 @@ int main(void) {
         [browser.favicons invalidate]; browser.favicons = nil; browser.active = YES; browser.visible = YES;
         [window orderBack:nil];
         [browser handleCommand:@{@"action":@"home"}];
-        check(spin(^BOOL { return browser.homePage.ready && !browser.webView.loading; }), "generated Home loaded");
+        check(spin(^BOOL { return browser.homePage.ready && !browser.webView.loading; }), "local Home is ready without loading a document");
         FixtureHomeView *home = (id)browser.webView;
         [browser handleCommand:@{@"action":@"navigate", @"url":@"https://example.org/old"}];
         check(spin(^BOOL { return [browser.webView.title isEqual:@"Old article fixture"] && browser.currentPage.ready && !browser.webView.loading; }), "old article loaded and visible");
         FixtureHomeView *content = (id)browser.webView;
         [browser handleCommand:@{@"action":@"home"}];
-        check(!home.hidden && content.hidden && home.requests == 1, "Home reuses document without reload");
+        check(home.hidden && content.hidden && home.requests == 0, "local Home has no remote document or request");
         __block BOOL chromeStayedHome = YES;
         browser.onEvent = ^(NSDictionary *event) {
             if ([event[@"event"] isEqual:@"state"] && browser.selectedTab.contentPendingFromHome)
-                chromeStayedHome &= GewuBrowserGoogleHome([NSURL URLWithString:event[@"url"]]) && ![event[@"title"] isEqual:@"Old article fixture"];
+                chromeStayedHome &= [event[@"home"] boolValue] && [event[@"url"] isEqual:@""] && ![event[@"title"] isEqual:@"Old article fixture"];
         };
-        // Generated non-credential form, owned entirely by this fixture.
-        [home evaluateJavaScript:@"document.querySelector('form').requestSubmit()" completionHandler:nil];
+        // Address-bar navigation from local Favorites, with a delayed generated destination.
+        [browser handleCommand:@{@"action":@"navigate", @"url":@"https://example.org/new"}];
         check(spin(^BOOL { return browser.heldDecision != nil; }), "Home search enters native pending destination");
         check(browser.webView == content && browser.selectedTab.contentPendingFromHome, "logical destination retains original content surface");
-        check([content.title isEqual:@"Old article fixture"] && content.hidden && !home.hidden, "old document demonstrably exists but is not presented");
+        check([content.title isEqual:@"Old article fixture"] && content.hidden && home.hidden, "old document demonstrably exists but is not presented");
         [browser handleCommand:@{@"action":@"layout", @"active":@YES, @"visible":@YES, @"viewportWidth":@800, @"x":@0, @"y":@0, @"width":@800, @"height":@500}];
-        check(content.hidden && !home.hidden && chromeStayedHome, "layout and loading events cannot unhide old content");
+        check(content.hidden && home.hidden && chromeStayedHome, "layout and loading events cannot unhide old content");
         void (^release)(WKNavigationActionPolicy) = browser.heldDecision; browser.heldDecision = nil;
         release(WKNavigationActionPolicyAllow);
         check(spin(^BOOL { return [content.title isEqual:@"New result fixture"] && browser.currentPage.ready && !content.loading; }), "new generated result completes");
         check(browser.provisionalKeptHome && browser.commitRevealed, "Home survives provisional start and switches only at destination commit");
-        check(home.requests == 1 && content.requests == 2 && browser.tabs.count == 1, "no added Home reload, duplicate request or third surface");
+        check(home.requests == 0 && content.requests == 2 && browser.tabs.count == 1, "no added Home reload, duplicate request or third surface");
         [browser handleCommand:@{@"action":@"back"}];
-        check(browser.webView == home && !home.hidden && content.hidden, "Back restores Home");
+        check(browser.webView == home && home.hidden && content.hidden, "Back restores Home");
         [browser handleCommand:@{@"action":@"forward"}];
         check(browser.webView == content && !content.hidden && [content.title isEqual:@"New result fixture"] && content.requests == 2, "Forward restores new result without replay");
         browser.onEvent = nil;

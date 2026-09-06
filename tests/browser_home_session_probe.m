@@ -22,6 +22,7 @@ static void check(BOOL ok, NSString *label) {
 @property NSEventType type;
 @property NSEventModifierFlags modifierFlags;
 @property(copy) NSString *charactersIgnoringModifiers;
+@property unsigned short keyCode;
 @property(strong) id window;
 @property BOOL isARepeat;
 @end
@@ -62,6 +63,16 @@ static void workspaceReturnChecks(void) {
         check(workspace.window.firstResponder == workspace && !browser.canReturnToWorkspace, @"native focus returns to workspace once");
     }
     check(events == 2 && !browser.webView, @"return neither loads nor creates nor closes any webpage");
+    for (NSString *localized in @[@"【", @"［", @"「", @""]) {
+        key.keyCode = 33; key.charactersIgnoringModifiers = localized;
+        browser.canReturnToWorkspace = YES;
+        check([browser handleWorkspaceReturnKeyEvent:(id)key], @"physical bracket works with localized input methods");
+        check(!browser.canReturnToWorkspace, @"localized shortcut consumes the source exactly once");
+    }
+    browser.canReturnToWorkspace = YES; key.keyCode = 30; key.charactersIgnoringModifiers = @"】";
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"physical right bracket cannot return");
+    key.keyCode = 33; key.modifierFlags |= NSEventModifierFlagShift;
+    check(![browser handleWorkspaceReturnKeyEvent:(id)key], @"localized bracket retains modifier boundaries");
     browser.workspace = nil;
 }
 @interface FakeHistory : NSObject
@@ -142,8 +153,7 @@ static void commit(TestBrowser *browser, NSString *url) {
 static void presentationChecks(void) {
     TestBrowser *browser = [TestBrowser alloc]; browser.active = YES; browser.visible = YES;
     [browser handleCommand:@{@"action":@"home"}];
-    commit(browser, @"https://www.google.com/");
-    FakeSurface *home = (id)browser.webView; home.title = @"Google";
+    FakeSurface *home = (id)browser.webView;
     [browser openContentRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/old"]]];
     commit(browser, @"https://example.org/old");
     FakeSurface *old = (id)browser.webView; old.title = @"Old article";
@@ -154,8 +164,8 @@ static void presentationChecks(void) {
     browser.onEvent = ^(NSDictionary *event) { if ([event[@"event"] isEqual:@"state"]) state = event; };
     NSURLRequest *search = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://www.google.com/search?q=new"]];
     [browser openContentRequest:search];
-    check(!home.hidden && old.hidden && tab.contentPendingFromHome, @"Home search never reveals previous content while provisional");
-    check([state[@"url"] isEqual:@"https://www.google.com/"] && [state[@"title"] isEqual:@"Google"] && [state[@"loading"] boolValue], @"Home chrome stays stable with a working loading/stop indicator");
+    check(home.hidden && old.hidden && tab.contentPendingFromHome, @"Home search never reveals previous content while provisional");
+    check([state[@"home"] boolValue] && [state[@"url"] isEqual:@""] && [state[@"title"] isEqual:@"Favorites"] && [state[@"loading"] boolValue], @"local Home chrome stays stable with a working loading/stop indicator");
     [browser webView:(id)old didStartProvisionalNavigation:nil];
     [browser recordCurrentHistory];
     check(old.hidden && tab.session.entries.count == historyCount, @"start and old history cannot cause a stale-page flash or history entry");
@@ -165,15 +175,15 @@ static void presentationChecks(void) {
     GewuBrowserTab *other = browser.selectedTab;
     check(home.hidden && old.hidden, @"switch away hides both transition surfaces");
     [browser selectTab:tab];
-    check(!home.hidden && old.hidden, @"switch back keeps Home visible until destination commits");
+    check(home.hidden && old.hidden, @"switch back keeps Home visible until destination commits");
     [browser handleCommand:@{@"action":@"stop"}];
-    check(browser.webView == (id)home && !home.hidden && old.hidden && !tab.contentPendingFromHome, @"Stop restores retained Home without revealing old content");
+    check(browser.webView == (id)home && home.hidden && old.hidden && !tab.contentPendingFromHome, @"Stop restores retained Home without revealing old content");
     [browser openContentRequest:search];
     old.loading = NO;
     [browser navigationFailed:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorTimedOut userInfo:nil] inPage:tab.currentPage];
-    check(!home.hidden && old.hidden && [state[@"error"] length] && ![state[@"loading"] boolValue], @"failed provisional request keeps Home and displays an error, not old article");
+    check(home.hidden && old.hidden && [state[@"error"] length] && ![state[@"loading"] boolValue], @"failed provisional request keeps Home and displays an error, not old article");
     [browser handleCommand:@{@"action":@"home"}];
-    check(home.loads == 1, @"Home cancellation never reloads the retained document");
+    check(home.loads == 0, @"Home cancellation never loads a remote document");
     [browser openContentRequest:search];
     id staleNavigation = [NSObject new];
     id currentNavigation = [NSObject new];
@@ -186,7 +196,7 @@ static void presentationChecks(void) {
     check(home.hidden && !old.hidden && !tab.contentPendingFromHome, @"only destination commit reveals content");
     check(tab.session.entries.count == historyCount + 1, @"new destination adds exactly one history entry");
     [browser handleCommand:@{@"action":@"back"}];
-    check(browser.webView == (id)home && !home.hidden, @"Back from committed result restores Home");
+    check(browser.webView == (id)home && home.hidden, @"Back from committed result restores Home");
     [browser handleCommand:@{@"action":@"forward"}];
     check(browser.webView == (id)old && !old.hidden, @"Forward still reveals retained result without requests");
     [browser handleCommand:@{@"action":@"home"}];
@@ -194,6 +204,7 @@ static void presentationChecks(void) {
     FakeAction *action = [FakeAction new]; action.targetFrame = [FakeFrame new]; action.navigationType = WKNavigationTypeFormSubmitted;
     action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://www.google.com/search?q=replacement"]];
     __block WKNavigationActionPolicy policy;
+    [browser openContentRequest:action.request];
     [browser webView:(id)home decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { policy = p; }];
     check(policy == WKNavigationActionPolicyCancel && [old.URL isEqual:action.request.URL] && old.hidden, @"second Home search replaces pending request without showing prior page");
     [browser selectTab:other];
@@ -203,7 +214,7 @@ static void presentationChecks(void) {
     check(!old.hidden && home.hidden, @"completed background destination appears when selected");
     [browser handleCommand:@{@"action":@"home"}]; [browser openContentRequest:search];
     [browser returnToRetainedHomeInTab:tab];
-    check(!home.hidden && old.hidden && browser.webView == (id)home, @"download hand-off keeps Home rather than the old document");
+    check(home.hidden && old.hidden && browser.webView == (id)home, @"download hand-off keeps Home rather than the old document");
 }
 int main(void) {
     @autoreleasepool {
@@ -212,24 +223,25 @@ int main(void) {
         browser.session = [[GewuBrowserSession alloc] init]; browser.active = YES;
         [browser handleCommand:@{@"action":@"home"}];
         FakeSurface *home = (id)browser.webView;
-        check(home.loads == 1 && browser.surfaces == 1, @"first Home loads on demand only");
+        check(home.loads == 0 && browser.surfaces == 1 && !home.URL, @"first Home is local, with no Google load");
         [browser handleCommand:@{@"action":@"home"}];
-        check(home.loads == 1, @"repeated Home while loading does not restart the request");
-        commit(browser, @"https://www.google.com/");
+        check(home.loads == 0, @"repeated Home does not create a request");
         for (int i = 0; i < 10; i++) [browser handleCommand:@{@"action":@"home"}];
-        check(home.loads == 1 && home.reloads == 0 && browser.session.entries.count == 1, @"warm Home is request-free and does not duplicate history");
+        check(home.loads == 0 && home.reloads == 0 && browser.session.entries.count == 1, @"warm Home is request-free and does not duplicate history");
 
         FakeAction *action = [[FakeAction alloc] init]; action.targetFrame = [[FakeFrame alloc] init];
         action.navigationType = WKNavigationTypeFormSubmitted;
         action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://www.google.com/search?q=physics"]];
         __block WKNavigationActionPolicy policy = WKNavigationActionPolicyAllow;
         [browser webView:browser.webView decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy value) { policy = value; }];
+        check(policy == WKNavigationActionPolicyCancel && home.loads == 0, @"unloaded Home anchor rejects webpage navigation");
+        [browser handleCommand:@{@"action":@"navigate", @"url":action.request.URL.absoluteString}];
         FakeSurface *content = (id)browser.webView;
-        check(policy == WKNavigationActionPolicyCancel && content != home && content.loads == 1 && home.loads == 1, @"GET search leaves the retained Home intact");
+        check(content != home && content.loads == 1 && home.loads == 0, @"address-bar search opens content without loading Google Home");
         commit(browser, @"https://www.google.com/search?q=physics");
         check(browser.session.index == 1 && browser.surfaces == 2, @"Home and result share a bounded two-surface session");
         [browser handleCommand:@{@"action":@"back"}];
-        check(browser.webView == (id)home && home.loads == 1, @"Back from first search restores warm Home");
+        check(browser.webView == (id)home && home.loads == 0, @"Back from first search restores local Home");
         [browser handleCommand:@{@"action":@"forward"}];
         check(browser.webView == (id)content && content.loads == 1 && content.traversals == 0, @"Forward restores retained result without reloading");
         [browser handleCommand:@{@"action":@"home"}];
@@ -237,20 +249,22 @@ int main(void) {
         check(browser.webView == (id)content && content.loads == 1, @"Home button keeps the previous webpage accessible");
         [browser handleCommand:@{@"action":@"forward"}];
         [browser handleCommand:@{@"action":@"reload"}];
-        check(home.reloads == 1, @"explicit Reload remains a real refresh");
+        check(home.reloads == 0 && home.loads == 0, @"Home Reload cannot request Google");
+        [browser handleCommand:@{@"action":@"back"}];
+        [browser handleCommand:@{@"action":@"reload"}];
+        check(content.reloads == 1, @"ordinary webpage Reload remains a real refresh");
 
         NSMutableURLRequest *post = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://accounts.google.com/"]];
         post.HTTPMethod = @"POST"; action.request = post;
         [browser webView:browser.webView decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy value) { policy = value; }];
-        check(policy == WKNavigationActionPolicyAllow && browser.webView == (id)home, @"POST stays with WebKit; never replay form data in a different view");
+        check(policy == WKNavigationActionPolicyAllow && browser.webView == (id)content, @"POST stays with WebKit; never replay form data in a different view");
         post.HTTPMethod = @"GET"; post.HTTPBody = [@"synthetic" dataUsingEncoding:NSUTF8StringEncoding];
         check(!GewuBrowserCanRetainHomeForRequest(post), @"requests with a body are not transferred");
         post.HTTPBody = nil; post.HTTPBodyStream = [NSInputStream inputStreamWithData:NSData.data];
         check(!GewuBrowserCanRetainHomeForRequest(post), @"streams are not transferred");
         [browser webViewWebContentProcessDidTerminate:(id)home];
         [browser handleCommand:@{@"action":@"home"}];
-        check(home.loads == 2, @"a terminated Home reloads only on demand");
-        commit(browser, @"https://www.google.com/");
+        check(home.loads == 0 && browser.homePage.ready, @"local Home survives process termination without network");
         [browser handleCommand:@{@"action":@"navigate", @"url":@"https://example.org/"}];
         commit(browser, @"https://example.org/");
         NSInteger before = browser.session.index;
@@ -258,7 +272,7 @@ int main(void) {
         [browser webView:(id)home didCommitNavigation:nil];
         check(browser.webView == (id)content && browser.session.index == before, @"hidden Home callbacks cannot corrupt active history");
         [browser handleCommand:@{@"action":@"home"}];
-        check(home.loads == 2 && browser.surfaces == 2, @"subsequent Home still reuses the same two surfaces");
+        check(home.loads == 0 && browser.surfaces == 2, @"subsequent Home still reuses the same two surfaces");
 
         GewuBrowserTab *first = browser.selectedTab;
         NSInteger originalHistoryCount = first.session.entries.count;
@@ -270,7 +284,7 @@ int main(void) {
         commit(browser, @"https://example.net/article");
         check(second.session.entries.count == 1 && first.session.entries.count == originalHistoryCount, @"tabs own independent native history");
         [browser selectTab:first];
-        check(browser.webView == (id)home && home.loads == 2 && secondView.loads == 1, @"selecting tabs never reloads either document");
+        check(browser.webView == (id)home && home.loads == 0 && secondView.loads == 1, @"selecting tabs never reloads either document");
         __block NSDictionary *lastState;
         browser.onEvent = ^(NSDictionary *event) { if ([event[@"event"] isEqual:@"state"]) lastState = event; };
         [browser emitState];
@@ -293,10 +307,11 @@ int main(void) {
         check(browser.tabs.count == 1 && browser.selectedTab == first && browser.disposed == 1, @"close background tab frees its surfaces without disturbing selection");
 
         browser.visible = YES; home.loading = NO;
+        [browser activatePage:browser.contentPage];
         action.targetFrame = nil;
         action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/popup"]];
         WKWebViewConfiguration *configuration = (id)[[NSObject alloc] init];
-        WKWebView *popup = [browser webView:(id)home createWebViewWithConfiguration:configuration forNavigationAction:(id)action windowFeatures:nil];
+        WKWebView *popup = [browser webView:(id)content createWebViewWithConfiguration:configuration forNavigationAction:(id)action windowFeatures:nil];
         check(popup && browser.popupConfiguration == configuration && ((FakeSurface *)popup).loads == 0, @"popup returns supplied-configuration view; WebKit loads it, no GET/POST replay");
         check(browser.tabs.count == 2 && browser.selectedTab.currentPage.view == popup, @"target blank selects a tracked tab");
         [browser webViewDidClose:popup];
@@ -304,16 +319,16 @@ int main(void) {
         [browser webViewDidClose:(id)home];
         check(browser.tabs.count == 1, @"website cannot script-close user-created Home tab");
         action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"http://127.0.0.1:8765/"]];
-        check(![browser webView:(id)home createWebViewWithConfiguration:configuration forNavigationAction:(id)action windowFeatures:nil], @"popup cannot reach private workspace addresses");
+        check(![browser webView:(id)content createWebViewWithConfiguration:configuration forNavigationAction:(id)action windowFeatures:nil], @"popup cannot reach private workspace addresses");
         action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/linked.pdf"]];
         action.targetFrame = [[FakeFrame alloc] init]; action.navigationType = WKNavigationTypeLinkActivated;
         action.modifierFlags = NSEventModifierFlagCommand;
-        [browser webView:(id)home decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { policy=p; }];
+        [browser webView:(id)content decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { policy=p; }];
         check(policy == WKNavigationActionPolicyCancel && browser.tabs.count == 2 && browser.selectedTab != first, @"Command-click link opens another tab");
         [browser handleCommand:@{@"action":@"close-tab",@"tab_id":browser.selectedTab.identifier}];
         [browser handleCommand:@{@"action":@"close-tab",@"tab_id":first.identifier}];
         check(browser.tabs.count == 1 && browser.selectedTab != first && browser.currentPage == browser.homePage, @"closing final tab keeps Browser open with a new Home");
-        check(((FakeSurface *)browser.webView).loads == 1, @"replacement Home is loaded once, not duplicated");
+        check(((FakeSurface *)browser.webView).loads == 0, @"replacement Home creates no remote load");
         [browser handleCommand:@{@"action":@"select-tab",@"tab_id":first.identifier}];
         check(browser.selectedTab != first, @"stale closed-tab commands are ignored");
         while (browser.tabs.count < 32) [browser handleCommand:@{@"action":@"new-tab"}];

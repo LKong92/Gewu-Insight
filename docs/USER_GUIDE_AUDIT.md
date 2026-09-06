@@ -177,6 +177,64 @@ Password, research database, or benchmark operation was used to test the shortcu
 There was no commit or push. The native keyboard shortcut is not claimed active
 in the older running App process.
 
+## Compact search and localized shortcut follow-up
+
+The Guided Tour now explains the compact, flat top-right search field and
+per-workspace queries. Browser documents the physical left-bracket key under
+Chinese input methods. HTML, generated LaTeX, and the 78-page PDF are aligned;
+pages 11-13 and 55-58 were rendered and inspected with no clipping or unwanted
+extra tail page. The rebuilt original App's PDF matches the source (SHA-256
+`83f4cc2d145f6ea40a1fa95d55699fdc253f48c0d9a252c2b6a9a65d880ab8f8`).
+
+The pre-fix original App was already running the previous shortcut build
+(PID 30014, started 07:17 on 2026-09-06). An Author Monitor public article link
+and Command-left bracket reproduced the non-return; the selected input method
+was Chinese Pinyin. The ASCII-only matcher had no physical-key fallback. It now
+accepts that key without weakening modifier, sheet, window or source checks.
+The exact cause of that live failure and the final original-App outcome still
+require the user-approved restart/retest; the input-method fix alone is not
+presented as proof that the reported failure is resolved.
+
+All 714 final product tests pass (31.539 seconds), after updating the legacy
+Guided Tour phrase assertions to the equivalent compact wording. Isolated
+five-workspace DOM return checks and 25 real WebKit/
+AppKit checks pass. The latter include English and full-width bracket events
+dispatched through the installed monitor from both webpage and workspace focus.
+Search layout checks cover five surfaces, three widths and five font scales.
+The final six guide-audit tests and four PDF structure checks pass. No credential
+operation, direct research-data change, benchmark work, commit or push is part
+of this follow-up. The original App has been rebuilt but not restarted while
+the user's save-drafts confirmation is pending.
+
+## Favorites-only local Home follow-up
+
+The user's subsequent Home request supersedes the Google-Home descriptions and
+illustration in the earlier audit stages above. Home now renders the canonical
+Favorites folder in the entire local main column. It does not load a Google
+document, including on first use or after restarting; the address field retains
+Google search and local history completion. Reload on Home refreshes bookmarks.
+Favicons can still need bounded network requests and have local fallback initials.
+Explicit google.com navigation remains an ordinary webpage, with no Home-specific
+style injection or zoom. Existing password, profile and network behavior is unchanged.
+
+README, Browser instructions, troubleshooting, the public synthetic illustration,
+generated LaTeX and the 78-page PDF are synchronized. Revised PDF pages 55-58 and
+76 were rendered and inspected. Source and packaged PDF SHA-256 both equal
+`dcd7dbcd31892ff3df4b45ad2531d2cef2838316ec1e2d8a7cbc9db568ec91dc`.
+
+All 714 final product tests pass (32.228 seconds); an earlier run failed two
+obsolete Google-Home documentation assertions, which now guard the new behavior.
+The four PDF structure checks pass. The independent real WebKit fixtures pass
+12 Home-transition checks and 25 tab/shortcut checks, with zero live website or
+credential requests. The headless layout fixture covers four window sizes,
+complete Favorites paging, aligned footers, ordinary Google pages, address search,
+and local-Home chrome. Five-workspace retained-DOM return checks also pass.
+
+The original universal App is rebuilt and its signature verifies. Live relaunch
+and the reported source-return shortcut remain pending saved-drafts approval;
+the synthetic shortcut checks do not establish the original-App result. No
+credentials, direct formal database changes, benchmark work, commit or push.
+
 ## Keeping the next edition aligned
 
 For a future feature change, check the matching topic and its cross-links as

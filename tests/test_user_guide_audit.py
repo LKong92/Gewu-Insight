@@ -68,7 +68,10 @@ class GuideAuditTests(unittest.TestCase):
         backup = self.topic("backup-migrate")
         for phrase in ("outside this project", "Apple Passwords", "sign in again", "API keys", "memory-only"):
             self.assertIn(phrase, backup)
-        self.assertIn("not an offline copy of Google", self.topic("troubleshooting"))
+        self.assertIn("Home displays local Favorites without a Google request", self.topic("troubleshooting"))
+        self.assertIn("even after restarting the App", browser)
+        self.assertIn("Reload on Home refreshes local bookmarks", browser)
+        self.assertNotIn("Native zoom fits Google", browser)
         self.assertIn("not Browser's Clear History", self.topic("startup"))
         for hour in (ui_server.AUTO_JOURNAL_MONITOR_HOUR, ui_server.AUTO_SUBJECT_MONITOR_HOUR,
                      ui_server.AUTO_AUTHOR_MONITOR_HOUR):
@@ -77,8 +80,9 @@ class GuideAuditTests(unittest.TestCase):
     def test_browser_figure_is_honest_about_generated_content(self):
         figure = self.soup.find("article", id="browser").find("figure")
         caption = figure.find("figcaption").get_text(" ", strip=True)
-        self.assertIn("current Browser interface code", caption)
-        self.assertIn("not a live Google screenshot", caption)
+        self.assertIn("current interface code", caption)
+        self.assertIn("public sample bookmarks", caption)
+        self.assertIn("Home is local", caption)
         self.assertNotIn("earlier screenshot", caption)
         renderer = (ROOT / "scripts/render_browser_guide_example.cjs").read_text()
         self.assertIn("paper_monitor/browser_ui.css", renderer)

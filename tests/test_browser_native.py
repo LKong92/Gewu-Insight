@@ -29,31 +29,25 @@ class BrowserNativeNavigationTests(unittest.TestCase):
         self.assertIn('existing.get(tab.id)', renderer)
         self.assertNotIn('.focus(', renderer)
 
-    def test_home_only_hides_secondary_google_footer(self):
+    def test_home_is_local_and_never_loads_a_google_document(self):
         source = (ROOT / 'scripts/GewuBrowserController.m').read_text()
-        fit = source.split('- (void)fitHomeGeneration:', 1)[1].split('- (void)scheduleHomeFit', 1)[0]
-        self.assertIn('#SIvCob', fit)
-        self.assertIn('#fbar', fit)
-        self.assertIn('display: none !important', fit)
-        self.assertIn("u.searchParams.has('q')", fit)
-        self.assertNotIn('removeChild', fit)
+        home = source.split('- (void)showHomeRecordingVisit:', 1)[1].split('- (void)openContentRequest:', 1)[0]
+        self.assertNotIn('loadRequest:', home)
+        self.assertNotIn('loadHTMLString:', home)
+        self.assertIn('self.homePage.ready = YES', home)
+        self.assertIn('self.homePage.view.hidden = YES', source)
+        self.assertIn('@"home":@(home)', source)
 
-    def test_home_fit_is_bounded_geometry_only_and_restores_ordinary_pages(self):
+    def test_local_home_does_not_modify_remote_page_styles_or_zoom(self):
         source = (ROOT / "scripts/GewuBrowserController.m").read_text()
-        fit = source.split('- (void)fitHomeGeneration:', 1)[1].split('- (void)handleCommand:', 1)[0]
-        self.assertIn('document.documentElement.scrollHeight', fit)
-        self.assertIn('GewuBrowserGoogleHome(self.webView.URL)', fit)
-        self.assertIn('generation != self.homeFitGeneration', fit)
-        self.assertIn('attempts:3', fit)
-        self.assertNotIn('addEventListener', fit)
-        self.assertNotIn('setInterval', fit)
-        self.assertNotIn('makeFirstResponder', fit)
-        self.assertNotIn('querySelector', fit)
-        self.assertIn('[role=contentinfo]', fit)
-        self.assertIn("u.searchParams.has('q')", fit)
-        self.assertIn("gewu-insight-home-surface')?.remove()", source)
-        self.assertIn('self.webView.pageZoom = self.currentPage.previousPageZoom', source)
-        self.assertIn('!GewuBrowserGoogleHome(self.webView.URL)) [self restorePageZoom]', source)
+        self.assertNotIn('fitHomeGeneration', source)
+        self.assertNotIn('scheduleHomeFit', source)
+        self.assertNotIn('pageZoom', source)
+        self.assertNotIn('gewu-insight-home-surface', source)
+        self.assertNotIn('GewuBrowserGoogleHome', source)
+        ui = (ROOT / 'paper_monitor/browser_ui.js').read_text()
+        self.assertIn('updateHome(event.home === true)', ui)
+        self.assertIn('Home — Favorites', ui)
 
     def test_context_menu_keeps_system_insertion_target_in_remote_webview(self):
         native = (ROOT / "scripts/GewuBrowserController.m").read_text()

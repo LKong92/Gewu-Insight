@@ -60,19 +60,17 @@ still resolve to the same persistent paper object.
 </table>
 
 The sixth main tab, **Browser**, provides a visible native WebKit browser with
-the real Google homepage above a local Favorites folder grid, nested bookmarks,
-searchable local history, inline PDFs, and session-aware downloads. Home preserves
-Google's own search and account controls; other pages use the full browsing area.
-After its first load, Home is retained in memory and the Home button reuses it
-without reloading. Reload remains explicit. First use after quitting the App or
-losing the webpage process still needs a connection, as do searches and sign-in.
-This is session reuse, not a downloaded offline Google site or password copy.
-Home uses the fixed Favorites folder with nested navigation, no divider, and
-no vertical Favorites scrolling; excess tiles use Previous/Next controls.
-Only Google Home is fitted with native page zoom. Other webpages retain normal
-zoom and scrolling. Sidebar and page status bars share the same bottom height.
-Home hides Google's secondary language, region and footer links while retaining
-its real logo, search and account controls. A separate tab strip sits below the
+local Favorites-only Home, nested bookmarks, searchable local history, inline
+PDFs, and session-aware downloads. Home uses the entire main area for the fixed
+Favorites folder, without a Google webpage, separate search box or divider.
+Enter search terms in the address field to search Google, or enter a URL directly.
+Home is available offline, including after restarting the App; Reload on Home
+refreshes local bookmarks. Site icons can need network and otherwise show initials.
+Searches, webpages and sign-in still require a connection. Opening google.com
+explicitly displays an ordinary webpage, with no Home-specific styling or zoom.
+Nested Favorites use breadcrumbs; excess tiles use Previous/Next controls rather
+than vertical scrolling. Sidebar and page status bars share the same bottom height.
+A separate tab strip sits below the
 address toolbar. Use the top-right **New Tab** (+ / ⌘T), a tab's × (⌘W), or
 **Open Link in New Tab** in a webpage context menu. Command-click links also
 opens a tab; bookmarks, Favorites and History have **Open in New Tab** actions.
