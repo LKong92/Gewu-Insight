@@ -2772,11 +2772,33 @@ Use {{\symbolfont ↑}}/{{\symbolfont ↓}}, then Enter to open a result, or cli
 
 \subsection{Read PDFs and save downloads}\label{read-pdfs-and-save-downloads}
 
-Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or \textbf{Share \textgreater{} Save Download}; unsupported attachments use a save sheet. This uses Browser\textquotesingle s session, not Python\textquotesingle s downloader. For HTML viewers, use the site\textquotesingle s PDF link. Downloads create no Library paper or Gewu Key: \hyperref[import-files]{import explicitly}. Library PDFs still open in macOS Preview.
+Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or \textbf{Share \textgreater{} Save Download}; unsupported attachments use a save sheet. This uses Browser\textquotesingle s session, not Python\textquotesingle s downloader. For HTML viewers, use the site\textquotesingle s PDF link. Save Download writes an ordinary downloaded file. To connect an article and its PDF to your research library, use \textbf{Save to Gewu} below or \hyperref[import-files]{import the saved file}. Library PDFs still open in macOS Preview.
 
 \subsection{System networking and Clash rules}\label{system-networking-and-clash-rules}
 
 WebKit follows macOS networking without changing proxies/Clash. When system proxy or TUN routes traffic to Clash, its rules choose DIRECT/proxy. \textbf{System network} is policy, not proof of routing. DIRECT needs a school-recognized exit or institutional login. PDF/login/CDN domains match separately; browser-specific extensions/process rules are not inherited. Verify Clash connections; see \hyperref[network-access]{Publisher and Network Access}.
+
+\subsection{Save an article and PDF to Library}\label{browser-save-gewu}
+
+\textbf{Save to Gewu} in the Browser toolbar opens a review panel for the current article or PDF. It connects the browser discovery to the shared paper record, Gewu Key, Library placement and Paper Files.
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Open the article or PDF.} Follow \textbf{Open Website} from a research workspace, or find the article directly in Browser. Wait for the page to finish loading and click \textbf{Save to Gewu}.
+\item
+  \textbf{Review its identity.} Check the title, DOI and Gewu Key. An existing DOI or known arXiv identity reuses its paper record, including a record discovered only in a Monitor. A new article receives its own Key when saved. If needed, enter a DOI/arXiv ID and click \textbf{Identify}. Without an identifier, enter the article title and choose \textbf{Use this title}; metadata can be completed later.
+\item
+  \textbf{Choose the PDF.} A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click \textbf{Get PDF}, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
+\item
+  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. File type starts as \textbf{Unknown}; use the appropriate publication version or supplementary type when known. The file source is recorded as \textbf{User import}, with its website as source detail.
+\end{enumerate}
+
+Opening the panel, identifying an article or cancelling does not add a Library item. Save creates or reuses the article and selected placement; a selected PDF becomes a managed Paper Files resource. Exact duplicate files are reused, distinct versions remain peers, and a manual Default is preserved. After saving, return to Library to read, classify or analyze the article.
+
+\textbf{Source context is a hint.} A webpage opened from one paper can lead to another work. Gewu therefore checks the current article and PDF identity instead of automatically attaching every later PDF to the initial paper. If identification is unavailable, the panel may offer the original article for explicit confirmation. Conflicting identifiers block saving; open the correct PDF as its own page or choose its matching file.
+
+\textbf{If PDF retrieval fails:} retry after opening the site\textquotesingle s PDF, choose a downloaded local PDF, or save the article alone. A file-storage failure after the record was saved reports that partial result; retry reuses the existing record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site\textquotesingle s login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu\textquotesingle s built-in Browser; a Safari extension is not included.
 
 \subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
 

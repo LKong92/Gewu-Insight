@@ -39,10 +39,12 @@ MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
     "$SOURCE" \
     "$PROJECT_DIR/scripts/GewuBrowserController.m" \
     "$PROJECT_DIR/scripts/GewuBrowserAutoFill.m" \
+    "$PROJECT_DIR/scripts/GewuBrowserCapture.m" \
     "$PROJECT_DIR/scripts/GewuBrowserFavicons.m" \
     -o "$OUTPUT"
 
 chmod +x "$OUTPUT"
+cp "$PROJECT_DIR/scripts/GewuBrowserCaptureProbe.js" "$APP/Contents/Resources/GewuBrowserCaptureProbe.js"
 cp "$PROJECT_DIR/scripts/GewuBrowserLoginProbe.js" "$APP/Contents/Resources/GewuBrowserLoginProbe.js"
 cp "$PROJECT_DIR/scripts/GewuBrowserNavigationProbe.js" "$APP/Contents/Resources/GewuBrowserNavigationProbe.js"
 mkdir -p "$(dirname "$BRAND_ART_DEST")"

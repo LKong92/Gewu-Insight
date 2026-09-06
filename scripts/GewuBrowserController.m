@@ -3,6 +3,7 @@
 #import "GewuBrowserFavicons.h"
 #import "GewuBrowserSession.h"
 #import "GewuBrowserAutoFill.h"
+#import "GewuBrowserCapture.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 
@@ -42,6 +43,8 @@
 @property(nonatomic, copy) NSURLRequest *mainNavigationRequest;
 @property(nonatomic, strong) NSURL *failedURL;
 @property(nonatomic, copy) NSString *visitID;
+@property(nonatomic, copy) NSString *captureDocumentID;
+@property(nonatomic, copy) NSString *documentMIME;
 @property(nonatomic) BOOL ready;
 @property(nonatomic) BOOL terminated;
 @property(nonatomic) BOOL historyTraversal;
@@ -53,6 +56,8 @@
 
 @interface GewuBrowserTab : NSObject
 @property(nonatomic, copy) NSString *identifier;
+@property(nonatomic, copy) NSString *originPaperID;
+@property(nonatomic, copy) NSString *originURL;
 @property(nonatomic, strong) GewuBrowserPage *homePage;
 @property(nonatomic, strong) GewuBrowserPage *contentPage;
 @property(nonatomic, strong) GewuBrowserPage *currentPage;
@@ -98,6 +103,8 @@
 @property(nonatomic, strong) NSView *suggestionsView;
 @property(nonatomic, copy) NSArray<NSDictionary *> *suggestionItems;
 @property(nonatomic, strong) GewuBrowserAutoFill *loginTrigger;
+@property(nonatomic, strong) NSMutableDictionary *captureSnapshots;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, GewuBrowserCapture *> *captures;
 @end
 
 @implementation GewuBrowserController
@@ -523,8 +530,15 @@
         }
         return;
     }
+    if ([action isEqualToString:@"capture-cancel"]) {
+        [self.captures[command[@"token"] ?: @""] cancel];
+        [self.captures removeObjectForKey:command[@"token"] ?: @""];
+        [self.captureSnapshots removeObjectForKey:command[@"snapshot_id"] ?: @""]; return;
+    }
     if (!self.active) return;
     [self ensureWebView];
+    if ([action isEqualToString:@"capture"]) { [self capturePage:command]; return; }
+    if ([action isEqualToString:@"capture-download"]) { [self captureDownload:command]; return; }
     if ([action isEqualToString:@"new-tab"]) {
         NSString *value = [command[@"url"] isKindOfClass:NSString.class] ? command[@"url"] : nil;
         NSURL *url = value.length ? [NSURL URLWithString:value] : nil;
@@ -532,7 +546,9 @@
             [self emit:@{@"event":@"error", @"message":@"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser."}];
             return;
         }
-        [self addTabWithRequest:url ? [NSURLRequest requestWithURL:url] : nil configuration:nil];
+        GewuBrowserTab *tab = [self addTabWithRequest:url ? [NSURLRequest requestWithURL:url] : nil configuration:nil];
+        tab.originPaperID = [command[@"origin_paper_id"] isKindOfClass:NSString.class] ? command[@"origin_paper_id"] : nil;
+        tab.originURL = url.absoluteString;
         if (!url) [self emit:@{@"event":@"focus-address"}];
     } else if ([@[@"select-tab", @"close-tab"] containsObject:action]) {
         NSString *identifier = [command[@"tab_id"] isKindOfClass:NSString.class] ? command[@"tab_id"] : @"";
@@ -545,6 +561,8 @@
         NSString *value = command[@"url"];
         NSURL *url = [value isKindOfClass:NSString.class] ? [NSURL URLWithString:value] : nil;
         if (!GewuBrowserPublicURL(url)) { [self emit:@{ @"event": @"error", @"message": @"Use a public HTTP or HTTPS website. Local app and file addresses are not available in Browser." }]; return; }
+        self.selectedTab.originPaperID = [command[@"origin_paper_id"] isKindOfClass:NSString.class] ? command[@"origin_paper_id"] : nil;
+        self.selectedTab.originURL = url.absoluteString;
         [self openContentRequest:[NSURLRequest requestWithURL:url]];
     } else if ([action isEqualToString:@"back"]) { [self moveInSession:-1]; }
     else if ([action isEqualToString:@"forward"]) { [self moveInSession:1]; }
@@ -612,6 +630,64 @@
             [self emit:@{ @"event": @"find-result", @"found": @(result.matchFound) }];
         }];
     }
+}
+
+
+// Read only article metadata after the trusted toolbar command. Remote pages
+// have no message handler, capture token, local path or workspace API access.
+- (void)capturePage:(NSDictionary *)command {
+    NSString *requestID = [command[@"request_id"] isKindOfClass:NSString.class] ? command[@"request_id"] : @"";
+    GewuBrowserPage *page = self.currentPage;
+    GewuBrowserTab *tab = self.selectedTab;
+    NSURL *url = page.view.URL;
+    if (page == tab.homePage || page.view.loading || !GewuBrowserPublicURL(url)) {
+        [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"Wait for an article or PDF to finish loading, then try Save to Gewu again."}]; return;
+    }
+    NSString *generation = page.captureDocumentID ?: @"";
+    NSString *script = [NSString stringWithContentsOfURL:[NSBundle.mainBundle URLForResource:@"GewuBrowserCaptureProbe" withExtension:@"js"] encoding:NSUTF8StringEncoding error:nil];
+    if (!script.length) { [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"The article collector is missing. Rebuild Gewu Insight.app."}]; return; }
+    [page.view evaluateJavaScript:script inFrame:nil inContentWorld:[WKContentWorld worldWithName:@"GewuBrowserCapture"] completionHandler:^(id value, NSError *error) {
+        if (![self.tabs containsObject:tab] || ![page.view.URL isEqual:url] || ![(page.captureDocumentID ?: @"") isEqual:generation]) {
+            [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"The page changed during identification. Try Save to Gewu on the current article."}]; return;
+        }
+        NSMutableDictionary *snapshot = [value isKindOfClass:NSDictionary.class] ? [value mutableCopy] : [NSMutableDictionary dictionary];
+        BOOL pdf = [page.documentMIME.lowercaseString isEqual:@"application/pdf"] || [snapshot[@"is_pdf"] boolValue];
+        NSMutableArray *urls = [NSMutableArray array];
+        if (pdf) [urls addObject:url.absoluteString];
+        NSArray *candidates = [snapshot[@"pdf_urls"] isKindOfClass:NSArray.class] ? snapshot[@"pdf_urls"] : @[];
+        for (id candidate in candidates) {
+            if ([candidate isKindOfClass:NSString.class] && GewuBrowserPublicURL([NSURL URLWithString:candidate]) && ![urls containsObject:candidate]) [urls addObject:candidate];
+            if (urls.count >= 8) break;
+        }
+        NSString *key = NSUUID.UUID.UUIDString;
+        if (!self.captureSnapshots) self.captureSnapshots = [NSMutableDictionary dictionary];
+        // The UI has one review panel. Retain only its frozen source document.
+        [self.captureSnapshots removeAllObjects];
+        self.captureSnapshots[key] = @{@"page":page, @"url":url, @"generation":generation, @"urls":urls};
+        snapshot[@"url"] = url.absoluteString; snapshot[@"is_pdf"] = @(pdf); snapshot[@"pdf_urls"] = urls;
+        snapshot[@"snapshot_id"] = key; snapshot[@"tab_id"] = tab.identifier;
+        snapshot[@"origin_paper_id"] = tab.originPaperID ?: @""; snapshot[@"origin_url"] = tab.originURL ?: @"";
+        [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"snapshot":snapshot}];
+    }];
+}
+- (void)captureDownload:(NSDictionary *)command {
+    NSString *token = [command[@"token"] isKindOfClass:NSString.class] ? command[@"token"] : @"";
+    NSDictionary *snapshot = self.captureSnapshots[command[@"snapshot_id"] ?: @""];
+    GewuBrowserPage *page = snapshot[@"page"];
+    NSString *url = [command[@"url"] isKindOfClass:NSString.class] ? command[@"url"] : @"";
+    if (!page || ![self tabForPage:page] || ![page.view.URL isEqual:snapshot[@"url"]]
+        || ![(page.captureDocumentID ?: @"") isEqual:snapshot[@"generation"]] || ![snapshot[@"urls"] containsObject:url] || !token.length) {
+        [self emit:@{@"event":@"capture-pdf", @"token":token, @"error":@"The source page changed. Reopen Save to Gewu or choose a local PDF."}]; return;
+    }
+    if (!self.captures) self.captures = [NSMutableDictionary dictionary];
+    [self.captures[token] cancel];
+    GewuBrowserCapture *capture = [[GewuBrowserCapture alloc] init];
+    self.captures[token] = capture;
+    __weak typeof(self) weakSelf = self;
+    [capture downloadURL:[NSURL URLWithString:url] fromView:page.view workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:^(NSString *error) {
+        [weakSelf.captures removeObjectForKey:token];
+        [weakSelf emit:@{@"event":@"capture-pdf", @"token":token, @"error":error ?: @""}];
+    }];
 }
 
 - (void)showAddressSuggestions:(NSDictionary *)command {
@@ -872,7 +948,9 @@
         && ((action.modifierFlags & NSEventModifierFlagCommand) || action.buttonNumber == 2)
         && GewuBrowserCanRetainHomeForRequest(action.request)) {
         decisionHandler(WKNavigationActionPolicyCancel);
+        GewuBrowserTab *origin = [self tabForPage:page];
         GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
+        opened.originPaperID = origin.originPaperID; opened.originURL = origin.originURL;
         opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
         return;
     }
@@ -895,7 +973,9 @@
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)windowFeatures {
     if (webView != self.webView || !self.active || !self.visible || action.targetFrame
         || !(GewuBrowserPublicURL(action.request.URL) || [action.request.URL.absoluteString isEqualToString:@"about:blank"])) return nil;
+    GewuBrowserTab *origin = [self tabForPage:[self pageForView:webView]];
     GewuBrowserTab *tab = [self addTabWithRequest:action.request configuration:configuration];
+    tab.originPaperID = origin.originPaperID; tab.originURL = origin.originURL;
     tab.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
     return tab.currentPage.view;
 }
@@ -911,6 +991,7 @@
         decisionHandler(WKNavigationResponsePolicyAllow); return;
     }
     if (!GewuBrowserPublicURL(response.response.URL)) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
+    if (response.forMainFrame) page.documentMIME = response.response.MIMEType;
     decisionHandler(GewuBrowserResponsePolicy(response.response, response.canShowMIMEType,
         response.forMainFrame && page.navigationRequestedDownload));
 }
@@ -922,6 +1003,7 @@
     if (!page || page != tab.currentPage) return;
     if (tab.contentPendingFromHome && tab.pendingHomeNavigation && tab.pendingHomeNavigation != navigation) return;
     page.failedURL = nil; page.errorMessage = nil;
+    page.captureDocumentID = NSUUID.UUID.UUIDString; page.documentMIME = nil;
     if (!page.reloadNavigation || !page.visitID) page.visitID = NSUUID.UUID.UUIDString;
     page.reloadNavigation = NO;
     if (webView == self.webView) {
@@ -1131,6 +1213,8 @@
     if (self.keyMonitor) [NSEvent removeMonitor:self.keyMonitor];
     self.keyMonitor = nil;
     [self.favicons invalidate];
+    for (GewuBrowserCapture *capture in self.captures.allValues) [capture cancel];
+    [self.captures removeAllObjects]; [self.captureSnapshots removeAllObjects];
     [self.suggestionsView removeFromSuperview]; self.suggestionsView = nil; self.suggestionItems = nil;
     for (WKDownload *download in self.downloads.keyEnumerator.allObjects) [download cancel:nil];
     for (GewuBrowserTab *tab in self.tabs) {

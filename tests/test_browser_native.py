@@ -113,7 +113,7 @@ class BrowserNativeNavigationTests(unittest.TestCase):
                 "xcrun", "clang", "-fobjc-arc", "-framework", "Cocoa", "-framework", "WebKit",
                 "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-I", str(ROOT / "scripts"),
                 str(ROOT / "tests/browser_home_session_probe.m"), str(ROOT / "scripts/GewuBrowserFavicons.m"),
-                str(ROOT / "scripts/GewuBrowserAutoFill.m"),
+                str(ROOT / "scripts/GewuBrowserAutoFill.m"), str(ROOT / "scripts/GewuBrowserCapture.m"),
                 "-o", str(executable),
             ], capture_output=True, text=True, env=env, timeout=90)
             self.assertEqual(build.returncode, 0, build.stderr)

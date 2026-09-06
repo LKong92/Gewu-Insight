@@ -6,11 +6,15 @@
 	<dict>
 		<key>Resources/Gewu Insight User Guide.pdf</key>
 		<data>
-		lhUnhicNCPL8I3nROB62ng3z76E=
+		CQMQI7+UDIBcfd9RPN263uvs7Go=
 		</data>
 		<key>Resources/GewuAboutCalligraphy.png</key>
 		<data>
 		NB+m+kLcgT5HIohIHjxt627aRz0=
+		</data>
+		<key>Resources/GewuBrowserCaptureProbe.js</key>
+		<data>
+		8aNrMOfcUhpdPQsZbaKPC/gevTA=
 		</data>
 		<key>Resources/GewuBrowserLoginProbe.js</key>
 		<data>
@@ -112,7 +116,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			HkIsdNEzuTMUICAfCFfQ8+B6+orq9vx4U4u1brC4F0c=
+			Z2iChb/l9QrUxy5F7F2ws3YeoawOYskE94X8IubMJGw=
 			</data>
 		</dict>
 		<key>Resources/GewuAboutCalligraphy.png</key>
@@ -120,6 +124,13 @@
 			<key>hash2</key>
 			<data>
 			+2d60L3YWZaDd0aNtt+gIRLoFAbsZFnWj0G1L3/gwFk=
+			</data>
+		</dict>
+		<key>Resources/GewuBrowserCaptureProbe.js</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			LSSjWnkbsg6etBsdaS1TBCBZmfdUuFqjO0R4SBY19ks=
 			</data>
 		</dict>
 		<key>Resources/GewuBrowserLoginProbe.js</key>

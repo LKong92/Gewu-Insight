@@ -29,7 +29,7 @@ class WorkspaceWebLinkTests(unittest.TestCase):
         self.assertNotIn('openUrlExternally', INDEX_HTML)
         self.assertNotIn('Open publisher page in Safari', INDEX_HTML)
         for route in [
-            'openWebsite(paper.url)', 'openWebsite(paper.google_scholar_url)',
+            'openWebsite(paper.url, paper)', 'openWebsite(paper.google_scholar_url)',
             'openWebsite(author.url)', 'openWebsite(author.homepage_url)',
             'openWebsite(destination)', 'openLibraryWebsite(paper)',
             'openLibraryWebsiteURL(paper.google_scholar_url',
@@ -205,7 +205,7 @@ assert.deepEqual(calls,[paper.url,paper.google_scholar_url,paper.url,paper.googl
                 '-framework', 'WebKit', '-framework', 'ImageIO', '-framework', 'UniformTypeIdentifiers',
                 '-I', str(ROOT / 'scripts'), str(ROOT / 'tests/workspace_navigation_probe.m'),
                 str(ROOT / 'scripts/GewuBrowserController.m'), str(ROOT / 'scripts/GewuBrowserFavicons.m'),
-                str(ROOT / 'scripts/GewuBrowserAutoFill.m'), '-o', str(executable),
+                str(ROOT / 'scripts/GewuBrowserAutoFill.m'), str(ROOT / 'scripts/GewuBrowserCapture.m'), '-o', str(executable),
             ], capture_output=True, text=True, timeout=90,
                 env=dict(os.environ, CLANG_MODULE_CACHE_PATH=str(Path(directory) / 'modules')))
             self.assertEqual(build.returncode, 0, build.stderr)

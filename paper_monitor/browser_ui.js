@@ -134,6 +134,7 @@
         <input id="browserAddress" type="text" placeholder="Search Google or enter a website" aria-label="Search Google or enter a website" aria-autocomplete="both" aria-expanded="false" autocomplete="off" autocapitalize="off" spellcheck="false">
         <div id="browserProgress" class="browser-progress"></div>
       </form>
+      <button type="button" id="browserSaveGewu" class="browser-save-gewu" title="Save this article or PDF to Library" disabled>Save to Gewu</button>
       ${button("browserAddBookmark", "Add Bookmark (⌘D)", "bookmark")}
       ${button("browserPasswords", "Open Passwords", "key")}
       ${button("browserShare", "Share and page actions", "share")}
@@ -333,6 +334,185 @@
     renderFavorites();
     scheduleLayout();
   }
+  let capturePanel = null;
+  const captureFields = ["Unknown", "Published version", "Preprint", "Accepted manuscript", "Corrected published version", "Correction notice", "Supplementary material", "Peer review file", "Other"];
+  function closeCapture() {
+    const c = capturePanel;
+    if (!c || c.saving) return;
+    if (typeof closeLibraryAddMenus === "function") closeLibraryAddMenus();
+    capturePanel = null;
+    clearTimeout(c.timer);
+    native({action:"capture-cancel", token:c.review?.token || "", snapshot_id:c.snapshot?.snapshot_id || ""});
+    if (c.review?.token) api("capture_cancel", {token:c.review.token}).catch(() => {});
+    c.element.remove(); scheduleLayout(); $("browserSaveGewu").focus();
+  }
+  function captureStatus(c, text, error = false) {
+    c.element.querySelector(".capture-status").textContent = text;
+    c.element.querySelector(".capture-status").classList.toggle("error", error);
+  }
+  function captureBusy(c, busy, status = "") {
+    c.busy = busy;
+    if (busy && typeof closeLibraryAddMenus === "function") closeLibraryAddMenus();
+    for (const control of c.element.querySelectorAll("input,select,button")) control.disabled = busy;
+    c.element.querySelector('[data-capture="cancel"]').disabled = Boolean(c.saving);
+    c.element.querySelector('[data-capture="save"]').disabled = busy || !c.review?.can_save;
+    c.element.querySelector('[data-capture="download"]').disabled = busy || !c.review?.snapshot.pdf_urls.length;
+    c.element.querySelector('[data-capture="origin"]').hidden = !c.review?.origin || Boolean(c.review?.paper);
+    c.element.querySelector('[name="include_pdf"]').disabled = busy || !c.review?.pdf_ready;
+    if (status) captureStatus(c, status);
+  }
+  function renderCapture(c, review) {
+    c.review = review;
+    const q = s => c.element.querySelector(s), p = review.paper;
+    q(".capture-identity").textContent = p ? `${p.title}\n${p.existing ? "Existing article" : "New article"} · ${p.gewu_key}${p.doi ? "\nDOI: " + p.doi : ""}${p.journal ? "\n" + p.journal : ""}` : "Article not identified yet. Enter its DOI/arXiv ID, or confirm a title below.";
+    q('[name="identifier"]').value = review.identifier || "";
+    if (!q('[name="title"]').value) q('[name="title"]').value = review.suggested_title || "";
+    q(".capture-manual").hidden = Boolean(p);
+    const target = q('[name="folder_id"]');
+    const folder = review.folders.find(f => String(f.id) === target.value) || review.folders.find(f => f.id === 1);
+    target.value = String(folder?.id || 1);
+    q('[data-capture="folder"]').textContent = (folder?.title || "Library") + " ▸";
+    q('[data-capture="folder"]').title = folder?.title || "Library";
+    const urls = q('[name="pdf_url"]'), selected = urls.value;
+    urls.replaceChildren(...review.snapshot.pdf_urls.map(url => new Option(url, url)));
+    if ([...urls.options].some(o => o.value === selected)) urls.value = selected;
+    q('[name="include_pdf"]').checked = review.pdf_ready;
+    q(".capture-file").textContent = review.pdf_ready ? `Ready: ${review.pdf_name}` : "No PDF attached. You can save the article alone.";
+    if (review.origin) q('[data-capture="origin"]').textContent = `Use source article: ${review.origin.title} (${review.origin.gewu_key})`;
+    captureBusy(c, false);
+    captureStatus(c, review.conflict || review.warning || "Review the article, file type and Library folder, then save.", Boolean(review.conflict));
+  }
+  async function reviewCapture(c, options = c.identity || {}) {
+    if (capturePanel !== c) return;
+    c.identity = options;
+    c.review.can_save = false;
+    captureBusy(c, true, "Identifying the article…");
+    try {
+      const review = await api("capture_review", {token:c.review.token, ...options});
+      if (capturePanel === c) renderCapture(c, review);
+    } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
+  }
+  function downloadCapture(c) {
+    if (!c.review || capturePanel !== c) return;
+    captureBusy(c, true, "Retrieving PDF from this browser session…");
+    native({action:"capture-download", token:c.review.token, upload_token:c.review.upload_token,
+      snapshot_id:c.snapshot.snapshot_id, url:c.element.querySelector('[name="pdf_url"]').value});
+  }
+  function startCapture() {
+    if (capturePanel) return;
+    if (!bridge() || !data.url || data.home) { message("Open an article or PDF in Gewu Insight.app first.", true); return; }
+    closeContext(); closeSuggestions();
+    const element = document.createElement("div"); element.className = "browser-capture-overlay";
+    element.setAttribute("role", "dialog"); element.setAttribute("aria-modal", "true"); element.setAttribute("aria-labelledby", "browserCaptureTitle");
+    element.innerHTML = `<section class="browser-capture-panel" tabindex="-1">
+      <h2 id="browserCaptureTitle">Save to Gewu</h2><p class="capture-status" role="status">Reading article metadata…</p>
+      <div class="capture-identity"></div>
+      <label>DOI or arXiv ID<div class="capture-row"><input name="identifier" placeholder="10.… or 2601.01234"><button data-capture="lookup">Identify</button></div></label>
+      <div class="capture-manual"><label>Article title<input name="title" maxlength="1000" placeholder="Enter the article title"></label><button data-capture="manual">Use this title</button></div>
+      <button data-capture="origin" hidden></button>
+      <label>PDF link<div class="capture-row"><select name="pdf_url" aria-label="PDF link"></select><button data-capture="download">Get PDF</button></div></label>
+      <div class="capture-file"></div><label class="capture-local">Or choose a local PDF<input name="local_pdf" type="file" accept="application/pdf,.pdf"></label>
+      <label class="capture-check"><input name="include_pdf" type="checkbox"> Include this PDF in Paper Files</label>
+      <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="1"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
+      <footer><button data-capture="cancel">Cancel</button><button data-capture="save" class="capture-primary">Save to Library</button></footer>
+    </section>`;
+    const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
+    document.body.append(element); captureBusy(c, true); scheduleLayout();
+    element.querySelector('[data-capture="cancel"]').focus();
+    element.addEventListener("keydown", event => {
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (element.querySelector(".library-add-menu.open")) closeLibraryAddMenus();
+        else closeCapture();
+      }
+      if (event.key === "Tab") {
+        const focusable = [...element.querySelectorAll("button,input,select")].filter(x => !x.disabled && x.getClientRects().length);
+        const index = focusable.indexOf(document.activeElement);
+        if (event.shiftKey && index <= 0 || !event.shiftKey && index === focusable.length - 1) {
+          event.preventDefault(); focusable[event.shiftKey ? focusable.length - 1 : 0]?.focus();
+        }
+      }
+    });
+    element.onclick = async event => {
+      const action = event.target.closest("[data-capture]")?.dataset.capture;
+      if (action === "cancel") { closeCapture(); return; }
+      if (!action || c.busy || !c.review) return;
+      const q = name => element.querySelector(`[name="${name}"]`);
+      if (action === "lookup") return reviewCapture(c, {identifier:q("identifier").value});
+      if (action === "manual") return reviewCapture(c, {manual:true, title:q("title").value, identifier:q("identifier").value});
+      if (action === "origin") return reviewCapture(c, {use_origin:true});
+      if (action === "download") return downloadCapture(c);
+      if (action === "folder") {
+        if (typeof openLibraryAddMenu !== "function") { captureStatus(c, "The Library folder picker is unavailable. Reopen Gewu Insight.app.", true); return; }
+        event.preventDefault(); event.stopPropagation();
+        const control = element.querySelector(".capture-folder-control");
+        return openLibraryAddMenu(control, c.review.paper?.paper_id || "", control.querySelector('[data-capture="folder"]'), null, {
+          portalRoot:element, selectedFolderId:Number(q("folder_id").value),
+          onSelect:selection => {
+            if (capturePanel !== c) return;
+            q("folder_id").value = String(selection.folderId);
+            const button = element.querySelector('[data-capture="folder"]');
+            button.textContent = selection.path + " ▸"; button.title = selection.path;
+          }
+        });
+      }
+      if (action === "save") {
+        c.saving = true; captureBusy(c, true, "Saving to Library…");
+        try {
+          const result = await api("capture_save", {token:c.review.token, folder_id:Number(q("folder_id").value), file_type:q("file_type").value, include_pdf:q("include_pdf").checked});
+          if (!result.ok) throw new Error(result.error || "The article could not be saved.");
+          if (typeof state !== "undefined") state.libraryLoaded = false;
+          c.saving = false; closeCapture();
+          message(`Saved to Library · ${result.gewu_key}${result.pdf_saved ? result.duplicate_file ? " · Existing PDF reused" : " · PDF added to Paper Files" : " · Article only"}`);
+        } catch (error) { c.saving = false; captureBusy(c, false); captureStatus(c, error.message, true); }
+      }
+    };
+    element.querySelector('[name="identifier"]').oninput = () => {
+      if (c.review) c.review.can_save = false;
+      element.querySelector('[data-capture="save"]').disabled = true;
+      captureStatus(c, "Click Identify to review the changed identifier before saving.");
+    };
+    element.querySelector('[name="local_pdf"]').onchange = async event => {
+      const file = event.target.files[0];
+      if (!file || c.busy || !c.review) return;
+      if (!file.size || file.size > 64 * 1024 * 1024) { captureStatus(c, "Choose a PDF up to 64 MB.", true); return; }
+      captureBusy(c, true, "Checking the selected PDF…");
+      try {
+        const response = await fetch("/api/browser-capture-file", {method:"POST", headers:{"Content-Type":"application/pdf", "X-Gewu-Capture-Token":c.review.upload_token, "X-Gewu-Filename":encodeURIComponent(file.name)}, body:file});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Could not read the PDF.");
+        await reviewCapture(c);
+      } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
+      event.target.value = "";
+    };
+    c.timer = setTimeout(() => { if (capturePanel === c && !c.snapshot) { captureBusy(c, false); captureStatus(c, "The page did not respond. Close this panel and retry after it loads.", true); } }, 15000);
+    native({action:"capture", request_id:c.requestID});
+  }
+  async function captureEvent(event) {
+    const c = capturePanel;
+    if (!c) {
+      if (event.snapshot) native({action:"capture-cancel", snapshot_id:event.snapshot.snapshot_id});
+      return;
+    }
+    if (event.event === "capture-metadata") {
+      if (event.request_id !== c.requestID) return;
+      clearTimeout(c.timer);
+      if (event.error) { captureBusy(c, false); captureStatus(c, event.error, true); return; }
+      c.snapshot = event.snapshot;
+      try {
+        const review = await api("capture_begin", {snapshot:event.snapshot});
+        if (capturePanel !== c) { api("capture_cancel", {token:review.token}).catch(() => {}); return; }
+        renderCapture(c, review);
+        if (review.snapshot.is_pdf && review.snapshot.pdf_urls.length) downloadCapture(c);
+      } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
+    } else if (event.event === "capture-pdf" && event.token === c.review?.token) {
+      if (event.error) { captureBusy(c, false); captureStatus(c, event.error + " You can save the article alone or choose a local PDF.", true); }
+      else await reviewCapture(c);
+    }
+  }
+  $("browserSaveGewu").onclick = startCapture;
+
   function visibleDialog() {
     return [...document.querySelectorAll('[role="dialog"], dialog[open], .finder-drop-overlay')].some(element => {
       const style = getComputedStyle(element);
@@ -373,7 +553,7 @@
     if (typeof closeLibraryQuickLook === "function" && state.libraryQuickLookOpen) closeLibraryQuickLook();
     setPrimaryView("browser"); state.mode = "browser";
   }
-  function openURL(value) {
+  function openURL(value, context = {}) {
     // Product links are destinations, never address-bar search text. Native
     // navigation applies the stricter public-network policy before any load.
     const url = new URL(String(value || "").trim());
@@ -394,7 +574,7 @@
     data.opened = true;
     open();
     message("");
-    native({action:first ? "navigate" : "new-tab", url:url.href});
+    native({action:first ? "navigate" : "new-tab", url:url.href, ...(context.paper_id ? {origin_paper_id:context.paper_id} : {})});
     return "Browser";
   }
   function returnToWorkspace() {
@@ -482,6 +662,7 @@
   }
 
   global.gewuBrowserNativeEvent = event => {
+    if (event.event === "capture-metadata" || event.event === "capture-pdf") { captureEvent(event); return; }
     if (event.event === "bookmark-source-cancel") {
       data.sourceSync = null; data.sourceSyncBusy = false;
       if (event.message) message(event.message, true);
@@ -537,6 +718,7 @@
       if (switched || document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
       $("browserSiteIcon").href = data.url || "#";
       $("browserSiteIcon").draggable = Boolean(data.url);
+      $("browserSaveGewu").disabled = !data.url || data.home || event.loading;
       $("browserAddBookmark").disabled = !data.url;
       $("browserDownload").disabled = !data.url;
       $("browserExternal").disabled = !data.url;

@@ -726,6 +726,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
             return
         try:
+            if parsed.path == "/api/browser-capture-file":
+                self.handle_browser_capture_file()
+                return
             if parsed.path == "/api/browser":
                 if int(self.headers.get("Content-Length") or 0) > 15 * 1024 * 1024:
                     self.close_connection = True
@@ -5556,6 +5559,28 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         try:
             browser = BrowserStore(storage.conn)
             action = payload.get("action", "state")
+            if str(action).startswith("capture_"):
+                from .browser_capture import CAPTURES
+                if action == "capture_begin":
+                    capture = CAPTURES.begin(self.configured_db_path, payload.get("snapshot") or {})
+                    try:
+                        result = CAPTURES.review(capture, storage, {"resolve": False})
+                    except Exception:
+                        CAPTURES.cancel(self.configured_db_path, capture.token)
+                        raise
+                else:
+                    capture = CAPTURES.get(self.configured_db_path, payload.get("token", ""))
+                    if action == "capture_review":
+                        result = CAPTURES.review(capture, storage, payload)
+                    elif action == "capture_save":
+                        result = CAPTURES.save(capture, storage, payload)
+                    elif action == "capture_cancel":
+                        CAPTURES.cancel(self.configured_db_path, capture.token)
+                        result = {"ok": True}
+                    else:
+                        raise ValueError("Unknown capture action.")
+                self.send_json(result)
+                return
             result: dict[str, Any] = {"ok": True}
             if action == "preview_bookmark_source":
                 self.send_json({"ok":True, "folders":source_folders(source_tree(payload))})
@@ -5591,6 +5616,28 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
         finally:
             storage.close()
+
+    def handle_browser_capture_file(self) -> None:
+        from .browser_capture import CAPTURES, MAX_PDF_BYTES
+        try:
+            # Native uploads have no Origin; normal web uploads must still be
+            # same-origin (checked by do_POST). Neither can upload without the
+            # short-lived token created by the privileged Browser API.
+            capture = CAPTURES.get(self.configured_db_path,
+                                   self.headers.get("X-Gewu-Capture-Token", ""), upload=True)
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 < length <= MAX_PDF_BYTES:
+                self.close_connection = True
+                self.send_error_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Choose a PDF up to 64 MB.")
+                return
+            content = self.rfile.read(length)
+            if len(content) != length:
+                raise ValueError("PDF upload was interrupted. Retry the capture.")
+            CAPTURES.upload(capture, content, unquote(self.headers.get("X-Gewu-Filename", "Article.pdf")))
+            self.send_json({"ok": True})
+        except (ValueError, TypeError) as exc:
+            self.close_connection = True
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
 
     def send_text(self, text: str, *, content_type: str) -> None:
         data = text.encode("utf-8")
@@ -37985,6 +38032,8 @@ INDEX_HTML = """<!doctype html>
         delete menu.dataset.anchorTop;
         delete menu.dataset.anchorBottom;
         ownerButton?.setAttribute("aria-expanded", "false");
+        if (menu._libraryAddRestoreFocus) ownerButton?.focus({preventScroll: true});
+        menu._libraryAddRestoreFocus = false;
         if (home?.isConnected) {
           home.appendChild(menu);
         } else if (menu.dataset.libraryAddPortal === "1") {
@@ -38078,7 +38127,7 @@ INDEX_HTML = """<!doctype html>
       return [rootLabel, ...parts.reverse()].join(" / ");
     }
 
-    function renderLibraryAddMenu(menu, paperId, article, workspaceRootId = 0, pathIds = [], selectedFolderId = 0) {
+    function renderLibraryAddMenu(menu, paperId, article, workspaceRootId = 0, pathIds = [], selectedFolderId = 0, options = {}) {
       const mainRootId = Number(state.libraryRootId || 1);
       const workspaces = libraryAddWorkspaceRoots();
       const rootId = Number(workspaceRootId || mainRootId);
@@ -38150,7 +38199,7 @@ INDEX_HTML = """<!doctype html>
           const nextRootId = Number(button.dataset.workspaceRootId || 0);
           if (!nextRootId) return;
           const nextSelectedId = nextRootId === mainRootId ? Number(unsortedId || nextRootId) : nextRootId;
-          renderLibraryAddMenu(menu, paperId, article, nextRootId, [], nextSelectedId);
+          renderLibraryAddMenu(menu, paperId, article, nextRootId, [], nextSelectedId, options);
           positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
         });
       });
@@ -38162,7 +38211,7 @@ INDEX_HTML = """<!doctype html>
           const depth = Number(button.dataset.depth || 0);
           const nextPath = pathIds.slice(0, depth);
           if (folderId && libraryAddFolderHasChildren(folderId)) nextPath[depth] = folderId;
-          renderLibraryAddMenu(menu, paperId, article, rootId, nextPath, folderId);
+          renderLibraryAddMenu(menu, paperId, article, rootId, nextPath, folderId, options);
           positionLibraryAddMenu(menu, article.querySelector('[data-action="add-library"]'));
         });
       });
@@ -38176,7 +38225,11 @@ INDEX_HTML = """<!doctype html>
         event.stopPropagation();
         if (!selectedId) return;
         closeLibraryAddMenus();
-        addPaperToLibrary(article, paperId, {folderId: selectedId});
+        if (typeof options.onSelect === "function") {
+          options.onSelect({folderId: selectedId, path: selectedPath, workspaceRootId: rootId});
+        } else {
+          addPaperToLibrary(article, paperId, {folderId: selectedId});
+        }
       });
     }
 
@@ -38228,7 +38281,7 @@ INDEX_HTML = """<!doctype html>
       menu.style.top = `${Math.round(Math.max(margin, Math.min(top, window.innerHeight - maxHeight - margin)))}px`;
     }
 
-    async function openLibraryAddMenu(article, paperId, button, anchor = null) {
+    async function openLibraryAddMenu(article, paperId, button, anchor = null, options = {}) {
       if (button?.disabled) return;
       const menu = button._libraryAddMenu
         || article.querySelector('[data-role="library-add-menu"]');
@@ -38242,7 +38295,8 @@ INDEX_HTML = """<!doctype html>
       menu._libraryAddButton = button;
       button._libraryAddMenu = menu;
       menu.dataset.libraryAddPortal = "1";
-      document.body.appendChild(menu);
+      (options.portalRoot || document.body).appendChild(menu);
+      menu._libraryAddRestoreFocus = Boolean(options.onSelect);
       menu.innerHTML = `<div class="library-add-menu-status">Loading folders...</div>`;
       menu.classList.add("open");
       menu.setAttribute("aria-hidden", "false");
@@ -38250,7 +38304,21 @@ INDEX_HTML = """<!doctype html>
       positionLibraryAddMenu(menu, button, anchor);
       try {
         await ensureLibrarySnapshotForAddMenu();
-        renderLibraryAddMenu(menu, paperId, article, Number(state.libraryRootId || 1), [], libraryUnsortedFolderId());
+        if (!menu.isConnected || !menu.classList.contains("open")) return;
+        let rootId = Number(state.libraryRootId || 1);
+        let selectedId = Number(options.selectedFolderId || libraryUnsortedFolderId());
+        const selectedFolder = libraryFolderById(selectedId);
+        if (!libraryAddFolderCanTarget(selectedFolder)) selectedId = Number(libraryUnsortedFolderId() || rootId);
+        const workspace = libraryAddWorkspaceRoots().find(item => libraryFolderIsWithin(selectedId, Number(item.root_folder_id)));
+        rootId = Number(workspace?.root_folder_id || rootId);
+        const path = [];
+        let current = libraryFolderById(selectedId);
+        if (current && !libraryAddFolderHasChildren(selectedId)) current = libraryFolderById(current.parent_id);
+        const seen = new Set();
+        while (current && Number(current.id) !== rootId && !seen.has(Number(current.id))) {
+          seen.add(Number(current.id)); path.unshift(Number(current.id)); current = libraryFolderById(current.parent_id);
+        }
+        renderLibraryAddMenu(menu, paperId, article, rootId, path, selectedId, options);
         positionLibraryAddMenu(menu, button);
       } catch (error) {
         menu.innerHTML = `<div class="library-add-menu-status">${escapeHtml(error.message || "Could not load folders")}</div>`;
@@ -51996,7 +52064,7 @@ INDEX_HTML = """<!doctype html>
       `;
       root.querySelector('[data-action="author-preview-pdf"]')?.addEventListener("click", () => openLibraryPdfInPreview(paper));
       root.querySelector('[data-action="author-download-pdf"]')?.addEventListener("click", () => downloadAuthorMonitorPdf(paper));
-      root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openWebsite(paper.url));
+      root.querySelector('[data-action="author-open-page"]')?.addEventListener("click", () => openWebsite(paper.url, paper));
       root.querySelector('[data-action="author-open-scholar"]')?.addEventListener("click", () => openWebsite(paper.google_scholar_url));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
@@ -53359,7 +53427,7 @@ INDEX_HTML = """<!doctype html>
         </div>
       `;
       const openPageButton = article.querySelector('[data-action="open-page"]');
-      if (openPageButton) openPageButton.addEventListener("click", () => openWebsite(paper.url));
+      if (openPageButton) openPageButton.addEventListener("click", () => openWebsite(paper.url, paper));
       article.addEventListener("click", () => {
         if (["report", "theme"].includes(state.mode)) {
           state.primaryKeyboardLayer = "content";
@@ -53586,12 +53654,12 @@ INDEX_HTML = """<!doctype html>
       openWebsite(url);
     }
 
-    function openWebsite(url) {
+    function openWebsite(url, paper = null) {
       if (!url) return;
       try {
         if (state.websiteLinkBrowser === "system") return openSystemWebsite(url);
         if (!window.gewuBrowser?.openURL) throw new Error("Browser is not ready. Please retry.");
-        return window.gewuBrowser.openURL(url);
+        return window.gewuBrowser.openURL(url, {paper_id:paper?.paper_id || ""});
       } catch (error) {
         showMonitorStatusMessage(error.message || "Could not open website");
         return null;
@@ -53635,10 +53703,10 @@ INDEX_HTML = """<!doctype html>
 
     async function openLibraryWebsite(paper) {
       if (!paper?.url) return;
-      await openLibraryWebsiteURL(paper.url);
+      await openLibraryWebsiteURL(paper.url, paper);
     }
 
-    async function openLibraryWebsiteURL(url) {
+    async function openLibraryWebsiteURL(url, paper = null) {
       if (!url) return;
       const status = $("libraryDetailStatus");
       if (status) {
@@ -53646,7 +53714,7 @@ INDEX_HTML = """<!doctype html>
         status.className = "library-detail-status";
       }
       try {
-        const destination = await openWebsite(url);
+        const destination = await openWebsite(url, paper);
         if (!destination) throw new Error("Could not open website");
         if (status) {
           status.textContent = `Opening in ${destination}...`;
