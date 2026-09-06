@@ -741,6 +741,11 @@
         decisionHandler(WKNavigationActionPolicyCancel); return;
     }
     NSURL *url = action.request.URL;
+    // Challenge widgets and ordinary embeds use local child documents. Leave
+    // their origin/sandbox rules to WebKit; never expose the trusted workspace.
+    if (action.targetFrame && !action.targetFrame.isMainFrame && GewuBrowserInternalFrameURL(url)) {
+        decisionHandler(WKNavigationActionPolicyAllow); return;
+    }
     if ([url.absoluteString isEqualToString:@"about:blank"] && (!action.targetFrame.isMainFrame || page.allowsInitialBlank)) { decisionHandler(WKNavigationActionPolicyAllow); return; }
     if (!GewuBrowserPublicURL(url)) {
         BOOL wasActive = webView == self.webView;
@@ -785,9 +790,12 @@
 }
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)response decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
-    if (!GewuBrowserPublicURL(response.response.URL)) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
     GewuBrowserPage *page = [self pageForView:webView];
-    if (!page) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
+    if (!page || page == [self tabForPage:page].homePage) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
+    if (!response.forMainFrame && response.canShowMIMEType && GewuBrowserInternalFrameURL(response.response.URL)) {
+        decisionHandler(WKNavigationResponsePolicyAllow); return;
+    }
+    if (!GewuBrowserPublicURL(response.response.URL)) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
     decisionHandler(GewuBrowserResponsePolicy(response.response, response.canShowMIMEType,
         response.forMainFrame && page.navigationRequestedDownload));
 }

@@ -123,6 +123,18 @@ static void workspaceReturnChecks(void) {
 @end
 @implementation FakeAction
 @end
+@interface FakeChildFrame : FakeFrame
+@end
+@implementation FakeChildFrame
+- (BOOL)isMainFrame { return NO; }
+@end
+@interface FakeNavigationResponse : NSObject
+@property(strong) NSURLResponse *response;
+@property(getter=isForMainFrame) BOOL forMainFrame;
+@property BOOL canShowMIMEType;
+@end
+@implementation FakeNavigationResponse
+@end
 @interface TestBrowser : GewuBrowserController
 @property NSInteger surfaces;
 @property NSInteger disposed;
@@ -149,6 +161,64 @@ static void commit(TestBrowser *browser, NSString *url) {
     view.URL = [NSURL URLWithString:url]; view.loading = NO;
     [browser webView:browser.webView didCommitNavigation:nil];
     browser.currentPage.ready = YES;
+}
+static void internalFrameChecks(void) {
+    TestBrowser *browser = [TestBrowser alloc]; browser.active = YES; browser.visible = YES;
+    [browser handleCommand:@{@"action":@"navigate", @"url":@"https://example.org/document"}];
+    GewuBrowserPage *content = browser.currentPage;
+    NSURLRequest *originalRequest = content.mainNavigationRequest;
+    FakeAction *action = [FakeAction new]; action.navigationType = WKNavigationTypeOther;
+    FakeNavigationResponse *response = [FakeNavigationResponse new]; response.canShowMIMEType = YES;
+    for (NSString *url in @[@"about:blank", @"about:srcdoc", @"https://challenges.cloudflare.com/"]) {
+        action.targetFrame = [FakeChildFrame new];
+        action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:url]];
+        __block WKNavigationActionPolicy decision;
+        [browser webView:content.view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { decision = p; }];
+        check(decision == WKNavigationActionPolicyAllow, @"internal documents and public challenge hosts load as subframes");
+        response.response = [[NSURLResponse alloc] initWithURL:action.request.URL MIMEType:@"text/html" expectedContentLength:0 textEncodingName:@"utf-8"];
+        response.forMainFrame = NO;
+        __block WKNavigationResponsePolicy result;
+        [browser webView:content.view decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+        check(result == WKNavigationResponsePolicyAllow, @"internal child response is not rejected after its action was allowed");
+        check(content.mainNavigationRequest == originalRequest && browser.tabs.count == 1, @"subframe callbacks do not change main navigation or create tabs");
+    }
+    for (NSString *url in @[@"about:config", @"about:srcdoc?file=/tmp/a", @"file:///tmp/a", @"data:text/html,test", @"http://127.0.0.1:8765/"]) {
+        action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:url]];
+        __block WKNavigationActionPolicy decision;
+        [browser webView:content.view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { decision = p; }];
+        check(decision == WKNavigationActionPolicyCancel, @"unrelated schemes and local/private child destinations remain blocked");
+        response.response = [[NSURLResponse alloc] initWithURL:action.request.URL MIMEType:@"text/html" expectedContentLength:0 textEncodingName:@"utf-8"];
+        __block WKNavigationResponsePolicy result;
+        [browser webView:content.view decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+        check(result == WKNavigationResponsePolicyCancel, @"response policy keeps local and unrelated schemes blocked");
+    }
+    action.request = [NSURLRequest requestWithURL:[NSURL URLWithString:@"about:srcdoc"]];
+    for (id frame in @[[FakeFrame new], NSNull.null]) {
+        action.targetFrame = frame == NSNull.null ? nil : frame;
+        __block WKNavigationActionPolicy decision;
+        [browser webView:content.view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { decision = p; }];
+        check(decision == WKNavigationActionPolicyCancel, @"srcdoc cannot become a top-level or popup destination");
+    }
+    response.response = [[NSURLResponse alloc] initWithURL:action.request.URL MIMEType:@"text/html" expectedContentLength:0 textEncodingName:@"utf-8"];
+    response.forMainFrame = YES;
+    __block WKNavigationResponsePolicy result;
+    [browser webView:content.view decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+    check(result == WKNavigationResponsePolicyCancel, @"top-level srcdoc response is blocked");
+    response.forMainFrame = NO;
+    response.canShowMIMEType = NO;
+    [browser webView:content.view decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+    check(result == WKNavigationResponsePolicyCancel, @"internal child exceptions never initiate a download");
+    response.canShowMIMEType = YES;
+    action.targetFrame = [FakeChildFrame new];
+    __block WKNavigationActionPolicy decision;
+    [browser webView:browser.homePage.view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { decision = p; }];
+    check(decision == WKNavigationActionPolicyCancel, @"Home anchor cannot start internal child navigation");
+    [browser webView:(id)[FakeSurface new] decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy p) { decision = p; }];
+    check(decision == WKNavigationActionPolicyCancel, @"unknown views cannot start internal child navigation");
+    [browser webView:browser.homePage.view decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+    check(result == WKNavigationResponsePolicyCancel, @"local Home anchor cannot load internal documents");
+    [browser webView:(id)[FakeSurface new] decidePolicyForNavigationResponse:(id)response decisionHandler:^(WKNavigationResponsePolicy p) { result = p; }];
+    check(result == WKNavigationResponsePolicyCancel, @"unknown or disposed views cannot use the child-document exception");
 }
 static void presentationChecks(void) {
     TestBrowser *browser = [TestBrowser alloc]; browser.active = YES; browser.visible = YES;
@@ -354,6 +424,7 @@ int main(void) {
         check(session.entries.count == 256 && session.index == 255, @"session metadata is bounded");
         presentationChecks();
         workspaceReturnChecks();
+        internalFrameChecks();
         printf("Retained Browser Home: %ld checks passed\n", (long)checks);
     }
 }

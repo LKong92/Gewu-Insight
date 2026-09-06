@@ -2706,7 +2706,7 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 
 \subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
 
-Bookmarks/history use \hyperref[privacy]{local SQLite}; cookies/cache use Browser\textquotesingle s persistent profile, not Safari synchronization. Browsing/search reaches websites, but external pages have no Library/credential bridge. Local/file/application addresses are blocked. HTTP recovery retries once as same-host HTTPS GET, without replaying forms or bypassing certificates; errors include reason/code. The local server rejects cross-site API requests and unrecognized hosts.
+Bookmarks/history use \hyperref[privacy]{local SQLite}; cookies/cache use Browser\textquotesingle s persistent profile, not Safari synchronization. Browsing/search reaches websites, but external pages have no Library/credential bridge. Local/file/application addresses are blocked. Standard internal child documents use WebKit\textquotesingle s origin and sandbox rules; they cannot become address-bar destinations. HTTP recovery retries once as same-host HTTPS GET, without replaying forms or bypassing certificates; errors include reason/code. The local server rejects cross-site API requests and unrecognized hosts.
 
 \subsection{Use macOS Passwords}\label{use-macos-passwords}
 
@@ -3424,6 +3424,10 @@ This is now the normal action for web links in all five research views, includin
 \section{Home works offline but a website will not load}\label{home-works-offline-but-a-website-will-not-load}
 
 Home displays local Favorites without a Google request. Missing site icons fall back to initials; they do not prevent opening Home. Search results and account actions require a connection. Read the load error, check the destination and Clash route, and try Reload once. A website may reject embedded browsers or have its own session policy; an unsupported-browser banner alone does not prove why a sign-in ended. Open in Safari is a manual compatibility fallback, with a separate sign-in session.
+
+\section{A publisher stays on security verification}\label{a-publisher-stays-on-security-verification}
+
+A verification loop does not establish that you were identified as AI. Browser supports standard internal child documents used by embedded widgets, but a publisher\textquotesingle s verification can still reject an embedded browser. Try Reload once; if the loop persists, use \textbf{Open in Safari}. Safari has a separate session. For publisher support, note the public URL, time, and displayed Ray ID, without sharing cookies or passwords. Do not repeatedly retry or bypass the challenge.
 
 \section{AutoFill does not appear or does not fill}\label{autofill-does-not-appear-or-does-not-fill}
 

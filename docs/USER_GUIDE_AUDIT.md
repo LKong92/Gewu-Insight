@@ -235,6 +235,24 @@ and the reported source-return shortcut remain pending saved-drafts approval;
 the synthetic shortcut checks do not establish the original-App result. No
 credentials, direct formal database changes, benchmark work, commit or push.
 
+## Embedded child-document compatibility follow-up
+
+Checkpoint `8adfec8` committed and pushed the preceding Home/search/guide work
+before the APS fix. The next guide revision adds the standard child-document
+security boundary and publisher verification-loop troubleshooting, without
+promising universal browser acceptance or credential filling.
+
+HTML, generated LaTeX and the 78-page PDF are synchronized. Pages 57-58 and
+76-78 were rendered and visually checked. Four PDF structure checks and all
+714 product tests pass (31.667 seconds). Source and packaged PDF SHA-256:
+`29d9db9e40b26b76267d65292850288b8fa28c023c4c99c0f0800b55dde74457`.
+The original universal App was rebuilt and restarted with saved-drafts approval;
+health and signature checks pass. The user's exact PRX recent-articles URL
+opened successfully without operating the verification widget or credentials.
+No private screenshot was saved or used for the guide. The user authorized
+publication after validation. See `BROWSER_EMBEDDED_COMPATIBILITY.md` for evidence
+and limits.
+
 ## Keeping the next edition aligned
 
 For a future feature change, check the matching topic and its cross-links as

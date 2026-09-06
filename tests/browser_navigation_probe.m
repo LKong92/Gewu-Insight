@@ -15,6 +15,12 @@ static NSHTTPURLResponse *response(NSString *mime, NSString *disposition) {
 
 int main(void) {
     @autoreleasepool {
+        for (NSString *url in @[@"about:blank", @"about:srcdoc"]) {
+            check(GewuBrowserInternalFrameURL([NSURL URLWithString:url]), @"only WebKit internal child documents are recognized");
+            check(!GewuBrowserPublicURL([NSURL URLWithString:url]), @"internal documents never become public address-bar URLs");
+        }
+        for (NSString *url in @[@"about:config", @"about:srcdoc?url=file:///tmp/a", @"about://srcdoc", @"file:///tmp/a", @"data:text/html,test", @"javascript:alert(1)", @"http://127.0.0.1:8765/", @"https://challenges.cloudflare.com/"])
+            check(!GewuBrowserInternalFrameURL([NSURL URLWithString:url]), @"internal-frame exception does not match arbitrary schemes or addresses");
         NSURL *workspace = [NSURL URLWithString:@"http://127.0.0.1:8765/"];
         NSURL *source = [NSURL URLWithString:@"http://127.0.0.1:8765/?mode=library"];
         NSMutableURLRequest *link = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://example.org/paper.pdf"]];

@@ -72,6 +72,10 @@ class GuideAuditTests(unittest.TestCase):
         self.assertIn("even after restarting the App", browser)
         self.assertIn("Reload on Home refreshes local bookmarks", browser)
         self.assertNotIn("Native zoom fits Google", browser)
+        self.assertIn("origin and sandbox rules", browser)
+        troubleshooting = self.topic("troubleshooting")
+        self.assertIn("verification can still reject an embedded browser", troubleshooting)
+        self.assertIn("without sharing cookies or passwords", troubleshooting)
         self.assertIn("not Browser's Clear History", self.topic("startup"))
         for hour in (ui_server.AUTO_JOURNAL_MONITOR_HOUR, ui_server.AUTO_SUBJECT_MONITOR_HOUR,
                      ui_server.AUTO_AUTHOR_MONITOR_HOUR):

@@ -25,6 +25,13 @@ static inline BOOL GewuBrowserCanRetainHomeForRequest(NSURLRequest *request) {
     return [request.HTTPMethod isEqualToString:@"GET"] && !request.HTTPBody.length && !request.HTTPBodyStream;
 }
 
+// WebKit-owned child documents inherit their embedding page's security context.
+// They are not public addresses and must never become address-bar destinations.
+static inline BOOL GewuBrowserInternalFrameURL(NSURL *url) {
+    return [url.absoluteString isEqualToString:@"about:blank"]
+        || [url.absoluteString isEqualToString:@"about:srcdoc"];
+}
+
 static inline BOOL GewuBrowserPublicURL(NSURL *url) {
     if (!url || ![@[@"http", @"https"] containsObject:url.scheme.lowercaseString]
         || url.user.length || url.password.length || url.absoluteString.length > 8192) return NO;
