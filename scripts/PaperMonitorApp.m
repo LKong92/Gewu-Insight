@@ -417,6 +417,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @property(nonatomic) NSPoint windowDragStartPoint;
 @property(nonatomic) NSRect windowDragStartFrame;
 @property(nonatomic) NSRect windowRestoreFrame;
+@property(nonatomic) BOOL trafficLightLayoutScheduled;
 @property(nonatomic, strong) NSURL *nativeQuickLookURL;
 @property(nonatomic) BOOL nativeQuickLookActive;
 @property(nonatomic) BOOL nativeQuickLookClosingProgrammatically;
@@ -1704,20 +1705,67 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)positionTrafficLightButtons {
-    CGFloat tabBarHeight = 38.0;
-    NSArray *windowButtons = @[
-        [self.window standardWindowButton:NSWindowCloseButton],
-        [self.window standardWindowButton:NSWindowMiniaturizeButton],
-        [self.window standardWindowButton:NSWindowZoomButton]
-    ];
-    for (NSButton *button in windowButtons) {
-        if (!button) continue;
+    if (!self.webView.superview || (self.window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    // Match .view-switcher / .view-switch in ui_server.py: top 6, height 32,
+    // a 2-point top border and no bottom border put the label center at 23.
+    const CGFloat tabBarHeight = 38.0;
+    const CGFloat labelCenterFromTop = 23.0;
+    NSButton *closeButton = [self.window standardWindowButton:NSWindowCloseButton];
+    NSView *titlebarContainer = closeButton.superview.superview;
+    if (!titlebarContainer.superview) return;
+    // Extend the native container as well, keeping the entire button hittable.
+    // Full-size content stays in place underneath the transparent title bar.
+    NSRect topBar = self.webView.bounds;
+    if (!self.webView.isFlipped) topBar.origin.y = NSMaxY(topBar) - tabBarHeight;
+    topBar.size.height = tabBarHeight;
+    NSRect containerFrame = titlebarContainer.frame;
+    NSRect convertedBar = [self.webView convertRect:topBar toView:titlebarContainer.superview];
+    containerFrame.origin.y = convertedBar.origin.y;
+    containerFrame.size.height = convertedBar.size.height;
+    if (!NSEqualRects(containerFrame, titlebarContainer.frame)) titlebarContainer.frame = containerFrame;
+
+    NSPoint labelCenter = NSMakePoint(0, self.webView.isFlipped
+        ? NSMinY(self.webView.bounds) + labelCenterFromTop
+        : NSMaxY(self.webView.bounds) - labelCenterFromTop);
+    CGFloat scale = self.window.backingScaleFactor ?: 1.0;
+    for (NSNumber *kind in @[@(NSWindowCloseButton), @(NSWindowMiniaturizeButton), @(NSWindowZoomButton)]) {
+        NSButton *button = [self.window standardWindowButton:kind.unsignedIntegerValue];
+        if (!button.superview) continue;
         NSView *container = button.superview;
         NSRect frame = button.frame;
-        CGFloat containerHeight = container ? NSHeight(container.bounds) : tabBarHeight;
-        frame.origin.y = round(containerHeight - tabBarHeight + ((tabBarHeight - NSHeight(frame)) / 2.0));
-        button.frame = frame;
+        NSPoint center = [self.webView convertPoint:labelCenter toView:container];
+        frame.origin.y = round((center.y - NSHeight(frame) / 2.0) * scale) / scale;
+        if (!NSEqualRects(frame, button.frame)) button.frame = frame;
     }
+}
+
+- (void)scheduleTrafficLightLayout:(NSNotification *)notification {
+    if (notification.object != self.window || self.trafficLightLayoutScheduled) return;
+    self.trafficLightLayoutScheduled = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.trafficLightLayoutScheduled = NO;
+        [self positionTrafficLightButtons];
+    });
+}
+
+- (void)windowDidResize:(NSNotification *)notification {
+    [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidEndLiveResize:(NSNotification *)notification {
+    [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidDeminiaturize:(NSNotification *)notification {
+    [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidExitFullScreen:(NSNotification *)notification {
+    [self scheduleTrafficLightLayout:notification];
+}
+
+- (void)windowDidChangeBackingProperties:(NSNotification *)notification {
+    [self scheduleTrafficLightLayout:notification];
 }
 
 - (void)installMainMenu {
