@@ -55,6 +55,13 @@ AUTOMATIC_DEFAULT_FILE_TYPE_RANK = {
     "preprint": 100,
 }
 _PAPER_FILE_PUBLISHER_PROVENANCE_TOKENS = {"publisher", "aaas", "nature"}
+_PAPER_FILE_PREPRINT_HOST_SUFFIXES = (
+    "arxiv.org",
+    "biorxiv.org",
+    "medrxiv.org",
+    "chemrxiv.org",
+    "researchsquare.com",
+)
 _PAPER_FILE_PUBLISHER_HOST_SUFFIXES = (
     "nature.com",
     "science.org",
@@ -187,7 +194,7 @@ def inferred_paper_file_source(source_url: Any = "", added_via: Any = "") -> tup
         for token in re.split(r"[^a-z0-9]+", added_key)
         if token
     }
-    if host.endswith(("arxiv.org", "biorxiv.org", "medrxiv.org")) or "arxiv" in added_key:
+    if any(host == suffix or host.endswith(f".{suffix}") for suffix in _PAPER_FILE_PREPRINT_HOST_SUFFIXES) or "arxiv" in added_key:
         return "preprint_server", host or added
     if any(token in host for token in ("repository", "eprints", "dspace", "hal.science")):
         return "institutional_repository", host
@@ -196,6 +203,8 @@ def inferred_paper_file_source(source_url: Any = "", added_via: Any = "") -> tup
     if any(host == suffix or host.endswith(f".{suffix}") for suffix in _PAPER_FILE_PUBLISHER_HOST_SUFFIXES):
         return "publisher", host
     if any(token in added_key for token in ("manual", "paper_details", "inventory", "legacy", "import")):
+        return "user_import", ""
+    if not url and added_key == "browser_capture":
         return "user_import", ""
     if url:
         return "other", host or url

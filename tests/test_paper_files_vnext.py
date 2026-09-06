@@ -313,6 +313,21 @@ class PaperFilesVNextTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_preprint_sources_match_domain_boundaries_and_preserve_local_capture_provenance(self) -> None:
+        for host in ('arxiv.org', 'export.arxiv.org', 'www.biorxiv.org', 'www.medrxiv.org',
+                     'chemrxiv.org', 'www.researchsquare.com', 'assets-eu.researchsquare.com'):
+            with self.subTest(host=host):
+                self.assertEqual(inferred_paper_file_source('https://' + host + '/paper.pdf', 'browser_capture'),
+                                 ('preprint_server', host))
+        for host in ('notarxiv.org', 'notbiorxiv.org', 'notmedrxiv.org', 'arxiv.org.example.net',
+                     'chemrxiv.org.example.net', 'notresearchsquare.com', 'nature.com.example.net'):
+            with self.subTest(host=host):
+                self.assertEqual(inferred_paper_file_source('https://' + host + '/paper.pdf', 'browser_capture'),
+                                 ('other', host))
+        self.assertEqual(inferred_paper_file_source('', 'browser_capture'), ('user_import', ''))
+        self.assertEqual(inferred_paper_file_source('', 'legacy_backfill'), ('user_import', ''))
+        self.assertEqual(inferred_paper_file_source('', 'arxiv_download'), ('preprint_server', 'arxiv_download'))
+
     def test_exact_duplicate_is_idempotent_but_annotated_peer_is_preserved(self) -> None:
         self.add_paper("dedupe")
         self.storage.add_library_item(paper_id="dedupe", folder_id=1)

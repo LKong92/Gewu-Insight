@@ -22021,6 +22021,7 @@ def attach_file_to_paper(
     source_detail: str = "",
     annotation_state: str = "",
     added_via: str = "paper_details",
+    source_url: str = "",
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     if not paper:
@@ -22081,6 +22082,7 @@ def attach_file_to_paper(
             file_type=resolved_type,
             file_source=file_source,
             source_detail=source_detail,
+            source_url=source_url,
             annotation_state=(
                 annotation_state
                 or ("annotated" if fingerprint.is_annotated else "unannotated")

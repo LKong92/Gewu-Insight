@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from pypdf import PdfWriter
 from paper_monitor import ui_server as ui
@@ -48,9 +49,18 @@ class BrowserCaptureTests(unittest.TestCase):
         writer = PdfWriter(); writer.add_blank_page(width=200, height=200); writer.add_metadata({'/Title':title})
         stream = io.BytesIO(); writer.write(stream); return stream.getvalue()
 
-    def upload(self, capture, found=None, title='A quantum sensing paper', content=None):
+    def upload(self, capture, found=None, title='A quantum sensing paper', content=None, source_url=''):
         with patch.object(ui, 'extract_identifier_from_pdf_or_title', return_value=found or {}), patch.object(ui, 'pdf_layout_title_candidates', return_value=[title]):
-            self.service.upload(capture, content or self.pdf(title))
+            self.service.upload(capture, content or self.pdf(title), source_url=source_url)
+
+    def remote_capture(self, pdf_url, doi='10.1234/first'):
+        capture = self.service.begin(self.db, {
+            'url':'https://www.nature.com/articles/capture-fixture',
+            'metadata':{'doi':doi,'title':'A quantum sensing paper'},
+            'pdf_urls':[pdf_url],
+        })
+        self.upload(capture, source_url=pdf_url)
+        return capture
 
     def count(self, table):
         return self.storage.conn.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0]
@@ -158,6 +168,8 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(len(resources), 1)
         resource = resources[0]
         self.assertEqual(resource['file_source'], 'user_import')
+        self.assertFalse(resource['source_detail'])
+        self.assertFalse(resource['source_url'])
         self.assertTrue(Path(resource['stored_path']).resolve().is_relative_to(self.root.resolve()), resource['stored_path'])
         self.assertEqual(Path(resource['stored_path']).read_bytes(), content)
         self.storage.conn.execute('UPDATE papers SET preferred_resource_id=?,preferred_resource_manual=1 WHERE paper_id=?', (resource['id'],'first'))
@@ -212,6 +224,9 @@ class BrowserCaptureTests(unittest.TestCase):
         payload = ui.paper_files_state_payload(self.storage, 'first')
         file = payload['files'][0]
         self.assertEqual(file['file_type'], 'published_version')
+        self.assertEqual(file['file_source'], 'publisher')
+        self.assertEqual(file['source_detail'], 'www.nature.com')
+        self.assertEqual(file['source_url'], capture.pdf_source_url)
         self.assertTrue(file['is_default']); self.assertTrue(file['is_primary'])
         path = Path(file['local_path'])
         self.assertTrue(path.resolve().is_relative_to(ui.LIBRARY_LOCAL_COPY_ROOT.resolve()), str(path))
@@ -270,6 +285,116 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.review(capture)['suggested_file_type'], 'unknown')
         with self.assertRaisesRegex(ValueError, 'source is not part'):
             self.service.upload(capture, self.pdf(), source_url='https://www.nature.com/articles/other.pdf')
+        self.assertTrue(self.save(capture, include_pdf=True)['ok'])
+        resource = self.storage.list_paper_resources('first')[0]
+        self.assertEqual(resource['file_source'], 'user_import')
+        self.assertFalse(resource['source_detail'])
+        self.assertFalse(resource['source_url'])
+
+    def test_remote_file_source_uses_pdf_host_independently_of_page_and_file_type(self):
+        cases = [
+            ('https://journals.aps.org/prl/pdf/10.1103/fixture', 'publisher'),
+            ('https://media.springernature.com/full/springer-static/image/fixture.pdf', 'publisher'),
+            ('https://export.arxiv.org/pdf/2601.01234', 'preprint_server'),
+            ('https://www.biorxiv.org/content/fixture.full.pdf', 'preprint_server'),
+            ('https://www.medrxiv.org/content/fixture.full.pdf', 'preprint_server'),
+            ('https://chemrxiv.org/engage/fixture.pdf', 'preprint_server'),
+            ('https://assets-eu.researchsquare.com/files/fixture.pdf', 'preprint_server'),
+            ('https://repository.example.edu/paper.pdf', 'institutional_repository'),
+            ('https://files.example.net/paper.pdf', 'other'),
+        ]
+        for index, (url, expected) in enumerate(cases):
+            with self.subTest(url=url):
+                key = 'source-' + str(index)
+                doi = '10.1234/' + key
+                self.paper(key=key, doi=doi)
+                capture = self.remote_capture(url, doi)
+                self.review(capture)
+                result = self.save(capture, include_pdf=True, file_type='preprint', file_type_manual=True)
+                self.assertTrue(result['ok'])
+                resource = self.storage.list_paper_resources(key)[0]
+                self.assertEqual(resource['file_type'], 'preprint')
+                self.assertTrue(resource['file_type_override'])
+                self.assertEqual(resource['file_source'], expected)
+                self.assertEqual(resource['source_detail'], urlsplit(url).hostname)
+                self.assertEqual(resource['source_url'], url)
+                self.assertEqual(resource['added_via'], 'browser_capture')
+                self.assertTrue(resource['is_default'])
+                observation = self.storage.conn.execute(
+                    "SELECT source_key FROM paper_source_observations WHERE paper_id=? AND source_kind='browser'", (key,)
+                ).fetchone()
+                self.assertEqual(observation['source_key'], capture.snapshot['url'])
+
+    def test_signed_pdf_retains_host_but_never_persists_authorization_url(self):
+        self.paper()
+        capture = self.remote_capture('https://www.nature.com/article.pdf?token=synthetic-secret')
+        self.review(capture)
+        self.assertTrue(self.save(capture, include_pdf=True)['ok'])
+        resource = self.storage.list_paper_resources('first')[0]
+        self.assertEqual(resource['file_source'], 'publisher')
+        self.assertEqual(resource['source_detail'], 'www.nature.com')
+        self.assertFalse(resource['source_url'])
+        self.assertNotIn('synthetic-secret', str(resource))
+
+    def test_selecting_local_pdf_after_native_upload_clears_remote_origin(self):
+        self.paper()
+        capture = self.remote_capture('https://arxiv.org/pdf/2601.01234')
+        self.upload(capture)
+        self.review(capture)
+        self.assertTrue(self.save(capture, include_pdf=True)['ok'])
+        resource = self.storage.list_paper_resources('first')[0]
+        self.assertEqual(resource['file_source'], 'user_import')
+        self.assertFalse(resource['source_detail'])
+        self.assertFalse(resource['source_url'])
+
+    def test_duplicate_capture_preserves_original_source_manual_type_and_default(self):
+        self.paper()
+        first = self.remote_capture('https://arxiv.org/pdf/2601.01234')
+        self.review(first); self.save(first, include_pdf=True, file_type='preprint')
+        resource = self.storage.list_paper_resources('first')[0]
+        edited = ui.update_paper_resource_role(
+            self.storage, 'first', resource['id'], 'accepted_manuscript',
+            file_source='institutional_repository', source_detail='repository.example.edu')
+        self.storage.set_preferred_paper_resource('first', resource['id'])
+        for capture in (self.begin(), self.remote_capture('https://www.nature.com/article.pdf')):
+            if not capture.pdf_ready:
+                self.upload(capture)
+            self.review(capture)
+            result = self.save(capture, include_pdf=True, file_type='published_version')
+            self.assertTrue(result['duplicate_file'])
+            after = self.storage.get_paper_resource(resource['id'])
+            for field in ('sha256', 'file_type', 'file_type_override', 'file_source', 'source_detail', 'source_url', 'added_via'):
+                self.assertEqual(after[field], edited[field], field)
+            self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], resource['id'])
+            self.assertTrue(self.storage.get_paper('first')['preferred_resource_manual'])
+        self.assertEqual(len(self.storage.list_paper_resources('first')), 1)
+
+    def test_remote_duplicate_does_not_assign_a_source_to_an_existing_local_file(self):
+        self.paper()
+        local = self.begin(); self.upload(local); self.review(local)
+        self.save(local, include_pdf=True)
+        original = self.storage.list_paper_resources('first')[0]
+        remote = self.remote_capture('https://www.nature.com/article.pdf'); self.review(remote)
+        result = self.save(remote, include_pdf=True)
+        self.assertTrue(result['duplicate_file'])
+        after = self.storage.get_paper_resource(original['id'])
+        self.assertEqual(after['file_source'], 'user_import')
+        self.assertFalse(after['source_detail'])
+        self.assertFalse(after['source_url'])
+
+    def test_remote_capture_retry_preserves_source_and_deduplicates_after_placement_failure(self):
+        self.paper()
+        capture = self.remote_capture('https://www.nature.com/article.pdf'); self.review(capture)
+        with patch.object(ui, 'reconcile_paper_pdf_storage', side_effect=OSError('fixture placement failure')):
+            result = self.save(capture, include_pdf=True, file_type='published_version')
+        self.assertFalse(result['ok']); self.assertTrue(result['metadata_saved'])
+        result = self.save(capture, include_pdf=True, file_type='published_version')
+        self.assertTrue(result['ok']); self.assertTrue(result['duplicate_file'])
+        resources = self.storage.list_paper_resources('first')
+        self.assertEqual(len(resources), 1)
+        self.assertEqual(resources[0]['file_source'], 'publisher')
+        self.assertEqual(resources[0]['source_detail'], 'www.nature.com')
+        self.assertEqual(resources[0]['source_url'], capture.pdf_source_url)
 
     def test_arxiv_pdf_alias_stays_preprint_even_for_a_published_article(self):
         self.storage.upsert_paper(dict(paper_id='first',doi='10.1234/pub',title='Published work',journal='',source='fixture',raw={'preprint':{'arxiv_id':'2601.01234'}}))
@@ -280,6 +405,7 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.review(capture)['suggested_file_type'],'preprint')
         self.assertTrue(self.save(capture,include_pdf=True)['ok'])
         self.assertEqual(self.storage.resolve_default_paper_resource('first')['file_type'],'preprint')
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['file_source'],'preprint_server')
 
     def test_other_preprint_servers_do_not_use_journal_metadata_as_file_type(self):
         cases = [
@@ -301,6 +427,7 @@ class BrowserCaptureTests(unittest.TestCase):
                 result = self.save(capture,include_pdf=True)
                 self.assertEqual(result['gewu_key'],paper['storage_key'])
                 self.assertEqual(self.storage.resolve_default_paper_resource(paper['paper_id'])['file_type'],'preprint')
+                self.assertEqual(self.storage.resolve_default_paper_resource(paper['paper_id'])['file_source'],'preprint_server')
 
     def test_arxiv_source_classifies_preprint_when_text_identity_is_missing_or_published(self):
         url = 'https://arxiv.org/pdf/2109.15071'

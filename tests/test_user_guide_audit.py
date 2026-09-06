@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("September 6, 2026", self.topic("welcome"))
+        self.assertIn("September 7, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 
@@ -62,6 +62,10 @@ class GuideAuditTests(unittest.TestCase):
 
     def test_browser_privacy_and_lifecycle_limits_are_explicit(self):
         browser = self.topic("browser")
+        self.assertIn("Source follows the PDF’s actual website", browser)
+        self.assertIn("Local files use User import without a webpage source", browser)
+        self.assertIn("Exact duplicates retain their existing source", browser)
+        self.assertNotIn("Source is User import", browser)
         for phrase in ("local history suggestions", "not live Google suggestions", "memory",
                        "not restored after App quit", "Passkey", "successful filling are not guaranteed"):
             self.assertIn(phrase, browser)

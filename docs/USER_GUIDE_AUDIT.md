@@ -16,7 +16,19 @@ publisher, account, downloader, or migration. A reviewed topic without a text
 change means its documented contract still matches the inspected code/tests;
 it does not mean a live network operation was repeated on personal data.
 
-## Current re-audit corrections
+## September 7 Browser capture update
+
+The Browser chapter now covers Save to Gewu, the Monitor-style hierarchical
+destination picker, Show in Library, main-PDF placement and preview, and
+publisher versus preprint file-type suggestions. Source follows the bound PDF
+host independently of File type; local imports borrow no webpage provenance.
+Duplicate resources retain their existing source and manual settings. Safari
+extension packaging remains explicitly outside the implemented feature.
+Both Guide editions share the revised HTML and show the September 7 revision.
+The earlier full 47-topic audit below remains the baseline; this follow-up is
+scoped to the Browser workflow, not another complete live feature audit.
+
+## September 6 re-audit corrections
 
 - Make Journal, My Publications, Browser, Overleaf and Website Links agree on
   built-in versus system-default routing; direct Browser navigation is separate.

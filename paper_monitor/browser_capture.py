@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 from .browser_store import browser_url, history_url
 from .pdf_utils import is_valid_pdf_bytes
 from .text import clean_text, make_paper_id, normalize_doi
-from .storage import PAPER_FILE_TYPES, AUTOMATIC_DEFAULT_FILE_TYPE_RANK, legacy_role_projection
+from .storage import PAPER_FILE_TYPES, AUTOMATIC_DEFAULT_FILE_TYPE_RANK, inferred_paper_file_source, legacy_role_projection
 
 MAX_PDF_BYTES = 64 * 1024 * 1024
 CAPTURE_TTL = 20 * 60
@@ -412,9 +412,16 @@ class BrowserCaptureService:
             resource = None
             if include_pdf:
                 try:
+                    # Only native uploads bound to the snapshot assert a remote
+                    # file origin. The open webpage is paper-level evidence only.
+                    file_source, source_detail = (
+                        inferred_paper_file_source(capture.pdf_source_url)
+                        if capture.pdf_source_url else ("user_import", "")
+                    )
                     resource = ui.attach_file_to_paper(storage, paper_id=paper_id, filename=capture.pdf_name,
-                        content=capture.path.read_bytes(), file_type=file_type, file_source="user_import",
-                        source_detail=urlsplit(capture.snapshot["url"]).hostname or "", added_via="browser_capture")
+                        content=capture.path.read_bytes(), file_type=file_type, file_source=file_source,
+                        source_detail=source_detail, source_url=persistent_url(capture.pdf_source_url),
+                        added_via="browser_capture")
                     duplicate = bool(resource.get("duplicate"))
                     # Repair only unclassified Browser captures on an explicit
                     # re-save. Keep the same resource/key, all known peer types,
@@ -427,9 +434,8 @@ class BrowserCaptureService:
                     if not duplicate or (resource.get("file_type") == "unknown" and not resource.get("file_type_override")):
                         storage.conn.execute("UPDATE resources SET file_type_override=? WHERE id=?",
                                              (int(payload.get("file_type_manual") is True), resource["id"]))
-                    pdf_source = persistent_url(capture.pdf_source_url) or source
-                    if pdf_source:
-                        storage.conn.execute("UPDATE resources SET source_url=COALESCE(NULLIF(source_url,''),?) WHERE id=?", (pdf_source, resource["id"]))
+                    # Duplicate reuse preserves the resource's original source
+                    # and any user edits, independently of file-type repair.
                     storage.conn.commit()
                     resource = storage.get_paper_resource(resource["id"])
                     if (resource.get("file_type") in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
