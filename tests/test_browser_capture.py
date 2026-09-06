@@ -194,6 +194,140 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertTrue(self.review(capture)['can_save'])
         self.assertEqual(self.save(capture)['paper_id'], 'first')
 
+    def publisher_capture(self, *, content=None, source=True):
+        doi = '10.1038/s41567-026-03429-7'
+        url = 'https://www.nature.com/articles/s41567-026-03429-7.pdf'
+        capture = self.service.begin(self.db, {'url':url, 'is_pdf':True})
+        with patch.object(ui, 'extract_identifier_from_pdf_or_title', return_value={'kind':'doi','identifier':doi}):
+            self.service.upload(capture, content or self.pdf('A quantum sensing paper'), 'article.pdf', source_url=url if source else '')
+        return capture
+
+    def test_publisher_main_pdf_gets_default_main_path_icon_and_preview_payload(self):
+        paper = self.paper(doi='10.1038/s41567-026-03429-7')
+        capture = self.publisher_capture()
+        self.assertEqual(self.review(capture)['suggested_file_type'], 'published_version')
+        result = self.save(capture, include_pdf=True)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['gewu_key'], paper['storage_key'])
+        payload = ui.paper_files_state_payload(self.storage, 'first')
+        file = payload['files'][0]
+        self.assertEqual(file['file_type'], 'published_version')
+        self.assertTrue(file['is_default']); self.assertTrue(file['is_primary'])
+        path = Path(file['local_path'])
+        self.assertTrue(path.resolve().is_relative_to(ui.LIBRARY_LOCAL_COPY_ROOT.resolve()), str(path))
+        self.assertEqual(payload['paper']['main_pdf_path'], str(path))
+        self.assertEqual(payload['paper']['merged_pdf_path'], str(path))
+        self.assertEqual(path.read_bytes(), capture.path.read_bytes())
+
+    def test_resave_repairs_only_unclassified_browser_copy_without_duplicates(self):
+        self.paper(doi='10.1038/s41567-026-03429-7')
+        old = self.publisher_capture(); self.review(old)
+        before = self.save(old, include_pdf=True, file_type='unknown')
+        resource = self.storage.list_paper_resources('first')[0]
+        old_path = Path(resource['stored_path'])
+        self.assertTrue(old_path.is_relative_to(ui.ASSOCIATED_FILES_ROOT))
+        again = self.publisher_capture(); self.review(again)
+        after = self.save(again, include_pdf=True)
+        self.assertTrue(after['duplicate_file'])
+        self.assertEqual(before['gewu_key'], after['gewu_key'])
+        self.assertEqual(before['item_id'], after['item_id'])
+        files = self.storage.list_paper_resources('first')
+        self.assertEqual(len(files), 1); self.assertEqual(files[0]['id'], resource['id'])
+        self.assertEqual(files[0]['sha256'], resource['sha256'])
+        self.assertTrue(files[0]['is_primary']); self.assertTrue(files[0]['is_default'])
+        self.assertFalse(old_path.exists())
+
+    def test_manual_unknown_and_existing_manual_default_are_preserved(self):
+        self.paper(doi='10.1038/s41567-026-03429-7')
+        capture = self.publisher_capture(); self.review(capture)
+        self.save(capture, include_pdf=True, file_type='unknown', file_type_manual=True)
+        first = self.storage.list_paper_resources('first')[0]
+        self.assertTrue(first['file_type_override'])
+        again = self.publisher_capture(); self.review(again); self.save(again, include_pdf=True)
+        self.assertEqual(self.storage.get_paper_resource(first['id'])['file_type'], 'unknown')
+        self.assertFalse(self.storage.get_paper('first')['main_pdf_path'])
+        self.storage.set_preferred_paper_resource('first', first['id'])
+        newer = self.publisher_capture(content=self.pdf('Another version of the quantum sensing paper'))
+        self.review(newer); self.save(newer, include_pdf=True)
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], first['id'])
+
+    def test_supplement_and_correction_are_not_promoted_to_main(self):
+        self.paper(doi='10.1038/s41567-026-03429-7')
+        for title, expected in [('Supplementary information for a quantum sensing paper','supplementary_material'),
+                                ('Peer review file for a quantum sensing paper','peer_review_file'),
+                                ('Author Correction: A quantum sensing paper','correction_notice')]:
+            with self.subTest(title=title):
+                capture = self.publisher_capture(content=self.pdf(title))
+                self.assertEqual(self.review(capture)['suggested_file_type'], expected)
+                self.assertTrue(self.save(capture, include_pdf=True)['ok'])
+        self.assertFalse(self.storage.get_paper('first')['main_pdf_path'])
+        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        self.assertTrue(all(Path(r['stored_path']).resolve().is_relative_to(ui.ASSOCIATED_FILES_ROOT.resolve()) for r in self.storage.list_paper_resources('first')))
+
+    def test_local_pdf_has_no_asserted_publisher_origin_and_unbound_url_is_rejected(self):
+        self.paper(doi='10.1038/s41567-026-03429-7')
+        capture = self.publisher_capture(source=False)
+        self.assertEqual(self.review(capture)['suggested_file_type'], 'unknown')
+        with self.assertRaisesRegex(ValueError, 'source is not part'):
+            self.service.upload(capture, self.pdf(), source_url='https://www.nature.com/articles/other.pdf')
+
+    def test_arxiv_pdf_alias_stays_preprint_even_for_a_published_article(self):
+        self.storage.upsert_paper(dict(paper_id='first',doi='10.1234/pub',title='Published work',journal='',source='fixture',raw={'preprint':{'arxiv_id':'2601.01234'}}))
+        url='https://arxiv.org/pdf/2601.01234v2'
+        capture=self.service.begin(self.db,{'url':url,'is_pdf':True})
+        with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value={'kind':'arxiv','identifier':'2601.01234'}):
+            self.service.upload(capture,self.pdf('Published work'),source_url=url)
+        self.assertEqual(self.review(capture)['suggested_file_type'],'preprint')
+        self.assertTrue(self.save(capture,include_pdf=True)['ok'])
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['file_type'],'preprint')
+
+    def test_other_preprint_servers_do_not_use_journal_metadata_as_file_type(self):
+        cases = [
+            ('https://www.biorxiv.org/content/10.1101/2026.01.01.123456v2.full.pdf', '10.1101/2026.01.01.123456'),
+            ('https://www.medrxiv.org/content/10.1101/2026.01.02.123456v1.full.pdf', '10.1101/2026.01.02.123456'),
+            ('https://chemrxiv.org/engage/api-gateway/chemrxiv/assets/orp/resource/item/fixture/original/paper.pdf', '10.26434/chemrxiv-2026-fixture'),
+            ('https://www.researchsquare.com/article/rs-123456/v1.pdf', '10.21203/rs.3.rs-123456/v1'),
+            ('https://assets-eu.researchsquare.com/files/rs-123457/v2/fixture.pdf', '10.21203/rs.3.rs-123457/v2'),
+        ]
+        for index, (url, doi) in enumerate(cases):
+            with self.subTest(url=url):
+                paper = self.paper(key='preprint-'+str(index), doi=doi)
+                capture = self.service.begin(self.db, {'url':url, 'is_pdf':True})
+                with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value={'kind':'doi','identifier':doi}):
+                    self.service.upload(capture,self.pdf('A quantum sensing paper'),source_url=url)
+                review = self.review(capture)
+                self.assertTrue(review['paper']['journal'])
+                self.assertEqual(review['suggested_file_type'],'preprint')
+                result = self.save(capture,include_pdf=True)
+                self.assertEqual(result['gewu_key'],paper['storage_key'])
+                self.assertEqual(self.storage.resolve_default_paper_resource(paper['paper_id'])['file_type'],'preprint')
+
+    def test_arxiv_source_classifies_preprint_when_text_identity_is_missing_or_published(self):
+        url = 'https://arxiv.org/pdf/2109.15071'
+        self.paper(doi='10.1109/tasc.2022.3147730')
+        for found in ({}, {'kind':'doi','identifier':'10.1109/tasc.2022.3147730'}):
+            with self.subTest(found=found):
+                capture = self.service.begin(self.db, {'url':url,'is_pdf':True})
+                with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value=found):
+                    self.service.upload(capture,self.pdf('A quantum sensing paper'),source_url=url)
+                review = self.review(capture,manual=True,title='A quantum sensing paper')
+                self.assertEqual(review['suggested_file_type'],'preprint')
+                self.assertTrue(self.save(capture,include_pdf=True)['ok'])
+        # The same local bytes selected while reading arXiv assert no origin.
+        local = self.service.begin(self.db, {'url':url,'is_pdf':True})
+        with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value={}):
+            self.service.upload(local,self.pdf('A quantum sensing paper'))
+        self.assertEqual(self.review(local,manual=True,title='A quantum sensing paper')['suggested_file_type'],'unknown')
+
+    def test_publisher_url_cannot_be_inferred_from_a_lookalike_host_or_preprint_site(self):
+        self.paper(doi='10.1038/s41567-026-03429-7')
+        for host in ('www.nature.com.example.org','www.biorxiv.org'):
+            url='https://'+host+'/articles/s41567-026-03429-7.pdf'
+            capture=self.service.begin(self.db,{'url':url,'is_pdf':True})
+            with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value={'kind':'doi','identifier':'10.1038/s41567-026-03429-7'}):
+                self.service.upload(capture,self.pdf('A quantum sensing paper'),source_url=url)
+            self.assertEqual(self.review(capture)['suggested_file_type'],'unknown')
+
     def test_pdf_and_page_known_arxiv_doi_aliases_are_compatible(self):
         self.storage.upsert_paper(dict(paper_id='published',doi='10.1234/pub',title='Published work',journal='',source='fixture',raw={'preprint':{'arxiv_id':'2601.01234'}}))
         capture = self.begin(doi='10.1234/pub')
@@ -292,6 +426,34 @@ class BrowserCaptureApiTests(unittest.TestCase):
         self.assertTrue(review['paper']['existing'])
         self.assertEqual(self.post('capture_save',token=review['token'])['gewu_key'],first['gewu_key'])
         self.post('capture_cancel',token=review['token'])
+
+    def test_capture_save_returns_files_for_unknown_pdf_and_duplicate_reuse(self):
+        from contextlib import ExitStack
+        root = Path(self.temp.name)
+        with ExitStack() as stack:
+            for name in ('LIBRARY_LOCAL_COPY_ROOT','SPACES_LOCAL_COPY_ROOT','MY_PUBLICATIONS_LOCAL_COPY_ROOT','DEFAULT_PDF_DIR','ASSOCIATED_FILES_ROOT'):
+                stack.enter_context(patch.object(ui,name,root/name))
+            writer=PdfWriter(); writer.add_blank_page(width=100,height=100)
+            writer.add_metadata({'/Title':'API article'})
+            content=io.BytesIO(); writer.write(content)
+            resource_id = None
+            for duplicate in (False,True):
+                review=self.post('capture_begin',snapshot={'url':'https://example.org/paper','metadata':{'doi':'10.1234/api','title':'API article'}})
+                self.assertEqual(self.upload(content.getvalue(),{'Content-Type':'application/pdf','X-Gewu-Capture-Token':review['upload_token']}),200)
+                self.post('capture_review',token=review['token'],resolve=False)
+                result=self.post('capture_save',token=review['token'],folder_id=1,include_pdf=True,file_type='unknown')
+                self.assertTrue(result['ok']); self.assertTrue(result['pdf_saved'])
+                self.assertEqual(result['duplicate_file'],duplicate)
+                files=result['paper_files'][0]
+                self.assertEqual(files['paper_id'],result['paper_id'])
+                self.assertEqual(files['paper']['storage_key'],result['gewu_key'])
+                self.assertEqual(len(files['files']),1)
+                file=files['files'][0]
+                self.assertTrue(file['exists']); self.assertEqual(file['file_type'],'unknown')
+                self.assertEqual(Path(file['local_path']).read_bytes(),content.getvalue())
+                if resource_id is not None: self.assertEqual(file['id'],resource_id)
+                resource_id=file['id']
+                self.post('capture_cancel',token=review['token'])
 
 class BrowserCaptureNativeTests(unittest.TestCase):
     def test_native_capture_lifecycle(self):

@@ -18,7 +18,7 @@ from urllib.parse import unquote, urlsplit
 from .browser_store import browser_url, history_url
 from .pdf_utils import is_valid_pdf_bytes
 from .text import clean_text, make_paper_id, normalize_doi
-from .storage import PAPER_FILE_TYPES
+from .storage import PAPER_FILE_TYPES, AUTOMATIC_DEFAULT_FILE_TYPE_RANK, legacy_role_projection
 
 MAX_PDF_BYTES = 64 * 1024 * 1024
 CAPTURE_TTL = 20 * 60
@@ -78,6 +78,9 @@ class Capture:
     pdf_name: str = "Article.pdf"
     pdf_identifier: tuple = ("", "")
     pdf_title: str = ""
+    pdf_source_url: str = ""
+    pdf_heading: str = ""
+    pdf_metadata_title: str = ""
     paper: dict | None = None
     conflict: str = ""
     result: dict | None = None
@@ -128,7 +131,7 @@ class BrowserCaptureService:
             self.captures.pop(capture.token, None)
             capture.directory.cleanup()
 
-    def upload(self, capture: Capture, content: bytes, filename="Article.pdf"):
+    def upload(self, capture: Capture, content: bytes, filename="Article.pdf", source_url=""):
         from . import ui_server as ui
         with capture.lock:
             if capture.result:
@@ -137,6 +140,10 @@ class BrowserCaptureService:
                 raise ValueError("Choose a PDF up to 64 MB.")
             if not is_valid_pdf_bytes(content):
                 raise ValueError("The downloaded file is not a readable PDF. It may be a sign-in page.")
+            # Native WebKit supplies the requested candidate, not a URL guessed
+            # from the open page. A local file has no asserted download origin.
+            if source_url and source_url not in capture.snapshot["pdf_urls"]:
+                raise ValueError("The PDF source is not part of this capture. Open Save to Gewu again.")
             capture.path.write_bytes(content)
             capture.pdf_name = Path(filename).name[:200] or "Article.pdf"
             if not capture.pdf_name.lower().endswith(".pdf"):
@@ -146,7 +153,10 @@ class BrowserCaptureService:
             found = ui.extract_identifier_from_pdf_or_title(capture.path, {}, title_lookup=lambda _: {})
             capture.pdf_identifier = (found.get("kind", ""), found.get("identifier", ""))
             titles = ui.pdf_layout_title_candidates(capture.path, page_limit=1)
-            metadata_title, _ = ui.pdf_identifier_page_texts(capture.path, page_limit=1)
+            metadata_title, pages = ui.pdf_identifier_page_texts(capture.path, page_limit=1)
+            capture.pdf_metadata_title = metadata_title[:1000]
+            capture.pdf_heading = clean_text(pages[0] if pages else "")[:350]
+            capture.pdf_source_url = source_url
             # Publisher PDFs can place a large DOI heading above the title, and
             # layout extraction may split a multiline title. Prefer a plausible
             # embedded title, then exclude URL headings from layout candidates.
@@ -155,6 +165,66 @@ class BrowserCaptureService:
                                       and not re.search(r"https?://|\bdoi\.org/", text, re.I)), "")[:1000]
             capture.pdf_ready = True
             capture.paper = None
+
+    @staticmethod
+    def suggested_file_type(capture: Capture) -> tuple[str, str]:
+        """Suggest only from this file's evidence; never from DOI presence alone."""
+        if not capture.pdf_ready:
+            return "unknown", ""
+        from . import ui_server as ui
+        text = " ".join([capture.pdf_name, capture.pdf_metadata_title, capture.pdf_title, capture.pdf_heading]).casefold()
+        if re.search(r"supplement(?:ary|al)?[\s_-]*(?:information|material|data|appendix)|supporting[\s_-]*information|\b\w+_moesm\d+_esm\b", text):
+            return "supplementary_material", "Supplementary material identified in this PDF."
+        if re.search(r"peer[\s_-]*review[\s_-]*(?:file|report)|reviewer[\s_-]*reports?", text):
+            return "peer_review_file", "Peer review file identified in this PDF."
+        title = " ".join([capture.pdf_metadata_title, capture.pdf_title, (capture.paper or {}).get("title") or ""])
+        if re.search(r"(?:^|\s)(?:author correction|publisher correction|correction to|erratum|corrigendum)\b", title, re.I):
+            return "correction_notice", "Correction notice identified in the title."
+        source = urlsplit(capture.pdf_source_url)
+        host, path = (source.hostname or "").lower(), unquote(source.path).lower()
+        kind, value = capture.pdf_identifier
+        if host in {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}:
+            source_kind, source_id = identifier(capture.pdf_source_url)
+            if source_kind == "arxiv" and re.fullmatch(r"/pdf/" + re.escape(source_id) + r"(?:v\d+)?(?:\.pdf)?", path):
+                # The native transfer binds this exact arXiv PDF route. Text
+                # extraction may fail or prefer a later publication's DOI.
+                return "preprint", "Preprint downloaded from arXiv."
+        # A preprint can have its own DOI and a later journal citation. Neither
+        # makes this downloaded copy the publisher's version of record.
+        pdf_doi = normalize_doi(value) if kind == "doi" else ""
+        preprint_server = ""
+        if (host in {"biorxiv.org", "www.biorxiv.org", "medrxiv.org", "www.medrxiv.org"}
+                and path.startswith("/content/") and path.endswith(".full.pdf")
+                and pdf_doi.startswith("10.1101/") and pdf_doi in path):
+            preprint_server = "bioRxiv" if "biorxiv" in host else "medRxiv"
+        elif (host == "chemrxiv.org" and path.startswith("/engage/api-gateway/chemrxiv/assets/")
+                and "/original/" in path and pdf_doi.startswith("10.26434/chemrxiv")):
+            preprint_server = "ChemRxiv"
+        elif host == "researchsquare.com" or host.endswith(".researchsquare.com"):
+            record = re.match(r"10\.21203/rs\.\d+\.rs-(\d+)(?:/|$)", pdf_doi)
+            if record and re.search(r"/(?:article|files)/rs-" + record.group(1) + r"/v\d", path):
+                preprint_server = "Research Square"
+        if preprint_server:
+            return "preprint", f"Preprint from {preprint_server}; the PDF has a preprint identifier."
+        doi = normalize_doi((capture.paper or {}).get("doi"))
+        if not doi or kind != "doi" or normalize_doi(value) != doi:
+            return "unknown", "Choose the file type if known."
+        if host in {"nature.com", "www.nature.com"} and ui.is_nature_reference_pdf_url(capture.pdf_source_url):
+            return "accepted_manuscript", "Nature accepted-manuscript PDF; the DOI matches."
+        if re.search(r"\b(?:author[\s_-]*)?accepted[\s_-]*manuscript\b", text):
+            return "accepted_manuscript", "Accepted manuscript identified in this PDF."
+        main = (
+            (host in {"nature.com", "www.nature.com"} and path == "/articles/" + doi.removeprefix("10.1038/") + ".pdf" and doi.startswith("10.1038/"))
+            or (host in {"pubs.acs.org", "www.science.org", "science.org", "onlinelibrary.wiley.com", "advanced.onlinelibrary.wiley.com"}
+                and path.endswith(tuple("/doi/" + mode + "/" + doi for mode in ("pdf", "epdf", "pdfdirect"))))
+            or (host == "journals.aps.org" and re.fullmatch(r"/[^/]+/pdf/" + re.escape(doi), path))
+            or (host == "link.aps.org" and path == "/pdf/" + doi)
+            or (host == "iopscience.iop.org" and path == "/article/" + doi + "/pdf")
+            or (host == "link.springer.com" and path == "/content/pdf/" + doi + ".pdf")
+        )
+        if main:
+            return "published_version", "Publisher article PDF; the PDF DOI matches."
+        return "unknown", "Choose the file type if known."
 
     @staticmethod
     def existing(storage, kind, value, title=""):
@@ -276,10 +346,12 @@ class BrowserCaptureService:
                            "date": p.get("publication_date") or "", "gewu_key": p.get("storage_key") or storage.storage_key_for_paper_id(p["paper_id"]),
                            "existing": bool(existing)}
             folders = self.folders(storage)
+            suggested_type, type_reason = self.suggested_file_type(capture)
             return {"token": capture.token, "upload_token": capture.upload_token, "snapshot": capture.snapshot, "paper": summary,
                     "identifier": value, "suggested_title": title, "pdf_ready": capture.pdf_ready, "pdf_name": capture.pdf_name,
                     "origin": {"title": origin["title"], "gewu_key": origin.get("storage_key")} if origin else None,
                     "conflict": capture.conflict, "warning": warning, "folders": folders,
+                    "suggested_file_type": suggested_type, "file_type_reason": type_reason,
                     "can_save": bool(summary) and not capture.conflict}
 
     @staticmethod
@@ -318,7 +390,7 @@ class BrowserCaptureService:
             include_pdf = payload.get("include_pdf") is True
             if include_pdf and not capture.pdf_ready:
                 raise ValueError("The PDF has not been received. Retry, choose a local PDF, or save the article only.")
-            file_type = str(payload.get("file_type") or "unknown")
+            file_type = str(payload.get("file_type") or self.suggested_file_type(capture)[0])
             if file_type not in FILE_TYPES:
                 raise ValueError("Choose a supported PDF file type.")
             paper = dict(capture.paper)
@@ -343,9 +415,27 @@ class BrowserCaptureService:
                     resource = ui.attach_file_to_paper(storage, paper_id=paper_id, filename=capture.pdf_name,
                         content=capture.path.read_bytes(), file_type=file_type, file_source="user_import",
                         source_detail=urlsplit(capture.snapshot["url"]).hostname or "", added_via="browser_capture")
-                    if source:
-                        storage.conn.execute("UPDATE resources SET source_url=COALESCE(NULLIF(source_url,''),?) WHERE id=?", (source, resource["id"]))
-                        storage.conn.commit()
+                    duplicate = bool(resource.get("duplicate"))
+                    # Repair only unclassified Browser captures on an explicit
+                    # re-save. Keep the same resource/key, all known peer types,
+                    # and any classification edited in Paper Files.
+                    if (duplicate and file_type != "unknown" and resource.get("added_via") == "browser_capture"
+                            and resource.get("file_type") == "unknown" and not resource.get("file_type_override")):
+                        role, version, label = legacy_role_projection(file_type)
+                        storage.conn.execute("UPDATE resources SET file_type=?,file_role=?,version_role=?,version_label=? WHERE id=?",
+                                             (file_type, role, version, label, resource["id"]))
+                    if not duplicate or (resource.get("file_type") == "unknown" and not resource.get("file_type_override")):
+                        storage.conn.execute("UPDATE resources SET file_type_override=? WHERE id=?",
+                                             (int(payload.get("file_type_manual") is True), resource["id"]))
+                    pdf_source = persistent_url(capture.pdf_source_url) or source
+                    if pdf_source:
+                        storage.conn.execute("UPDATE resources SET source_url=COALESCE(NULLIF(source_url,''),?) WHERE id=?", (pdf_source, resource["id"]))
+                    storage.conn.commit()
+                    resource = storage.get_paper_resource(resource["id"])
+                    if (resource.get("file_type") in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
+                            and ui.should_promote_new_paper_version(storage, paper_id, resource)):
+                        resource = ui.promote_paper_resource(storage, paper_id, resource["id"])
+                    resource["duplicate"] = duplicate
                 except Exception as exc:
                     return {"ok": False, "metadata_saved": True, "paper_id": paper_id,
                             "error": "Article saved to Library, but the PDF could not be attached: " + str(exc)}

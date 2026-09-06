@@ -5574,6 +5574,10 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
                         result = CAPTURES.review(capture, storage, payload)
                     elif action == "capture_save":
                         result = CAPTURES.save(capture, storage, payload)
+                        if result.get("paper_id"):
+                            # Publish the committed file state with the save result,
+                            # including a retryable partial save or duplicate reuse.
+                            result = {**result, "paper_files": [paper_files_state_payload(storage, result["paper_id"])]}
                     elif action == "capture_cancel":
                         CAPTURES.cancel(self.configured_db_path, capture.token)
                         result = {"ok": True}
@@ -5633,7 +5637,8 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             content = self.rfile.read(length)
             if len(content) != length:
                 raise ValueError("PDF upload was interrupted. Retry the capture.")
-            CAPTURES.upload(capture, content, unquote(self.headers.get("X-Gewu-Filename", "Article.pdf")))
+            CAPTURES.upload(capture, content, unquote(self.headers.get("X-Gewu-Filename", "Article.pdf")),
+                            source_url=unquote(self.headers.get("X-Gewu-PDF-Source", "")))
             self.send_json({"ok": True})
         except (ValueError, TypeError) as exc:
             self.close_connection = True
@@ -45054,10 +45059,12 @@ INDEX_HTML = """<!doctype html>
       if (!key) return null;
       if (!force && state.paperFilesByPaperId[key]) return state.paperFilesByPaperId[key];
       if (state.paperFileRequests[key]) return state.paperFileRequests[key];
-      state.paperFileRequests[key] = fetch(`/api/paper-files?paper_id=${encodeURIComponent(key)}`)
+      const request = fetch(`/api/paper-files?paper_id=${encodeURIComponent(key)}`)
         .then(async (res) => {
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not load files");
+          // A save can install a newer snapshot while this read is in flight.
+          if (state.paperFileRequests[key] !== request) return paperFilesSnapshot(key) || data;
           state.paperFilesByPaperId[key] = data;
           const selectedPaperId = state.libraryTab === "my-publications"
             ? String(selectedMyPublicationPaper()?.paper_id || "")
@@ -45068,8 +45075,11 @@ INDEX_HTML = """<!doctype html>
           }
           return data;
         })
-        .finally(() => delete state.paperFileRequests[key]);
-      return state.paperFileRequests[key];
+        .finally(() => {
+          if (state.paperFileRequests[key] === request) delete state.paperFileRequests[key];
+        });
+      state.paperFileRequests[key] = request;
+      return request;
     }
 
     async function uploadPaperFiles(panel, paperId, fileList) {

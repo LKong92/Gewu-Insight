@@ -158,7 +158,7 @@
       <div class="browser-page-column">
         <div id="browserTabs" class="browser-tabs" role="tablist" aria-label="Webpage tabs"></div>
         <div id="browserFindBar" class="browser-find" hidden><input id="browserFindInput" placeholder="Find on page" aria-label="Find on page"><button id="browserFindPrevious" title="Previous match">↑</button><button id="browserFindNext" title="Next match">↓</button><span id="browserFindResult"></span><button id="browserFindClose" aria-label="Close find">×</button></div>
-        <div id="browserMessage" class="browser-message" role="status" hidden><span id="browserMessageText"></span><button id="browserMessageDismiss" aria-label="Dismiss message">×</button></div>
+        <div id="browserMessage" class="browser-message" role="status" hidden><span id="browserMessageText"></span><button id="browserMessageAction" hidden></button><button id="browserMessageDismiss" aria-label="Dismiss message">×</button></div>
         <div id="browserViewport" class="browser-viewport"><div class="browser-native-placeholder">${icon("globe")}<strong>Browser</strong><span id="browserNativeHint">Opening the native web browser.</span></div></div>
         <section id="browserFavorites" class="browser-favorites" aria-label="Favorites start page" hidden>
           <div class="browser-favorites-inner">
@@ -265,10 +265,21 @@
 
   function newTab(url) { closeContext(); closeSuggestions(); native({action:"new-tab", ...(url ? {url} : {})}); }
 
-  function message(text, error = false) {
+  function message(text, error = false, action = null) {
     $("browserMessageText").textContent = text || "";
     $("browserMessage").hidden = !text;
     $("browserMessage").classList.toggle("error", error);
+    const button = $("browserMessageAction");
+    button.hidden = !action; button.disabled = false;
+    button.textContent = action?.label || "";
+    const handler = action ? async () => {
+      button.disabled = true;
+      try { await action.run(); }
+      catch (error) {
+        if (button.onclick === handler) message(error.message || "Could not open Library. Try again.", true, action);
+      } finally { if (button.onclick === handler) button.disabled = false; }
+    } : null;
+    button.onclick = handler;
     scheduleLayout();
   }
   async function api(action, payload = {}) {
@@ -378,6 +389,8 @@
     if ([...urls.options].some(o => o.value === selected)) urls.value = selected;
     q('[name="include_pdf"]').checked = review.pdf_ready;
     q(".capture-file").textContent = review.pdf_ready ? `Ready: ${review.pdf_name}` : "No PDF attached. You can save the article alone.";
+    if (!c.fileTypeManual) q('[name="file_type"]').value = review.suggested_file_type || "unknown";
+    q(".capture-file-type-hint").textContent = c.fileTypeManual ? "Your selected file type will be used." : review.file_type_reason || "";
     if (review.origin) q('[data-capture="origin"]').textContent = `Use source article: ${review.origin.title} (${review.origin.gewu_key})`;
     captureBusy(c, false);
     captureStatus(c, review.conflict || review.warning || "Review the article, file type and Library folder, then save.", Boolean(review.conflict));
@@ -414,6 +427,7 @@
       <div class="capture-file"></div><label class="capture-local">Or choose a local PDF<input name="local_pdf" type="file" accept="application/pdf,.pdf"></label>
       <label class="capture-check"><input name="include_pdf" type="checkbox"> Include this PDF in Paper Files</label>
       <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="1"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
+      <p class="capture-file-type-hint"></p>
       <footer><button data-capture="cancel">Cancel</button><button data-capture="save" class="capture-primary">Save to Library</button></footer>
     </section>`;
     const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
@@ -460,13 +474,25 @@
       if (action === "save") {
         c.saving = true; captureBusy(c, true, "Saving to Library…");
         try {
-          const result = await api("capture_save", {token:c.review.token, folder_id:Number(q("folder_id").value), file_type:q("file_type").value, include_pdf:q("include_pdf").checked});
+          const result = await api("capture_save", {token:c.review.token, folder_id:Number(q("folder_id").value), file_type:q("file_type").value, file_type_manual:Boolean(c.fileTypeManual), include_pdf:q("include_pdf").checked});
+          if (typeof applyPaperFilesPayloads === "function") applyPaperFilesPayloads(result.paper_files);
+          if (typeof state !== "undefined" && (result.ok || result.metadata_saved)) state.libraryLoaded = false;
           if (!result.ok) throw new Error(result.error || "The article could not be saved.");
-          if (typeof state !== "undefined") state.libraryLoaded = false;
           c.saving = false; closeCapture();
-          message(`Saved to Library · ${result.gewu_key}${result.pdf_saved ? result.duplicate_file ? " · Existing PDF reused" : " · PDF added to Paper Files" : " · Article only"}`);
+          message(`Saved to Library · ${result.gewu_key}${result.pdf_saved ? result.duplicate_file ? " · Existing PDF reused" : " · PDF added to Paper Files" : " · Article only"}`, false, {
+            label:"Show in Library",
+            run:async () => {
+              if (typeof navigateToPaperInLibrary !== "function") throw new Error("Reopen Gewu Insight.app to show this article in Library.");
+              await navigateToPaperInLibrary(result.paper_id, result.item_id);
+              document.getElementById("libraryShell")?.focus({preventScroll:true});
+            }
+          });
         } catch (error) { c.saving = false; captureBusy(c, false); captureStatus(c, error.message, true); }
       }
+    };
+    element.querySelector('[name="file_type"]').onchange = () => {
+      c.fileTypeManual = true;
+      element.querySelector(".capture-file-type-hint").textContent = "Your selected file type will be used.";
     };
     element.querySelector('[name="identifier"]').oninput = () => {
       if (c.review) c.review.can_save = false;

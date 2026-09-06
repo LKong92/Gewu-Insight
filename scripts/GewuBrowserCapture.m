@@ -9,6 +9,7 @@
 @property(nonatomic, strong) NSURL *endpoint;
 @property(nonatomic, copy) NSString *uploadToken;
 @property(nonatomic, copy) NSString *filename;
+@property(nonatomic, copy) NSString *sourceURL;
 @property(nonatomic, copy) void (^completion)(NSString *error);
 @property(nonatomic, strong) NSTimer *timer;
 @end
@@ -24,6 +25,7 @@
     }
     self.endpoint = [NSURL URLWithString:@"/api/browser-capture-file" relativeToURL:workspaceURL].absoluteURL;
     self.uploadToken = token;
+    self.sourceURL = url.absoluteString;
     __weak typeof(self) weakSelf = self;
     NSDate *started = NSDate.date;
     self.timer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
@@ -88,6 +90,7 @@
     [request setValue:@"application/pdf" forHTTPHeaderField:@"Content-Type"];
     [request setValue:self.uploadToken forHTTPHeaderField:@"X-Gewu-Capture-Token"];
     [request setValue:[self.filename stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] forHTTPHeaderField:@"X-Gewu-Filename"];
+    [request setValue:[self.sourceURL stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet] forHTTPHeaderField:@"X-Gewu-PDF-Source"];
     [request setValue:size.stringValue forHTTPHeaderField:@"Content-Length"];
     __weak typeof(self) weakSelf = self;
     [[self.uploader uploadTaskWithRequest:request fromFile:self.file completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {

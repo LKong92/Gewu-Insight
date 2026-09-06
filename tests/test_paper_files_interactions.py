@@ -21,6 +21,32 @@ class PaperFilesInteractionTests(unittest.TestCase):
         result = subprocess.run(["node", "-e", script + "\n(async () => {\n" + code + "\n})().catch(error => {console.error(error); process.exit(1);});"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_saved_files_replace_empty_cache_and_supersede_inflight_reads(self):
+        self.run_js(["paperFilesSnapshot", "applyPaperFilesPayloads", "loadPaperFiles"], r'''
+global.state = {mode:'browser', paperFilesByPaperId:{paper:{paper_id:'paper',files:[]}}, paperFileRequests:{}};
+const updated = [], replies = [];
+global.updatePaperState = (id,paper) => updated.push([id,paper]);
+global.libraryItemById = () => null;
+global.fetch = () => new Promise(resolve => replies.push(files => resolve({ok:true,json:async()=>({paper_id:'paper',files})})));
+const pending = loadPaperFiles('paper',{force:true});
+const saved = {paper_id:'paper',files:[{id:9,file_type:'unknown'}],paper:{paper_id:'paper',title:'Saved article'}};
+applyPaperFilesPayloads([saved]);
+replies.shift()([]);
+assert.equal(await pending, saved);
+assert.equal(await loadPaperFiles('paper'), saved);
+assert.deepEqual(updated, [['paper',saved.paper]]);
+// Completion of an older request cannot clear a newer request either.
+const older = loadPaperFiles('paper',{force:true});
+applyPaperFilesPayloads([saved]);
+const newer = loadPaperFiles('paper',{force:true});
+const active = state.paperFileRequests.paper;
+replies.shift()([]); await older;
+assert.equal(state.paperFileRequests.paper,active);
+replies.shift()([{id:9},{id:10}]); await newer;
+assert.equal(paperFilesSnapshot('paper').files.length,2);
+assert.equal(state.paperFileRequests.paper,undefined);
+''')
+
     def test_item_open_uses_default_then_legacy_primary_and_explicit_preview(self):
         self.run_js(["openNativeLibraryEntry", "openLibraryPaperResource", "libraryPaperResourceIsPdf"], r'''
 global.state = {};

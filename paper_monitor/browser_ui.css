@@ -106,6 +106,9 @@
 #gewuBrowser .browser-page-footer svg { width: 14px; height: 14px; }
 .browser-message { padding: 7px 11px; color: #507357; font-size: 12px; display: flex; align-items: center; gap: 10px; background: #f5f9f5; border-bottom: 1px solid #dfe7e0; }
 .browser-message.error { color: #996727; background: #fff9ef; border-color: #ede1cc; }
+.browser-message > span {flex:1; min-width:0; overflow-wrap:anywhere}
+#gewuBrowser #browserMessageAction {flex-shrink:0; padding:5px 10px; border:1px solid #245c83; border-radius:5px; background:#245c83; color:#fff; font:inherit; font-weight:600; cursor:pointer}
+#gewuBrowser #browserMessageAction:disabled {opacity:.6; cursor:default}
 #browserMessageText { flex: 1; }
 .browser-find { display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 5px 10px; background: #f7f7f8; border-bottom: 1px solid #dfe2e7; }
 .browser-find input { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid #d8dce1; border-radius: 5px; }
@@ -131,6 +134,8 @@
 .browser-capture-panel .capture-status {margin:6px 0 12px; color:#526578}
 .browser-capture-panel .capture-status.error {color:#a63129}
 .browser-capture-panel .capture-file {overflow-wrap:anywhere; margin-top:8px; color:#526578}
+.browser-capture-panel .capture-file-type-hint {margin:8px 0 0; color:#526578; font-size:12px}
+.browser-capture-panel .capture-file-type-hint:empty {display:none}
 .browser-capture-panel .capture-check {display:flex; align-items:center; gap:8px}
 .browser-capture-panel .capture-manual button {margin-top:6px}
 .browser-capture-panel [data-capture="origin"] {margin-top:12px; text-align:left; overflow-wrap:anywhere}
