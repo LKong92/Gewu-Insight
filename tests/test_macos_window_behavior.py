@@ -15,29 +15,18 @@ class MacosWindowBehaviorTests(unittest.TestCase):
     def test_loading_pages_use_the_packaged_icon_and_subtle_brand_art(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 
-        loading_page = source.split("- (void)showLoadingPage", 1)[1].split(
-            "- (void)ensureServerThenLoad", 1
-        )[0]
-        self.assertIn("src='GewuInsightAppIcon.png'", loading_page)
-        icon_shell_css = loading_page.split('".icon-shell{', 1)[1].split('}"', 1)[0]
-        self.assertNotIn("border:", icon_shell_css)
-        self.assertNotIn("background:", icon_shell_css)
-        self.assertNotIn("box-shadow:", icon_shell_css)
-        self.assertIn("Starting Gewu Insight", loading_page)
-        self.assertIn("brand-art", loading_page)
-        self.assertIn("src='GewuSealGlyphs.png'", loading_page)
-        self.assertIn("width:460px", loading_page)
-        self.assertIn("right:-28px;top:-66px;width:236px;height:236px", loading_page)
-        self.assertNotIn("mix-blend-mode:multiply", loading_page)
-        self.assertGreater(loading_page.index("class='brand-art'"), loading_page.index("class='card'"))
-        self.assertNotIn("-webkit-mask", loading_page)
-        self.assertNotIn("格物洞见", loading_page)
-        self.assertNotIn("brand-seal", loading_page)
-        self.assertIn("baseURL:[NSBundle mainBundle].resourceURL", loading_page)
-        self.assertIn("self.startupWebView", loading_page)
-        self.assertIn("[self.startupWebView loadHTMLString:html", loading_page)
-        self.assertNotIn("[self.webView loadHTMLString:html", loading_page)
-        self.assertNotIn("<div class='icon'>G</div>", loading_page)
+        loading_view = source.split("@implementation GewuStartupView", 1)[1].split("@end", 1)[0]
+        self.assertIn('URLForResource:@"GewuInsightAppIcon"', loading_view)
+        self.assertIn('URLForResource:@"GewuSealGlyphs"', loading_view)
+        self.assertIn("Starting Gewu Insight", loading_view)
+        self.assertIn("NSRectFill(self.bounds)", loading_view)
+        self.assertIn("drawRect:", loading_view)
+        self.assertNotIn("WKWebView", loading_view)
+        creation = source.split("- (void)createWindow", 1)[1].split("- (void)userContentController:", 1)[0]
+        self.assertLess(creation.index("[self showLoadingPage]"), creation.index("makeKeyAndOrderFront"))
+        loading_page = source.split("- (void)showLoadingPage", 1)[1].split("- (void)dismissStartupOverlay", 1)[0]
+        self.assertIn("GewuStartupView alloc", loading_page)
+        self.assertNotIn("loadHTMLString", loading_page)
         self.assertIn('objectForInfoDictionaryKey:@"CFBundleIconFile"', source)
         self.assertIn('URLForResource:applicationIconName', source)
         self.assertIn('withExtension:@"png"', source)
@@ -176,11 +165,11 @@ class MacosWindowBehaviorTests(unittest.TestCase):
     def test_native_startup_overlay_persists_until_library_is_ready(self) -> None:
         source = (ROOT / "scripts" / "PaperMonitorApp.m").read_text()
 
-        self.assertIn("@property(nonatomic, strong) WKWebView *startupWebView;", source)
+        self.assertIn("@property(nonatomic, strong) GewuStartupView *startupView;", source)
         self.assertIn('name:@"appReady"', source)
         self.assertIn('[message.name isEqualToString:@"appReady"]', source)
         self.assertIn("[self dismissStartupOverlay];", source)
-        self.assertIn("[self.window.contentView addSubview:self.startupWebView", source)
+        self.assertIn("[self.window.contentView addSubview:self.startupView", source)
         self.assertIn("overlay.animator.alphaValue = 0.0;", source)
         self.assertIn("[overlay removeFromSuperview];", source)
         self.assertIn("[self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];", source)

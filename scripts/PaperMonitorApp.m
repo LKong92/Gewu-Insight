@@ -10,6 +10,80 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 static const NSTimeInterval GewuInsightServerRecoveryDelay = 0.75;
 static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
+// This view paints synchronously with the window's first frame. A second
+// WKWebView would itself need an asynchronous first paint before showing this art.
+@interface GewuStartupView : NSView
+@property(nonatomic, strong) NSImage *icon;
+@property(nonatomic, strong) NSImage *brandArt;
+@end
+
+@implementation GewuStartupView
+- (instancetype)initWithFrame:(NSRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.wantsLayer = YES;
+        self.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        NSURL *iconURL = [[NSBundle mainBundle] URLForResource:@"GewuInsightAppIcon" withExtension:@"png"];
+        NSURL *artURL = [[NSBundle mainBundle] URLForResource:@"GewuSealGlyphs" withExtension:@"png"];
+        self.icon = iconURL ? [[NSImage alloc] initWithContentsOfURL:iconURL] : nil;
+        self.brandArt = artURL ? [[NSImage alloc] initWithContentsOfURL:artURL] : nil;
+        self.accessibilityElement = YES;
+        self.accessibilityRole = NSAccessibilityGroupRole;
+        self.accessibilityLabel = @"Starting Gewu Insight. Preparing the local reading workspace.";
+    }
+    return self;
+}
+- (void)setBrandArt:(NSImage *)source {
+    // The packaged seal has light glyphs. Match the startup page's black tint
+    // while retaining the PNG's alpha, without waiting for a web CSS filter.
+    _brandArt = source ? [NSImage imageWithSize:NSMakeSize(236, 236) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [source drawInRect:rect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
+        [NSColor.blackColor setFill];
+        NSRectFillUsingOperation(rect, NSCompositingOperationSourceIn);
+        return YES;
+    }] : nil;
+}
+- (BOOL)isFlipped { return YES; }
+- (BOOL)isOpaque { return YES; }
+- (void)setFrameSize:(NSSize)size {
+    [super setFrameSize:size];
+    self.needsDisplay = YES;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    [[NSColor colorWithRed:244.0/255.0 green:242.0/255.0 blue:237.0/255.0 alpha:1.0] setFill];
+    NSRectFill(self.bounds);
+    NSRect card = NSMakeRect((NSWidth(self.bounds) - 460.0) / 2.0,
+                             (NSHeight(self.bounds) - 116.0) / 2.0, 460.0, 116.0);
+    NSBezierPath *outline = [NSBezierPath bezierPathWithRoundedRect:card xRadius:18 yRadius:18];
+    [NSGraphicsContext saveGraphicsState];
+    NSShadow *shadow = [NSShadow new];
+    shadow.shadowColor = [NSColor colorWithWhite:0 alpha:0.08];
+    shadow.shadowBlurRadius = 32;
+    shadow.shadowOffset = NSMakeSize(0, -12);
+    [shadow set];
+    [[NSColor colorWithWhite:1 alpha:0.78] setFill];
+    [outline fill];
+    [NSGraphicsContext restoreGraphicsState];
+    [NSGraphicsContext saveGraphicsState];
+    [outline addClip];
+    [self.brandArt drawInRect:NSMakeRect(NSMaxX(card) - 208, NSMinY(card) - 66, 236, 236)
+                    fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:0.075
+              respectFlipped:YES hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+    [[NSColor colorWithRed:35.0/255.0 green:31.0/255.0 blue:26.0/255.0 alpha:0.12] setStroke];
+    [outline stroke];
+    [self.icon drawInRect:NSMakeRect(NSMinX(card) + 33, NSMinY(card) + 29, 58, 58)
+                fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1
+          respectFlipped:YES hints:nil];
+    [@"Starting Gewu Insight" drawAtPoint:NSMakePoint(NSMinX(card) + 111, NSMinY(card) + 33)
+                         withAttributes:@{NSFontAttributeName:[NSFont boldSystemFontOfSize:19],
+                                          NSForegroundColorAttributeName:[NSColor colorWithWhite:0.13 alpha:1]}];
+    [@"Preparing the local reading workspace." drawAtPoint:NSMakePoint(NSMinX(card) + 111, NSMinY(card) + 60)
+                         withAttributes:@{NSFontAttributeName:[NSFont systemFontOfSize:13],
+                                          NSForegroundColorAttributeName:[NSColor colorWithWhite:0.36 alpha:1]}];
+}
+@end
+
 @interface GewuInsightWebView : WKWebView <NSDraggingDestination, NSDraggingSource>
 @property(nonatomic, copy) NSString *nativeDragPath;
 @property(nonatomic, copy) NSString *nativeDragName;
@@ -310,7 +384,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) GewuBrowserController *browserController;
-@property(nonatomic, strong) WKWebView *startupWebView;
+@property(nonatomic, strong) GewuStartupView *startupView;
 @property(nonatomic, strong) NSWindow *loaderWindow;
 @property(nonatomic, strong) WKWebView *loaderWebView;
 @property(nonatomic, strong) NSWindow *userGuideWindow;
@@ -395,7 +469,6 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     [[NSUserDefaults standardUserDefaults] setObject:@"None" forKey:@"AppleActionOnDoubleClick"];
 
     [self createWindow];
-    [self showLoadingPage];
     [self installMainMenu];
     [NSApp activateIgnoringOtherApps:YES];
     [self ensureServerThenLoad];
@@ -669,6 +742,8 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     }
     [contentView addSubview:self.webView];
     self.window.contentView = contentView;
+    self.window.backgroundColor = [NSColor colorWithRed:244.0/255.0 green:242.0/255.0 blue:237.0/255.0 alpha:1.0];
+    [self showLoadingPage];
     if (self.window.isMiniaturized) [self.window deminiaturize:nil];
     [self.window makeKeyAndOrderFront:nil];
     [self positionTrafficLightButtons];
@@ -1745,45 +1820,22 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)showLoadingPage {
-    [self.startupWebView removeFromSuperview];
-    WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-    self.startupWebView = [[WKWebView alloc] initWithFrame:self.window.contentView.bounds
-                                             configuration:configuration];
-    self.startupWebView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.startupWebView.alphaValue = 1.0;
-    if (@available(macOS 12.0, *)) {
-        self.startupWebView.underPageBackgroundColor = [NSColor colorWithRed:244.0/255.0
-                                                                       green:242.0/255.0
-                                                                        blue:237.0/255.0
-                                                                       alpha:1.0];
-    }
-    [self.window.contentView addSubview:self.startupWebView
+    [self.startupView removeFromSuperview];
+    self.startupView = [[GewuStartupView alloc] initWithFrame:self.window.contentView.bounds];
+    [self.window.contentView addSubview:self.startupView
                               positioned:NSWindowAbove
                               relativeTo:self.webView];
-    NSString *html = @"<!doctype html>"
-        "<html><head><meta charset='utf-8'><style>"
-        "body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f2ed;color:#231f1a;font:15px -apple-system,BlinkMacSystemFont,sans-serif;}"
-        ".card{position:relative;isolation:isolate;display:flex;align-items:center;gap:18px;width:460px;box-sizing:border-box;overflow:hidden;padding:26px 30px;border:1px solid rgba(35,31,26,.12);border-radius:18px;background:rgba(255,255,255,.78);box-shadow:0 18px 50px rgba(35,31,26,.08);}"
-        ".brand-art{position:absolute;z-index:0;right:-28px;top:-66px;width:236px;height:236px;display:block;object-fit:contain;opacity:.075;filter:brightness(0) saturate(100%);transform:rotate(-2deg);pointer-events:none;}"
-        ".icon-shell{width:62px;height:62px;flex:0 0 62px;display:grid;place-items:center;}"
-        ".icon{width:58px;height:58px;display:block;object-fit:contain;}"
-        ".copy{position:relative;z-index:1;min-width:0;flex:1;}"
-        "strong{display:block;margin:0 0 2px;font-size:19px;line-height:1.25;}"
-        ".message{min-height:19px;color:#5e5a54;font-size:13px;line-height:19px;white-space:nowrap;}"
-        "</style></head><body><div class='card'><img class='brand-art' src='GewuSealGlyphs.png' alt='' aria-hidden='true'><div class='icon-shell'><img class='icon' src='GewuInsightAppIcon.png' alt='Gewu Insight'></div><div class='copy'><strong>Starting Gewu Insight</strong><div class='message'>Preparing the local reading workspace.</div></div></div></body></html>";
-    [self.startupWebView loadHTMLString:html baseURL:[NSBundle mainBundle].resourceURL];
 }
 
 - (void)dismissStartupOverlay {
-    WKWebView *overlay = self.startupWebView;
+    GewuStartupView *overlay = self.startupView;
     if (!overlay) return;
-    self.startupWebView = nil;
+    self.startupView = nil;
     __weak typeof(self) weakSelf = self;
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
         context.duration = 0.18;
         overlay.animator.alphaValue = 0.0;
     } completionHandler:^{
-        [overlay stopLoading];
         [overlay removeFromSuperview];
         PaperMonitorDelegate *strongSelf = weakSelf;
         if (strongSelf) [strongSelf.window makeFirstResponder:strongSelf.webView];
@@ -1885,7 +1937,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
             self.serverRestartAttempts = 0;
             return;
         }
-        if (self.mainAppHasLoaded && !self.startupWebView) [self showLoadingPage];
+        if (self.mainAppHasLoaded && !self.startupView) [self showLoadingPage];
         if ([self restartServerForCurrentOutageIfPossible]) {
             [self beginServerReadinessPolling];
         }
