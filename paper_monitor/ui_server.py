@@ -27305,24 +27305,6 @@ INDEX_HTML = """<!doctype html>
       min-height: 1px;
       height: var(--library-tab-stack-height, 1px);
     }
-    .library-tab-section.can-scroll-up::before,
-    .library-tab-section.can-scroll-down::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      z-index: 4;
-      width: 30px;
-      height: 13px;
-      pointer-events: none;
-    }
-    .library-tab-section.can-scroll-up::before {
-      top: 24px;
-      background: linear-gradient(to bottom, rgba(255,255,255,0.96), rgba(255,255,255,0));
-    }
-    .library-tab-section.can-scroll-down::after {
-      bottom: 0;
-      background: linear-gradient(to top, rgba(255,255,255,0.96), rgba(255,255,255,0));
-    }
     .library-tab-rail .library-tab {
       position: absolute;
       left: 0;
@@ -27386,27 +27368,11 @@ INDEX_HTML = """<!doctype html>
       box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.05);
     }
     .library-tab-rail .library-tab.active {
+      border-color: transparent;
       color: var(--library-tab-active-color);
       background: var(--library-tab-active-bg);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+      box-shadow: none;
       z-index: 2;
-    }
-    .library-tab-rail .library-tab.active::before,
-    .library-tab-rail .library-tab.active::after {
-      content: "";
-      position: absolute;
-      bottom: -1px;
-      width: 18px;
-      height: 18px;
-      pointer-events: none;
-    }
-    .library-tab-rail .library-tab.active::before {
-      left: -18px;
-      background: radial-gradient(circle at 0 0, transparent 18px, var(--library-tab-active-bg) 19px);
-    }
-    .library-tab-rail .library-tab.active::after {
-      right: -18px;
-      background: radial-gradient(circle at 100% 0, transparent 18px, var(--library-tab-active-bg) 19px);
     }
     .library-tab.shortcut-tab {
       --library-tab-bg: #e8f0f8;
@@ -27430,7 +27396,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab.shortcut-tab.active {
       background: var(--library-tab-active-bg);
-      border-color: var(--library-tab-active-border);
+      border-color: transparent;
     }
     .library-tab.workspace-tab {
       --library-tab-bg: #f0f5fa;
@@ -27446,7 +27412,7 @@ INDEX_HTML = """<!doctype html>
     .library-tab[data-nav-draggable="true"].nav-dragging { cursor: grabbing; }
     .library-tab.workspace-tab.active {
       background: var(--library-tab-active-bg);
-      border-color: var(--library-tab-active-border);
+      border-color: transparent;
     }
     .loader-tool-tab {
       display: inline-flex;
