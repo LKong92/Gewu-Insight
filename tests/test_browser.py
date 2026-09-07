@@ -257,14 +257,16 @@ class BrowserApiTests(unittest.TestCase):
     def test_website_preference_dispatch_initial_page_and_external_request(self):
         headers = {"Origin": f"http://127.0.0.1:{self.server.server_port}", "Content-Type": "application/json"}
         status, content = self.request("/api/settings/website-links")
-        self.assertEqual((status, json.loads(content)), (200, {"browser": "builtin"}))
-        status, content = self.request("/api/settings/website-links", {"browser": "system"}, headers)
-        self.assertEqual((status, json.loads(content)), (200, {"browser": "system"}))
+        self.assertEqual((status, json.loads(content)), (200, {"browser": "builtin", "capture_details_expanded": False}))
+        status, content = self.request("/api/settings/website-links", {"browser": "system", "capture_details_expanded": True}, headers)
+        self.assertEqual((status, json.loads(content)), (200, {"browser": "system", "capture_details_expanded": True}))
         status, content = self.request("/")
         self.assertEqual(status, 200)
         self.assertIn(b'websiteLinkBrowser: "system",', content)
+        self.assertIn(b'browserCaptureDetailsExpanded: true,', content)
         bad_headers = {**headers, "Origin": "https://example.org"}
         self.assertEqual(self.request("/api/settings/website-links", {"browser": "builtin"}, bad_headers)[0], 403)
+        self.assertEqual(self.request("/api/settings/website-links", {"browser": "system", "capture_details_expanded": False}, bad_headers)[0], 403)
         self.assertEqual(self.request("/api/settings/website-links", {"browser": "unknown"}, headers)[0], 400)
         with patch("paper_monitor.ui_server.subprocess.run") as launch:
             self.assertEqual(self.request("/api/open-url", {"url": "https://example.org/", "app": "default"}, bad_headers)[0], 403)

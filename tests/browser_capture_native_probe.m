@@ -15,11 +15,15 @@ static void check(BOOL condition, NSString *name) { if(!condition){fprintf(stder
 @property(strong) CaptureFakeDownload *download;
 @property(strong) NSURLRequest *request;
 @property(copy) void (^probe)(id,NSError *);
+@property NSRect bounds;
+@property(strong) WKSnapshotConfiguration *snapshotConfiguration;
+@property(copy) void (^snapshotCompletion)(NSImage *,NSError *);
 @end
 @implementation CaptureFakeView
 - (BOOL)isLoading { return self.loading; }
 - (void)startDownloadUsingRequest:(NSURLRequest *)request completionHandler:(void (^)(WKDownload *))done {self.request=request;self.download=[CaptureFakeDownload new];done((id)self.download);}
 - (void)evaluateJavaScript:(NSString *)script inFrame:(id)frame inContentWorld:(WKContentWorld *)world completionHandler:(void (^)(id,NSError *))done {check([world.name isEqual:@"GewuBrowserCapture"],@"metadata uses isolated world");self.probe=done;}
+- (void)takeSnapshotWithConfiguration:(WKSnapshotConfiguration *)configuration completionHandler:(void (^)(NSImage *,NSError *))done {self.snapshotConfiguration=configuration;self.snapshotCompletion=done;}
 @end
 int main(void){@autoreleasepool {
     NSURL *public=[NSURL URLWithString:@"https://example.org/paper.pdf"], *local=[NSURL URLWithString:@"http://127.0.0.1:9876/"];
@@ -74,5 +78,23 @@ int main(void){@autoreleasepool {
     controller.active=NO;
     [controller handleCommand:@{@"action":@"capture-cancel",@"snapshot_id":snapshot[@"snapshot_id"],@"token":@"ticket"}];
     check(controller.captureSnapshots.count==0,@"cancel releases snapshot even after workspace exit");
+    controller.active=YES; view.bounds=NSMakeRect(0,0,2000,1200);
+    [controller captureBackdropForPage:page requestID:@"backdrop-one"];
+    check(NSEqualRects(view.snapshotConfiguration.rect,view.bounds),@"backdrop captures only the visible viewport");
+    check(view.snapshotConfiguration.snapshotWidth.intValue==1600,@"backdrop resolution is bounded");
+    NSBitmapImageRep *bitmap=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:20 pixelsHigh:20 bitsPerSample:8 samplesPerPixel:3 hasAlpha:NO isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    memset(bitmap.bitmapData,255,bitmap.bytesPerRow*bitmap.pixelsHigh);
+    NSImage *image=[[NSImage alloc] initWithSize:NSMakeSize(20,20)];[image addRepresentation:bitmap];
+    event=nil; view.snapshotCompletion(image,nil);
+    check([event[@"event"] isEqual:@"capture-backdrop"] && [event[@"image"] hasPrefix:@"data:image/jpeg;base64,"],@"backdrop goes to the trusted workspace as an in-memory image");
+    void (^oldSnapshot)(NSImage *,NSError *)=view.snapshotCompletion;
+    [controller captureBackdropForPage:page requestID:@"backdrop-two"];
+    event=nil;oldSnapshot(image,nil);check(!event,@"superseded backdrop cannot update a new dialog");
+    [controller handleCommand:@{@"action":@"capture-cancel",@"request_id":@"backdrop-two"}];
+    view.snapshotCompletion(image,nil);check(!event,@"closing the dialog rejects its late backdrop");
+    [controller captureBackdropForPage:page requestID:@"backdrop-three"];
+    page.captureDocumentID=@"new-document";view.snapshotCompletion(image,nil);check(!event,@"navigation invalidates pending backdrop");
+    [controller captureBackdropForPage:page requestID:@"backdrop-four"];
+    controller.active=NO;view.snapshotCompletion(image,nil);check(!event,@"workspace exit cannot reveal a pending backdrop");
     printf("%d native capture boundary and lifecycle checks passed.\n",checks);
 }}

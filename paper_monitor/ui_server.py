@@ -229,6 +229,7 @@ PDF_RENAME_TEMPLATE_SETTING = "pdf_rename_template"
 QUICK_LOOK_MODE_SETTING = "quick_look_mode"
 WEBSITE_LINK_BROWSER_SETTING = "website_link_browser"
 WEBSITE_LINK_BROWSERS = {"builtin", "system"}
+BROWSER_CAPTURE_DETAILS_SETTING = "browser_capture_details_expanded"
 FONT_SIZE_SCALE_SETTING = "font_size_scale"
 MONITOR_PDF_CACHE_RETENTION_DAYS = 30
 THEME_CUSTOM_GROUPS_SETTING = "theme_custom_groups"
@@ -3728,9 +3729,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if browser not in WEBSITE_LINK_BROWSERS:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown website browser")
             return
+        details = payload.get("capture_details_expanded")
+        if "capture_details_expanded" in payload and not isinstance(details, bool):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose whether Save to Gewu details open by default")
+            return
         storage = Storage(self.configured_db_path)
         try:
             storage.set_setting(WEBSITE_LINK_BROWSER_SETTING, browser)
+            if details is not None:
+                storage.set_setting(BROWSER_CAPTURE_DETAILS_SETTING, "true" if details else "false")
             response = website_link_settings_payload(storage)
         finally:
             storage.close()
@@ -13190,16 +13197,20 @@ def quick_look_settings_payload(storage: Storage) -> dict[str, Any]:
     }
 
 
-def website_link_settings_payload(storage: Storage) -> dict[str, str]:
+def website_link_settings_payload(storage: Storage) -> dict[str, Any]:
     browser = storage.get_setting(WEBSITE_LINK_BROWSER_SETTING, "builtin")
-    return {"browser": browser if browser in WEBSITE_LINK_BROWSERS else "builtin"}
+    return {"browser": browser if browser in WEBSITE_LINK_BROWSERS else "builtin",
+            "capture_details_expanded": storage.get_setting(BROWSER_CAPTURE_DETAILS_SETTING, "false") == "true"}
 
 
 def workspace_html(storage: Storage) -> str:
     # Embed only the validated enum so even the first click after reload uses
     # SQLite's preference, without delaying browser-hosted popup gestures.
-    browser = website_link_settings_payload(storage)["browser"]
-    return INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1)
+    settings = website_link_settings_payload(storage)
+    browser = settings["browser"]
+    details = "true" if settings["capture_details_expanded"] else "false"
+    return INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1).replace(
+        'browserCaptureDetailsExpanded: false,', f'browserCaptureDetailsExpanded: {details},', 1)
 
 
 def normalize_font_size_scale(value: Any) -> int:
@@ -34968,7 +34979,7 @@ INDEX_HTML = """<!doctype html>
           <div class="settings-modal-head">
             <div>
               <h2 id="websiteLinkSettingsTitle">Website Links</h2>
-              <p>Choose where website buttons and links open.</p>
+              <p>Choose where websites open and how Save to Gewu starts.</p>
             </div>
             <button class="settings-modal-close" id="closeWebsiteLinkSettings" type="button" title="Close settings">×</button>
           </div>
@@ -34986,8 +34997,13 @@ INDEX_HTML = """<!doctype html>
                 </label>
               </div>
               <p class="field-settings-note">Includes Library, My Publications, Journal Monitor, Subject Monitor, Author Monitor, and their Note links.</p>
+              <div class="citation-source-setting-head"><strong>Save to Gewu</strong><span>Built-in Browser</span></div>
+              <label class="quick-look-mode-option">
+                <input type="checkbox" id="browserCaptureDetailsExpanded">
+                <span class="quick-look-mode-copy"><strong>Show Details by default</strong><span>Expand article identity and PDF controls when Save to Gewu opens. You can always toggle Details in the dialog.</span></span>
+              </label>
               <div class="field-settings-note">
-                <span>Default: Gewu Insight Browser.</span>
+                <span>Defaults: Gewu Insight Browser; Details collapsed.</span>
                 <span class="field-settings-actions">
                   <button class="smallbtn" id="resetWebsiteLinkSettings" type="button">Restore Default</button>
                   <button class="smallbtn" id="saveWebsiteLinkSettings" type="button">Save</button>
@@ -35203,6 +35219,7 @@ INDEX_HTML = """<!doctype html>
       quickLookSettingsLoaded: false,
       quickLookSettingsPromise: null,
       websiteLinkBrowser: "builtin",
+      browserCaptureDetailsExpanded: false,
       websiteLinkSettingsBusy: false,
       fontSizeScale: 100,
       fontSizeSettingsLoaded: false,
@@ -54362,6 +54379,8 @@ INDEX_HTML = """<!doctype html>
 
     function applyWebsiteLinkSettings(settings = {}) {
       state.websiteLinkBrowser = settings.browser === "system" ? "system" : "builtin";
+      state.browserCaptureDetailsExpanded = settings.capture_details_expanded === true;
+      $("browserCaptureDetailsExpanded").checked = state.browserCaptureDetailsExpanded;
       document.querySelectorAll('input[name="website-link-browser"]').forEach((input) => {
         input.checked = input.value === state.websiteLinkBrowser;
       });
@@ -54370,6 +54389,7 @@ INDEX_HTML = """<!doctype html>
     function setWebsiteLinkSettingsBusy(busy) {
       state.websiteLinkSettingsBusy = busy;
       $("websiteLinkBrowserOptions").querySelectorAll("input").forEach(input => { input.disabled = busy; });
+      $("browserCaptureDetailsExpanded").disabled = busy;
       $("saveWebsiteLinkSettings").disabled = busy;
       $("resetWebsiteLinkSettings").disabled = busy;
     }
@@ -54377,7 +54397,7 @@ INDEX_HTML = """<!doctype html>
     async function openWebsiteLinkSettings() {
       const backdrop = $("websiteLinkSettingsBackdrop");
       if (!backdrop || state.websiteLinkSettingsBusy) return;
-      applyWebsiteLinkSettings({browser: state.websiteLinkBrowser});
+      applyWebsiteLinkSettings({browser: state.websiteLinkBrowser, capture_details_expanded: state.browserCaptureDetailsExpanded});
       backdrop.classList.add("open");
       backdrop.setAttribute("aria-hidden", "false");
       focusDialogSurface(backdrop);
@@ -54387,7 +54407,7 @@ INDEX_HTML = """<!doctype html>
       status.className = "citation-settings-status";
       try {
         applyWebsiteLinkSettings(await fetchJson("/api/settings/website-links"));
-        status.textContent = "Choose a browser, then Save. The choice applies to the next website you open.";
+        status.textContent = "Choose your defaults, then Save. Changes apply the next time you open a website or Save to Gewu.";
       } catch (error) {
         status.textContent = error.message || "Could not load website settings";
         status.className = "citation-settings-status err";
@@ -54404,18 +54424,19 @@ INDEX_HTML = """<!doctype html>
     async function saveWebsiteLinkSettings(browserOverride = null) {
       if (state.websiteLinkSettingsBusy) return;
       const browser = browserOverride || document.querySelector('input[name="website-link-browser"]:checked')?.value;
+      const capture_details_expanded = browserOverride ? false : $("browserCaptureDetailsExpanded").checked;
       setWebsiteLinkSettingsBusy(true);
       const status = $("websiteLinkSettingsStatus");
       status.textContent = "Saving website settings...";
       status.className = "citation-settings-status";
       try {
         const res = await fetch("/api/settings/website-links", {
-          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({browser})
+          method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({browser, capture_details_expanded})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not save website settings");
         applyWebsiteLinkSettings(data);
-        status.textContent = "Website browser preference saved.";
+        status.textContent = "Website and Save to Gewu preferences saved.";
         status.className = "citation-settings-status ok";
       } catch (error) {
         status.textContent = error.message || "Could not save website settings";

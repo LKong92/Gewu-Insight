@@ -105,6 +105,7 @@
 @property(nonatomic, strong) GewuBrowserAutoFill *loginTrigger;
 @property(nonatomic, strong) NSMutableDictionary *captureSnapshots;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, GewuBrowserCapture *> *captures;
+@property(nonatomic, copy) NSString *captureBackdropRequestID;
 @end
 
 @implementation GewuBrowserController
@@ -501,6 +502,7 @@
     NSString *action = [command[@"action"] isKindOfClass:NSString.class] ? command[@"action"] : @"";
     if ([action isEqualToString:@"layout"]) {
         self.active = [command[@"active"] boolValue];
+        if (!self.active) self.captureBackdropRequestID = nil;
         self.sidebarVisible = [command[@"sidebarVisible"] boolValue];
         self.canReturnToWorkspace = self.active && [command[@"canReturnToWorkspace"] boolValue];
         self.favicons.active = self.active;
@@ -531,6 +533,7 @@
         return;
     }
     if ([action isEqualToString:@"capture-cancel"]) {
+        if ([command[@"request_id"] isEqual:self.captureBackdropRequestID]) self.captureBackdropRequestID = nil;
         [self.captures[command[@"token"] ?: @""] cancel];
         [self.captures removeObjectForKey:command[@"token"] ?: @""];
         [self.captureSnapshots removeObjectForKey:command[@"snapshot_id"] ?: @""]; return;
@@ -635,6 +638,32 @@
 
 // Read only article metadata after the trusted toolbar command. Remote pages
 // have no message handler, capture token, local path or workspace API access.
+- (void)captureBackdropForPage:(GewuBrowserPage *)page requestID:(NSString *)requestID {
+    self.captureBackdropRequestID = requestID;
+    NSRect bounds = page.view.bounds;
+    if (bounds.size.width < 1 || bounds.size.height < 1) return;
+    GewuBrowserTab *tab = self.selectedTab;
+    NSURL *url = page.view.URL;
+    NSString *generation = page.captureDocumentID ?: @"";
+    WKSnapshotConfiguration *configuration = [WKSnapshotConfiguration new];
+    configuration.rect = bounds;
+    configuration.snapshotWidth = @(MIN(1600, bounds.size.width));
+    configuration.afterScreenUpdates = NO;
+    __weak typeof(self) weakSelf = self;
+    [page.view takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage *image, NSError *error) {
+        typeof(self) self = weakSelf;
+        if (!self || self.invalidated || !self.active || error || !image
+            || ![self.captureBackdropRequestID isEqual:requestID] || self.selectedTab != tab || self.currentPage != page
+            || ![page.view.URL isEqual:url] || ![(page.captureDocumentID ?: @"") isEqual:generation]) return;
+        // A one-shot visible-viewport image stays only in the trusted dialog's
+        // memory. Never store it, send it to a server or include it in metadata.
+        NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:image.TIFFRepresentation];
+        NSData *jpeg = [bitmap representationUsingType:NSBitmapImageFileTypeJPEG properties:@{NSImageCompressionFactor:@0.55}];
+        if (!jpeg.length || jpeg.length > 4 * 1024 * 1024) return;
+        [self emit:@{@"event":@"capture-backdrop", @"request_id":requestID,
+                     @"image":[@"data:image/jpeg;base64," stringByAppendingString:[jpeg base64EncodedStringWithOptions:0]]}];
+    }];
+}
 - (void)capturePage:(NSDictionary *)command {
     NSString *requestID = [command[@"request_id"] isKindOfClass:NSString.class] ? command[@"request_id"] : @"";
     GewuBrowserPage *page = self.currentPage;
@@ -643,6 +672,7 @@
     if (page == tab.homePage || page.view.loading || !GewuBrowserPublicURL(url)) {
         [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"Wait for an article or PDF to finish loading, then try Save to Gewu again."}]; return;
     }
+    [self captureBackdropForPage:page requestID:requestID];
     NSString *generation = page.captureDocumentID ?: @"";
     NSString *script = [NSString stringWithContentsOfURL:[NSBundle.mainBundle URLForResource:@"GewuBrowserCaptureProbe" withExtension:@"js"] encoding:NSUTF8StringEncoding error:nil];
     if (!script.length) { [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"The article collector is missing. Rebuild Gewu Insight.app."}]; return; }
@@ -1209,6 +1239,7 @@
 - (void)invalidate {
     if (self.invalidated) return;
     self.invalidated = YES;
+    self.captureBackdropRequestID = nil;
     [self.loginTrigger cancelPending];
     if (self.keyMonitor) [NSEvent removeMonitor:self.keyMonitor];
     self.keyMonitor = nil;

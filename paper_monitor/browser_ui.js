@@ -353,18 +353,28 @@
     if (typeof closeLibraryAddMenus === "function") closeLibraryAddMenus();
     capturePanel = null;
     clearTimeout(c.timer);
-    native({action:"capture-cancel", token:c.review?.token || "", snapshot_id:c.snapshot?.snapshot_id || ""});
+    native({action:"capture-cancel", request_id:c.requestID, token:c.review?.token || "", snapshot_id:c.snapshot?.snapshot_id || ""});
     if (c.review?.token) api("capture_cancel", {token:c.review.token}).catch(() => {});
+    c.element.querySelector(".capture-page-backdrop").removeAttribute("src");
     c.element.remove(); scheduleLayout(); $("browserSaveGewu").focus();
   }
   function captureStatus(c, text, error = false) {
-    c.element.querySelector(".capture-status").textContent = text;
-    c.element.querySelector(".capture-status").classList.toggle("error", error);
+    const status = c.element.querySelector(".capture-status");
+    status.textContent = text;
+    status.hidden = !text;
+    status.classList.toggle("error", error);
+  }
+  function captureDetails(c, expanded) {
+    c.element.querySelector(".capture-details-content").hidden = !expanded;
+    c.element.querySelector('[data-capture="details"]').setAttribute("aria-expanded", String(expanded));
+    c.element.classList.toggle("details-expanded", expanded);
+    scheduleLayout();
   }
   function captureBusy(c, busy, status = "") {
     c.busy = busy;
     if (busy && typeof closeLibraryAddMenus === "function") closeLibraryAddMenus();
     for (const control of c.element.querySelectorAll("input,select,button")) control.disabled = busy;
+    c.element.querySelector('[data-capture="details"]').disabled = false;
     c.element.querySelector('[data-capture="cancel"]').disabled = Boolean(c.saving);
     c.element.querySelector('[data-capture="save"]').disabled = busy || !c.review?.can_save;
     c.element.querySelector('[data-capture="download"]').disabled = busy || !c.review?.snapshot.pdf_urls.length;
@@ -393,7 +403,8 @@
     q(".capture-file-type-hint").textContent = c.fileTypeManual ? "Your selected file type will be used." : review.file_type_reason || "";
     if (review.origin) q('[data-capture="origin"]').textContent = `Use source article: ${review.origin.title} (${review.origin.gewu_key})`;
     captureBusy(c, false);
-    captureStatus(c, review.conflict || review.warning || "Review the article, file type and Library folder, then save.", Boolean(review.conflict));
+    if (!review.can_save) captureDetails(c, true);
+    captureStatus(c, review.conflict || review.warning || (review.pdf_ready ? "" : "Article only · Open Details to add a PDF."), Boolean(review.conflict));
   }
   async function reviewCapture(c, options = c.identity || {}) {
     if (capturePanel !== c) return;
@@ -417,8 +428,10 @@
     closeContext(); closeSuggestions();
     const element = document.createElement("div"); element.className = "browser-capture-overlay";
     element.setAttribute("role", "dialog"); element.setAttribute("aria-modal", "true"); element.setAttribute("aria-labelledby", "browserCaptureTitle");
-    element.innerHTML = `<section class="browser-capture-panel" tabindex="-1">
+    element.innerHTML = `<img class="capture-page-backdrop" alt="" aria-hidden="true" hidden><section class="browser-capture-panel" tabindex="-1">
       <h2 id="browserCaptureTitle">Save to Gewu</h2><p class="capture-status" role="status">Reading article metadata…</p>
+      <button type="button" class="capture-details-toggle" data-capture="details" aria-expanded="false" aria-controls="browserCaptureDetails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 3 4 3 4-3M4 9l4 3 4-3"/></svg><span>Details</span></button>
+      <div class="capture-details-content" id="browserCaptureDetails" hidden>
       <div class="capture-identity"></div>
       <label>DOI or arXiv ID<div class="capture-row"><input name="identifier" placeholder="10.… or 2601.01234"><button data-capture="lookup">Identify</button></div></label>
       <div class="capture-manual"><label>Article title<input name="title" maxlength="1000" placeholder="Enter the article title"></label><button data-capture="manual">Use this title</button></div>
@@ -426,12 +439,15 @@
       <label>PDF link<div class="capture-row"><select name="pdf_url" aria-label="PDF link"></select><button data-capture="download">Get PDF</button></div></label>
       <div class="capture-file"></div><label class="capture-local">Or choose a local PDF<input name="local_pdf" type="file" accept="application/pdf,.pdf"></label>
       <label class="capture-check"><input name="include_pdf" type="checkbox"> Include this PDF in Paper Files</label>
-      <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="1"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
       <p class="capture-file-type-hint"></p>
+      </div>
+      <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="1"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
       <footer><button data-capture="cancel">Cancel</button><button data-capture="save" class="capture-primary">Save to Library</button></footer>
     </section>`;
     const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
-    document.body.append(element); captureBusy(c, true); scheduleLayout();
+    document.body.append(element);
+    captureDetails(c, typeof state !== "undefined" && state.browserCaptureDetailsExpanded === true);
+    captureBusy(c, true); scheduleLayout();
     element.querySelector('[data-capture="cancel"]').focus();
     element.addEventListener("keydown", event => {
       event.stopPropagation();
@@ -451,6 +467,10 @@
     element.onclick = async event => {
       const action = event.target.closest("[data-capture]")?.dataset.capture;
       if (action === "cancel") { closeCapture(); return; }
+      if (action === "details") {
+        captureDetails(c, element.querySelector('[data-capture="details"]').getAttribute("aria-expanded") !== "true");
+        return;
+      }
       if (!action || c.busy || !c.review) return;
       const q = name => element.querySelector(`[name="${name}"]`);
       if (action === "lookup") return reviewCapture(c, {identifier:q("identifier").value});
@@ -521,7 +541,11 @@
       if (event.snapshot) native({action:"capture-cancel", snapshot_id:event.snapshot.snapshot_id});
       return;
     }
-    if (event.event === "capture-metadata") {
+    if (event.event === "capture-backdrop") {
+      if (event.request_id !== c.requestID || typeof event.image !== "string" || event.image.length > 6 * 1024 * 1024 || !event.image.startsWith("data:image/jpeg;base64,")) return;
+      const image = c.element.querySelector(".capture-page-backdrop");
+      image.src = event.image; image.hidden = false; scheduleLayout();
+    } else if (event.event === "capture-metadata") {
       if (event.request_id !== c.requestID) return;
       clearTimeout(c.timer);
       if (event.error) { captureBusy(c, false); captureStatus(c, event.error, true); return; }
@@ -554,6 +578,10 @@
       if (data.home && data.favoriteLayout !== `${column.clientWidth}:${available}`) renderFavorites();
     }
     const rect = $(data.home ? "browserFavorites" : "browserViewport").getBoundingClientRect();
+    if (capturePanel) {
+      const image = capturePanel.element.querySelector(".capture-page-backdrop");
+      Object.assign(image.style, {left:rect.x+"px", top:rect.y+"px", width:rect.width+"px", height:rect.height+"px"});
+    }
     const active = data.active;
     const payload = {action:"layout", active, visible:active && !visibleDialog(), sidebarVisible:!data.hidden, canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
     const signature = JSON.stringify(payload);
@@ -688,7 +716,7 @@
   }
 
   global.gewuBrowserNativeEvent = event => {
-    if (event.event === "capture-metadata" || event.event === "capture-pdf") { captureEvent(event); return; }
+    if (["capture-metadata", "capture-pdf", "capture-backdrop"].includes(event.event)) { captureEvent(event); return; }
     if (event.event === "bookmark-source-cancel") {
       data.sourceSync = null; data.sourceSyncBusy = false;
       if (event.message) message(event.message, true);

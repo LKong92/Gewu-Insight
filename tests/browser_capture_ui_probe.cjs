@@ -78,10 +78,28 @@ function workspaceFunction(name) {
       return page.evaluate(()=>commands.filter(c=>c.action==='capture').at(-1).request_id);
     }
     async function deliver(id) {await page.evaluate(id=>gewuBrowserNativeEvent({event:'capture-metadata',request_id:id,snapshot:review.snapshot}),id);}
+    async function details() {
+      if(await page.getAttribute('[data-capture="details"]','aria-expanded')==='false') await page.click('[data-capture="details"]');
+    }
     let id=await start();
     await deliver('stale-request'); assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
     await deliver(id); await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
     assert.ok(await page.evaluate(()=>commands.filter(c=>c.action==='layout').at(-1).visible===false),'native view hidden behind dialog');
+    assert.equal(await page.getAttribute('[data-capture="details"]','aria-expanded'),'false');
+    assert.equal(await page.locator('[name="identifier"]').isVisible(),false);
+    assert.equal(await page.locator('[name="file_type"]').isVisible(),true);
+    assert.equal(await page.locator('[data-capture="folder"]').isVisible(),true);
+    assert.match(await page.locator('.capture-status').innerText(),/Article only/,'no-PDF saves remain explicit when details are hidden');
+    const backdrop=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=80;c.height=60;const x=c.getContext('2d');x.fillStyle='#6495ed';x.fillRect(0,0,80,60);return c.toDataURL('image/jpeg');});
+    await page.evaluate(image=>gewuBrowserNativeEvent({event:'capture-backdrop',request_id:'stale',image}),backdrop);
+    assert.equal(await page.locator('.capture-page-backdrop').getAttribute('src'),null);
+    await page.evaluate(({request_id,image})=>gewuBrowserNativeEvent({event:'capture-backdrop',request_id,image}),{request_id:id,image:backdrop});
+    assert.equal(await page.locator('.capture-page-backdrop').isVisible(),true);
+    assert.equal(await page.locator('.capture-page-backdrop').evaluate(e=>getComputedStyle(e).filter),'blur(5px)');
+    await details();
+    await page.click('[data-capture="details"]'); await details();
+    assert.equal(await page.inputValue('[name="identifier"]'),'10.1234/fixture','details preserve article identity');
+    await page.click('[data-capture="details"]');
     assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').length),0,'review never saves');
     for(const [width,height] of [[1200,900],[980,640],[700,560]]) {
       await page.setViewportSize({width,height});
@@ -127,7 +145,9 @@ function workspaceFunction(name) {
     }
     await page.setViewportSize({width:1200,height:900});
 
-    await page.click('[data-capture="download"]');
+    await details();
+    await page.screenshot({path:'/private/tmp/gewu-capture-details-expanded.png'});
+    await details(); await page.click('[data-capture="download"]');
     assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
     const transfer=await page.evaluate(()=>commands.filter(c=>c.action==='capture-download').at(-1));
     assert.equal(transfer.snapshot_id,'native-snapshot'); assert.equal(transfer.upload_token,'upload-token');
@@ -136,6 +156,10 @@ function workspaceFunction(name) {
     await page.click('[data-capture="download"]');
     await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:''}));
     await page.waitForFunction(()=>document.querySelector('[name="include_pdf"]').checked);
+    await page.click('[data-capture="details"]');
+    assert.equal(await page.locator('.capture-status').isVisible(),false,'ready PDF needs no instruction paragraph');
+    assert.equal(await page.locator('[data-capture="save"]').isDisabled(),false);
+    await details();
     assert.equal(await page.inputValue('[name="file_type"]'),'published_version','review selects the detected main PDF type');
     await page.selectOption('[name="file_type"]','preprint');
     assert.equal(await page.inputValue('[name="folder_id"]'),'7','selection survives review');
@@ -176,7 +200,7 @@ function workspaceFunction(name) {
     await menu.locator('button[data-workspace-root-id="20"]').click();
     await menu.locator('button[data-folder-id="21"]').click();
     await menu.locator('[data-action="confirm-library-add"]').click();
-    await page.click('[data-capture="download"]');
+    await details(); await page.click('[data-capture="download"]');
     await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:''}));
     await page.waitForFunction(()=>document.querySelector('[name="include_pdf"]').checked);
     await page.click('[data-capture="save"]');
@@ -191,6 +215,22 @@ function workspaceFunction(name) {
     assert.equal(await page.evaluate(()=>state.libraryTab),'workspace-0');
     assert.equal(await page.evaluate(()=>state.librarySelection.id),202);
     await page.evaluate(()=>{state.mode='browser';gewuBrowser.setActive(true);});
+
+    await page.evaluate(()=>{state.browserCaptureDetailsExpanded=true;});
+    id=await start(); await deliver(id);
+    await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
+    assert.equal(await page.getAttribute('[data-capture="details"]','aria-expanded'),'true','saved preference controls new dialogs');
+    await page.click('[data-capture="details"]'); await page.click('[data-capture="cancel"]');
+    assert.equal(await page.evaluate(()=>state.browserCaptureDetailsExpanded),true,'one-dialog toggle does not change saved preference');
+    await page.evaluate(()=>{state.browserCaptureDetailsExpanded=false;review.can_save=false;review.paper=null;review.conflict='The identifiers conflict. Review the article.';});
+    id=await start();await deliver(id);
+    await page.waitForFunction(()=>document.querySelector('.capture-status').textContent.includes('identifiers conflict'));
+    assert.equal(await page.getAttribute('[data-capture="details"]','aria-expanded'),'true','blocked identity exposes repair controls');
+    assert.equal(await page.locator('[data-capture="save"]').isDisabled(),true);
+    await page.click('[data-capture="details"]');
+    assert.equal(await page.locator('.capture-status.error').isVisible(),true,'a collapsed conflict remains visible');
+    await page.click('[data-capture="cancel"]');
+    await page.evaluate(()=>{review.can_save=true;review.paper={paper_id:'paper',title:'Quantum sensing with light',gewu_key:'gw_1234567890'};review.conflict='';});
 
     await page.evaluate(()=>{deferBegin=true;});
     id=await start(); await deliver(id);

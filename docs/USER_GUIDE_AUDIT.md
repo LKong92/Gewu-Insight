@@ -25,6 +25,9 @@ host independently of File type; local imports borrow no webpage provenance.
 Duplicate resources retain their existing source and manual settings. Safari
 extension packaging remains explicitly outside the implemented feature.
 Both Guide editions share the revised HTML and show the September 7 revision.
+The compact-dialog follow-up adds collapsed Details, the Website Links default,
+and visible failure/identity-repair behavior; existing classification, destination
+selection and Show in Library instructions remain current.
 The earlier full 47-topic audit below remains the baseline; this follow-up is
 scoped to the Browser workflow, not another complete live feature audit.
 

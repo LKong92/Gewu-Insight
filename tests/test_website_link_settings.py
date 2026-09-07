@@ -30,13 +30,13 @@ class WebsiteLinkSettingsTests(unittest.TestCase):
 
     def test_default_save_reopen_reset_and_invalid_preference(self):
         self.handler.handle_get_website_link_settings()
-        self.handler.send_json.assert_called_with({"browser": "builtin"})
+        self.handler.send_json.assert_called_with({"browser": "builtin", "capture_details_expanded": False})
         for browser in ("system", "builtin", "system"):
-            self.handler.handle_set_website_link_settings({"browser": browser})
-            self.handler.send_json.assert_called_with({"browser": browser})
+            self.handler.handle_set_website_link_settings({"browser": browser, "capture_details_expanded": False})
+            self.handler.send_json.assert_called_with({"browser": browser, "capture_details_expanded": False})
             storage = Storage(self.path)
             try:
-                self.assertEqual(ui_server.website_link_settings_payload(storage), {"browser": browser})
+                self.assertEqual(ui_server.website_link_settings_payload(storage), {"browser": browser, "capture_details_expanded": False})
                 self.assertIn(f'websiteLinkBrowser: "{browser}",', ui_server.workspace_html(storage))
                 self.assertEqual(storage.conn.execute("PRAGMA user_version").fetchone()[0], self.version)
                 self.assertEqual(storage.conn.execute("SELECT count(*) FROM browser_history").fetchone()[0], 0)
@@ -47,14 +47,33 @@ class WebsiteLinkSettingsTests(unittest.TestCase):
             self.handler.handle_set_website_link_settings(payload)
             self.assertEqual(self.handler.send_error_json.call_args.args[0], 400)
             self.handler.handle_get_website_link_settings()
-            self.handler.send_json.assert_called_with({"browser": "system"})
+            self.handler.send_json.assert_called_with({"browser": "system", "capture_details_expanded": False})
         storage = Storage(self.path)
         try:
             storage.set_setting(ui_server.WEBSITE_LINK_BROWSER_SETTING, '</script><script>alert(1)</script>')
-            self.assertEqual(ui_server.website_link_settings_payload(storage), {"browser": "builtin"})
+            self.assertEqual(ui_server.website_link_settings_payload(storage), {"browser": "builtin", "capture_details_expanded": False})
             self.assertEqual(ui_server.workspace_html(storage), ui_server.INDEX_HTML)
         finally:
             storage.close()
+
+    def test_details_preference_persists_without_changing_browser_routing(self):
+        for expanded in (True, False, True):
+            self.handler.handle_set_website_link_settings({"browser":"system", "capture_details_expanded":expanded})
+            self.handler.send_json.assert_called_with({"browser":"system", "capture_details_expanded":expanded})
+            storage = Storage(self.path)
+            try:
+                self.assertIn(f'browserCaptureDetailsExpanded: {str(expanded).lower()},', ui_server.workspace_html(storage))
+                self.assertEqual(storage.conn.execute("PRAGMA user_version").fetchone()[0], self.version)
+            finally:
+                storage.close()
+        # Old callers may update the browser only without discarding this choice.
+        self.handler.handle_set_website_link_settings({"browser":"builtin"})
+        self.handler.send_json.assert_called_with({"browser":"builtin", "capture_details_expanded":True})
+        for invalid in ("false", 1, None, [], {}):
+            self.handler.handle_set_website_link_settings({"browser":"system", "capture_details_expanded":invalid})
+            self.assertEqual(self.handler.send_error_json.call_args.args[0], 400)
+        self.handler.handle_get_website_link_settings()
+        self.handler.send_json.assert_called_with({"browser":"builtin", "capture_details_expanded":True})
 
     def test_system_launch_uses_macos_default_and_reports_failure(self):
         with patch.object(ui_server.sys, "platform", "darwin"), patch.object(ui_server.subprocess, "run") as run, patch.object(ui_server.webbrowser, "open") as browser:
@@ -91,29 +110,34 @@ const elements={},$=id=>elements[id] ||= {textContent:'',className:'',classList:
 const document={querySelectorAll:()=>inputs,querySelector:()=>inputs.find(i=>i.checked)};
 const window={gewuBrowser:{openURL:url=>{calls.push(['builtin',url]);return 'Browser';}}};
 const showMonitorStatusMessage=m=>messages.push(m),focusDialogSurface=()=>{};
-let saved='builtin', fail=false, pending;
-const fetchJson=async()=>({browser:saved});
+let saved='builtin', savedDetails=false, fail=false, pending;
+const fetchJson=async()=>({browser:saved,capture_details_expanded:savedDetails});
 const fetch=async(url,options)=>{
   const body=JSON.parse(options.body);calls.push([url,body]);
   if(pending) await pending;
   if(fail) return {ok:false,json:async()=>({error:'Synthetic failure'})};
-  if(url.includes('settings')) saved=body.browser;
-  return {ok:true,json:async()=>({browser:saved,status:'opened'})};
+  if(url.includes('settings')) {saved=body.browser;savedDetails=body.capture_details_expanded;}
+  return {ok:true,json:async()=>({browser:saved,capture_details_expanded:savedDetails,status:'opened'})};
 };
 ''' + router + settings + library + r'''
 (async()=>{
   await openWebsiteLinkSettings();
   inputs[0].checked=false;inputs[1].checked=true;
+  $('browserCaptureDetailsExpanded').checked=true;
   closeWebsiteLinkSettings();
   assert.equal(openWebsite('https://example.org/cancel'),'Browser');
   assert.equal(state.websiteLinkBrowser,'builtin','unsaved selection does not apply');
   await openWebsiteLinkSettings();
   assert.ok(inputs[0].checked,'reopening discards unsaved choice');
+  assert.equal($('browserCaptureDetailsExpanded').checked,false);
+  $('browserCaptureDetailsExpanded').checked=true;
   inputs[0].checked=false;inputs[1].checked=true;
   fail=true;await saveWebsiteLinkSettings();
   assert.equal(state.websiteLinkBrowser,'builtin');assert.equal(saved,'builtin');
+  assert.equal(state.browserCaptureDetailsExpanded,false);assert.equal(savedDetails,false);
   fail=false;await saveWebsiteLinkSettings();
   assert.equal(state.websiteLinkBrowser,'system');assert.equal(saved,'system');
+  assert.equal(state.browserCaptureDetailsExpanded,true);assert.equal(savedDetails,true);
   for(const mode of ['library','my-publications','report','theme','author']) {
     state.mode=mode;const before={...state};calls.length=0;
     assert.equal(await openWebsite('https://example.org/'+mode),'system default browser');
@@ -130,6 +154,7 @@ const fetch=async(url,options)=>{
   assert.equal(messages.at(-1),'Synthetic failure');
   fail=false;await saveWebsiteLinkSettings('builtin');
   assert.equal(state.websiteLinkBrowser,'builtin');assert.equal(saved,'builtin');
+  assert.equal(state.browserCaptureDetailsExpanded,false);assert.equal(savedDetails,false);
   assert.equal(openWebsite('https://example.org/default'),'Browser');
   console.log('Website routing, saved preference, cancel, reset and failures passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

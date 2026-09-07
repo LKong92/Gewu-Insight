@@ -2780,25 +2780,25 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 
 \subsection{Save an article and PDF to Library}\label{browser-save-gewu}
 
-\textbf{Save to Gewu} in the Browser toolbar opens a review panel for the current article or PDF. It connects the browser discovery to the shared paper record, Gewu Key, Library placement and Paper Files.
+\textbf{Save to Gewu} opens a compact dialog with \textbf{File type}, \textbf{Add to Library}, Cancel and Save to Library. Click the double-arrow \textbf{Details} to expand article identity and PDF controls. Set its default under \textbf{Setting \textgreater{} Website Links}.
 
 \begin{enumerate}
 \tightlist
 \item
   \textbf{Open the article or PDF.} Follow \textbf{Open Website} from a research workspace, or find the article directly in Browser. Wait for the page to finish loading and click \textbf{Save to Gewu}.
 \item
-  \textbf{Review its identity.} Check the title, DOI and Gewu Key. An existing DOI or known arXiv identity reuses its paper record, including a record discovered only in a Monitor. A new article receives its own Key when saved. If needed, enter a DOI/arXiv ID and click \textbf{Identify}. Without an identifier, enter the article title and choose \textbf{Use this title}; metadata can be completed later.
+  \textbf{Review identity in Details.} Check the title, DOI and Gewu Key. An existing DOI or known arXiv identity reuses its paper record, including a record discovered only in a Monitor. A new article receives its own Key when saved. If needed, enter a DOI/arXiv ID and click \textbf{Identify}. Without an identifier, enter the article title and choose \textbf{Use this title}; metadata can be completed later.
 \item
-  \textbf{Choose the PDF.} A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click \textbf{Get PDF}, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
+  \textbf{Choose the PDF in Details.} A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click \textbf{Get PDF}, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
 \item
   \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. Main article PDFs enable the PDF icon and Space preview. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
 \end{enumerate}
 
-Opening the panel, identifying an article or cancelling does not add a Library item. Save creates or reuses the article and selected placement; a selected PDF becomes a managed Paper Files resource and immediately updates its file list. Exact duplicates retain their existing source and settings; distinct versions remain peers, and a manual Default is preserved. After saving, click \textbf{Show in Library} beside the success message to open the chosen Library or Space folder with this article selected. The webpage remains available in Browser.
+Opening Details, identifying or cancelling does not import anything. Save creates or reuses the article and chosen placement, immediately refreshing Paper Files. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. Click \textbf{Show in Library} beside the success message to select the saved article in its Library or Space folder. Browser keeps the webpage.
 
-\textbf{Source context is a hint.} A webpage opened from one paper can lead to another work. Gewu therefore checks the current article and PDF identity instead of automatically attaching every later PDF to the initial paper. If identification is unavailable, the panel may offer the original article for explicit confirmation. Conflicting identifiers block saving; open the correct PDF as its own page or choose its matching file.
+\textbf{Source context is a hint.} An Open Website link may lead to another work. Gewu checks the current article and PDF identity before attachment. If identification fails, you can explicitly choose the source article when offered. Conflicting identifiers block saving; open the correct PDF separately or select its matching local file.
 
-\textbf{If PDF retrieval fails:} retry after opening the site\textquotesingle s PDF, choose a downloaded local PDF, or save the article alone. A file-storage failure after the record was saved reports that partial result; retry reuses the existing record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site\textquotesingle s login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu\textquotesingle s built-in Browser; a Safari extension is not included.
+\textbf{If PDF retrieval fails:} retry after opening the site\textquotesingle s PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site\textquotesingle s login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu\textquotesingle s built-in Browser; a Safari extension is not included.
 
 \subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
 
@@ -3067,7 +3067,9 @@ Option & Behavior \\
 \GewuTableEnd
 }
 
-This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: \textbf{Open Website}, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, Overleaf, and links inside Note. \textbf{Restore Default} saves Gewu Insight Browser as the preference.
+This applies to Library (including Spaces), My Publications, Journal Monitor, Subject Monitor, and Author Monitor: \textbf{Open Website}, publisher arrows, DOI/arXiv links, Google Scholar, author profiles and homepages, citation sources, remote PDF links, Overleaf, and links inside Note. \textbf{Restore Default} saves Gewu Insight Browser and collapses Save to Gewu Details by default.
+
+\textbf{Show Details by default} controls how Save to Gewu opens. It is off initially; Save remembers it after restart. Toggling Details inside one dialog preserves its fields and does not change this preference. Unsaved settings changes are discarded.
 
 Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain their own actions. Browsing directly inside the Browser tab stays there. Its explicit \textbf{Open in Safari} command still opens Safari. Selecting a different browser does not transfer website sign-ins, cookies, or existing tabs. When using the local UI in a separate web browser, the built-in option opens an ordinary tab in that browser.
 
