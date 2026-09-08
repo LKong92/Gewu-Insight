@@ -530,6 +530,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
                 self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type=content_type)
                 return
+            if parsed.path in {"/markdown-preview-worker.js", "/markdown-it.min.js"}:
+                filename = {
+                    "/markdown-preview-worker.js": "markdown_preview_worker.js",
+                    "/markdown-it.min.js": "vendor/markdown-it/markdown-it.min.js",
+                }[parsed.path]
+                self.send_bytes((Path(__file__).parent / filename).read_bytes(), content_type="text/javascript; charset=utf-8")
+                return
+            if parsed.path == "/api/markdown-preview":
+                self.handle_markdown_preview(parse_qs(parsed.query))
+                return
             if parsed.path == "/api/health":
                 self.send_json({"ok": True})
                 return
@@ -5412,6 +5422,20 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             return
         content_type = mimetypes.guess_type(str(requested))[0] or "application/octet-stream"
         self.send_local_file(requested, content_type)
+
+    def handle_markdown_preview(self, query: dict[str, list[str]]) -> None:
+        raw_path = first(query, "path")
+        if not raw_path:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "path is required")
+            return
+        requested = Path(raw_path).expanduser().resolve()
+        if requested.suffix.lower() not in {".md", ".markdown", ".mdown", ".mkd"}:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose a Markdown file")
+            return
+        if not requested.is_file():
+            self.send_error_json(HTTPStatus.NOT_FOUND, "File not found")
+            return
+        self.send_json(markdown_preview_payload(requested))
 
     def handle_pdf_info(self, query: dict[str, list[str]]) -> None:
         raw_path = first(query, "path")
@@ -24825,6 +24849,19 @@ def file_type_icon_glyph(kind: str, accent: str) -> str:
     return f'<path d="M22 23h20M22 29h17M22 35h13" stroke="{accent}" stroke-width="2.2" stroke-linecap="round" opacity=".75"/>'
 
 
+MARKDOWN_PREVIEW_MAX_BYTES = 256 * 1024
+
+
+def markdown_preview_payload(path: Path) -> dict[str, Any]:
+    """Read a bounded, disposable preview without changing the original file."""
+    with path.open("rb") as handle:
+        data = handle.read(MARKDOWN_PREVIEW_MAX_BYTES + 1)
+    truncated = len(data) > MARKDOWN_PREVIEW_MAX_BYTES
+    data = data[:MARKDOWN_PREVIEW_MAX_BYTES]
+    encoding = "utf-16" if data.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig"
+    return {"text": data.decode(encoding, errors="replace"), "truncated": truncated}
+
+
 @lru_cache(maxsize=256)
 def cached_pdf_page_count(path_text: str, file_size: int, modified_ns: int) -> int:
     del file_size, modified_ns
@@ -26332,6 +26369,27 @@ INDEX_HTML = """<!doctype html>
       padding: 0;
       background: #fff;
     }
+    .library-file-preview.markdown { display: block; place-items: initial; padding: 24px 30px 40px; box-sizing: border-box; }
+    .library-markdown-document { width: 100%; min-width: 0; max-width: 850px; margin: 0 auto; color: #253344; line-height: 1.65; font-size: 15px; overflow-wrap: anywhere; }
+    .library-markdown-document > :first-child { margin-top: 0; }
+    .library-markdown-document h1, .library-markdown-document h2, .library-markdown-document h3,
+    .library-markdown-document h4, .library-markdown-document h5, .library-markdown-document h6 { line-height: 1.3; margin: 1.3em 0 .55em; }
+    .library-markdown-document h1 { font-size: 1.85em; }
+    .library-markdown-document h2 { font-size: 1.45em; border-bottom: 1px solid #e1e6ec; padding-bottom: .25em; }
+    .library-markdown-document h3 { font-size: 1.18em; }
+    .library-markdown-document p, .library-markdown-document ul, .library-markdown-document ol { margin: .7em 0; }
+    .library-markdown-document ul, .library-markdown-document ol { padding-left: 1.8em; }
+    .library-markdown-document blockquote { margin: 1em 0; padding: .1em 1em; border-left: 3px solid #94abc4; color: #566579; background: #f5f7fa; }
+    .library-markdown-document code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef2f6; padding: .12em .3em; border-radius: 3px; }
+    .library-markdown-document pre { white-space: pre; overflow: auto; padding: 14px; background: #f3f5f8; border-radius: 6px; }
+    .library-markdown-document pre code { padding: 0; background: none; }
+    .library-markdown-document table { display: block; width: max-content; max-width: 100%; overflow: auto; border-collapse: collapse; margin: 1em 0; }
+    .library-markdown-document th, .library-markdown-document td { padding: 7px 12px; border: 1px solid #dce2e9; }
+    .library-markdown-document th { background: #f1f5f9; }
+    .library-markdown-document a[data-markdown-url] { color: #245e87; cursor: pointer; text-decoration: underline; }
+    .library-markdown-document img { max-width: 100%; height: auto; }
+    .library-markdown-document hr { border: 0; border-top: 1px solid #dce2e9; margin: 1.4em 0; }
+    .library-markdown-truncated { color: #667085; font-style: italic; }
     .library-file-preview-text {
       min-height: 100%;
       margin: 0;
@@ -27342,17 +27400,29 @@ INDEX_HTML = """<!doctype html>
     .library-tab-rail .library-tab:focus-visible {
       opacity: 1;
       filter: none;
-      outline: 2px solid rgba(31, 79, 122, 0.72);
-      outline-offset: -2px;
+      outline: none;
+      box-shadow: none;
+      --library-focus-color: rgba(31, 79, 122, 0.72);
       z-index: 5;
     }
     .library-tab-rail.keyboard-active .library-tab:focus {
       opacity: 1;
       filter: none;
-      outline: 2px solid #0b67d8;
-      outline-offset: -2px;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.74);
+      outline: none;
+      box-shadow: none;
+      --library-focus-color: #0b67d8;
       z-index: 6;
+    }
+    .library-tab-rail .library-tab:focus-visible::after,
+    .library-tab-rail.keyboard-active .library-tab:focus::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border: 2px solid var(--library-focus-color);
+      /* The tab is rotated: its bottom edge is the rail's open right edge. */
+      border-bottom: 0;
+      border-radius: inherit;
     }
     .library-tab-rail .library-tab.nav-dragging { opacity: 0.46; }
     .library-tab-rail .library-tab.drag-over-before { box-shadow: inset -3px 0 0 var(--accent); }
@@ -44351,9 +44421,9 @@ INDEX_HTML = """<!doctype html>
                   data-library-resource-path="${escapeAttr(file.local_path || "")}" data-library-resource-ext="${escapeAttr(ext)}"
                   role="listitem" aria-current="${selected ? "true" : "false"}" tabindex="${selected ? "0" : "-1"}"
                   title="${escapeAttr(file.local_path || name)}">
-                  <span class="library-resource-icon-tile"><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
+                  <span class="library-resource-icon-tile" ${libraryNativeFileDragAttrs(file.local_path, name)}><span class="paper-file-icon file-type-icon" style="--file-icon-url:url('/api/file-icon?ext=${encodeURIComponent(ext)}')" aria-hidden="true"></span></span>
                   <span class="library-resource-copy">
-                    <span class="library-resource-name">${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</span>
+                    <span class="library-resource-name" ${libraryNativeFileDragAttrs(file.local_path, name)}>${escapeHtml(name)}${file.is_default ? `<span class="paper-file-default">Default</span>` : ""}</span>
                     <span class="library-resource-properties">
                       <span class="library-resource-property is-file-type"><span class="library-resource-property-label">File type</span>${typeControl}</span>
                       <span class="library-resource-extra-properties" id="${propertiesId}"${expanded ? "" : " hidden"}>
@@ -44363,7 +44433,7 @@ INDEX_HTML = """<!doctype html>
                       <button type="button" class="library-resource-file-meta" data-library-resource-toggle
                         aria-expanded="${expanded}" aria-controls="${propertiesId}" aria-label="${expanded ? "Hide" : "Show"} annotation and source for ${escapeAttr(name)}"
                         title="${expanded ? "Hide" : "Show"} annotation and source">
-                        <span class="resource-properties-chevron" aria-hidden="true">${expanded ? "⌄" : "›"}</span>
+                        <span class="resource-properties-chevron" aria-hidden="true">${expanded ? "⌃" : "⌄"}</span>
                         ${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true">·</span>')}
                       </button>
                     </span>
@@ -44706,7 +44776,12 @@ INDEX_HTML = """<!doctype html>
       const path = libraryNativeItemPath(entry);
       if (!path) return "";
       const fileName = sanitizeDragFileName(entry?.paper?.original_filename || fileNameFromPath(path) || fallbackName || "file");
-      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName)}" title="Drag file to Finder"`;
+      return libraryNativeFileDragAttrs(path, fileName);
+    }
+
+    function libraryNativeFileDragAttrs(path, fileName) {
+      if (!path) return "";
+      return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName || fileNameFromPath(path))}" title="Drag to Finder or an application icon"`;
     }
 
     function libraryEntryIconClass(type, entry) {
@@ -48030,7 +48105,7 @@ INDEX_HTML = """<!doctype html>
           toggle.setAttribute("aria-expanded", String(expanded));
           toggle.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} annotation and source`);
           toggle.title = `${expanded ? "Hide" : "Show"} annotation and source`;
-          toggle.querySelector(".resource-properties-chevron").textContent = expanded ? "⌄" : "›";
+          toggle.querySelector(".resource-properties-chevron").textContent = expanded ? "⌃" : "⌄";
         });
       });
       shell.querySelectorAll("[data-library-resource-control]").forEach((select) => {
@@ -48260,6 +48335,7 @@ INDEX_HTML = """<!doctype html>
       wireLibraryResourceInteractions(shell);
       wireLibraryColumnInteractions(shell);
       shell.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
         const handle = event.target.closest?.("[data-native-file-drag-handle]");
         if (!handle) return;
         event.stopPropagation();
@@ -48769,6 +48845,7 @@ INDEX_HTML = """<!doctype html>
     function libraryFilePreviewKind(paper) {
       const mime = String(paper?.file_mime_type || "").toLowerCase();
       const ext = libraryFileExtension(paper);
+      if (["md", "markdown", "mdown", "mkd"].includes(ext)) return "markdown";
       const textExtensions = new Set(["txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "html", "htm", "css", "js", "ts", "py", "c", "cc", "cpp", "h", "hpp", "java", "m", "mm", "tex", "bib", "ris", "log", "ini", "yaml", "yml", "toml", "rtf"]);
       if (mime.startsWith("image/")) return "image";
       if (mime.startsWith("video/")) return "video";
@@ -48843,9 +48920,63 @@ INDEX_HTML = """<!doctype html>
       root.querySelector("[data-open-native-preview]")?.addEventListener("click", () => openNativePaperFile(paper));
     }
 
+    let libraryMarkdownWorker = null;
+    let libraryMarkdownRequest = null;
+
+    function cancelLibraryMarkdownPreview() {
+      if (!libraryMarkdownRequest) return;
+      libraryMarkdownRequest = null;
+      libraryMarkdownWorker?.postMessage({cancel: true});
+    }
+
+    function renderLibraryMarkdownPreview(paper, token) {
+      const path = paperNativePath(paper || {});
+      const root = $("libraryQuickLookPages");
+      root.innerHTML = `<div class="library-file-preview text"><p>Loading Markdown...</p></div>`;
+      libraryMarkdownRequest = {paper, token, path};
+      const isCurrent = (data) => state.libraryQuickLookOpen
+        && state.libraryQuickLookKind === "file"
+        && data.token === state.libraryQuickLookRenderToken
+        && data.path === state.libraryQuickLookPath;
+      try {
+        if (!libraryMarkdownWorker) {
+          libraryMarkdownWorker = new Worker("/markdown-preview-worker.js");
+          libraryMarkdownWorker.onmessage = ({data}) => {
+            if (!isCurrent(data)) return;
+            const selectedPaper = libraryMarkdownRequest?.paper;
+            libraryMarkdownRequest = null;
+            if (data.error) {
+              renderLibraryFilePreviewCard(root, selectedPaper, data.error);
+              return;
+            }
+            root.innerHTML = `<div class="library-file-preview markdown"><article class="library-markdown-document">${data.html}${data.truncated ? '<p class="library-markdown-truncated">[Preview truncated]</p>' : ""}</article></div>`;
+            root.querySelectorAll("[data-markdown-url]").forEach((link) => {
+              link.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openWebsite(link.dataset.markdownUrl);
+              });
+            });
+          };
+          libraryMarkdownWorker.onerror = () => {
+            const pending = libraryMarkdownRequest;
+            libraryMarkdownWorker?.terminate();
+            libraryMarkdownWorker = null;
+            libraryMarkdownRequest = null;
+            if (pending && isCurrent(pending)) renderLibraryFilePreviewCard(root, pending.paper, "Markdown preview could not be loaded.");
+          };
+        }
+        libraryMarkdownWorker.postMessage({path, token});
+      } catch (error) {
+        libraryMarkdownRequest = null;
+        if (isCurrent({path, token})) renderLibraryFilePreviewCard(root, paper, error.message || "Markdown preview failed.");
+      }
+    }
+
     async function renderLibraryQuickLookFilePreview(paper, token) {
       const root = $("libraryQuickLookPages");
       if (!root) return;
+      cancelLibraryMarkdownPreview();
       const path = paperNativePath(paper || {});
       const url = nativeFilePreviewUrl(path);
       const kind = libraryFilePreviewKind(paper);
@@ -48854,13 +48985,21 @@ INDEX_HTML = """<!doctype html>
         renderLibraryFilePreviewCard(root, paper, "No local file path is available.");
         return;
       }
+      if (kind === "markdown") {
+        renderLibraryMarkdownPreview(paper, token);
+        return;
+      }
       if (kind === "image") {
         root.innerHTML = `
           <div class="library-file-preview image">
             <img src="${escapeAttr(url)}" alt="${escapeAttr(libraryFilePreviewTitle(paper))}">
           </div>
         `;
-        root.querySelector("img")?.addEventListener("error", () => renderLibraryFilePreviewCard(root, paper, "Preview could not be rendered."));
+        root.querySelector("img")?.addEventListener("error", () => {
+          if (token === state.libraryQuickLookRenderToken && path === state.libraryQuickLookPath) {
+            renderLibraryFilePreviewCard(root, paper, "Preview could not be rendered.");
+          }
+        });
         return;
       }
       if (kind === "video") {
@@ -48929,6 +49068,7 @@ INDEX_HTML = """<!doctype html>
         && !options.forceInline
         && (options.forceNative || quickLookUsesNativeForPaper(paper));
       if (useNativeQuickLook) {
+        cancelLibraryMarkdownPreview();
         const action = state.libraryQuickLookKind === "native-file" ? "update" : "open";
         captureLibraryQuickLookReturnFocus();
         state.libraryQuickLookOpen = true;
@@ -48956,8 +49096,8 @@ INDEX_HTML = """<!doctype html>
       const title = $("libraryQuickLookTitle");
       const pages = $("libraryQuickLookPages");
       if (!overlay || !pages) return;
-      const token = ++state.libraryQuickLookRenderToken;
       const isNewFile = path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "file";
+      const token = isNewFile ? ++state.libraryQuickLookRenderToken : state.libraryQuickLookRenderToken;
       captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "file";
@@ -49377,6 +49517,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeLibraryQuickLook(options = {}) {
+      cancelLibraryMarkdownPreview();
       const returnFocus = state.libraryQuickLookReturnFocus;
       const quickLookKind = state.libraryQuickLookKind;
       if (quickLookKind === "native-file" && !options.nativeAlreadyClosed) {
@@ -49539,6 +49680,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function showLibraryQuickLookPlaceholder(options = {}) {
+      cancelLibraryMarkdownPreview();
       if (!state.libraryQuickLookOpen && !options.open) return;
       if (state.libraryQuickLookKind === "native-file") postNativeQuickLook("close");
       const overlay = $("libraryQuickLook");
@@ -49787,6 +49929,7 @@ INDEX_HTML = """<!doctype html>
       if (!overlay || !pages) return;
       const pdfUrl = paper.merged_pdf_url || `/files?path=${encodeURIComponent(paper.merged_pdf_path)}`;
       const isNewPdf = paper.merged_pdf_path !== state.libraryQuickLookPath || state.libraryQuickLookKind !== "pdf";
+      if (isNewPdf) cancelLibraryMarkdownPreview();
       captureLibraryQuickLookReturnFocus();
       state.libraryQuickLookOpen = true;
       state.libraryQuickLookKind = "pdf";

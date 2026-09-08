@@ -296,7 +296,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
         self.nativeDragPath = nil;
         self.nativeDragName = nil;
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
-            NSURL *fileURL = [NSURL fileURLWithPath:path];
+            NSURL *fileURL = [[NSURL fileURLWithPath:path] URLByResolvingSymlinksInPath];
             NSDraggingItem *draggingItem = [[NSDraggingItem alloc] initWithPasteboardWriter:fileURL];
             NSImage *icon = [[NSWorkspace sharedWorkspace] iconForFile:path];
             icon.size = NSMakeSize(48, 48);
@@ -336,7 +336,11 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 }
 
 - (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
-    return NSDragOperationCopy;
+    // Finder copies the file; application icons can negotiate opening it.
+    // Never offer Move/Delete for a file managed by the Library.
+    return context == NSDraggingContextOutsideApplication
+        ? (NSDragOperationCopy | NSDragOperationGeneric)
+        : NSDragOperationCopy;
 }
 
 - (BOOL)ignoreModifierKeysForDraggingSession:(NSDraggingSession *)session {

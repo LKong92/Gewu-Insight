@@ -1741,7 +1741,7 @@ A paper is one work record that can own several PDFs and related files. Paper Fi
 
 \subsection{Compact cards for one flat bundle}\label{compact-cards-for-one-flat-bundle}
 
-The Paper Files column is a flat peer list, not a hierarchy of version or attachment folders. Each card shows its filename, \textbf{File type}, and size by default. Click the size footer or its chevron to expand \textbf{Annotation} and \textbf{Source} into separate rows; click again to collapse them. Each card expands independently, and the choice lasts for the current session. File type remains visible because it identifies a preprint, accepted manuscript, published version, supplement, or other resource. The \textbf{Default} marker identifies the preferred file.
+The Paper Files column is a flat peer list, not a hierarchy of version or attachment folders. Each card shows its filename, \textbf{File type}, and size by default. Click the size footer or its chevron to expand \textbf{Annotation} and \textbf{Source} into separate rows; click again to collapse them. The chevron points down when collapsed and up when expanded. Each card expands independently, and the choice lasts for the current session. File type remains visible because it identifies a preprint, accepted manuscript, published version, supplement, or other resource. The \textbf{Default} marker identifies the preferred file.
 
 \subsection{Select, open, or act on a file}\label{select-open-or-act-on-a-file}
 
@@ -1749,6 +1749,8 @@ The Paper Files column is a flat peer list, not a hierarchy of version or attach
 \tightlist
 \item
   Single-click a card to select it.
+\item
+  Drag a card\textquotesingle s file icon or filename to Finder or the Desktop to copy it, or onto a compatible application icon in the Dock or on the Desktop to open the original file with that application. Library item file icons support the same native drag. The target application decides which file types it accepts.
 \item
   Double-click a card to open it.
 \item
@@ -1806,6 +1808,8 @@ On the first open, the app may still need to inspect the PDF and render thumbnai
 \subsection{Read and navigate the built-in viewer}\label{read-and-navigate-the-built-in-viewer}
 
 The PDF opens at page width. Scroll the document, click a page thumbnail to jump, or use a trackpad pinch to zoom the PDF. The document and thumbnail strip scroll independently. Drag the preview title bar to reposition it, or its resize corner to change the reading area. The strip provides page buttons for the first 200 pages; thumbnail images are limited to the first 160. The document remains scrollable beyond that range; use \textbf{Open in Preview} for the full reader\textquotesingle s navigation and tools.
+
+Markdown files (\texttt{.md}, \texttt{.markdown}, \texttt{.mdown}, and \texttt{.mkd}) use a formatted reading view in built-in Quick Look, including headings, emphasis, nested lists, quotations, code blocks, and tables. The view follows keyboard selection, including Markdown attachments in Paper Files. Nearby images in the same folder or its subfolders can appear inline; remote images are links that you open explicitly. Website links follow Website Links settings. Raw HTML is shown as text. Large files are limited to a 256 KiB preview and marked {[}Preview truncated{]}; the original file is unchanged. Complex notes may use a shorter preview to keep navigation responsive. Native Quick Look modes keep the system\textquotesingle s own renderer.
 
 Supported images, audio, video, and text files can also be inspected inside the workspace. A long text preview may end with {[}Preview truncated{]}; use Open File to read the complete original. Other formats show a file card with \textbf{Open File}; that opens the file in its macOS application. Choose a native mode in \hyperref[quick-look-settings]{Quick Look Settings} for formats better handled by system Quick Look.
 
