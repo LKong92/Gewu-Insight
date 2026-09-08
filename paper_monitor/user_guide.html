@@ -1994,8 +1994,8 @@
           <p class="lead">Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.</p>
 
           <figure class="guide-screenshot">
-            <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with Superconductivity selected, subject-specific calendar counts, and the asterisk legend below Updates">
-            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and a superscript asterisk on the partially completed count. The explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.</figcaption>
+            <img src="/user-guide-assets/subject-monitor.png" alt="Subject Monitor with Superconductivity selected and numeric calendar counts for that subject">
+            <figcaption><strong>Subject Monitor.</strong> Superconductivity is selected, with matching papers and numeric calendar counts for that subject. Recorded counts include zero; dates without stored results remain blank.</figcaption>
           </figure>
 
           <h2>Create a subject</h2>
@@ -2015,9 +2015,9 @@
           <h2>Keep one subject selected across dates</h2>
           <p>Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar's day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.</p>
 
-          <p>After all sources complete successfully for that subject and date, the calendar shows the stored count, including <strong>0</strong> for no matching papers. A partially completed fetch also shows its current count, including zero, with a superscript asterisk. The asterisk means one or more sources did not complete, so the count may be incomplete; zero with an asterisk is not a confirmed empty result. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.</p>
+          <p>The calendar shows the stored count as a number, including <strong>0</strong>, for the selected subject and date. Counts have no completeness marker. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.</p>
 
-          <p>The <span class="ui">Discovery</span> row describes the selected subject; its asterisk legend appears at the bottom of <span class="ui">Monitor Summary</span>, after Updates and any Errors. Discovery distinguishes <span class="ui">Completed</span>, <span class="ui">Partially completed</span>, failed, and deferred discovery; failed or deferred attempts also keep their provisional counts marked. Switching subjects changes both the counts and their completion markers. A later successful refresh removes the asterisk, and reopening the app preserves the status recorded in SQLite.</p>
+          <p>The <span class="ui">Discovery</span> row describes the recorded retrieval status for the selected subject. A completed retrieval is not a guarantee that every relevant paper has been found. Switching subjects changes the counts and recorded status; reopening the app preserves the status stored in SQLite.</p>
 
           <h2>Refresh subjects</h2>
           <ol class="steps">

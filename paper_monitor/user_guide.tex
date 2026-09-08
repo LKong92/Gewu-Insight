@@ -2517,7 +2517,7 @@ Subject Monitor discovers papers for reusable topics. Each subject stores a name
 \begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Subject Monitor. Superconductivity is selected, with matching papers and a superscript asterisk on the partially completed count. The explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.
+Subject Monitor. Superconductivity is selected, with matching papers and numeric calendar counts for that subject. Recorded counts include zero; dates without stored results remain blank.
 \end{GewuCaption}
 
 \subsection{Create a subject}\label{create-a-subject}
@@ -2546,9 +2546,9 @@ Choose \textbf{Refresh This Subject} explicitly to rebuild that subject\textquot
 
 Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar\textquotesingle s day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.
 
-After all sources complete successfully for that subject and date, the calendar shows the stored count, including \textbf{0} for no matching papers. A partially completed fetch also shows its current count, including zero, with a superscript asterisk. The asterisk means one or more sources did not complete, so the count may be incomplete; zero with an asterisk is not a confirmed empty result. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.
+The calendar shows the stored count as a number, including \textbf{0}, for the selected subject and date. Counts have no completeness marker. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.
 
-The \textbf{Discovery} row describes the selected subject; its asterisk legend appears at the bottom of \textbf{Monitor Summary}, after Updates and any Errors. Discovery distinguishes \textbf{Completed}, \textbf{Partially completed}, failed, and deferred discovery; failed or deferred attempts also keep their provisional counts marked. Switching subjects changes both the counts and their completion markers. A later successful refresh removes the asterisk, and reopening the app preserves the status recorded in SQLite.
+The \textbf{Discovery} row describes the recorded retrieval status for the selected subject. A completed retrieval is not a guarantee that every relevant paper has been found. Switching subjects changes the counts and recorded status; reopening the app preserves the status stored in SQLite.
 
 \subsection{Refresh subjects}\label{refresh-subjects}
 

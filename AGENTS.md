@@ -18,7 +18,7 @@
 - PDF opening from the UI should use macOS Preview.
 - `Note` should open on demand as a right-side drawer that compresses the report area and scrolls independently.
 - Keep the left calendar/filter column independent from report scrolling.
-- Calendar day counts should show numbers only, with a superscript asterisk for incomplete Subject Monitor discovery.
+- Calendar day counts show numbers only. Subject Monitor must not display an incomplete-discovery asterisk or its explanatory legend; keep internal fetch status tracking.
 - Preserve download and analysis status so repeated actions are visible and avoidable.
 - Subject Monitor must reject Zenodo records during candidate ingestion and cached-result display; do not expose a Zenodo show/hide control.
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.

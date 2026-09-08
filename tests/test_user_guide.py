@@ -561,10 +561,10 @@ class UserGuideTests(unittest.TestCase):
         for phrase in [
             "Moving to a date with no result does not switch",
             "calendar's day numbers describe the active subject",
-            "including zero, with a superscript asterisk",
-            "zero with an asterisk is not a confirmed empty result",
+            "Counts have no completeness marker",
+            "not a guarantee that every relevant paper has been found",
             "no stored results and no fetch record remains blank",
-            "A later successful refresh removes the asterisk",
+            "reopening the app preserves the status stored in SQLite",
             "arXiv display option is enabled by default",
         ]:
             self.assertIn(phrase, subject_text)

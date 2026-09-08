@@ -25697,12 +25697,6 @@ INDEX_HTML = """<!doctype html>
     }
     .daynum { font-weight: 650; font-size: 14px; }
     .count { color: var(--muted); font-size: 11px; }
-    .calendar-count-partial {
-      font-size: .75em;
-      line-height: 0;
-      vertical-align: super;
-      margin-left: 1px;
-    }
     .fetching-dot {
       width: 7px;
       height: 7px;
@@ -26987,12 +26981,6 @@ INDEX_HTML = """<!doctype html>
       min-width: 0;
       color: #667085;
       overflow-wrap: anywhere;
-    }
-    .monitor-discovery-note {
-      margin: -2px 0 1px;
-      font-size: 10px;
-      line-height: 1.4;
-      color: #7a8799;
     }
     .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.updates > span:last-child,
     .monitor-sidebar-summary.warning .monitor-sidebar-summary-row.errors > span:last-child {
@@ -39188,9 +39176,6 @@ INDEX_HTML = """<!doctype html>
       const total = isThemeCalendar
         ? activeThemeCount
         : Object.values(dayCounts).reduce((sum, value) => sum + value, 0);
-      const incomplete = isThemeCalendar && hasCount && themeFetchStatusIsIncomplete(themeCalendarFetchStatus(iso));
-      const countTitle = incomplete ? ' title="Incomplete discovery: one or more sources did not complete; counts may be incomplete."' : "";
-      const countMarker = incomplete ? '<sup class="calendar-count-partial" aria-label="Incomplete discovery">*</sup>' : "";
       const isFetching = isThemeCalendar ? state.themeFetchingDates.has(iso) : reportFetchIsPending(iso);
       const isFuture = isFutureDateIso(iso);
       const isToday = iso === todayIsoDate();
@@ -39201,7 +39186,7 @@ INDEX_HTML = """<!doctype html>
       const markup = `<span class="daynum">${day}</span>${
         isFetching
           ? `<span class="fetching-dot" title="Fetching"></span>`
-          : `<span class="count"${countTitle}>${hasCount ? total : ""}${countMarker}</span>`
+          : `<span class="count">${hasCount ? total : ""}</span>`
       }`;
       if (button.className !== className) button.className = className;
       if (button.disabled !== isFuture) button.disabled = isFuture;
@@ -39817,7 +39802,6 @@ INDEX_HTML = """<!doctype html>
 	        }
 	        rows.push(monitorSidebarSummaryRow("Updates", updates, "updates"));
         if (errors.length) rows.push(monitorSidebarSummaryRow("Errors", `${errors.length} incomplete`, "errors"));
-        rows.push('<div class="monitor-discovery-note"><sup>*</sup> Incomplete discovery: one or more sources did not complete; counts may be incomplete. Counts and status refer to the selected subject.</div>');
       }
       root.className = `monitor-sidebar-summary${warning ? " warning" : ""}`;
       root.innerHTML = `<div class="monitor-sidebar-summary-title">Monitor Summary</div>${rows.join("")}`;

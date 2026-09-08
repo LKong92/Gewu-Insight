@@ -106,7 +106,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Backup and Migration](../paper_monitor/user_guide.html#backup-migrate) | Clarify quit versus close, database/file consistency, Browser profile exclusion and API-key sensitivity. |
 | [My Publications](../paper_monitor/user_guide.html#my-publications) | Find Profile, Manual Metadata, individual author marks, Files controls, Library add, visible-row export scope and Desktop Overleaf ZIP; publication/render/export handlers. |
 | [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain Nature example, counts, subscriptions and provenance; clarify Website Links, Refresh This Journal and Note drawer controls. |
-| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Retain keyword groups, matching scores, saved results after Library add, superscript incomplete marker and Zenodo exclusion; theme/UI tests. |
+| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Retain keyword groups, matching scores, saved results after Library add, numeric calendar counts and Zenodo exclusion; theme/UI tests. |
 | [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Retain Hong Ding, profile matching and New/Read All; add Date/Citations, Conferences, author/identifier refresh and exact profile menu labels. |
 | [Browser](../paper_monitor/user_guide.html#browser) | Expand current navigation, tabs, history suggestions, lifecycle and credential limits; Browser store/native/policy/layout tests. |
 | [Open Source Settings](../paper_monitor/user_guide.html#citation-settings) | Preserve old anchor for links; complete Save/Test/Clear, masks/Show, status and free-only budget behavior. Source settings tests. |
@@ -142,7 +142,7 @@ Current refresh status:
 | Author Monitor | Newly captured with Hong Ding selected. Reviewed without pointer overlay. |
 | Journal Monitor | Newly captured on August 12, 2026 with Nature selected and article figures visible. Reviewed without pointer overlay. |
 | My Publications | Existing real App capture reviewed; no pointer found. |
-| Subject Monitor | Newly captured from the original App on August 27, 2026 with Superconductivity selected, cached papers and the partial-count legend visible. Window-only capture is pointer-free. |
+| Subject Monitor | Recaptured September 9, 2026 from the original App, matching the user's view: August 2026 calendar, September 2 results, Superconductivity selected (16 shown / 40 visible), beginning with the Ising-superconductor diode paper. Numeric counts, with no asterisk or legend. Native window-content capture excludes the title bar and contains no pointer, Computer Use badge, or sharing overlay. |
 | Space | Newly captured from the original Tobit Space with Single-shot parity readout of a minimal Kitaev chain selected and Paper Files visible. Window-only capture is pointer-free. |
 
 The original App became responsive after the intervening system WebCrypto
@@ -414,3 +414,26 @@ settings dialog is left open. Health, served HTML/PDF and resource hashes pass.
 Only normal UI preference/history/selection changes occurred; no direct research
 data, credential or benchmark operations. These validation runs did not commit or push;
 subsequent commit/push was explicitly requested by the user.
+
+
+## Numeric Subject calendar (September 9)
+
+The Subject calendar now shows stored numbers without the completeness asterisk,
+its tooltip or its sidebar legend. Fetch status, retry behavior and stored
+results are unchanged. The in-app text and generated manual describe the numeric
+counts and distinguish retrieval completion from exhaustive literature coverage.
+The Subject illustration is retained and replaced with a fresh original-App
+capture matching the user's date and subject selection. The August 2026 calendar
+is visible beside September 2 results for Superconductivity, starting with the
+Ising-superconductor diode paper (16 shown / 40 visible). A native Core Graphics
+window-content capture frames the full calendar, summary and result area below
+the title bar, excluding the Computer Use sharing badge without retouching the
+image. No pointer or control overlay is included. All seven original-App
+illustrations remain in both the interactive and fixed-layout guides.
+
+Validation: 52 focused Subject/history/Guide tests and six PDF structure checks
+pass, along with Python compilation and diff checks. The regenerated PDF has
+79 pages; pages 54–55 were rendered and visually checked. All seven screenshot
+figures remain, and Product Identity 4-1–4-4 flows continuously on pages 69–70.
+Original and worktree source/Guide assets and signed bundles are synchronized.
+The disabled isolated App is not updated. No direct database or fetch changes.
