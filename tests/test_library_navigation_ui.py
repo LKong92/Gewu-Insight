@@ -130,27 +130,41 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn('"Remove Shortcut"', menu_logic)
         self.assertNotIn("renameButton", menu_logic)
 
-    def test_idle_navigation_tabs_keep_readable_text_color_and_lighter_borders(self) -> None:
+    def test_navigation_rail_uses_soft_borderless_tabs_without_a_left_inset(self) -> None:
+        rail_css = INDEX_HTML.split(".library-tab-rail {", 1)[1].split("}", 1)[0]
+        tab_css = INDEX_HTML.split(".library-tab-rail .library-tab {", 1)[1].split("}", 1)[0]
         idle_css = INDEX_HTML.split(".library-tab-rail .library-tab:not(.active) {", 1)[1].split("}", 1)[0]
+        active_css = INDEX_HTML.split(".library-tab-rail .library-tab.active {", 1)[1].split("}", 1)[0]
+        self.assertIn("--library-vertical-tab-thickness: 30px;", rail_css)
+        self.assertIn("left: 0;", tab_css)
+        self.assertIn("border-radius: 13px 13px 0 0;", tab_css)
+        self.assertIn("border: 0;", tab_css)
+        self.assertIn("background: transparent;", tab_css)
         self.assertIn("opacity: 1;", idle_css)
         self.assertIn("filter: none;", idle_css)
-        self.assertIn("border-color: #c4ccd5;", idle_css)
+        self.assertIn("background: transparent;", idle_css)
         self.assertIn("color: color-mix(in srgb, var(--library-tab-color) 80%, white);", idle_css)
+        self.assertIn("color: #173f69;", active_css)
+        self.assertIn("background: #dceafb;", active_css)
+        self.assertIn("box-shadow: inset 0 2px 0 #4d8fd1;", active_css)
         tools_css = INDEX_HTML.split(".library-tab-section-tools {", 1)[1].split(
             ".library-tab-section.workspace-section", 1
         )[0]
+        self.assertIn("width: 30px;", tools_css)
+        self.assertIn("border: 0;", tools_css)
         self.assertIn("opacity: 1;", tools_css)
         self.assertIn("filter: none;", tools_css)
         self.assertNotIn("opacity: 0.34;", tools_css)
         self.assertIn(".library-tab-section-tools button:disabled { color: #667085;", INDEX_HTML)
 
-    def test_root_shortcut_and_space_tabs_use_distinct_blue_depths(self) -> None:
+    def test_root_shortcut_and_space_tabs_share_the_soft_active_palette(self) -> None:
         root_css = INDEX_HTML.split(".library-tab.root-tab {", 1)[1].split("}", 1)[0]
         shortcut_css = INDEX_HTML.split(".library-tab.shortcut-tab {", 1)[1].split("}", 1)[0]
         workspace_css = INDEX_HTML.split(".library-tab.workspace-tab {", 1)[1].split("}", 1)[0]
-        self.assertIn("--library-tab-active-bg: rgba(101, 164, 248, 0.5);", root_css)
-        self.assertIn("--library-tab-active-bg: rgba(82, 179, 209, 0.5);", shortcut_css)
-        self.assertIn("--library-tab-active-bg: rgba(140, 174, 243, 0.5);", workspace_css)
+        for css in (root_css, shortcut_css, workspace_css):
+            self.assertIn("--library-tab-active-bg: #dceafb;", css)
+            self.assertIn("--library-tab-active-border: transparent;", css)
+            self.assertIn("--library-tab-active-color: #173f69;", css)
         self.assertIn("--library-tab-idle-opacity: 0.38;", root_css)
         self.assertIn("--library-tab-idle-opacity: 0.44;", shortcut_css)
         self.assertIn("--library-tab-idle-opacity: 0.5;", workspace_css)
