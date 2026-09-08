@@ -38,6 +38,11 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
+from . import publication_jobs
+from .publication_deletion import delete_publications
+from .publication_errors import report_publication_error
+from .workflow_store import (publication_work_snapshot, preserve_subject_history,
+                             subject_revision, subject_window_preserved)
 from .browser_store import BrowserStore, browser_url
 from .config import (
     AppConfig,
@@ -307,6 +312,8 @@ FILE_ICON_STYLES = {
 ADS_API_TOKEN_SETTING = "ads_api_token"
 RESEARCHGATE_SEMANTIC_BACKFILL_SETTING_PREFIX = "researchgate_semantic_backfill:"
 RESEARCHGATE_SEMANTIC_BACKFILL_RETRY_DAYS = 30
+SUBJECT_HISTORY_LOCK = threading.RLock()
+
 MY_PUBLICATIONS_SCHOLAR_PROFILE_SETTING = "my_publications_scholar_profile"
 AUTO_JOURNAL_MONITOR_LAST_RUN_SETTING = "auto_journal_monitor_last_run_date"
 AUTO_JOURNAL_MONITOR_STATUS_SETTING = "auto_journal_monitor_status"
@@ -476,6 +483,7 @@ def run_ui_server(
         threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
+        publication_jobs.start_workers(db_path)
 
     documentation_mode_enabled = documentation_mode
 
@@ -709,6 +717,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/publication-search":
                 self.handle_publication_search(parse_qs(parsed.query))
+                return
+            if parsed.path == "/api/my-publications/work":
+                storage = Storage(self.configured_db_path)
+                try:
+                    self.send_json({"work": publication_work_snapshot(storage)})
+                finally:
+                    storage.close()
                 return
             if parsed.path == "/api/google-scholar-profiles":
                 self.handle_google_scholar_profile_search(parse_qs(parsed.query))
@@ -960,6 +975,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/my-publications/import-scholar":
                 self.handle_import_google_scholar_publications(payload)
+                return
+            if parsed.path == "/api/my-publications/work":
+                self.handle_my_publication_work(payload)
                 return
             if parsed.path == "/api/my-publications/scholar-profile":
                 self.handle_my_publication_scholar_profile(payload)
@@ -1843,9 +1861,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
             my_name = effective_my_publication_name(storage)
             scholar_profile = load_my_publications_scholar_profile(storage)
+            work = publication_work_snapshot(storage)
         finally:
             storage.close()
-        self.send_json({"publications": publications, "myName": my_name, "scholarProfile": scholar_profile})
+        self.send_json({"publications": publications, "myName": my_name, "scholarProfile": scholar_profile, "work": work})
 
     def handle_publication_search(self, query: dict[str, list[str]]) -> None:
         search_text = (first(query, "q") or "").strip()
@@ -1856,7 +1875,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             results = search_publications(search_text, kind=kind)
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Publication lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, report_publication_error(exc, operation="Publication lookup"))
             return
         self.send_json({"results": [publication_candidate_to_api(paper) for paper in results]})
 
@@ -1871,7 +1890,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_error_json(
                     HTTPStatus.BAD_GATEWAY,
-                    f"Author metadata lookup failed: {exc}",
+                    report_publication_error(exc, operation="Author lookup"),
                 )
                 return
             storage = Storage(self.configured_db_path)
@@ -1918,7 +1937,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             )
             return
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar profile lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, report_publication_error(exc, operation="Profile lookup"))
             return
         self.send_json({
             "profiles": merge_google_scholar_profiles(local_profiles, profiles, search_text, limit=20),
@@ -2503,6 +2522,30 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"job": job})
 
+    def handle_my_publication_work(self, payload: dict[str, Any]) -> None:
+        storage = Storage(self.configured_db_path)
+        try:
+            action = str(payload.get("action") or "")
+            if action == "add-all":
+                profile = payload.get("profile")
+                if not isinstance(profile, dict):
+                    raise ValueError("Choose an author profile first")
+                publication_jobs.create_import(storage, profile)
+                save_my_publications_scholar_profile(storage, profile)
+            elif action == "retry-identifiers":
+                publication_jobs.retry_identifiers(storage, int(payload.get("publication_id") or 0))
+            else:
+                publication_jobs.control_import(storage, int(payload.get("job_id") or 0), action)
+            work = publication_work_snapshot(storage)
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        if not self.documentation_mode:
+            publication_jobs.start_workers(self.configured_db_path)
+        self.send_json({"work": work})
+
     def handle_add_my_publication(self, payload: dict[str, Any]) -> None:
         candidate = payload.get("paper")
         paper_id = str(payload.get("paper_id") or "")
@@ -2512,19 +2555,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             paper: dict[str, Any] | None = None
             publication: dict[str, Any] = {}
             if isinstance(candidate, dict):
-                normalized = paper_from_publication_candidate(candidate)
-                if not storage.upsert_paper(normalized):
-                    self.send_error_json(HTTPStatus.CONFLICT, "Paper identity conflict is pending review")
+                try:
+                    publication, _existed = publication_jobs.add_candidate(storage, candidate)
+                except ValueError as exc:
+                    self.send_error_json(HTTPStatus.CONFLICT, str(exc))
                     return
-                paper = storage.get_paper(normalized["paper_id"])
-                paper_id = normalized["paper_id"]
-                if not paper_id or not paper:
-                    self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
-                    return
-                publication = storage.add_my_publication(paper_id=paper_id)
-                sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
-                move_monitor_pdf_into_context_if_needed(storage, paper_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
-                sync_my_publication_alias(storage, paper_id)
             elif isinstance(paper_ids, list):
                 valid_ids = []
                 for raw_id in paper_ids:
@@ -2539,6 +2574,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     sync_my_publication_existing_pubmed_marks(storage, paper_id=candidate_id)
                     move_monitor_pdf_into_context_if_needed(storage, candidate_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
                     sync_my_publication_alias(storage, candidate_id)
+                    publication_jobs.queue_identifier(storage, publication)
             elif paper_id:
                 paper = storage.get_paper(paper_id)
                 if not paper_id or not paper:
@@ -2548,13 +2584,17 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 sync_my_publication_existing_pubmed_marks(storage, paper_id=paper_id)
                 move_monitor_pdf_into_context_if_needed(storage, paper_id, MY_PUBLICATIONS_LOCAL_COPY_ROOT)
                 sync_my_publication_alias(storage, paper_id)
+                publication_jobs.queue_identifier(storage, publication)
             else:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "A publication candidate or paper_id is required")
                 return
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+            work = publication_work_snapshot(storage)
         finally:
             storage.close()
-        self.send_json({"publication": my_publication_to_api(publication), "publications": publications})
+        if not self.documentation_mode:
+            publication_jobs.start_workers(self.configured_db_path)
+        self.send_json({"publication": my_publication_to_api(publication), "publications": publications, "work": work})
 
     def handle_import_google_scholar_publications(self, payload: dict[str, Any]) -> None:
         profile_url = str(payload.get("url") or "").strip()
@@ -2587,7 +2627,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             )
             return
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar import failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, report_publication_error(exc, operation="Publication lookup"))
             return
         results: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -2600,7 +2640,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 results.append(result)
             except Exception as exc:
                 if len(errors) < 5:
-                    errors.append(f"{title or 'Untitled'}: {exc}")
+                    errors.append(report_publication_error(exc, operation="Article identification"))
         profile = save_my_publications_scholar_profile_for_db(
             self.configured_db_path,
             scholar_payload.get("profile") or {},
@@ -2637,7 +2677,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             resolved_candidate = resolve_google_scholar_candidate_to_identifier(candidate)
         except Exception as exc:
-            self.send_error_json(HTTPStatus.BAD_GATEWAY, f"Google Scholar identifier lookup failed: {exc}")
+            self.send_error_json(HTTPStatus.BAD_GATEWAY, report_publication_error(exc, operation="Identifier lookup"))
             return
         if not resolved_candidate:
             self.send_json({"candidate": None})
@@ -2876,12 +2916,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     def handle_delete_my_publication(self, payload: dict[str, Any]) -> None:
         publication_id = int(payload.get("publication_id") or 0)
+        publication_ids = payload.get("publication_ids") or [publication_id]
+        if not isinstance(publication_ids, list):
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Choose publications to delete")
+            return
         storage = Storage(self.configured_db_path)
         try:
-            storage.delete_my_publication(publication_id=publication_id)
+            result = delete_publications(storage, publication_ids)
+            work = publication_work_snapshot(storage)
+        except Exception as exc:
+            report_publication_error(exc, operation="Publication deletion")
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Could not delete publications. Please try again; if the problem continues, check the diagnostic log.")
+            return
         finally:
             storage.close()
-        self.send_json({"deleted_publication_id": publication_id})
+        self.send_json({"deleted_publication_id": publication_id, **result, "work": work})
 
     def handle_reorder_my_publications(self, payload: dict[str, Any]) -> None:
         publication_ids: list[int] = []
@@ -4971,17 +5020,19 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             if group_key not in theme_groups:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Subject not found")
                 return
-            updated = build_theme_group_update(payload, group_key=group_key, existing_group=theme_groups[group_key])
-            custom_groups = load_custom_theme_groups(storage)
-            custom_index = next((index for index, group in enumerate(custom_groups) if group.get("key") == group_key), -1)
-            if custom_index >= 0:
-                custom_groups[custom_index] = {**updated, "is_custom": True}
-                save_custom_theme_groups(storage, custom_groups)
-            else:
-                overrides = load_theme_group_overrides(storage)
-                overrides[group_key] = updated
-                save_theme_group_overrides(storage, overrides)
-            reset_theme_group_fetch_cache(storage, group_key)
+            with SUBJECT_HISTORY_LOCK:
+                updated = build_theme_group_update(payload, group_key=group_key, existing_group=theme_groups[group_key])
+                if updated['queries'] != theme_groups[group_key].get('queries'):
+                    preserve_subject_history(storage, group_key, str(time.time_ns()))
+                custom_groups = load_custom_theme_groups(storage)
+                custom_index = next((index for index, group in enumerate(custom_groups) if group.get("key") == group_key), -1)
+                if custom_index >= 0:
+                    custom_groups[custom_index] = {**updated, "is_custom": True}
+                    save_custom_theme_groups(storage, custom_groups)
+                else:
+                    overrides = load_theme_group_overrides(storage)
+                    overrides[group_key] = updated
+                    save_theme_group_overrides(storage, overrides)
             reloaded = load_theme_groups(storage)
             self.send_json({"group": theme_group_to_api(reloaded[group_key]), "groups": theme_groups_api(reloaded)})
         except ValueError as exc:
@@ -6778,6 +6829,8 @@ def selected_theme_group_keys(value: Any, theme_groups: dict[str, dict[str, Any]
 def reset_theme_group_fetch_cache(storage: Storage, group_key: str) -> None:
     journal = f"theme:{group_key}"
     storage.conn.execute("DELETE FROM theme_results WHERE group_key = ?", (group_key,))
+    storage.conn.execute("DELETE FROM subject_preserved_windows WHERE group_key = ?", (group_key,))
+    storage.set_setting("subject_edit_revision:" + group_key, str(time.time_ns()))
     storage.conn.execute(
         """
         DELETE FROM fetch_runs
@@ -6835,8 +6888,25 @@ def run_theme_monitor(
             "sources": {},
         },
     }
-    groups = theme_groups or load_theme_groups(storage)
-    group_keys = [key for key in group_keys if key in groups]
+    manual_replace = trigger in {"manual", "manual_search"}
+    with SUBJECT_HISTORY_LOCK:
+        current_groups = load_theme_groups(storage)
+        groups = dict(theme_groups or current_groups)
+        # A queued range/retry may carry a configuration captured before an
+        # edit. Read its revised keywords and revision together before fetching.
+        for key in list(groups):
+            if subject_revision(storage, key):
+                if key in current_groups:
+                    groups[key] = current_groups[key]
+                else:
+                    del groups[key]
+        group_keys = [key for key in group_keys if key in groups]
+        if not manual_replace:
+            group_keys = [key for key in group_keys if not subject_window_preserved(storage, key, window_start, window_end)]
+        if not group_keys:
+            return summary
+        registered_keys = set(current_groups)
+        revisions = {key: subject_revision(storage, key) for key in group_keys}
     progress_date = start_date.isoformat() if start_date == end_date else ""
     source_fetchers = theme_source_fetchers()
     source_fetcher_by_name = dict(source_fetchers)
@@ -7053,14 +7123,6 @@ def run_theme_monitor(
         for group_key in group_keys:
             group = groups[group_key]
             group_name = str(group["name"])
-            fetch_run_id = storage.start_fetch_run(
-                monitor_type="theme",
-                source="multi",
-                journal=f"theme:{group_key}",
-                window_start=window_start,
-                window_end=window_end,
-                started_at=now_iso(),
-            )
             group_errors: list[str] = []
             failed_tasks: list[dict[str, str]] = []
             source_statuses = {
@@ -7085,7 +7147,7 @@ def run_theme_monitor(
                         if message and message not in group_errors:
                             group_errors.append(message)
 
-            saved = 0
+            matches = []
             matchers = theme_keyword_matchers(list(group.get("queries") or []))
             for merge_key, paper in candidates.items():
                 score, hits = score_theme_relevance(
@@ -7095,7 +7157,7 @@ def run_theme_monitor(
                 )
                 if score <= 0:
                     continue
-                storage.record_theme_result(
+                matches.append(dict(
                     paper_id=str(paper["paper_id"]),
                     group_key=group_key,
                     group_name=group_name,
@@ -7104,12 +7166,45 @@ def run_theme_monitor(
                     hits=hits,
                     window_start=window_start,
                     window_end=window_end,
-                )
-                saved += 1
+                ))
 
+            saved = len(matches)
             status = aggregate_theme_group_status(source_statuses, saved)
-            message = "; ".join(group_errors[:3])
-            storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message=message)
+            with SUBJECT_HISTORY_LOCK:
+                current_groups = load_theme_groups(storage)
+                obsolete = (group_key in registered_keys and group_key not in current_groups) or subject_revision(storage, group_key) != revisions[group_key]
+                preserved = not manual_replace and subject_window_preserved(storage, group_key, window_start, window_end)
+                previous = storage.conn.execute("SELECT 1 FROM theme_results WHERE group_key=? AND window_start=? AND window_end=? UNION SELECT 1 FROM fetch_runs WHERE journal=? AND monitor_type='theme' AND window_start=? AND window_end=? LIMIT 1", (group_key, window_start, window_end, "theme:" + group_key, window_start, window_end)).fetchone()
+                if obsolete or preserved:
+                    matches = []
+                    status = "superseded"
+                    group_errors.append("Subject changed during retrieval; saved results were preserved. Refresh explicitly to use the new keywords.")
+                elif manual_replace and previous and status not in {"success", "empty"}:
+                    matches = []
+                    group_errors.append("Refresh is incomplete; previous results were preserved.")
+                else:
+                    try:
+                        storage.conn.execute("BEGIN IMMEDIATE")
+                        if manual_replace and status in {"success", "empty"}:
+                            storage.conn.execute("DELETE FROM theme_results WHERE group_key=? AND window_start=? AND window_end=?", (group_key, window_start, window_end))
+                        for match in matches:
+                            storage.record_theme_result(**match, commit=False)
+                        storage.conn.commit()
+                    except Exception:
+                        storage.conn.rollback()
+                        raise
+                saved = len(matches)
+                message = "; ".join(group_errors[:3])
+                if not obsolete and not preserved:
+                    fetch_run_id = storage.start_fetch_run(
+                        monitor_type="theme",
+                        source="multi",
+                        journal=f"theme:{group_key}",
+                        window_start=window_start,
+                        window_end=window_end,
+                        started_at=now_iso(),
+                    )
+                    storage.finish_fetch_run(fetch_run_id, status=status, records_found=saved, message=message)
             summary["saved"] += saved
             summary["groups"][group_key] = {
                 "name": group_name,
@@ -7558,29 +7653,33 @@ def match_local_arxiv_for_all_subjects(storage: Storage, selected_date: date) ->
         end_date=selected_date,
     )
     counts: dict[str, int] = {}
-    for group_key, group in groups.items():
-        matched = 0
-        matchers = theme_keyword_matchers(list(group.get("queries") or []))
-        for paper in papers:
-            score, hits = score_theme_relevance(
-                str(paper.get("title") or ""),
-                str(paper.get("abstract") or ""),
-                matchers,
-            )
-            if score <= 0:
+    with SUBJECT_HISTORY_LOCK:
+        groups = load_theme_groups(storage)
+        for group_key, group in groups.items():
+            if subject_window_preserved(storage, group_key, selected_date.isoformat(), selected_date.isoformat()):
                 continue
-            storage.record_theme_result(
-                paper_id=str(paper["paper_id"]),
-                group_key=group_key,
-                group_name=str(group.get("name") or group_key),
-                query="local arXiv",
-                score=score,
-                hits=hits,
-                window_start=selected_date.isoformat(),
-                window_end=selected_date.isoformat(),
-            )
-            matched += 1
-        counts[group_key] = matched
+            matched = 0
+            matchers = theme_keyword_matchers(list(group.get("queries") or []))
+            for paper in papers:
+                score, hits = score_theme_relevance(
+                    str(paper.get("title") or ""),
+                    str(paper.get("abstract") or ""),
+                    matchers,
+                )
+                if score <= 0:
+                    continue
+                storage.record_theme_result(
+                    paper_id=str(paper["paper_id"]),
+                    group_key=group_key,
+                    group_name=str(group.get("name") or group_key),
+                    query="local arXiv",
+                    score=score,
+                    hits=hits,
+                    window_start=selected_date.isoformat(),
+                    window_end=selected_date.isoformat(),
+                )
+                matched += 1
+            counts[group_key] = matched
     return counts
 
 
@@ -8327,7 +8426,7 @@ def missing_theme_group_keys_for_date(storage: Storage, selected: str, group_key
     latest_groups = theme_last_fetch_info(storage, selected, group_keys).get("groups") or {}
     completed_group_keys = theme_fetch_completed_group_keys(storage, selected, group_keys)
     completed_group_keys |= {key for key in present_group_keys if key not in latest_groups}
-    return [key for key in group_keys if key not in completed_group_keys]
+    return [key for key in group_keys if key not in completed_group_keys and not subject_window_preserved(storage, key, selected, selected)]
 
 
 def mark_stale_theme_fetch_runs(storage: Storage) -> None:
@@ -9348,6 +9447,8 @@ def run_due_auto_subject_retries_once(db_path: Path, now: datetime | None = None
             for item in due_items:
                 group_key = clean_text(item.get("group_key") or "")
                 if group_key not in theme_groups:
+                    continue
+                if subject_window_preserved(retry_storage, group_key, selected, selected):
                     continue
                 if group_key in theme_fetch_completed_group_keys(retry_storage, selected, [group_key]):
                     succeeded += 1
@@ -14315,10 +14416,14 @@ def google_scholar_global_cooldown(
 
 def google_scholar_global_cooldown_message(cooldown: dict[str, Any]) -> str:
     until = clean_text(cooldown.get("until") or "")
-    suffix = f" until {until}" if until else ""
+    try:
+        until = datetime.fromisoformat(until).astimezone(local_timezone()).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        until = ""
+    retry = f"Try again after {until} (local time)." if until else "Please try again later."
     return (
-        f"Google Scholar access is paused for all authors{suffix} to protect the current network IP. "
-        "Profile search, add, and refresh are disabled during this cooldown."
+        "Gewu Insight has temporarily paused Google Scholar requests for all authors after an access restriction. "
+        + retry
     )
 
 
@@ -27831,6 +27936,14 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
     }
+    #myPublicationWork:empty { display: none; }
+    #myPublicationWork { padding: 3px 0 6px; font-size: 12px; }
+    .publication-work-toolbar, .publication-work-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 3px 0; }
+    .publication-work-message { color: #94542a; flex-basis: 100%; overflow-wrap: anywhere; }
+    .publication-panel-status { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; padding: 4px 0; }
+    .publication-import-history { margin: 6px 0; color: var(--muted); }
+    .publication-import-history summary { cursor: pointer; }
+    .publication-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
     .my-publications-search {
       grid-row: 1;
       border-bottom: 1px solid #d8d8dc;
@@ -29008,6 +29121,7 @@ INDEX_HTML = """<!doctype html>
     }
     .my-publications-status-bar .publication-search-status {
       width: fit-content;
+      min-width: 0;
       max-width: calc(100% - 8px);
       flex: 0 1 auto;
       min-height: 18px;
@@ -29019,6 +29133,10 @@ INDEX_HTML = """<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .my-publications-status-bar .publication-work-summary { min-width: 0; flex: 1 1 auto; display: block; }
+    .publication-progress-link { flex: 0 0 auto; border: 0; background: transparent; color: var(--accent-strong); font: inherit; font-size: 12px; padding: 2px 6px; cursor: pointer; }
+    .publication-progress-link:hover { text-decoration: underline; }
+    .publication-progress-link[hidden] { display: none; }
     .my-publications-status-bar .publication-search-status:empty {
       display: none;
     }
@@ -29026,6 +29144,7 @@ INDEX_HTML = """<!doctype html>
       padding-left: 16px;
     }
     .my-publications-status-bar .publication-search-status.secondary {
+      max-width: 35%;
       margin-left: auto;
       justify-content: flex-end;
     }
@@ -35422,6 +35541,10 @@ INDEX_HTML = """<!doctype html>
       myPublicationSort: "date",
       myPublicationSortDir: "desc",
       myPublicationSearchResults: [],
+      myPublicationCandidateProfile: null,
+      myPublicationSearchOpen: false,
+      myPublicationPanelMode: "search",
+      myPublicationHistoryOpen: false,
       myPublicationSearchStatus: "",
       myPublicationSearchScrollTop: 0,
       myPublicationsLoaded: false,
@@ -36607,6 +36730,7 @@ INDEX_HTML = """<!doctype html>
       state.libraryTab = "my-publications";
       setPrimaryView("my-publications");
       renderMyPublications({loading: !state.myPublicationsLoaded});
+      scheduleMyPublicationWorkPoll();
       if (state.myPublicationsLoaded) return;
       await ensureMyPublicationsLoaded();
       if (state.mode === "library" && state.libraryTab === "my-publications") renderMyPublications();
@@ -36677,6 +36801,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyMyPublications(data) {
+      if (data.work) state.myPublicationWork = data.work;
       if (Array.isArray(data.publications)) {
         state.myPublications = data.publications;
       } else if (data.publication?.id) {
@@ -36692,6 +36817,10 @@ INDEX_HTML = """<!doctype html>
       const deletedPublicationId = Number(data.deleted_publication_id || 0);
       if (deletedPublicationId) {
         state.myPublications = state.myPublications.filter((entry) => Number(entry.id) !== deletedPublicationId);
+      }
+      if (Array.isArray(data.deleted_publication_ids)) {
+        const deleted = new Set(data.deleted_publication_ids.map(Number));
+        state.myPublications = state.myPublications.filter(entry => !deleted.has(Number(entry.id)));
       }
       if (Array.isArray(data.publication_ids)) {
         const order = new Map(data.publication_ids.map((id, index) => [Number(id), index]));
@@ -43588,13 +43717,15 @@ INDEX_HTML = """<!doctype html>
           text: activity.text,
           live: activity.live !== false
         }));
+      const workItem = myPublicationWorkStatusItem();
+      if (workItem) return [workItem, searchItem?.live ? searchItem : (activities[0] || searchItem)].filter(Boolean);
       if (searchItem?.live) return [searchItem, ...activities].slice(0, 2);
       if (activities.length) return activities.slice(0, 2);
       return searchItem ? [searchItem] : [];
     }
 
     function myPublicationStatusClass(item, secondary = false) {
-      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}`;
+      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}${item?.id === "work" ? " publication-work-summary" : ""}`;
     }
 
     function myPublicationStatusBarMarkup() {
@@ -43603,7 +43734,7 @@ INDEX_HTML = """<!doctype html>
         const item = items[index] || null;
         const id = index === 0 ? "publicationSearchStatus" : "myPublicationSecondaryStatus";
         return `<span class="${myPublicationStatusClass(item, index === 1)}" id="${id}" title="${escapeAttr(item?.text || "")}">${escapeHtml(item?.text || "")}</span>`;
-      }).join("");
+      }).join("") + `<button class="publication-progress-link" type="button" id="myPublicationProgressDetails" data-action="open-publication-progress" aria-expanded="${Boolean(state.myPublicationSearchOpen)}" title="Show import and identifier progress" ${myPublicationWorkStatusItem() || state.myPublicationWork?.imports?.length ? "" : "hidden"}>${myPublicationWorkStatusItem() ? "Details" : "History"}</button>`;
     }
 
     function updateMyPublicationStatusBar() {
@@ -43616,6 +43747,154 @@ INDEX_HTML = """<!doctype html>
         status.className = myPublicationStatusClass(item, index === 1);
         status.title = item?.text || "";
       });
+      const details = $("myPublicationProgressDetails");
+      if (details) {
+        details.hidden = !myPublicationWorkStatusItem() && !state.myPublicationWork?.imports?.length;
+        details.textContent = myPublicationWorkStatusItem() ? "Details" : "History";
+        details.setAttribute("aria-expanded", String(Boolean(state.myPublicationSearchOpen)));
+      }
+    }
+
+    function myPublicationWorkStatusItem() {
+      const work = state.myPublicationWork || {};
+      const jobs = (work.imports || []).filter(job => job.status !== "complete");
+      const ids = work.identifiers || {};
+      const pending = Number(ids.pending || 0) + Number(ids.working || 0);
+      const finished = Number(ids.matched || 0) + Number(ids.unresolved || 0) + Number(ids.error || 0);
+      const total = pending + finished;
+      if (!jobs.length && !total) return null;
+      const importing = jobs.some(job => ["queued", "running"].includes(job.status));
+      const failed = jobs.filter(job => ["error", "partial"].includes(job.status)).length;
+      const paused = jobs.filter(job => job.status === "paused").length;
+      const pieces = [];
+      if (jobs.length) {
+        const read = jobs.reduce((sum, job) => sum + Number(job.seen || 0), 0);
+        const added = jobs.reduce((sum, job) => sum + Number(job.added || 0), 0);
+        const label = importing ? "Importing" : failed ? "Import needs retry" : paused ? "Import paused" : "Import complete";
+        pieces.push(`${label}: ${read} read · ${added} added`);
+        if (importing && (failed || paused)) pieces.push(`${failed + paused} import(s) paused or need retry`);
+      }
+      if (total) pieces.push(`DOI/arXiv: ${finished}/${total}${pending ? " processing" : " processed"}${ids.error ? ` · ${ids.error} failed` : ""}${ids.unresolved ? ` · ${ids.unresolved} unmatched` : ""}`);
+      if (state.myPublicationWorkUnavailable) pieces.unshift("Progress unavailable · reconnecting · last known");
+      return {id: "work", text: pieces.join(" · "), live: !state.myPublicationWorkUnavailable && (importing || pending > 0)};
+    }
+
+    function myPublicationImportForProfile(profile) {
+      let userId = profile?.user_id || "";
+      try { userId ||= new URL(scholarProfileExternalUrl(profile || {})).searchParams.get("user") || ""; } catch (error) {}
+      return (state.myPublicationWork?.imports || []).find(job => userId && job.user_id === userId);
+    }
+
+    function myPublicationWorkMarkup() {
+      const work = state.myPublicationWork || {};
+      const progress = state.myPublicationPanelMode === "progress";
+      const profile = progress ? {} : (state.myPublicationCandidateProfile || {});
+      const allJobs = work.imports || [];
+      const selectedJob = myPublicationImportForProfile(profile);
+      const jobs = progress ? allJobs.filter(job => job.status !== "complete") : (selectedJob ? [selectedJob] : []);
+      const history = progress ? allJobs.filter(job => job.status === "complete") : [];
+      const ids = progress ? (work.identifiers || {}) : {};
+      const pending = Number(ids.pending || 0) + Number(ids.working || 0);
+      const finished = Number(ids.matched || 0) + Number(ids.unresolved || 0) + Number(ids.error || 0);
+      const total = pending + finished;
+      if (!scholarProfileExternalUrl(profile) && !jobs.length && !history.length && !total) return "";
+      const busy = selectedJob && ["queued", "running"].includes(selectedJob.status);
+      const control = (action, label, extra = "", disabled = false) => `<button class="smallbtn" type="button" data-publication-work-action="${action}" ${extra} ${disabled ? "disabled" : ""}>${label}</button>`;
+      const jobMarkup = (job, historical = false) => `<div class="publication-work-progress"><span>${escapeHtml(job.name || "Author")}: ${escapeHtml(job.status === "complete" ? "Import complete" : job.status === "partial" ? "Import finished with failures" : job.status === "error" ? "Import incomplete" : job.status === "paused" ? "Import paused" : "Importing all publications")} · ${job.seen} read · ${job.added} ${historical || job.status === "complete" ? "originally added" : "added"} · ${job.reused} already present${job.rejected ? ` · ${job.rejected} failed` : ""}${job.status === "complete" ? ` · ${Number(job.currently_saved || 0)} currently in My Publications` : ""}</span>
+        ${["queued", "running"].includes(job.status) ? control("pause", "Pause Import", `data-job-id="${job.id}"`) : ["paused", "error", "partial"].includes(job.status) ? control("resume", "Continue Import", `data-job-id="${job.id}"`) : ""}
+        ${job.message && job.status !== "complete" ? `<span class="publication-work-message">${escapeHtml(job.message)}</span>` : ""}</div>`;
+      return `<div class="publication-work-toolbar">
+        ${scholarProfileExternalUrl(profile) ? control("add-all", "Add All Publications", "", busy) : ""}
+        ${Number(ids.unresolved || 0) + Number(ids.error || 0) ? control("retry-identifiers", "Retry Unresolved IDs", "", Boolean(pending)) : ""}
+      </div>
+      ${jobs.map(job => jobMarkup(job)).join("")}
+      ${total ? `<div class="publication-work-progress">DOI / arXiv: ${finished} / ${total} processed · ${Number(ids.matched || 0)} matched · ${Number(ids.unresolved || 0)} unmatched · ${Number(ids.error || 0)} failed${pending ? ` · ${pending} pending (continues in background)` : ""}</div>` : ""}
+      ${history.length ? `<details class="publication-import-history" ${state.myPublicationHistoryOpen ? "open" : ""} ontoggle="if (this.isConnected) state.myPublicationHistoryOpen = this.open"><summary>Import history (${history.length})</summary>${history.map(job => jobMarkup(job, true)).join("")}</details>` : ""}`;
+    }
+
+    let myPublicationWorkPollTimer = null;
+    let myPublicationWorkPolling = false;
+    let myPublicationWorkRenderedRevision = "";
+    function myPublicationsVisible() {
+      return state.mode === "library" && state.libraryTab === "my-publications";
+    }
+    function renderMyPublicationsIfVisible() {
+      if (myPublicationsVisible()) renderMyPublications();
+    }
+    function scheduleMyPublicationWorkPoll() {
+      if (myPublicationWorkPollTimer !== null || myPublicationWorkPolling) return;
+      myPublicationWorkPollTimer = window.setTimeout(pollMyPublicationWork, 1500);
+    }
+    async function pollMyPublicationWork() {
+      myPublicationWorkPollTimer = null;
+      myPublicationWorkPolling = true;
+      try {
+        if (!myPublicationsVisible()) return;
+        const res = await fetch("/api/my-publications/work");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not read import progress");
+        if (!myPublicationsVisible()) return;
+        state.myPublicationWork = data.work;
+        state.myPublicationWorkUnavailable = false;
+        updateMyPublicationStatusBar();
+        const host = $("myPublicationWork");
+        if (host) host.innerHTML = myPublicationWorkMarkup();
+        const revision = JSON.stringify([(data.work?.imports || []).map(job => [job.id, job.seen]), data.work?.identifiers?.matched || 0]);
+        const editing = document.activeElement?.matches?.("input, textarea, select, [contenteditable='true']");
+        if (revision !== myPublicationWorkRenderedRevision && !editing) {
+          const rows = await fetch("/api/my-publications");
+          const snapshot = await rows.json();
+          if (!rows.ok) throw new Error(snapshot.error || "Could not refresh publications");
+          applyMyPublications(snapshot);
+          myPublicationWorkRenderedRevision = revision;
+          renderMyPublicationsIfVisible();
+        }
+      } catch (error) {
+        // Keep the list available through temporary server recovery.
+        state.myPublicationWorkUnavailable = true;
+        updateMyPublicationStatusBar();
+      } finally {
+        myPublicationWorkPolling = false;
+        myPublicationWorkPollTimer = window.setTimeout(pollMyPublicationWork, 3000);
+      }
+    }
+    async function runMyPublicationWorkAction(button) {
+      button.disabled = true;
+      const action = button.dataset.publicationWorkAction;
+      const payload = {action, job_id: Number(button.dataset.jobId || 0), publication_id: button.dataset.publicationId === "selected" ? Number(state.myPublicationSelectionId || 0) : Number(button.dataset.publicationId || 0)};
+      if (action === "add-all") {
+        const index = button.dataset.profileIndex;
+        const chosen = index === undefined ? state.myPublicationCandidateProfile : state.myPublicationSearchResults[Number(index)];
+        payload.profile = chosen;
+        const existing = myPublicationImportForProfile(chosen);
+        if (existing && ["complete", "paused", "error", "partial"].includes(existing.status)) {
+          payload.action = existing.status === "complete" ? "check" : "resume";
+          payload.job_id = existing.id;
+        }
+      }
+      if (action === "add-all" || action === "check") {
+        state.myPublicationSearchToken += 1;
+        state.myPublicationSearchResults = state.myPublicationSearchResults.map(candidate => candidate.match_status === "resolving" ? {...candidate, match_status: "scholar"} : candidate);
+      }
+      try {
+        const res = await fetch("/api/my-publications/work", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not start publication work");
+        state.myPublicationWork = data.work;
+        if (payload.profile) state.myPublicationScholarProfile = payload.profile;
+        if (action === "add-all" || action === "check") {
+          state.myPublicationPanelMode = "progress";
+          state.myPublicationSearchStatus = "";
+          state.myPublicationSearchResults = [];
+          state.myPublicationCandidateProfile = null;
+        }
+        updateMyPublicationScholarProfileStrip();
+        renderMyPublicationsIfVisible();
+        scheduleMyPublicationWorkPoll();
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message;
+        updateMyPublicationStatusBar();
+      } finally { button.disabled = false; }
     }
 
     function myPublicationScholarProfileMarkup() {
@@ -44090,9 +44369,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function myPublicationSearchResultsMarkup() {
-      const results = state.myPublicationSearchResults || [];
-      if (!results.length) return "";
-      return myPublicationSearchResultViewItems(results).map(({candidate, index}) => {
+      const results = state.myPublicationPanelMode === "progress" ? [] : (state.myPublicationSearchResults || []);
+      if (!state.myPublicationSearchOpen) return "";
+      const workMarkup = myPublicationWorkMarkup();
+      const progress = state.myPublicationPanelMode === "progress";
+      const status = !progress ? state.myPublicationSearchStatus : "";
+      return `<div class="publication-panel-heading"><strong>${progress ? "Import Progress" : "Add Publications"}</strong><button class="smallbtn" type="button" data-action="close-publication-progress">Close</button></div>${status ? `<div class="publication-panel-status">${escapeHtml(status)}</div>` : ""}<div id="myPublicationWork">${workMarkup}</div>${!results.length && !workMarkup && !status ? `<div class="publication-search-result placeholder">No results to display.</div>` : ""}` + myPublicationSearchResultViewItems(results).map(({candidate, index}) => {
         if (candidate.candidate_type === "scholar-profile") {
           const meta = [
             candidate.affiliation || "",
@@ -44108,6 +44390,7 @@ INDEX_HTML = """<!doctype html>
               </div>
               <div class="publication-search-actions">
                 <button class="smallbtn" type="button" data-action="use-scholar-profile">Use Profile</button>
+                <button class="smallbtn" type="button" data-publication-work-action="add-all" data-profile-index="${index}">Add All Publications</button>
               </div>
             </div>
           `;
@@ -46888,12 +47171,31 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeMyPublicationSearchResults() {
-      if (!state.myPublicationSearchResults.length) return;
+      if (!state.myPublicationSearchResults.length && !state.myPublicationCandidateProfile && !state.myPublicationSearchOpen) return;
       state.myPublicationSearchResults = [];
+      state.myPublicationCandidateProfile = null;
+      state.myPublicationSearchOpen = false;
       state.myPublicationSearchStatus = "";
       state.myPublicationSearchScrollTop = 0;
       state.myPublicationSearchToken += 1;
-      renderMyPublications({tableScrollTop: 0});
+      renderMyPublicationsIfVisible();
+    }
+
+    function openMyPublicationProgress() {
+      state.myPublicationSearchOpen = true;
+      state.myPublicationPanelMode = "progress";
+      state.myPublicationHistoryOpen = !myPublicationWorkStatusItem();
+      renderMyPublicationsIfVisible();
+    }
+
+    function handleMyPublicationPanelClick(event) {
+      const action = event.target.closest?.('[data-action="open-publication-progress"], [data-action="close-publication-progress"]')?.dataset.action;
+      if (!action) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      if (action === "open-publication-progress") openMyPublicationProgress();
+      else closeMyPublicationSearchResults();
+      return true;
     }
 
     function sortMyPublicationsByColumn(key) {
@@ -47303,16 +47605,21 @@ INDEX_HTML = """<!doctype html>
     async function deleteMyPublications(publicationIds) {
       const ids = [...new Set((publicationIds || []).map((id) => Number(id)).filter(Boolean))];
       if (!ids.length) return;
-      for (const id of ids) {
-        if (!myPublicationById(id)) continue;
+      try {
+        state.myPublicationSearchStatus = `Deleting ${ids.length} publications...`;
+        updateMyPublicationStatusBar();
         const res = await fetch("/api/my-publications/delete", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({publication_id: id})
+          body: JSON.stringify({publication_ids: ids})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete publication");
         applyMyPublications(data);
+      } catch (error) {
+        state.myPublicationSearchStatus = error.message || "Could not delete publications";
+        updateMyPublicationStatusBar();
+        return;
       }
       state.myPublicationSelectedIds = new Set();
       const rows = visibleMyPublicationRows();
@@ -47508,6 +47815,7 @@ INDEX_HTML = """<!doctype html>
       state.myPublicationAuthorCache[key] = {
         results: JSON.parse(JSON.stringify(state.myPublicationSearchResults || [])),
         status: state.myPublicationSearchStatus || "",
+        profile: state.myPublicationCandidateProfile ? {...state.myPublicationCandidateProfile} : null,
       };
     }
 
@@ -47517,6 +47825,9 @@ INDEX_HTML = """<!doctype html>
       if (!Array.isArray(cached.results) || !cached.results.length) return false;
       state.myPublicationSearchToken += 1;
       state.myPublicationSearchResults = JSON.parse(JSON.stringify(cached.results || []));
+      state.myPublicationCandidateProfile = cached.profile ? {...cached.profile} : null;
+      state.myPublicationSearchOpen = true;
+      state.myPublicationPanelMode = "search";
       state.myPublicationSearchStatus = cached.status || `${state.myPublicationSearchResults.length} cached Scholar results.`;
       state.myPublicationSearchScrollTop = 0;
       renderMyPublications();
@@ -47527,15 +47838,19 @@ INDEX_HTML = """<!doctype html>
       const query = kind === "author" ? ($("myPublicationName")?.value || state.myPublicationName || "") : ($("publicationSearchBox")?.value || "");
       const cleanQuery = query.trim();
       if (!cleanQuery) return;
+      state.myPublicationSearchOpen = true;
+      state.myPublicationPanelMode = "search";
+      const searchToken = ++state.myPublicationSearchToken;
       const scholarUrlQuery = kind === "author" && myPublicationQueryIsScholarUrl(cleanQuery);
       if (kind === "author" && !scholarUrlQuery) await saveMyPublicationName();
+      if (searchToken !== state.myPublicationSearchToken) return;
       const authorCacheKey = kind === "author" ? myPublicationAuthorCacheKey(cleanQuery) : "";
       if (authorCacheKey && restoreMyPublicationAuthorResults(authorCacheKey)) return;
-      state.myPublicationSearchToken += 1;
       state.myPublicationSearchStatus = kind === "author"
         ? (scholarUrlQuery ? "Opening Google Scholar profile..." : "Matching Google Scholar profiles...")
         : "Searching publications...";
       state.myPublicationSearchResults = [];
+      state.myPublicationCandidateProfile = null;
       state.myPublicationSearchScrollTop = 0;
       renderMyPublications();
       try {
@@ -47544,6 +47859,7 @@ INDEX_HTML = """<!doctype html>
           : `/api/publication-search?q=${encodeURIComponent(cleanQuery)}&kind=${encodeURIComponent(kind)}`;
         const res = await fetch(url);
         const data = await res.json();
+        if (searchToken !== state.myPublicationSearchToken) return;
         if (!res.ok) throw new Error(data.error || "Search failed");
         state.myPublicationSearchResults = kind === "author" ? (data.profiles || []) : (data.results || []);
         state.myPublicationSearchStatus = state.myPublicationSearchResults.length
@@ -47553,16 +47869,17 @@ INDEX_HTML = """<!doctype html>
           : (kind === "author" ? "No Google Scholar profiles found." : "No publication candidates found.");
         if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
       } catch (error) {
+        if (searchToken !== state.myPublicationSearchToken) return;
         state.myPublicationSearchStatus = error.message || "Search failed";
       }
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
     }
 
     async function addMyPublicationCandidate(candidate) {
       const results = $("publicationSearchResults");
       if (results) state.myPublicationSearchScrollTop = results.scrollTop;
       state.myPublicationSearchStatus = "Adding publication...";
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
       const res = await fetch("/api/my-publications/add", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -47571,22 +47888,26 @@ INDEX_HTML = """<!doctype html>
       const data = await res.json();
       if (!res.ok) {
         state.myPublicationSearchStatus = data.error || "Could not add publication";
-        renderMyPublications();
+        renderMyPublicationsIfVisible();
         return;
       }
       applyMyPublications(data);
+      scheduleMyPublicationWorkPoll();
       state.myPublicationSelectionId = Number(data.publication?.id || state.myPublicationSelectionId || 0);
       sortMyPublicationSearchResultsByAdded();
       state.myPublicationSearchStatus = "Publication added.";
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
     }
 
     async function importGoogleScholarProfile(profileUrl = "", profileName = "", authorCacheKey = "", profile = null) {
       const button = $("findMyPublications");
       const url = String(profileUrl || "").trim();
       if (!url) return;
+      state.myPublicationSearchOpen = true;
+      state.myPublicationPanelMode = "search";
       const searchToken = ++state.myPublicationSearchToken;
       state.myPublicationScholarProfile = {...(profile || {}), name: profileName || profile?.name || ""};
+      state.myPublicationCandidateProfile = {...state.myPublicationScholarProfile, url};
       state.myPublicationSearchStatus = `Importing Google Scholar titles${profileName ? ` for ${profileName}` : ""}...`;
       state.myPublicationSearchResults = [];
       state.myPublicationSearchScrollTop = 0;
@@ -47594,7 +47915,7 @@ INDEX_HTML = """<!doctype html>
         button.disabled = true;
         button.textContent = "Searching...";
       }
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
       try {
         const res = await fetch("/api/my-publications/import-scholar", {
           method: "POST",
@@ -47605,6 +47926,7 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Google Scholar import failed");
         if (searchToken !== state.myPublicationSearchToken) return;
         state.myPublicationScholarProfile = {...(state.myPublicationScholarProfile || {}), ...(data.profile || {})};
+        state.myPublicationCandidateProfile = {...state.myPublicationScholarProfile, url};
         const nameInput = $("myPublicationName");
         if (nameInput && myPublicationQueryIsScholarUrl(nameInput.value)) {
           nameInput.value = state.myPublicationName || data.profile?.name || profileName || "";
@@ -47616,7 +47938,7 @@ INDEX_HTML = """<!doctype html>
           ? `${state.myPublicationSearchResults.length} Scholar titles found. Resolving DOI/arXiv matches...`
           : `No Scholar titles found${errorCount ? ` · ${errorCount} errors` : ""}.`;
         if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
-        renderMyPublications();
+        renderMyPublicationsIfVisible();
         if (state.myPublicationSearchResults.length) {
           resolveScholarSearchResults(searchToken, authorCacheKey);
         }
@@ -47629,7 +47951,7 @@ INDEX_HTML = """<!doctype html>
           button.textContent = "Find Profile";
         }
       }
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
     }
 
     async function resolveScholarSearchResults(searchToken, authorCacheKey = "") {
@@ -47640,7 +47962,7 @@ INDEX_HTML = """<!doctype html>
         if (!unresolved.length) break;
         if (pass > 1) {
           state.myPublicationSearchStatus = `${total} Scholar titles found · retrying ${unresolved.length} unresolved identifier lookup${unresolved.length === 1 ? "" : "s"}...`;
-          renderMyPublications();
+          renderMyPublicationsIfVisible();
           await sleep(pass === 2 ? 1200 : 2200);
         }
         for (let attemptIndex = 0; attemptIndex < unresolved.length; attemptIndex += 1) {
@@ -47653,12 +47975,12 @@ INDEX_HTML = """<!doctype html>
       updateScholarResolutionStatus("done");
       sortMyPublicationSearchResultsByAdded();
       if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
     }
 
     function scholarOnlyIndexes() {
       return state.myPublicationSearchResults
-        .map((candidate, index) => candidate?.match_status === "scholar" ? index : -1)
+        .map((candidate, index) => candidate?.match_status === "scholar" && !myPublicationCandidateAlreadyAdded(candidate) ? index : -1)
         .filter((index) => index >= 0);
     }
 
@@ -47678,7 +48000,7 @@ INDEX_HTML = """<!doctype html>
       const candidate = state.myPublicationSearchResults[index];
       if (!candidate || candidate.match_status !== "scholar") return false;
       state.myPublicationSearchResults[index] = {...candidate, match_status: "resolving"};
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
       try {
         const res = await fetch("/api/my-publications/resolve-scholar", {
           method: "POST",
@@ -47691,7 +48013,7 @@ INDEX_HTML = """<!doctype html>
           state.myPublicationSearchResults[index] = data.candidate;
           updateScholarResolutionStatus();
           if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
-          renderMyPublications();
+          renderMyPublicationsIfVisible();
           return true;
         }
       } catch (error) {
@@ -47700,7 +48022,7 @@ INDEX_HTML = """<!doctype html>
       state.myPublicationSearchResults[index] = {...candidate, match_status: "scholar"};
       updateScholarResolutionStatus();
       if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
       return false;
     }
 
@@ -47712,7 +48034,7 @@ INDEX_HTML = """<!doctype html>
       await resolveScholarCandidateAtIndex(index, searchToken, authorCacheKey);
       updateScholarResolutionStatus("done");
       if (authorCacheKey) cacheMyPublicationAuthorResults(authorCacheKey);
-      renderMyPublications();
+      renderMyPublicationsIfVisible();
     }
 
     function handleMyPublicationKeydown(event, key) {
@@ -55456,15 +55778,21 @@ INDEX_HTML = """<!doctype html>
         if (!res.ok) throw new Error(data.error || "Could not save subject");
 	        state.themeGroups = data.groups || [];
 	        state.themeGroupsLoaded = true;
-	        if (data.group?.key) {
+	        if (data.group?.key && !editingKey) {
 	          state.selectedThemeGroups.add(data.group.key);
 	          setActiveThemeGroupKey(data.group.key, {renderCalendar: false});
 	        }
 	        saveSelectedThemeGroups();
 	        closeThemeGroupDialog();
         renderThemeFilters();
-        await loadThemeMonth({force: true});
-        await loadThemeReportForDate(state.selectedDate);
+        if (editingKey) {
+          const viewport = {mode: "theme", scrollTop: $("papers")?.scrollTop || 0};
+          renderThemeTabs(groupedThemePapers());
+          restoreMonitorViewport(viewport);
+        } else {
+          await loadThemeMonth({force: true});
+          await loadThemeReportForDate(state.selectedDate);
+        }
       } catch (error) {
         status.textContent = error.message || "Could not save subject";
         status.className = "citation-settings-status err";
@@ -57399,6 +57727,14 @@ INDEX_HTML = """<!doctype html>
         openMyPublicationScholarProfile();
         return;
       }
+      if (handleMyPublicationPanelClick(event)) return;
+      const publicationWorkButton = event.target.closest?.("[data-publication-work-action]");
+      if (publicationWorkButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!publicationWorkButton.disabled) runMyPublicationWorkAction(publicationWorkButton);
+        return;
+      }
       if (event.target.closest?.('[data-action="clear-scholar-profile"]')) {
         event.preventDefault();
         event.stopPropagation();
@@ -57412,14 +57748,6 @@ INDEX_HTML = """<!doctype html>
       closeAuthorAffiliationTooltip();
       if (!event.target.closest?.(".publication-author-menu, .publication-author-pill")) closePublicationAuthorMenu();
       if (!event.target.closest?.(".publication-export-menu")) closePublicationExportMenu();
-      if (
-        state.libraryTab === "my-publications"
-        && state.myPublicationSearchResults.length
-        && !event.target.closest(".my-publications-search")
-        && !event.target.closest(".my-publications-tools")
-      ) {
-        closeMyPublicationSearchResults();
-      }
     });
     window.addEventListener("resize", () => {
       if (state.mode === "library") resizeLibraryViewport();

@@ -106,7 +106,7 @@ class PaperFilesVNextTests(unittest.TestCase):
         self.storage = Storage(self.db_path)
         migrated = self.storage.list_paper_resources("migration")[0]
         paper = self.storage.get_paper("migration")
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 16)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 17)
         self.assertEqual(migrated["file_type"], "preprint")
         self.assertEqual(migrated["file_source"], "preprint_server")
         self.assertEqual(migrated["annotation_state"], "annotated")

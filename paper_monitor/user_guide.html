@@ -1710,6 +1710,10 @@
             <li><strong>Check the result.</strong> If another Library location or My Publications still refers to the same work, only the selected reference is removed. Otherwise the item moves to <span class="ui">Recycle</span> and remains recoverable.</li>
           </ol>
 
+          <h2>Delete from My Publications</h2>
+          <p>Select one or more publications and choose <span class="ui">Delete</span>. If a Library, Space, Shortcut or Recycle location still refers to the work, its shared article record, Gewu Key and files remain. Otherwise, deleting this last placement also removes the article record and its identifier tasks from SQLite; private managed files move to macOS Trash. External originals and bytes shared with other articles are preserved. Import history does not keep an otherwise unreferenced article alive.</p>
+          <p>Removing every currently saved article of a running profile import pauses that import. Continue Import does not restore previously removed source entries. An explicit Add All Publications recheck after completion can add those articles again.</p>
+
           <h2>Recover an item</h2>
           <ol class="steps">
             <li><strong>Open <span class="ui">Recycle</span>.</strong></li>
@@ -1718,7 +1722,7 @@
           </ol>
 
           <h2>Delete permanently</h2>
-          <p>Use final deletion only inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.</p>
+          <p>Final deletion of Library items takes place inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.</p>
 
           <div class="important"><span class="callout-title">Important</span><span class="ui">Delete All</span> affects every eligible item in the selected Recycle context. Back up first if you are uncertain.</div>
 
@@ -1867,10 +1871,16 @@
           <ol class="steps">
             <li><strong>Enter a name, optional affiliations, or an exact Google Scholar profile URL.</strong> For a name search, use <code>Name; affiliation A; affiliation B</code>.</li>
             <li><strong>Choose <span class="ui">Find Profile</span>.</strong> Review candidate profiles carefully.</li>
-            <li><strong>Choose <span class="ui">Use Profile</span>.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile using <a href="#website-link-settings">Website Links</a>; use the remove control to forget it.</li>
+            <li><strong>Choose <span class="ui">Use Profile</span> to review candidates individually, or <span class="ui">Add All Publications</span> to import the complete profile.</strong> The saved strip shows the active name and profile photo. Select the photo to open the profile using <a href="#website-link-settings">Website Links</a>; use the remove control to forget it.</li>
           </ol>
 
           <p>Already have the paper in Library? Control-click its row and choose <span class="ui">Add to My Publications</span>. Multiple selected papers can be added together. The publication list and Library then refer to the same work, files, and Gewu Key.</p>
+
+          <h2>Add all publications or choose individual papers</h2>
+          <p><span class="ui">Use Profile</span> opens a candidate list where each article retains its own <span class="ui">Add</span> button. To import the author's entire profile, choose <span class="ui">Add All Publications</span> beside the correct search profile or at the top of its article candidate list. These controls appear only inside the search/add area; the normal publication table keeps its original layout. The complete import reads successive source pages until the profile ends; it is independent of the 200-title candidate preview and has no 300- or 5,000-paper cutoff. Existing canonical articles and My Publications entries are reused.</p>
+          <p>The bottom status bar continuously shows active import counts and DOI/arXiv progress, including running, processed, paused, and retry-needed states. Completed imports move into <span class="ui">Import history</span>, which distinguishes original import counts from articles currently saved in My Publications. When only history remains, the footer entry reads <span class="ui">History</span>. Old imports do not appear in a new author search; its own status or error stays visible in the search panel. Choose <span class="ui">Details</span> in that bar to view full progress and import controls without searching again. The search/add panel opens when searching or choosing a profile and stays open until you choose its <span class="ui">Close</span> button; clicking a publication or completing a task does not dismiss it. Closing the panel keeps background work running and preserves the table position. <span class="ui">Pause Import</span> preserves completed work; <span class="ui">Continue Import</span> resumes it. An interrupted source page is retried without adding its successful articles twice. A blocked, unreadable, repeated, or interrupted source page is reported as incomplete with a short reason and guidance to try again later. Technical connection details stay in the diagnostic log. Individual identity conflicts do not stop later articles and remain reported for review and retry. Adding all again after completion explicitly checks the profile from its first page for additional articles.</p>
+          <p>Both individual Add and Add All automatically queue missing DOI/arXiv identifiers. Articles are saved first, and identifier completion runs separately in the background. Its progress distinguishes matched, unmatched, failed, and pending work. Switching tabs does not stop either task; unfinished work resumes after app restart. Identifier updates preserve the article's Gewu Key and file relationships. The existing per-candidate <span class="ui">Retry ID</span> remains available. When saved articles have unmatched or failed identifiers, <span class="ui">Retry Unresolved IDs</span> appears with progress inside the search/add area. Pausing the profile import does not pause identifier work already queued. Articles without a confident match remain saved. This operation does not automatically download PDFs.</p>
+          <p>After Scholar reports an access restriction, Gewu Insight applies a shared 24-hour pause to Scholar requests. The prompt shows the local retry time; this is an application pause, not a Google-provided IP-ban deadline. Changing authors or restarting does not clear it.</p>
 
           <h2>Add and update publications</h2>
           <ul>
@@ -1997,6 +2007,10 @@
           </ol>
 
           <p>Keywords use case-insensitive literal matching. Enter the words or phrases you expect to appear; they are not regular expressions and are not silently expanded into unrelated concepts.</p>
+
+          <h2>Edit keywords without losing history</h2>
+          <p>Control-click a subject and choose <span class="ui">Edit</span>. Saving a new name or keywords keeps its existing paper list, calendar counts, selection, and reading position. New keywords apply to future retrieval. Existing date windows, including empty and incomplete results, remain preserved after a keyword change; background retries and later local arXiv matching do not silently reclassify those windows.</p>
+          <p>Choose <span class="ui">Refresh This Subject</span> explicitly to rebuild that subject's selected date with the current keywords. A successful refresh replaces only that result window; other dates and subjects remain unchanged. An incomplete refresh preserves previous results. Editing during an active retrieval discards the obsolete result instead of replacing history. Deleting a subject still clears its Subject Monitor matches, without deleting the underlying shared papers or Library files. Previously cleared matches from an older software version are not automatically reconstructed by this fix.</p>
 
           <h2>Keep one subject selected across dates</h2>
           <p>Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar's day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.</p>
