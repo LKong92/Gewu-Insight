@@ -27206,7 +27206,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-rail {
       --library-vertical-tab-length: 82px;
-      --library-vertical-tab-thickness: 32px;
+      --library-vertical-tab-thickness: 28px;
       width: 30px;
       min-width: 30px;
       min-height: 0;
@@ -27250,9 +27250,10 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-section-tools {
       display: grid;
-      grid-template-columns: 15px 15px;
-      width: 30px;
+      grid-template-columns: 14px 14px;
+      width: 28px;
       height: 24px;
+      margin-left: 2px;
       border: 1px solid #d8dee8;
       border-radius: 7px 7px 0 0;
       background: #f7f8fa;
@@ -27263,11 +27264,11 @@ INDEX_HTML = """<!doctype html>
       transition: opacity 140ms ease, filter 140ms ease;
     }
     .library-tab-section.workspace-section .library-tab-section-tools {
-      grid-template-columns: 30px;
+      grid-template-columns: 28px;
       border-color: #c5d9ee;
       background: #f1f6fc;
     }
-    .library-tab-section.workspace-section .library-tab-section-tools button { width: 30px; }
+    .library-tab-section.workspace-section .library-tab-section-tools button { width: 28px; }
     .library-tab-section-tools:hover,
     .library-tab-section-tools:focus-within {
       opacity: 1;
@@ -27275,7 +27276,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-section-tools button {
       min-width: 0;
-      width: 15px;
+      width: 14px;
       height: 22px;
       border: 0;
       border-right: 1px solid rgba(148, 163, 184, 0.24);
@@ -27307,7 +27308,7 @@ INDEX_HTML = """<!doctype html>
     }
     .library-tab-rail .library-tab {
       position: absolute;
-      left: 0;
+      left: 2px;
       top: calc(var(--tab-top, 0px) + var(--library-tab-length, var(--library-vertical-tab-length)));
       width: var(--library-tab-length, var(--library-vertical-tab-length));
       height: var(--library-vertical-tab-thickness);
@@ -27328,13 +27329,15 @@ INDEX_HTML = """<!doctype html>
       transition: opacity 150ms ease, filter 150ms ease, background-color 150ms ease, border-color 150ms ease, color 150ms ease;
     }
     .library-tab-rail .library-tab:not(.active) {
-      opacity: var(--library-tab-idle-opacity);
-      filter: var(--library-tab-idle-filter);
+      opacity: 1;
+      filter: none;
+      border-color: #c4ccd5;
+      color: color-mix(in srgb, var(--library-tab-color) 80%, white);
     }
     .library-tab-rail .library-tab:not(.active):hover,
     .library-tab-rail .library-tab:not(.active):focus-visible {
-      opacity: 0.68;
-      filter: saturate(0.82) brightness(1.03);
+      opacity: 1;
+      filter: none;
     }
     .library-tab-rail .library-tab:focus-visible {
       opacity: 1;
@@ -42522,7 +42525,7 @@ INDEX_HTML = """<!doctype html>
 
     function libraryNavigationTabLayout(tabs, labelForTab) {
       let offset = 0;
-      const gap = 10;
+      const gap = 0;
       const entries = (Array.isArray(tabs) ? tabs : []).map((tab, index) => {
         const length = libraryNavigationTabLength(labelForTab(tab, index));
         const entry = {top: offset, length};

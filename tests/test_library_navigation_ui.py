@@ -130,10 +130,12 @@ class LibraryNavigationUiTests(unittest.TestCase):
         self.assertIn('"Remove Shortcut"', menu_logic)
         self.assertNotIn("renameButton", menu_logic)
 
-    def test_only_navigation_tabs_fade_while_section_tools_stay_emphasized(self) -> None:
-        self.assertIn(".library-tab-rail .library-tab:not(.active)", INDEX_HTML)
-        self.assertIn("opacity: var(--library-tab-idle-opacity);", INDEX_HTML)
-        self.assertIn("filter: var(--library-tab-idle-filter);", INDEX_HTML)
+    def test_idle_navigation_tabs_keep_readable_text_color_and_lighter_borders(self) -> None:
+        idle_css = INDEX_HTML.split(".library-tab-rail .library-tab:not(.active) {", 1)[1].split("}", 1)[0]
+        self.assertIn("opacity: 1;", idle_css)
+        self.assertIn("filter: none;", idle_css)
+        self.assertIn("border-color: #c4ccd5;", idle_css)
+        self.assertIn("color: color-mix(in srgb, var(--library-tab-color) 80%, white);", idle_css)
         tools_css = INDEX_HTML.split(".library-tab-section-tools {", 1)[1].split(
             ".library-tab-section.workspace-section", 1
         )[0]
