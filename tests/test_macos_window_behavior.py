@@ -172,7 +172,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.window.contentView addSubview:self.startupView", source)
         self.assertIn("overlay.animator.alphaValue = 0.0;", source)
         self.assertIn("[overlay removeFromSuperview];", source)
-        self.assertIn("[self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];", source)
+        self.assertIn("[self.webView loadRequest:[self workspaceRequestForURL:self.url]];", source)
 
         self.assertIn("function finishAppStartup()", INDEX_HTML)
         self.assertIn("window.webkit?.messageHandlers?.appReady", INDEX_HTML)

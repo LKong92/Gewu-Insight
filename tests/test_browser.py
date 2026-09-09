@@ -213,7 +213,8 @@ class BrowserApiTests(unittest.TestCase):
 
     def request(self, path, body=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port)
-        connection.request("POST" if body is not None else "GET", path, json.dumps(body) if body is not None else None, headers or {})
+        headers = {"X-Gewu-Workspace": self.server.workspace_access.token, **(headers or {})}
+        connection.request("POST" if body is not None else "GET", path, json.dumps(body) if body is not None else None, headers)
         response = connection.getresponse(); content = response.read(); connection.close()
         return response.status, content
 

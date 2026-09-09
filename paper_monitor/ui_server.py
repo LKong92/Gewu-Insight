@@ -405,6 +405,11 @@ AUTHOR_MONITOR_CARD_CACHE_BUILD_LOCK = threading.Lock()
 
 
 class FastLocalThreadingHTTPServer(ThreadingHTTPServer):
+    def __init__(self, server_address, handler, *args, **kwargs):
+        from .local_access import WorkspaceAccess
+        self.workspace_access = WorkspaceAccess(handler.configured_db_path)
+        super().__init__(server_address, handler, *args, **kwargs)
+
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)
         host, port = self.server_address[:2]
@@ -451,6 +456,8 @@ def run_ui_server(
     db_path: Path = DEFAULT_DB_PATH,
     open_browser: bool = False,
 ) -> None:
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError("Gewu Insight serves local clients only; use a loopback host.")
     documentation_mode = str(os.environ.get("GEWU_DOCUMENTATION_MODE") or "").strip().lower() in {
         "1",
         "true",
@@ -498,7 +505,7 @@ def run_ui_server(
     url = f"http://{host}:{server.server_port}"
     print(f"Journal Monitor UI: {url}")
     if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.4, lambda: webbrowser.open(url + "/#workspace=" + server.workspace_access.bootstrap())).start()
     server.serve_forever()
 
 
@@ -509,12 +516,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
     server_version = "GewuInsightUI/0.1"
 
-    def trusted_local_request(self, *, browser: bool = False) -> bool:
-        """Reject cross-site requests and DNS-rebound hosts before any API work.
+    def end_headers(self):
+        if getattr(self, "workspace_cookie_pending", False):
+            self.send_header("Set-Cookie", self.server.workspace_access.cookie())
+        super().end_headers()
 
-        Native/CLI loopback clients may omit Origin. Browser organization always
-        requires an explicit same-origin JSON request from the trusted app UI.
-        """
+    def trusted_local_request(self, *, browser: bool = False) -> bool:
+        """Validate origin before choosing the workspace or scoped AI boundary."""
         host = self.headers.get("Host", "").lower()
         port = self.server.server_port
         allowed = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
@@ -527,13 +535,47 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             valid = valid and origin == f"http://{host}" and self.headers.get("X-Gewu-Browser") == "1"
         if not valid:
             self.send_error_json(HTTPStatus.FORBIDDEN, "This local API is available only to the Gewu Insight workspace.")
-        return bool(valid)
+            return False
+        path = urlparse(self.path).path
+        if path == "/api/health" or path.startswith("/api/v1/"):
+            return True  # AI routes enforce their own Bearer grant before dispatch.
+        access = self.server.workspace_access
+        if path == "/api/workspace-session" and self.command == "POST":
+            if access.consume_bootstrap(self.headers.get("X-Gewu-Bootstrap", "")):
+                self.workspace_cookie_pending = True
+                self.send_json({"ok": True})
+            else:
+                self.send_error_json(HTTPStatus.UNAUTHORIZED, "This workspace launch link expired.")
+            return False
+        if path == "/api/browser-capture-file" and self.command == "POST":
+            return True  # Its existing per-upload capability is checked by the handler.
+        if access.accepts(self.headers):
+            self.workspace_cookie_pending = access.matches(self.headers.get("X-Gewu-Workspace", ""))
+            return True
+        if path == "/" and self.command == "GET":
+            from .local_access import LOCKED_WORKSPACE_HTML
+            self.send_text(LOCKED_WORKSPACE_HTML, content_type="text/html; charset=utf-8")
+        else:
+            self.send_error_json(HTTPStatus.UNAUTHORIZED, "Workspace authentication is required. AI clients must use the authorized /api/v1 interface.")
+        return False
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if not self.trusted_local_request():
             return
         try:
+            if parsed.path.startswith("/api/v1/"):
+                from .ai_http import handle_api
+                handle_api(self)
+                return
+            if parsed.path == "/api/settings/ai-access":
+                from .ai_http import handle_admin
+                handle_admin(self)
+                return
+            if parsed.path in {"/ai-access.js", "/ai-access.css"}:
+                name = "ai_access_ui.js" if parsed.path.endswith(".js") else "ai_access_ui.css"
+                self.send_bytes(Path(__file__).with_name(name).read_bytes(), content_type="text/javascript" if name.endswith(".js") else "text/css")
+                return
             if parsed.path in {"/browser-ui.js", "/browser-ui.css", "/browser-keyboard.js"}:
                 filename = {"/browser-ui.js":"browser_ui.js", "/browser-ui.css":"browser_ui.css", "/browser-keyboard.js":"browser_keyboard.js"}[parsed.path]
                 content_type = "text/javascript; charset=utf-8" if filename.endswith(".js") else "text/css; charset=utf-8"
@@ -753,6 +795,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not self.trusted_local_request(browser=parsed.path == "/api/browser"):
             return
         try:
+            if parsed.path.startswith("/api/v1/"):
+                from .ai_http import handle_api
+                handle_api(self)
+                return
+            if parsed.path == "/api/settings/ai-access":
+                from .ai_http import handle_admin
+                handle_admin(self)
+                return
             if parsed.path == "/api/browser-capture-file":
                 self.handle_browser_capture_file()
                 return
@@ -13356,7 +13406,8 @@ def workspace_html(storage: Storage) -> str:
     browser = settings["browser"]
     details = "true" if settings["capture_details_expanded"] else "false"
     return INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1).replace(
-        'browserCaptureDetailsExpanded: false,', f'browserCaptureDetailsExpanded: {details},', 1)
+        'browserCaptureDetailsExpanded: false,', f'browserCaptureDetailsExpanded: {details},', 1).replace(
+        'aiAccessEnabled: false,', 'aiAccessEnabled: ' + ('true' if storage.get_setting('ai_access_enabled', 'false') == 'true' else 'false') + ',', 1)
 
 
 def normalize_font_size_scale(value: Any) -> int:
@@ -35531,6 +35582,7 @@ INDEX_HTML = """<!doctype html>
       libraryLoadingPromise: null,
       libraryRefreshPromise: null,
       libraryPaperDetailRequests: {},
+      aiAccessEnabled: false,
       paperFilesByPaperId: {},
       paperFileRequests: {},
       libraryPaperResourceSelection: {paperId: "", resourceId: 0},
@@ -45509,6 +45561,17 @@ INDEX_HTML = """<!doctype html>
         </section>
       `;
     }
+
+    window.setGewuAIAccessEnabled = (enabled) => { state.aiAccessEnabled = enabled === true; };
+    window.addEventListener("focus", () => {
+      // Refresh only on returning from an AI client, with AI access enabled.
+      // No idle polling, and disabled AI access changes no file-loading work.
+      if (!state.aiAccessEnabled || state.mode !== "library" || document.querySelector(".settings-backdrop.open")) return;
+      const paperId = state.libraryTab === "my-publications"
+        ? selectedMyPublicationPaper()?.paper_id
+        : state.librarySelection?.type === "item" ? libraryItemById(state.librarySelection.id)?.paper_id : null;
+      if (paperId) loadPaperFiles(paperId, {force: true}).catch(() => {});
+    });
 
     async function loadPaperFiles(paperId, {force = false} = {}) {
       const key = String(paperId || "");
@@ -57725,6 +57788,7 @@ INDEX_HTML = """<!doctype html>
     $("libraryQuickLookDragHandle").addEventListener("pointerdown", startLibraryQuickLookDrag);
     $("libraryQuickLookResize").addEventListener("pointerdown", startLibraryQuickLookResize);
     function handleGewuInsightWindowKeydown(event) {
+      if ($("aiAccessBackdrop")?.classList.contains("open")) return;
       if (handlePreviewCloseShortcut(event)) return;
       if (handleSearchShortcut(event)) return;
       if (handleLibraryViewShortcut(event)) return;
@@ -57999,6 +58063,8 @@ INDEX_HTML = """<!doctype html>
       updateReportPanelToggle();
     }
   </script>
+  <link rel="stylesheet" href="/ai-access.css">
+  <script src="/ai-access.js"></script>
   <script src="/browser-keyboard.js"></script>
   <script src="/browser-ui.js"></script>
 </body>

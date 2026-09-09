@@ -613,6 +613,7 @@
             <button class="topic-link" data-topic="field-settings">Field Settings</button>
             <button class="topic-link" data-topic="quick-look-settings">Quick Look Settings</button>
             <button class="topic-link" data-topic="website-link-settings">Website Links</button>
+            <button class="topic-link" data-topic="ai-access">AI Access</button>
             <button class="topic-link" data-topic="naming">Naming and PDF Rename Rules</button>
             <button class="topic-link" data-topic="storage-model">How Gewu Insight Stores Files</button>
             <button class="topic-link" data-topic="privacy">Local Data and Privacy</button>
@@ -653,7 +654,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Guide revision · September 7, 2026 · Browser capture update</p>
+          <p class="guide-revision">Guide revision · September 9, 2026 · AI Access update</p>
 
           <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -2329,6 +2330,40 @@
           <p><span class="ui">Show Details by default</span> controls how Save to Gewu opens. It is off initially; Save remembers it after restart. Toggling Details inside one dialog preserves its fields and does not change this preference. Unsaved settings changes are discarded.</p>
           <p>Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain their own actions. Browsing directly inside the Browser tab stays there. Its explicit <span class="ui">Open in Safari</span> command still opens Safari. Selecting a different browser does not transfer website sign-ins, cookies, or existing tabs. When using the local UI in a separate web browser, the built-in option opens an ordinary tab in that browser.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#browser">Browse, Bookmark, and Revisit Websites</a><a href="#paper-details">Use Paper Details</a><a href="#quick-look-settings">Quick Look Settings</a></div></div>
+        </article>
+
+        <article class="help-topic guide-topic" id="ai-access" data-group="Settings and Safety" data-title="AI Access" data-keywords="AI API MCP token permissions authorization Gewu Key analysis Markdown privacy connection revoke">
+          <p class="topic-kicker">Settings and Safety</p>
+          <h1>Connect an AI to Your Papers</h1>
+          <p class="lead">Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.</p>
+          <p><span class="ui">Setting &gt; AI Access</span> is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.</p>
+          <h2>Create a connection</h2>
+          <ol>
+            <li>Keep Gewu Insight running and enable <span class="ui">AI access</span>.</li>
+            <li>Expand <span class="ui">New Connection</span> and enter a name you will recognize.</li>
+            <li>Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.</li>
+            <li>Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.</li>
+            <li>Choose an expiry, then <span class="ui">Create Connection</span>. The default is 30 days.</li>
+            <li>Use <span class="ui">Copy MCP Configuration</span> and add the server entry to your AI client's local MCP settings. The configuration includes the local adapter path, Python executable, port and token.</li>
+          </ol>
+          <div class="note"><span class="callout-title">Keep the connection private</span>The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.</div>
+          <h2>What an authorized AI can do</h2>
+          <table class="plain-table">
+            <tr><th>Tool</th><th>Result</th></tr>
+            <tr><td><code>search_papers</code></td><td>Search authorized titles, DOI, Gewu Keys and abstracts, with pagination.</td></tr>
+            <tr><td><code>get_paper</code></td><td>Get the article metadata, file inventory and Default file ID for a Gewu Key.</td></tr>
+            <tr><td><code>read_paper</code></td><td>Read PDF page ranges or text/Markdown attachments when file reading is allowed.</td></tr>
+            <tr><td><code>save_analysis</code></td><td>Add a new Markdown analysis to the same paper's Paper Files when writing analyses is allowed.</td></tr>
+          </table>
+          <p>For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper's file panel.</p>
+          <p>Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.</p>
+          <h2>Pause, revoke and review</h2>
+          <p>Turn off <span class="ui">Enable AI access</span> to pause all connections. <span class="ui">Revoke</span> stops one connection; expired connections also stop working. Re-enabling access resumes connections that are still valid. Expand <span class="ui">Recent Activity</span> to review requests and outcomes, and choose <span class="ui">Refresh</span> to update the list. Tokens, prompts and full file text are not included in that activity log.</p>
+          <h2>Limits and troubleshooting</h2>
+          <p>The AI client must run on the same computer, and Gewu Insight's local service must be running. The local MCP adapter supports protocol 2025-11-25 and earlier negotiated versions. There is no remote MCP endpoint in this version. Developers can retrieve the authenticated API v1 specification at <code>/api/v1/openapi.json</code>.</p>
+          <p>PDF reading is on demand, at most ten pages per request, with a 64 MiB file limit and a bounded extraction time. Text is returned in chunks. Scanned PDFs may need separate OCR; no OCR or model runs automatically. Analysis notes are limited to 256 KiB. A busy response means retry later. An unavailable paper or file may be outside the connection's collection, missing, or no longer accessible.</p>
+          <p>Permissions apply to API access. Software already granted direct operating-system access to your database or files has a separate, broader permission. Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. The native App manages its own private workspace session automatically.</p>
+          <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#quick-look">Preview Files with Quick Look</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
         <article class="help-topic guide-topic" id="naming" data-group="Settings and Safety" data-title="Naming and PDF Rename Rules" data-keywords="naming rule title citation auto rename metadata template author year journal DOI">

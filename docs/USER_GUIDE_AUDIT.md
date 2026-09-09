@@ -114,6 +114,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Clarify Save, unsaved close and immediate Restore Defaults; preserve canonical classification versus visible grouping. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Three mode labels, Save/unsaved-close and immediate Restore Default; `saveQuickLookSettings`, `resetQuickLookSettings`, shared preview routing. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Built-in default or macOS default browser; Save, unsaved close, Restore Default, persistence, research-link scope, Preview/Finder and Browser exceptions. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Default-off local API and MCP; connection collection, permissions, expiry and revoke; file reads, append-only Markdown analysis, provenance, limits and the filesystem permission boundary. |
 | [Naming](../paper_monitor/user_guide.html#naming) | New unnamed placements versus explicit file rename; tokens, sample, Save/Default and batch rename checked against native menu, settings and rename handlers. |
 | [Storage Model](../paper_monitor/user_guide.html#storage-model) | Retain managed roots, associated bundles and identity independent of filenames; storage/file-operation tests. |
 | [Privacy](../paper_monitor/user_guide.html#privacy) | Retain local-first, network access, private exports and credentials; Browser/profile details cross-referenced. |
@@ -437,3 +438,15 @@ pass, along with Python compilation and diff checks. The regenerated PDF has
 figures remain, and Product Identity 4-1–4-4 flows continuously on pages 69–70.
 Original and worktree source/Guide assets and signed bundles are synchronized.
 The disabled isolated App is not updated. No direct database or fetch changes.
+
+
+## September 9 AI Access update
+
+Added the AI Access settings chapter and navigation entry to the shared HTML/PDF
+source. The API v1 developer reference is `docs/AI_ACCESS.md`; generated OpenAPI
+is `paper_monitor/ai_openapi.json`. This is opt-in access, not automatic analysis.
+The guide distinguishes normal App sessions from scoped AI tokens and direct
+filesystem permission. Both editions document the four implemented MCP tools,
+file/analysis permission choices, expiry, revocation, provenance and retry rules.
+All seven existing screenshots are preserved. The new PDF section on pages 66–67
+was rendered and inspected; Product Identity chapters still flow continuously.

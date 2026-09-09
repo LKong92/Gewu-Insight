@@ -18,7 +18,7 @@ class UserGuideTests(unittest.TestCase):
     def local_handler(self):
         handler = object.__new__(ui_server.PaperMonitorUiHandler)
         handler.headers = {"Host": "127.0.0.1:8765"}
-        handler.server = SimpleNamespace(server_port=8765)
+        handler.server = SimpleNamespace(server_port=8765, workspace_access=MagicMock())
         return handler
 
     def test_offline_guide_asset_is_loaded_from_the_python_package(self) -> None:
@@ -113,6 +113,9 @@ class UserGuideTests(unittest.TestCase):
             "arXiv Scope Settings",
             "Field Settings",
             "Quick Look Settings",
+            "AI Access",
+            "Copy MCP Configuration",
+            "save_analysis",
             "Visual Identity and Cultural Elements",
             "Keyboard Shortcuts",
             "Back Up and Upgrade",

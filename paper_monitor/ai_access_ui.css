@@ -1,0 +1,24 @@
+.ai-access-modal { max-width: 720px; }
+.ai-access-modal [hidden] { display: none !important; }
+.ai-access-modal .settings-modal-body { display: grid; gap: 14px; }
+.ai-access-modal p { margin: 6px 0; line-height: 1.5; }
+.ai-access-modal .ai-muted, .ai-access-modal small { color: var(--muted, #69788b); font-size: .9em; }
+.ai-access-modal label { display: flex; flex-direction: column; gap: 6px; }
+.ai-access-modal label.ai-enable, .ai-access-modal fieldset label { flex-direction: row; align-items: center; gap: 10px; }
+.ai-access-modal .ai-enable { font-weight: 650; }
+.ai-access-modal input:not([type=checkbox]), .ai-access-modal select, .ai-access-modal textarea {
+  box-sizing: border-box; width: 100%; min-width: 0; font: inherit; padding: 9px 11px;
+  color: inherit; background: var(--panel, #fff); border: 1px solid #c8d1dc; border-radius: 7px;
+}
+.ai-access-modal textarea { resize: vertical; }
+.ai-access-modal form { display: grid; gap: 14px; padding-top: 14px; }
+.ai-access-modal fieldset { margin: 0; padding: 12px; border: 1px solid #d9e0e8; border-radius: 8px; }
+.ai-access-modal fieldset label { margin-top: 10px; }
+.ai-access-modal summary { cursor: pointer; font-weight: 600; padding: 5px 0; }
+.ai-access-modal h3 { font-size: 1em; margin: 6px 0 0; }
+.ai-access-modal .ai-connection { display: flex; gap: 16px; align-items: start; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #d9e0e8; overflow-wrap: anywhere; }
+.ai-access-modal .ai-connection button { flex: 0 0 auto; }
+.ai-access-modal #aiActivity { max-height: 230px; overflow: auto; font-size: .86em; overflow-wrap: anywhere; }
+.ai-access-modal #aiCreated { background: #eff5fa; padding: 16px; border-radius: 8px; }
+.ai-access-modal #aiCreated button { margin: 10px 5px 10px 0; }
+.ai-access-modal #aiMcpConfig { font-family: ui-monospace, monospace; font-size: .8em; }

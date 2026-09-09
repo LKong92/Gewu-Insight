@@ -430,6 +430,7 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 @property(nonatomic, copy) NSString *nativeQuickLookPendingKey;
 @property(nonatomic) NSInteger nativeQuickLookKeyDispatchGeneration;
 @property(nonatomic) BOOL nativeQuickLookReloadScheduled;
+- (NSMutableURLRequest *)workspaceRequestForURL:(NSURL *)url;
 - (void)toggleMainWindowFill;
 - (NSRect)defaultRestoreFrameForScreen:(NSScreen *)screen;
 - (void)showAuthorPhotoChooserForAuthorId:(NSNumber *)authorId;
@@ -1594,7 +1595,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         return;
     }
     NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/manual-pdf-path"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    NSMutableURLRequest *request = [self workspaceRequestForURL:endpoint];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     request.HTTPBody = body;
@@ -1848,6 +1849,8 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     quickLookSettingsItem.target = self;
     NSMenuItem *websiteLinkSettingsItem = [settingMenu addItemWithTitle:@"Website Links" action:@selector(openWebsiteLinkSettings:) keyEquivalent:@""];
     websiteLinkSettingsItem.target = self;
+    NSMenuItem *aiAccessItem = [settingMenu addItemWithTitle:@"AI Access" action:@selector(openAIAccessSettings:) keyEquivalent:@""];
+    aiAccessItem.target = self;
     NSMenuItem *arxivSettingsItem = [settingMenu addItemWithTitle:@"arXiv Scope Settings" action:@selector(openArxivSettings:) keyEquivalent:@""];
     arxivSettingsItem.target = self;
     NSMenuItem *citationSettingsItem = [settingMenu addItemWithTitle:@"Open Source Settings" action:@selector(openCitationSettings:) keyEquivalent:@","];
@@ -2029,12 +2032,28 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
     }] resume];
 }
 
+- (NSMutableURLRequest *)workspaceRequestForURL:(NSURL *)url {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    BOOL local = [url.scheme isEqualToString:self.url.scheme] &&
+        [url.host isEqualToString:self.url.host] && [url.port isEqual:self.url.port];
+    if (local) {
+        NSString *dataRoot = NSProcessInfo.processInfo.environment[@"GEWU_DATA_ROOT"];
+        NSURL *folder = dataRoot.length ? [NSURL fileURLWithPath:dataRoot isDirectory:YES] :
+            [[[NSBundle mainBundle].bundleURL URLByDeletingLastPathComponent] URLByAppendingPathComponent:@"data" isDirectory:YES];
+        NSString *token = [NSString stringWithContentsOfURL:[folder URLByAppendingPathComponent:@".gewu-workspace-token"]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+        token = [token stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (token.length == 64) [request setValue:token forHTTPHeaderField:@"X-Gewu-Workspace"];
+    }
+    return request;
+}
+
 - (void)loadApp {
     [self.browserController invalidate];
     self.browserController = nil;
     self.mainAppHasLoaded = YES;
     [self dismissStartupFailureAlert];
-    [self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];
+    [self.webView loadRequest:[self workspaceRequestForURL:self.url]];
     [self refreshLibraryNamingRuleMenu];
 }
 
@@ -2068,6 +2087,10 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)openFontSizeSettings:(id)sender {
     [self.webView evaluateJavaScript:@"window.openFontSizeSettings && window.openFontSizeSettings()" completionHandler:nil];
+}
+
+- (void)openAIAccessSettings:(id)sender {
+    [self.webView evaluateJavaScript:@"window.openAIAccessSettings && window.openAIAccessSettings()" completionHandler:nil];
 }
 
 - (void)openWebsiteLinkSettings:(id)sender {
@@ -2289,7 +2312,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         self.userGuideWindow.contentView = self.userGuideWebView;
         [self.userGuideWindow center];
     }
-    [self.userGuideWebView loadRequest:[NSURLRequest requestWithURL:[self userGuideURL]]];
+    [self.userGuideWebView loadRequest:[self workspaceRequestForURL:[self userGuideURL]]];
     [self.userGuideWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
@@ -2324,7 +2347,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
         self.loaderWindow.contentView = self.loaderWebView;
         [self.loaderWindow center];
     }
-    [self.loaderWebView loadRequest:[NSURLRequest requestWithURL:[self loaderURL]]];
+    [self.loaderWebView loadRequest:[self workspaceRequestForURL:[self loaderURL]]];
     [self.loaderWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
@@ -2338,7 +2361,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 - (void)setLibraryNamingRule:(NSString *)rule {
     [self updateLibraryNamingRuleMenu:rule];
     NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/settings/library-naming"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    NSMutableURLRequest *request = [self workspaceRequestForURL:endpoint];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     request.HTTPBody = [[NSString stringWithFormat:@"{\"rule\":\"%@\"}", rule] dataUsingEncoding:NSUTF8StringEncoding];
@@ -2355,7 +2378,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)refreshLibraryNamingRuleMenu {
     NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/settings/library-naming"];
-    NSURLRequest *request = [NSURLRequest requestWithURL:endpoint];
+    NSURLRequest *request = [self workspaceRequestForURL:endpoint];
     [[[NSURLSession sharedSession] dataTaskWithRequest:request
                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         if (error || !data) {
@@ -2374,7 +2397,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 
 - (void)clearWebCache:(id)sender {
     NSURL *endpoint = [self.url URLByAppendingPathComponent:@"api/cache/clear-web"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    NSMutableURLRequest *request = [self workspaceRequestForURL:endpoint];
     request.HTTPMethod = @"POST";
     [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
     request.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];

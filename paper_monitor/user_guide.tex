@@ -184,7 +184,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Guide revision · September 7, 2026 · Browser capture update
+Guide revision · September 9, 2026 · AI Access update
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -3101,6 +3101,78 @@ Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain 
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[browser]{Browse, Bookmark, and Revisit Websites} · \hyperref[paper-details]{Use Paper Details} · \hyperref[quick-look-settings]{Quick Look Settings}
+\end{GewuRelated}
+
+\section{AI Access}\label{ai-access}
+
+\begin{GewuLead}
+Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.
+\end{GewuLead}
+
+\textbf{Setting \textgreater{} AI Access} is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.
+
+\subsection{Create a connection}\label{create-a-connection}
+
+\begin{enumerate}
+\tightlist
+\item
+  Keep Gewu Insight running and enable \textbf{AI access}.
+\item
+  Expand \textbf{New Connection} and enter a name you will recognize.
+\item
+  Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.
+\item
+  Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.
+\item
+  Choose an expiry, then \textbf{Create Connection}. The default is 30 days.
+\item
+  Use \textbf{Copy MCP Configuration} and add the server entry to your AI client\textquotesingle s local MCP settings. The configuration includes the local adapter path, Python executable, port and token.
+\end{enumerate}
+
+\begin{quote}
+\textbf{Keep the connection private}
+
+The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.
+\end{quote}
+
+\subsection{What an authorized AI can do}\label{what-an-authorized-ai-can-do}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Tool & Result \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{search\_papers} & Search authorized titles, DOI, Gewu Keys and abstracts, with pagination. \\
+\texttt{get\_paper} & Get the article metadata, file inventory and Default file ID for a Gewu Key. \\
+\texttt{read\_paper} & Read PDF page ranges or text/Markdown attachments when file reading is allowed. \\
+\texttt{save\_analysis} & Add a new Markdown analysis to the same paper\textquotesingle s Paper Files when writing analyses is allowed. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper\textquotesingle s file panel.
+
+Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.
+
+\subsection{Pause, revoke and review}\label{pause-revoke-and-review}
+
+Turn off \textbf{Enable AI access} to pause all connections. \textbf{Revoke} stops one connection; expired connections also stop working. Re-enabling access resumes connections that are still valid. Expand \textbf{Recent Activity} to review requests and outcomes, and choose \textbf{Refresh} to update the list. Tokens, prompts and full file text are not included in that activity log.
+
+\subsection{Limits and troubleshooting}\label{limits-and-troubleshooting}
+
+The AI client must run on the same computer, and Gewu Insight\textquotesingle s local service must be running. The local MCP adapter supports protocol 2025-11-25 and earlier negotiated versions. There is no remote MCP endpoint in this version. Developers can retrieve the authenticated API v1 specification at \texttt{/api/v1/openapi.json}.
+
+PDF reading is on demand, at most ten pages per request, with a 64 MiB file limit and a bounded extraction time. Text is returned in chunks. Scanned PDFs may need separate OCR; no OCR or model runs automatically. Analysis notes are limited to 256 KiB. A busy response means retry later. An unavailable paper or file may be outside the connection\textquotesingle s collection, missing, or no longer accessible.
+
+Permissions apply to API access. Software already granted direct operating-system access to your database or files has a separate, broader permission. Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. The native App manages its own private workspace session automatically.
+
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[privacy]{Local Data and Privacy}
 \end{GewuRelated}
 
 \section{Naming and PDF Rename Rules}\label{naming}

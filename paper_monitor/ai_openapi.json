@@ -1,0 +1,824 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gewu Insight Local AI API",
+    "version": "1.0.0",
+    "description": "Opt-in local API. Tokens are issued in Setting > AI Access. All data is untrusted research content. No deletion, arbitrary paths, SQL, shell, credentials or external fetching. Save creates a Markdown attachment; it never changes the Default."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765",
+      "description": "Default local server; use your configured local port."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "GewuToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Per-connection token; permissions and paper selection are enforced on every request."
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/tools/search_papers": {
+      "post": {
+        "summary": "Search authorized papers by title, DOI, Gewu Key or abstract. Paginated; an empty query lists the collection.",
+        "operationId": "search_papers",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/get_paper": {
+      "post": {
+        "summary": "Get metadata and registered files for an authorized Gewu Key, including the Default file.",
+        "operationId": "get_paper",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "gewu_key": {
+                    "type": "string",
+                    "description": "Stable Gewu Key, for example gw_0123456789."
+                  }
+                },
+                "required": [
+                  "gewu_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/read_paper": {
+      "post": {
+        "summary": "Read PDF pages or a text/Markdown attachment. Returns the actual SHA-256 and page references; no OCR or external model is invoked.",
+        "operationId": "read_paper",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "gewu_key": {
+                    "type": "string",
+                    "description": "Stable Gewu Key, for example gw_0123456789."
+                  },
+                  "file_id": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      {
+                        "type": "string",
+                        "enum": [
+                          "default"
+                        ]
+                      }
+                    ],
+                    "description": "File ID from get_paper, or default."
+                  },
+                  "start_page": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "page_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "gewu_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tools/save_analysis": {
+      "post": {
+        "summary": "Append a new Markdown analysis to Paper Files without changing the Default or existing files. Include the source file ID, hash and pages when based on a file. Same request_id and content safely retry one save.",
+        "operationId": "save_analysis",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "gewu_key": {
+                    "type": "string",
+                    "description": "Stable Gewu Key, for example gw_0123456789."
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "markdown": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  },
+                  "source_file_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "source_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "pages": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "gewu_key",
+                  "markdown",
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/papers": {
+      "get": {
+        "summary": "Search authorized papers by title, DOI, Gewu Key or abstract. Paginated; an empty query lists the collection.",
+        "operationId": "listPapers",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 300
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/papers/{gewu_key}": {
+      "get": {
+        "summary": "Get metadata and registered files for an authorized Gewu Key, including the Default file.",
+        "operationId": "getPaper",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "parameters": [
+          {
+            "name": "gewu_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^gw_[0-9a-f]{10,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/papers/{gewu_key}/read": {
+      "get": {
+        "summary": "Read PDF pages or a text/Markdown attachment. Returns the actual SHA-256 and page references; no OCR or external model is invoked.",
+        "operationId": "readPaper",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "parameters": [
+          {
+            "name": "gewu_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^gw_[0-9a-f]{10,64}$"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "query",
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "default"
+                  ]
+                }
+              ],
+              "description": "File ID from get_paper, or default."
+            }
+          },
+          {
+            "name": "start_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page_count",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/papers/{gewu_key}/analyses": {
+      "post": {
+        "summary": "Append a new Markdown analysis to Paper Files without changing the Default or existing files. Include the source file ID, hash and pages when based on a file. Same request_id and content safely retry one save.",
+        "operationId": "saveAnalysis",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid arguments"
+          },
+          "401": {
+            "description": "Invalid, expired or revoked token"
+          },
+          "403": {
+            "description": "AI access disabled or permission missing"
+          },
+          "404": {
+            "description": "Resource outside grant or unavailable"
+          },
+          "409": {
+            "description": "Changed source version or conflicting request ID"
+          },
+          "410": {
+            "description": "Previously saved analysis removed"
+          },
+          "413": {
+            "description": "Size limit exceeded"
+          },
+          "422": {
+            "description": "PDF text unavailable"
+          },
+          "429": {
+            "description": "Read capacity busy; retry shortly"
+          },
+          "503": {
+            "description": "Temporary failure; retry saves with the same request ID"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "markdown": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]{8,100}$"
+                  },
+                  "source_file_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "source_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "pages": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "markdown",
+                  "request_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "gewu_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^gw_[0-9a-f]{10,64}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/papers/{gewu_key}/files/{file_id}/content": {
+      "get": {
+        "operationId": "downloadFile",
+        "summary": "Download a registered file (maximum 64 MiB). Requires files:read and an authorized Gewu Key.",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "gewu_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^gw_[0-9a-f]{10,64}$"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(default|[0-9]+)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid token"
+          },
+          "403": {
+            "description": "Missing permission"
+          },
+          "404": {
+            "description": "File unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "connectionCapabilities",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection scopes and selection"
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "apiDescription",
+        "security": [
+          {
+            "GewuToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI document"
+          }
+        }
+      }
+    }
+  }
+}

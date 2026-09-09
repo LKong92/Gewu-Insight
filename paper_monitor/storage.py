@@ -14,6 +14,7 @@ from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
 from .browser_store import ensure_browser_schema
 from .workflow_store import ensure_workflow_schema, PUBLICATION_REMOVED_BY_USER
+from .ai_store import ensure_ai_schema
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
@@ -23,7 +24,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 17
+STORAGE_SCHEMA_VERSION = 18
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -732,6 +733,7 @@ class Storage:
                 self._ensure_file_path_indexes()
                 ensure_browser_schema(self.conn)
                 ensure_workflow_schema(self.conn)
+                ensure_ai_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -745,6 +747,8 @@ class Storage:
                     ensure_browser_schema(self.conn)
                 if schema_version < 17:
                     ensure_workflow_schema(self.conn)
+                if schema_version < 18:
+                    ensure_ai_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
