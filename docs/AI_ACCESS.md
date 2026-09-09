@@ -16,7 +16,7 @@ AI model, upload your collection, or start analysis jobs when you enable access.
 5. Choose an expiry and create the connection. Copy **MCP Configuration** into
    the AI client's local MCP configuration. The generated configuration includes
    the correct Python executable, adapter path, local port, and connection token.
-   Clients use different configuration wrappers; preserve the server entry.
+   Clients use different formats. For Codex, use the field mapping or TOML example below.
 
 The secret is displayed only after creation. Store it in client configuration,
 not chat messages, source control, or shared notes. If lost, revoke the connection
@@ -30,6 +30,99 @@ environment. It implements MCP stdio protocol version **2025-11-25**, with
 compatibility negotiation for 2024-11-05, 2025-03-26 and 2025-06-18. It does not
 implement the newer 2026 stateless transport. It supports initialization, ping,
 tool discovery and calls; no remote MCP HTTP server or OAuth endpoint is provided.
+
+## Example: connect Codex on macOS
+
+API means **Application Programming Interface**; MCP means **Model Context
+Protocol**. Codex calls the MCP adapter's tools, and the adapter requests data
+from the Gewu API with your connection token. A Gewu Key identifies the paper;
+the token grants access. This token is issued by Gewu, independently of Codex
+login and the text tokens counted by models.
+
+Keep Gewu running on the same Mac. Create a connection named `Codex` in
+**Setting > AI Access**, choose its paper collection, and allow file reading if
+you want Codex to read PDFs. Analysis writing is optional and must be enabled
+separately to save notes back into Paper Files.
+
+In the local desktop client, open **Settings > MCP servers > Add server**,
+choose **STDIO**, and enter these fields. Save and use **Restart** to reload.
+These steps follow the [official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+checked September 9, 2026. The same local Codex host shares this configuration
+across desktop, CLI and IDE clients.
+
+| Field | Example |
+| --- | --- |
+| Name | `gewu-insight` |
+| Type | `STDIO` |
+| Command | `<GEWU_ROOT>/.venv/bin/python` |
+| Arguments, one entry | `<GEWU_ROOT>/scripts/gewu_mcp.py` |
+
+`<GEWU_ROOT>` means the absolute path to your Gewu program folder, which contains
+`scripts/gewu_mcp.py`. It is not the Library folder or the `.app` bundle. This
+setup does not require a fixed installation location. Replace the whole
+placeholder, including angle brackets; Codex will not expand it automatically.
+The command example assumes a project-local `.venv`. If your Python executable
+is elsewhere, use the complete `command` from **Copy MCP Configuration** instead.
+Its first `args` entry gives the actual script path. Keep paths containing spaces
+as single fields. If you move the installation, update both paths from a newly
+generated configuration.
+
+### Fill in Environment variables
+
+In **Environment variables**, the left **Key** box holds the variable name and
+the right **Value** box holds its value. Fill in the first row, then click
+**Add environment variable** for the second row. Enter names and values
+separately, without quotation marks or an equals sign.
+
+| Key (left box) | Value (right box) |
+| --- | --- |
+| `GEWU_API_URL` | `http://127.0.0.1:8765`, or the exact address under `env` in your generated configuration if the port differs |
+| `GEWU_API_TOKEN` | Paste your newly issued Gewu token using **Copy Token** |
+
+Leave **Environment variable passthrough** empty. It forwards variables already
+present in the client's environment; this example supplies both values explicitly
+above. The API address belongs in these variables while the server type remains
+**STDIO**. Do not send the token as a chat message.
+
+### Alternative: edit the TOML file
+
+The copied configuration is generic JSON, while Codex's file format is TOML.
+If editing `~/.codex/config.toml`, merge this equivalent block. Replace
+`<GEWU_ROOT>` as explained above and `<GEWU_TOKEN>` with your copied token;
+use the generated command and port if they differ. Keep existing settings;
+update an existing block of the same name instead of duplicating it. Keep the
+quotation marks in this TOML version and reload MCP afterward.
+
+```toml
+[mcp_servers.gewu-insight]
+command = "<GEWU_ROOT>/.venv/bin/python"
+args = ["<GEWU_ROOT>/scripts/gewu_mcp.py"]
+
+[mcp_servers.gewu-insight.env]
+GEWU_API_URL = "http://127.0.0.1:8765"
+GEWU_API_TOKEN = "<GEWU_TOKEN>"
+```
+
+### Verify a paper and save an analysis
+
+Type `/mcp` in Codex to inspect the connection. Replace `YOUR_GEWU_KEY` with the
+key of an authorized paper that has a local PDF, then send:
+
+> Use the gewu-insight MCP tools to get the paper with Gewu Key YOUR_GEWU_KEY.
+> Show its title and Default filename, then read the first three pages of the
+> Default PDF and summarize them in Chinese.
+
+With analysis-writing permission, follow with:
+
+> Read the relevant remaining PDF pages, then save a Chinese Markdown analysis
+> to this same paper through save_analysis. Include the source file ID, SHA-256
+> and page references, and use a unique request ID.
+
+The note becomes an associated Markdown file; the Default PDF is preserved.
+For missing tools, check permissions and reload MCP. For connection errors,
+check that Gewu is running, AI access is enabled, the token is valid and the
+paper belongs to the authorized collection. A new token issued after revocation
+must also replace the old token in Codex's settings.
 
 ## Tools and permissions
 

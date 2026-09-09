@@ -248,6 +248,10 @@
       text-align: center;
       vertical-align: .05em;
     }
+    #ai-access pre { overflow-x: auto; padding: 14px; border-radius: 8px; background: var(--code); font-size: 13px; line-height: 1.5; }
+    #ai-access pre code { padding: 0; background: none; font-size: inherit; }
+    #ai-access td code { overflow-wrap: anywhere; }
+    #ai-access td:first-child code { white-space: nowrap; }
     code { padding: 1px 5px; border-radius: 5px; background: var(--code); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
 
     .note, .important {
@@ -654,7 +658,7 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Guide revision · September 9, 2026 · AI Access update</p>
+          <p class="guide-revision">Guide revision · September 9, 2026 · Codex connection example</p>
 
           <h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
@@ -2332,11 +2336,20 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#browser">Browse, Bookmark, and Revisit Websites</a><a href="#paper-details">Use Paper Details</a><a href="#quick-look-settings">Quick Look Settings</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="ai-access" data-group="Settings and Safety" data-title="AI Access" data-keywords="AI API MCP token permissions authorization Gewu Key analysis Markdown privacy connection revoke">
+        <article class="help-topic guide-topic" id="ai-access" data-group="Settings and Safety" data-title="AI Access" data-keywords="AI API MCP Codex STDIO TOML config token permissions authorization Gewu Key analysis Markdown privacy connection revoke">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Connect an AI to Your Papers</h1>
           <p class="lead">Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.</p>
           <p><span class="ui">Setting &gt; AI Access</span> is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.</p>
+          <h2>API, MCP and your token</h2>
+          <table class="plain-table">
+            <tr><th>Name</th><th>Meaning in this connection</th></tr>
+            <tr><td>API</td><td><strong>Application Programming Interface</strong>: the operations another program can request from Gewu Insight.</td></tr>
+            <tr><td>MCP</td><td><strong>Model Context Protocol</strong>: a shared way for an AI client to discover and call tools. Gewu's local MCP adapter translates those calls into its API requests.</td></tr>
+            <tr><td>Access token</td><td>A private credential issued by Gewu Insight. It authorizes a connection's paper collection and permissions; it is separate from your AI account login and from text tokens counted by models.</td></tr>
+            <tr><td>Gewu Key</td><td>The stable identifier of a paper. It selects the article; the access token authorizes access to it.</td></tr>
+          </table>
+          <p>The request flows from Codex to the local MCP adapter, then to the Gewu API, which checks the token before reading or saving data. Gewu supplies the research material; Codex performs the analysis.</p>
           <h2>Create a connection</h2>
           <ol>
             <li>Keep Gewu Insight running and enable <span class="ui">AI access</span>.</li>
@@ -2344,7 +2357,7 @@
             <li>Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.</li>
             <li>Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.</li>
             <li>Choose an expiry, then <span class="ui">Create Connection</span>. The default is 30 days.</li>
-            <li>Use <span class="ui">Copy MCP Configuration</span> and add the server entry to your AI client's local MCP settings. The configuration includes the local adapter path, Python executable, port and token.</li>
+            <li>Use <span class="ui">Copy MCP Configuration</span> to obtain the local adapter path, Python executable, port and token. Enter these in your AI client's MCP settings using its required format. See the Codex example below.</li>
           </ol>
           <div class="note"><span class="callout-title">Keep the connection private</span>The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.</div>
           <h2>What an authorized AI can do</h2>
@@ -2357,6 +2370,46 @@
           </table>
           <p>For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper's file panel.</p>
           <p>Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.</p>
+          <h2>Example: connect Codex on macOS</h2>
+          <p>This example connects a local Codex client to Gewu Insight on the same Mac. Keep Gewu running. Create a connection named <span class="ui">Codex</span> using the steps above. Enable <span class="ui">Read PDF, attachment and note contents</span> to read full text; metadata-only access cannot read PDFs. Enable <span class="ui">Add new Markdown analyses to Paper Files</span> only when you also want Codex to save analyses.</p>
+          <ol>
+            <li>Open the desktop client's <span class="ui">Settings &gt; MCP servers &gt; Add server</span>.</li>
+            <li>Name the server <code>gewu-insight</code> and choose <span class="ui">STDIO</span>. This starts our adapter as a local process.</li>
+            <li>Fill the command, one argument and two environment variables shown below. Use the values from your own <span class="ui">Copy MCP Configuration</span>.</li>
+            <li>Save, then choose <span class="ui">Restart</span> to reload the MCP connection.</li>
+          </ol>
+          <p>These fields follow <a href="https://learn.chatgpt.com/docs/extend/mcp?surface=cli">OpenAI's MCP configuration documentation</a> (checked September 9, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.</p>
+          <table class="plain-table">
+            <tr><th>Codex field</th><th>Example value</th></tr>
+            <tr><td>Name</td><td><code>gewu-insight</code></td></tr>
+            <tr><td>Type</td><td><code>STDIO</code></td></tr>
+            <tr><td>Command</td><td><code>&lt;GEWU_ROOT&gt;/.venv/bin/python</code></td></tr>
+            <tr><td>Arguments: one entry</td><td><code>&lt;GEWU_ROOT&gt;/scripts/gewu_mcp.py</code></td></tr>
+          </table>
+          <div class="note"><span class="callout-title">What &lt;GEWU_ROOT&gt; means</span><code>&lt;GEWU_ROOT&gt;</code> is a placeholder for the absolute path to your Gewu program folder: the folder containing <code>scripts/gewu_mcp.py</code>. It is not the Library folder or the <code>.app</code> bundle. This setup does not require one fixed installation location. Replace the entire placeholder, including the angle brackets, before saving; Codex will not expand it automatically. The command example assumes a project-local <code>.venv</code>. If your Python executable is elsewhere, use the complete <code>command</code> from <span class="ui">Copy MCP Configuration</span> instead. Its first <code>args</code> entry supplies the actual script path. Keep a path containing spaces as one field. If you move the installation later, update both paths from a newly generated configuration.</div>
+          <h3>Fill in Environment variables</h3>
+          <p>Under <span class="ui">Environment variables</span>, enter the first row below: the left <span class="ui">Key</span> box holds the variable name and the right <span class="ui">Value</span> box holds its value. Click <span class="ui">Add environment variable</span> to add the second row. Enter each name and value separately, without quotation marks or an equals sign.</p>
+          <table class="plain-table">
+            <tr><th>Key (left box)</th><th>Value (right box)</th></tr>
+            <tr><td><code>GEWU_API_URL</code></td><td><code>http://127.0.0.1:8765</code>, or the exact address under <code>env</code> in your generated configuration if the port differs.</td></tr>
+            <tr><td><code>GEWU_API_TOKEN</code></td><td>Paste the token just created in Gewu Insight using <span class="ui">Copy Token</span>.</td></tr>
+          </table>
+          <p>Leave <span class="ui">Environment variable passthrough</span> empty. It is for forwarding variables already present in the client's environment; this example supplies both values explicitly above. The API address belongs in these variables while the server type remains <span class="ui">STDIO</span>. Copy the token into settings, not the chat.</p>
+          <h3>Alternative: edit Codex's configuration file</h3>
+          <p><span class="ui">Copy MCP Configuration</span> currently produces generic JSON. Codex's file uses TOML, so do not paste that JSON directly into it. If you prefer editing the file, merge this equivalent block into <code>~/.codex/config.toml</code>. Replace <code>&lt;GEWU_ROOT&gt;</code> as explained above and <code>&lt;GEWU_TOKEN&gt;</code> with your copied token; use the generated command and port if they differ. Preserve your other settings; update an existing <code>gewu-insight</code> block instead of adding a duplicate. Keep the quotation marks in this TOML version and reload the connection after saving.</p>
+          <pre><code>[mcp_servers.gewu-insight]
+command = "&lt;GEWU_ROOT&gt;/.venv/bin/python"
+args = ["&lt;GEWU_ROOT&gt;/scripts/gewu_mcp.py"]
+
+[mcp_servers.gewu-insight.env]
+GEWU_API_URL = "http://127.0.0.1:8765"
+GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
+          <h3>Verify a real paper, then request an analysis</h3>
+          <p>Type <code>/mcp</code> in Codex to inspect the connected server. Replace <code>YOUR_GEWU_KEY</code> below with the exact key of an authorized paper that has a local PDF, then send:</p>
+          <blockquote><p>Use the gewu-insight MCP tools to get the paper with Gewu Key YOUR_GEWU_KEY. Show its title and Default filename, then read the first three pages of the Default PDF and summarize them in Chinese.</p></blockquote>
+          <p>This checks both metadata access and PDF reading. When analysis-writing permission is enabled, you can follow with:</p>
+          <blockquote><p>Read the relevant remaining PDF pages, then save a Chinese Markdown analysis to this same paper through save_analysis. Include the source file ID, SHA-256 and page references, and use a unique request ID.</p></blockquote>
+          <p>The saved analysis appears as an associated Markdown file under that paper's Paper Files; the Default PDF stays unchanged. If a tool is missing, check that connection's permissions and reload MCP. If the service is unavailable, start Gewu; if access is rejected, check the AI switch, expiry, revocation and selected paper collection. A connection that you create later supplies a new token, which must also be updated in Codex.</p>
           <h2>Pause, revoke and review</h2>
           <p>Turn off <span class="ui">Enable AI access</span> to pause all connections. <span class="ui">Revoke</span> stops one connection; expired connections also stop working. Re-enabling access resumes connections that are still valid. Expand <span class="ui">Recent Activity</span> to review requests and outcomes, and choose <span class="ui">Refresh</span> to update the list. Tokens, prompts and full file text are not included in that activity log.</p>
           <h2>Limits and troubleshooting</h2>

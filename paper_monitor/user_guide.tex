@@ -184,7 +184,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Guide revision · September 9, 2026 · AI Access update
+Guide revision · September 9, 2026 · Codex connection example
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -3111,6 +3111,28 @@ Give an AI client access to selected papers through their stable Gewu Keys, with
 
 \textbf{Setting \textgreater{} AI Access} is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.
 
+\subsection{API, MCP and your token}\label{api-mcp-and-your-token}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Name & Meaning in this connection \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+API & \textbf{Application Programming Interface}: the operations another program can request from Gewu Insight. \\
+MCP & \textbf{Model Context Protocol}: a shared way for an AI client to discover and call tools. Gewu\textquotesingle s local MCP adapter translates those calls into its API requests. \\
+Access token & A private credential issued by Gewu Insight. It authorizes a connection\textquotesingle s paper collection and permissions; it is separate from your AI account login and from text tokens counted by models. \\
+Gewu Key & The stable identifier of a paper. It selects the article; the access token authorizes access to it. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+The request flows from Codex to the local MCP adapter, then to the Gewu API, which checks the token before reading or saving data. Gewu supplies the research material; Codex performs the analysis.
+
 \subsection{Create a connection}\label{create-a-connection}
 
 \begin{enumerate}
@@ -3126,7 +3148,7 @@ Give an AI client access to selected papers through their stable Gewu Keys, with
 \item
   Choose an expiry, then \textbf{Create Connection}. The default is 30 days.
 \item
-  Use \textbf{Copy MCP Configuration} and add the server entry to your AI client\textquotesingle s local MCP settings. The configuration includes the local adapter path, Python executable, port and token.
+  Use \textbf{Copy MCP Configuration} to obtain the local adapter path, Python executable, port and token. Enter these in your AI client\textquotesingle s MCP settings using its required format. See the Codex example below.
 \end{enumerate}
 
 \begin{quote}
@@ -3158,6 +3180,100 @@ Tool & Result \\
 For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper\textquotesingle s file panel.
 
 Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.
+
+\subsection{Example: connect Codex on macOS}\label{example-connect-codex-on-macos}
+
+This example connects a local Codex client to Gewu Insight on the same Mac. Keep Gewu running. Create a connection named \textbf{Codex} using the steps above. Enable \textbf{Read PDF, attachment and note contents} to read full text; metadata-only access cannot read PDFs. Enable \textbf{Add new Markdown analyses to Paper Files} only when you also want Codex to save analyses.
+
+\begin{enumerate}
+\tightlist
+\item
+  Open the desktop client\textquotesingle s \textbf{Settings \textgreater{} MCP servers \textgreater{} Add server}.
+\item
+  Name the server \texttt{gewu-insight} and choose \textbf{STDIO}. This starts our adapter as a local process.
+\item
+  Fill the command, one argument and two environment variables shown below. Use the values from your own \textbf{Copy MCP Configuration}.
+\item
+  Save, then choose \textbf{Restart} to reload the MCP connection.
+\end{enumerate}
+
+These fields follow \href{https://learn.chatgpt.com/docs/extend/mcp?surface=cli}{OpenAI\textquotesingle s MCP configuration documentation} (checked September 9, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Codex field & Example value \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Name & \texttt{gewu-insight} \\
+Type & \texttt{STDIO} \\
+Command & \texttt{\textless{}GEWU\_ROOT\textgreater{}/.venv/bin/python} \\
+Arguments: one entry & \texttt{\textless{}GEWU\_ROOT\textgreater{}/scripts/gewu\_mcp.py} \\
+\end{longtable}
+\GewuTableEnd
+}
+
+\begin{quote}
+\textbf{What \textless GEWU\_ROOT\textgreater{} means}
+
+\texttt{\textless{}GEWU\_ROOT\textgreater{}} is a placeholder for the absolute path to your Gewu program folder: the folder containing \texttt{scripts/gewu\_mcp.py}. It is not the Library folder or the \texttt{.app} bundle. This setup does not require one fixed installation location. Replace the entire placeholder, including the angle brackets, before saving; Codex will not expand it automatically. The command example assumes a project-local \texttt{.venv}. If your Python executable is elsewhere, use the complete \texttt{command} from \textbf{Copy MCP Configuration} instead. Its first \texttt{args} entry supplies the actual script path. Keep a path containing spaces as one field. If you move the installation later, update both paths from a newly generated configuration.
+\end{quote}
+
+\subsubsection{Fill in Environment variables}\label{fill-in-environment-variables}
+
+Under \textbf{Environment variables}, enter the first row below: the left \textbf{Key} box holds the variable name and the right \textbf{Value} box holds its value. Click \textbf{Add environment variable} to add the second row. Enter each name and value separately, without quotation marks or an equals sign.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Key (left box) & Value (right box) \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{GEWU\_API\_URL} & \texttt{http://127.0.0.1:8765}, or the exact address under \texttt{env} in your generated configuration if the port differs. \\
+\texttt{GEWU\_API\_TOKEN} & Paste the token just created in Gewu Insight using \textbf{Copy Token}. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+Leave \textbf{Environment variable passthrough} empty. It is for forwarding variables already present in the client\textquotesingle s environment; this example supplies both values explicitly above. The API address belongs in these variables while the server type remains \textbf{STDIO}. Copy the token into settings, not the chat.
+
+\subsubsection{Alternative: edit Codex\textquotesingle s configuration file}\label{alternative-edit-codexs-configuration-file}
+
+\textbf{Copy MCP Configuration} currently produces generic JSON. Codex\textquotesingle s file uses TOML, so do not paste that JSON directly into it. If you prefer editing the file, merge this equivalent block into \texttt{\textasciitilde{}/.codex/config.toml}. Replace \texttt{\textless{}GEWU\_ROOT\textgreater{}} as explained above and \texttt{\textless{}GEWU\_TOKEN\textgreater{}} with your copied token; use the generated command and port if they differ. Preserve your other settings; update an existing \texttt{gewu-insight} block instead of adding a duplicate. Keep the quotation marks in this TOML version and reload the connection after saving.
+
+\begin{verbatim}
+[mcp_servers.gewu-insight]
+command = "<GEWU_ROOT>/.venv/bin/python"
+args = ["<GEWU_ROOT>/scripts/gewu_mcp.py"]
+
+[mcp_servers.gewu-insight.env]
+GEWU_API_URL = "http://127.0.0.1:8765"
+GEWU_API_TOKEN = "<GEWU_TOKEN>"
+\end{verbatim}
+
+\subsubsection{Verify a real paper, then request an analysis}\label{verify-a-real-paper-then-request-an-analysis}
+
+Type \texttt{/mcp} in Codex to inspect the connected server. Replace \texttt{YOUR\_GEWU\_KEY} below with the exact key of an authorized paper that has a local PDF, then send:
+
+\begin{quote}
+Use the gewu-insight MCP tools to get the paper with Gewu Key YOUR\_GEWU\_KEY. Show its title and Default filename, then read the first three pages of the Default PDF and summarize them in Chinese.
+\end{quote}
+
+This checks both metadata access and PDF reading. When analysis-writing permission is enabled, you can follow with:
+
+\begin{quote}
+Read the relevant remaining PDF pages, then save a Chinese Markdown analysis to this same paper through save\_analysis. Include the source file ID, SHA-256 and page references, and use a unique request ID.
+\end{quote}
+
+The saved analysis appears as an associated Markdown file under that paper\textquotesingle s Paper Files; the Default PDF stays unchanged. If a tool is missing, check that connection\textquotesingle s permissions and reload MCP. If the service is unavailable, start Gewu; if access is rejected, check the AI switch, expiry, revocation and selected paper collection. A connection that you create later supplies a new token, which must also be updated in Codex.
 
 \subsection{Pause, revoke and review}\label{pause-revoke-and-review}
 

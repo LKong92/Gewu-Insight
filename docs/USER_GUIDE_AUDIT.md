@@ -114,7 +114,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Clarify Save, unsaved close and immediate Restore Defaults; preserve canonical classification versus visible grouping. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Three mode labels, Save/unsaved-close and immediate Restore Default; `saveQuickLookSettings`, `resetQuickLookSettings`, shared preview routing. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Built-in default or macOS default browser; Save, unsaved close, Restore Default, persistence, research-link scope, Preview/Finder and Browser exceptions. |
-| [AI Access](../paper_monitor/user_guide.html#ai-access) | Default-off local API and MCP; connection collection, permissions, expiry and revoke; file reads, append-only Markdown analysis, provenance, limits and the filesystem permission boundary. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Default-off local API and MCP; Codex STDIO fields, explicit environment rows, path placeholders, TOML and verification prompts; connection collection, permissions, expiry and revoke; file reads, append-only Markdown analysis, provenance, limits and the filesystem permission boundary. |
 | [Naming](../paper_monitor/user_guide.html#naming) | New unnamed placements versus explicit file rename; tokens, sample, Save/Default and batch rename checked against native menu, settings and rename handlers. |
 | [Storage Model](../paper_monitor/user_guide.html#storage-model) | Retain managed roots, associated bundles and identity independent of filenames; storage/file-operation tests. |
 | [Privacy](../paper_monitor/user_guide.html#privacy) | Retain local-first, network access, private exports and credentials; Browser/profile details cross-referenced. |
@@ -450,3 +450,42 @@ filesystem permission. Both editions document the four implemented MCP tools,
 file/analysis permission choices, expiry, revocation, provenance and retry rules.
 All seven existing screenshots are preserved. The new PDF section on pages 66–67
 was rendered and inspected; Product Identity chapters still flow continuously.
+
+
+## September 9 Codex connection example
+
+Both Guide editions and `docs/AI_ACCESS.md` now explain API, MCP, the private
+access token and the Gewu Key, followed by an end-to-end Codex example. The
+example separates Command/Arguments from the two Environment variables rows,
+identifies the left Key and right Value boxes, explains Add environment variable,
+and explicitly leaves Environment variable passthrough empty.
+
+`<GEWU_ROOT>` denotes the actual absolute program folder containing
+`scripts/gewu_mcp.py`; it is neither the Library nor the App bundle. No fixed
+installation location is assumed. The project-local Python path is only an
+example: the generated configuration supplies the installation's real interpreter,
+script and port. Placeholders must be replaced, paths with spaces stay in one
+field, and moving the installation requires updating the paths. Only placeholder
+tokens are printed. The generic copied JSON is distinguished from Codex's TOML,
+with a matching TOML block, metadata/PDF validation prompt and optional analysis
+save prompt. Local desktop configuration follows the
+[official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+checked September 9, 2026.
+
+Validation: all 26 existing Guide/audit tests and six PDF structure checks pass.
+The HTML and Markdown TOML examples parse and match, with the expected two
+environment keys. The 82-page PDF was rendered and pages 66–69 visually reviewed;
+the final example pages 66–68 are pixel-identical to that review. All seven
+original-App illustrations remain, and Product Identity chapters 4-1–4-4 still
+flow continuously on pages 72–73. The interactive Guide fits 1280, 900 and 640 px
+windows; environment names remain unbroken and no page overflow occurs. The
+initial sandbox browser launch was denied; an authorized temporary headless
+browser completed the layout checks. No new illustration is used.
+
+The original source and both signed App bundles contain the same PDF; the live
+original service serves matching HTML/PDF bytes and remains healthy with the
+same UI process (78889). No App restart, AI connection creation, client
+configuration change or research-data modification was performed during this
+documentation update. Commit and push were requested afterward.
+The documentation/App backup and installation verification are retained at
+`/private/tmp/gewu-codex-guide-before-2eow2ja4/`.
