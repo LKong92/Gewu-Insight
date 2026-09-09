@@ -38,8 +38,9 @@ class GuideAuditTests(unittest.TestCase):
         self.assertNotIn("Choose Image, Data, Code", adoption)
         self.assertIn("Supplementary material", adoption)
         self.assertIn("Other", adoption)
-        self.assertIn("physical primary", self.topic("troubleshooting"))
-        self.assertIn("switching defaults does not guarantee", self.topic("troubleshooting"))
+        self.assertIn("Default PDF is kept as the protected main file", self.topic("troubleshooting"))
+        self.assertIn("previous primary PDF into Associated Files", self.topic("troubleshooting"))
+        self.assertIn("Non-PDF defaults keep their existing location", self.topic("versions-current"))
 
     def test_profile_and_loader_instructions_use_real_labels_and_context(self):
         profile_button = BeautifulSoup(ui_server.INDEX_HTML, "html.parser").find(id="findMyPublications")

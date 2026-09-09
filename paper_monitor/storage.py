@@ -3343,7 +3343,18 @@ class Storage:
             ),
             reverse=True,
         )
-        return automatic[0] if automatic else None
+        if automatic:
+            return automatic[0]
+        # Browser Save can establish the first main PDF before its version is
+        # known. This fallback never outranks a recognized publication version
+        # or a manual Default, and does not adopt ordinary Unknown attachments.
+        primary = by_id.get(int(paper.get("primary_resource_id") or 0))
+        if (primary and primary.get("exists")
+                and primary.get("added_via") == "browser_capture"
+                and normalize_paper_file_type(primary.get("file_type")) == "unknown"
+                and Storage.resource_is_pdf(primary)):
+            return primary
+        return None
 
     def resolve_default_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
         paper = self.get_paper(str(paper_id))

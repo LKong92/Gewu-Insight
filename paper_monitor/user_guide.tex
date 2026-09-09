@@ -1082,9 +1082,9 @@ Folder Loader is a migration-oriented workflow. It imports a visible collection 
 
 \section{How the default file is resolved}\label{how-the-default-file-is-resolved}
 
-An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.
+An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If no Default or main PDF exists, Browser Save establishes its first article PDF as a fallback Default even when its type is Unknown. This keeps the version classification intact.
 
-\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, \textbf{Unknown}, and \textbf{Invalid file} do not become the automatic default. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
+\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, and \textbf{Invalid file} do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
 
 \begin{quote}
 \textbf{Published files}
@@ -1852,11 +1852,11 @@ The default file is the preferred local representation of the paper. You can cho
 
 \subsection{Automatic selection}\label{automatic-selection}
 
-The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, Unknown, and Invalid file never become the automatic default.
+The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.
 
 \subsection{Automatic and manual eligibility}\label{automatic-and-manual-eligibility}
 
-Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Use Automatic Selection}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
+The four publication types above take priority in automatic selection, ahead of the first Browser PDF fallback. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Use Automatic Selection}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
 
 \subsection{Choose a file manually}\label{choose-a-file-manually}
 
@@ -1867,11 +1867,11 @@ Only the four publication types above participate in automatic selection. You ma
 \item
   \textbf{Select the file you want.}
 \item
-  \textbf{Choose \textbf{Set as Default}.} This file will be used by \textbf{Open in Preview} and paper preview.
+  \textbf{Choose \textbf{Set as Default}.} This file will be used by \textbf{Open in Preview} and paper preview. You can also pin the automatically selected Default this way.
 \end{enumerate}
 
 \begin{GewuResult}
-\textbf{Result.} The selected file becomes the manual default. Its existing filename and physical location are preserved.
+\textbf{Result.} The selected file becomes the manual default. When it is a PDF, Gewu Insight places it in the main managed file folder and keeps the previous primary PDF in Associated Files. The article and file identities stay unchanged. External originals and files shared with another article are copied safely; existing filenames are retained unless a name conflict requires a unique name. Non-PDF defaults keep their existing location.
 \end{GewuResult}
 
 \subsection{Return to automatic selection}\label{return-to-automatic-selection}
@@ -1899,7 +1899,7 @@ Annotation state is selected independently as \textbf{Annotated}, \textbf{Unanno
 \begin{quote}
 \textbf{Note}
 
-Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.
+Changing File type can change the automatic Default. When the selected Default is a PDF, its main file location is synchronized too. Annotation and Source remain independent properties; changing a label does not apply a filename template or rewrite the PDF.
 \end{quote}
 
 \begin{GewuRelated}
@@ -2817,7 +2817,7 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 \item
   \textbf{Choose the PDF in Details.} A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click \textbf{Get PDF}, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
 \item
-  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. Main article PDFs enable the PDF icon and Space preview. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
+  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
 \end{enumerate}
 
 Opening Details, identifying or cancelling does not import anything. Save creates or reuses the article and chosen placement, immediately refreshing Paper Files. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. Click \textbf{Show in Library} beside the success message to select the saved article in its Library or Space folder. Browser keeps the webpage.
@@ -3150,7 +3150,7 @@ Edit \textbf{Filename Template} and inspect the sample \textbf{Preview}, then ch
 \begin{quote}
 \textbf{Note}
 
-Changing a Paper Files property or choosing \textbf{Set as Default} does not rename that file. A rename occurs only through a naming or rename action.
+Choosing a Default PDF can move it to the main file folder and archive the previous main PDF in Associated Files. This does not apply the filename template or rewrite file contents; name conflicts use a unique filename. Use a naming or rename action to apply your preferred naming rule.
 \end{quote}
 
 \begin{GewuRelated}
@@ -3576,7 +3576,7 @@ Open the live or previous Loader log and the result guide. Confirm the metadata 
 
 \section{A default file cannot be deleted}\label{a-default-file-cannot-be-deleted}
 
-The preferred Default and the protected physical primary file are not always the same resource. \textbf{Set as Default} changes the reading preference, not the Library\textquotesingle s compatibility primary path; switching defaults does not guarantee that the old file becomes deletable. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An \textbf{Invalid file} remains an audit record and is never eligible to become default.
+A Default PDF is kept as the protected main file. Choose another PDF with \textbf{Set as Default} to move the previous primary PDF into Associated Files, where it remains available as a separate file. A non-PDF default changes the reading preference and leaves the main PDF in place. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An \textbf{Invalid file} remains an audit record and is never eligible to become default.
 
 \section{Change where website links open}\label{change-where-website-links-open}
 

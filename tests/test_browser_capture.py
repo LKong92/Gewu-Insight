@@ -234,13 +234,105 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(payload['paper']['merged_pdf_path'], str(path))
         self.assertEqual(path.read_bytes(), capture.path.read_bytes())
 
+    def test_first_unknown_browser_pdf_becomes_automatic_default_for_existing_library_item(self):
+        before = self.paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Already cataloged')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        self.assertFalse(self.storage.list_paper_resources('first'))
+        url = 'https://mdpi-res.com/article_deploy/fixture/article.pdf'
+        capture = self.service.begin(self.db, {
+            'url':url, 'is_pdf':True, 'origin_paper_id':'first',
+            'metadata':{'doi':'10.1234/first', 'title':before['title']},
+        })
+        self.upload(capture, found={'kind':'doi','identifier':'10.1234/first'}, source_url=url)
+        review = self.review(capture)
+        self.assertTrue(review['paper']['existing'])
+        self.assertEqual(review['suggested_file_type'], 'unknown')
+        result = self.service.save(capture, self.storage, {'folder_id':folder['id'], 'include_pdf':True})
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['gewu_key'], before['storage_key'])
+        self.assertEqual(result['item_id'], item['id'])
+        files = ui.paper_files_state_payload(self.storage, 'first')
+        resource = files['files'][0]
+        self.assertEqual(resource['file_type'], 'unknown')
+        self.assertTrue(resource['is_default']); self.assertTrue(resource['is_primary'])
+        self.assertFalse(files['preferred_resource_manual'])
+        path = Path(resource['local_path'])
+        self.assertEqual(path.parent.resolve(), (ui.LIBRARY_LOCAL_COPY_ROOT / 'Already cataloged').resolve())
+        self.assertEqual(path.read_bytes(), capture.path.read_bytes())
+        self.assertEqual(files['paper']['merged_pdf_path'], str(path))
+        self.assertEqual(self.count('papers'), 1)
+        self.assertEqual(self.count('library_items'), 1)
+        self.assertEqual(self.count('resources'), 1)
+        # Selection persists through reopening SQLite without setting a sticky manual preference.
+        self.storage.close(); self.storage = Storage(self.db)
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], resource['id'])
+
+    def test_first_unknown_default_does_not_steal_manual_choice_or_block_later_versions(self):
+        self.paper()
+        first = self.begin(); self.upload(first); self.review(first)
+        self.assertTrue(self.save(first, include_pdf=True)['ok'])
+        original = self.storage.resolve_default_paper_resource('first')
+        self.assertIsNotNone(original)
+        newer = self.begin(); self.upload(newer, content=self.pdf('Second unknown PDF')); self.review(newer)
+        self.assertTrue(self.save(newer, include_pdf=True)['ok'])
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], original['id'])
+        known = self.begin(); self.upload(known, content=self.pdf('Recognized preprint')); self.review(known)
+        self.assertTrue(self.save(known, include_pdf=True, file_type='preprint')['ok'])
+        preprint = self.storage.resolve_default_paper_resource('first')
+        self.assertEqual(preprint['file_type'], 'preprint')
+        self.assertEqual(self.storage.get_paper('first')['primary_resource_id'], preprint['id'])
+        self.assertTrue(Path(self.storage.get_paper_resource(original['id'])['stored_path']).is_relative_to(ui.ASSOCIATED_FILES_ROOT))
+        ui.set_preferred_paper_file(self.storage, 'first', original['id'])
+        published = self.begin(); self.upload(published, content=self.pdf('Published paper')); self.review(published)
+        self.assertTrue(self.save(published, include_pdf=True, file_type='published_version')['ok'])
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], original['id'])
+        self.assertTrue(self.storage.get_paper('first')['preferred_resource_manual'])
+
+    def test_first_unknown_promotion_failure_can_retry_without_duplicate_or_false_default(self):
+        self.paper()
+        capture = self.begin(); self.upload(capture); self.review(capture)
+        self.storage.conn.execute("CREATE TRIGGER fail_primary BEFORE UPDATE OF primary_resource_id ON papers BEGIN SELECT RAISE(FAIL, 'fixture failure'); END")
+        self.storage.conn.commit()
+        failed = self.save(capture, include_pdf=True)
+        self.assertFalse(failed['ok'])
+        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        first = self.storage.list_paper_resources('first')[0]
+        self.assertEqual(Path(first['stored_path']).read_bytes(), capture.path.read_bytes())
+        self.storage.conn.execute('DROP TRIGGER fail_primary'); self.storage.conn.commit()
+        retried = self.save(capture, include_pdf=True)
+        self.assertTrue(retried['ok']); self.assertTrue(retried['duplicate_file'])
+        self.assertEqual(self.count('resources'), 1)
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], first['id'])
+        self.assertEqual(self.storage.get_paper('first')['primary_resource_id'], first['id'])
+
+    def test_resave_adopts_legacy_unknown_browser_pdf_without_adding_a_resource(self):
+        before = self.paper()
+        self.storage.add_library_item(paper_id='first', folder_id=1)
+        content = self.pdf('A quantum sensing paper')
+        original = ui.attach_file_to_paper(self.storage, paper_id='first', filename='old-capture.pdf',
+            content=content, file_type='unknown', added_via='browser_capture')
+        old_path = Path(original['stored_path'])
+        self.assertTrue(old_path.resolve().is_relative_to(ui.ASSOCIATED_FILES_ROOT.resolve()))
+        self.assertIsNone(self.storage.resolve_default_paper_resource('first'))
+        capture = self.begin(); self.upload(capture, content=content); self.review(capture)
+        result = self.save(capture, include_pdf=True)
+        self.assertTrue(result['ok']); self.assertTrue(result['duplicate_file'])
+        selected = self.storage.resolve_default_paper_resource('first')
+        self.assertEqual(selected['id'], original['id'])
+        self.assertEqual(result['gewu_key'], before['storage_key'])
+        self.assertEqual(self.count('resources'), 1)
+        self.assertFalse(old_path.exists())
+        self.assertEqual(Path(selected['stored_path']).read_bytes(), content)
+        self.assertFalse(self.storage.get_paper('first')['preferred_resource_manual'])
+
     def test_resave_repairs_only_unclassified_browser_copy_without_duplicates(self):
         self.paper(doi='10.1038/s41567-026-03429-7')
         old = self.publisher_capture(); self.review(old)
         before = self.save(old, include_pdf=True, file_type='unknown')
         resource = self.storage.list_paper_resources('first')[0]
         old_path = Path(resource['stored_path'])
-        self.assertTrue(old_path.is_relative_to(ui.ASSOCIATED_FILES_ROOT))
+        self.assertTrue(old_path.resolve().is_relative_to(ui.LIBRARY_LOCAL_COPY_ROOT.resolve()))
         again = self.publisher_capture(); self.review(again)
         after = self.save(again, include_pdf=True)
         self.assertTrue(after['duplicate_file'])
@@ -250,7 +342,7 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(len(files), 1); self.assertEqual(files[0]['id'], resource['id'])
         self.assertEqual(files[0]['sha256'], resource['sha256'])
         self.assertTrue(files[0]['is_primary']); self.assertTrue(files[0]['is_default'])
-        self.assertFalse(old_path.exists())
+        self.assertTrue(old_path.exists())
 
     def test_manual_unknown_and_existing_manual_default_are_preserved(self):
         self.paper(doi='10.1038/s41567-026-03429-7')
@@ -260,7 +352,9 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertTrue(first['file_type_override'])
         again = self.publisher_capture(); self.review(again); self.save(again, include_pdf=True)
         self.assertEqual(self.storage.get_paper_resource(first['id'])['file_type'], 'unknown')
-        self.assertFalse(self.storage.get_paper('first')['main_pdf_path'])
+        self.assertTrue(self.storage.get_paper('first')['main_pdf_path'])
+        self.assertEqual(self.storage.resolve_default_paper_resource('first')['id'], first['id'])
+        self.assertFalse(self.storage.get_paper('first')['preferred_resource_manual'])
         self.storage.set_preferred_paper_resource('first', first['id'])
         newer = self.publisher_capture(content=self.pdf('Another version of the quantum sensing paper'))
         self.review(newer); self.save(newer, include_pdf=True)
@@ -577,6 +671,9 @@ class BrowserCaptureApiTests(unittest.TestCase):
                 self.assertEqual(len(files['files']),1)
                 file=files['files'][0]
                 self.assertTrue(file['exists']); self.assertEqual(file['file_type'],'unknown')
+                self.assertTrue(file['is_default']); self.assertTrue(file['is_primary'])
+                self.assertFalse(files['preferred_resource_manual'])
+                self.assertTrue(Path(file['local_path']).resolve().is_relative_to(ui.LIBRARY_LOCAL_COPY_ROOT.resolve()))
                 self.assertEqual(Path(file['local_path']).read_bytes(),content.getvalue())
                 if resource_id is not None: self.assertEqual(file['id'],resource_id)
                 resource_id=file['id']

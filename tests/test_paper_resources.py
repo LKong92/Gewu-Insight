@@ -31,6 +31,7 @@ class PaperResourceStorageTests(unittest.TestCase):
             patch.object(ui_server, "SPACES_LOCAL_COPY_ROOT", self.spaces_root),
             patch.object(ui_server, "MY_PUBLICATIONS_LOCAL_COPY_ROOT", self.publications_root),
             patch.object(ui_server, "ASSOCIATED_FILES_ROOT", self.associated_root),
+            patch.object(ui_server, "DEFAULT_PDF_DIR", self.root / "data" / "pdfs"),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -857,6 +858,129 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
         self.assertEqual(int(promoted["id"]), int(preprint["id"]))
 
+    def test_add_file_classification_moves_default_to_main_in_both_workspaces(self) -> None:
+        for workspace in ("library", "my-publications"):
+            with self.subTest(workspace=workspace):
+                paper_id = "classify-" + workspace
+                self.add_paper(paper_id)
+                if workspace == "library":
+                    self.storage.add_library_item(paper_id=paper_id, folder_id=1)
+                    main_root = self.library_root
+                else:
+                    self.storage.add_my_publication(paper_id=paper_id)
+                    main_root = self.publications_root
+                content = self.valid_pdf_bytes(paper_id)
+                resource = ui_server.attach_file_to_paper(
+                    self.storage, paper_id=paper_id, filename=paper_id + ".pdf",
+                    content=content, file_type="unknown", file_source="user_import",
+                    added_via="paper_details_native_chooser",
+                )
+                old_path = Path(resource["stored_path"])
+                self.assertTrue(old_path.is_relative_to(self.associated_root))
+                key = self.storage.get_paper(paper_id)["storage_key"]
+                ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
+                paper = self.storage.get_paper(paper_id)
+                current = self.storage.get_paper_resource(resource["id"])
+                self.assertEqual(paper["storage_key"], key)
+                self.assertEqual(paper["primary_resource_id"], resource["id"])
+                self.assertEqual(Path(paper["main_pdf_path"]), main_root / (paper_id + ".pdf"))
+                self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
+                self.assertEqual(current["stored_path"], paper["main_pdf_path"])
+                self.assertEqual(Path(current["stored_path"]).read_bytes(), content)
+                self.assertFalse(old_path.exists())
+                # Repeating classification is idempotent; explicit pinning is available
+                # even when automatic selection already resolves to this same resource.
+                ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
+                ui_server.set_preferred_paper_file(self.storage, paper_id, resource["id"])
+                self.assertEqual(len(self.storage.list_paper_resources(paper_id)), 1)
+                self.assertTrue(self.storage.get_paper(paper_id)["preferred_resource_manual"])
+
+    def test_default_pdf_switch_preserves_versions_and_manual_choice(self) -> None:
+        paper_id = "physical-default-switch"
+        self.add_paper(paper_id)
+        self.storage.add_my_publication(paper_id=paper_id)
+        resources = []
+        for kind in ("unknown", "preprint", "published_version"):
+            resource = ui_server.attach_file_to_paper(
+                self.storage, paper_id=paper_id, filename=kind + ".pdf",
+                content=self.valid_pdf_bytes(kind), file_type=kind,
+            )
+            resources.append(resource)
+            if kind == "unknown":
+                ui_server.set_preferred_paper_file(self.storage, paper_id, resource["id"])
+        self.assertEqual(self.storage.get_paper(paper_id)["primary_resource_id"], resources[0]["id"])
+        ui_server.set_preferred_paper_file(self.storage, paper_id, None)
+        paper = self.storage.get_paper(paper_id)
+        self.assertEqual(paper["primary_resource_id"], resources[2]["id"])
+        self.assertFalse(paper["preferred_resource_manual"])
+        for resource, kind in zip(resources, ("unknown", "preprint", "published_version")):
+            current = self.storage.get_paper_resource(resource["id"])
+            self.assertEqual(Path(current["stored_path"]).read_bytes(), self.valid_pdf_bytes(kind))
+        self.assertTrue(Path(self.storage.get_paper_resource(resources[0]["id"])["stored_path"]).is_relative_to(self.associated_root))
+
+    def test_default_transition_sql_failure_restores_files_type_and_preference(self) -> None:
+        paper_id = "physical-default-rollback"
+        self.add_paper(paper_id)
+        self.storage.add_my_publication(paper_id=paper_id)
+        old = ui_server.attach_file_to_paper(self.storage, paper_id=paper_id, filename="old.pdf",
+            content=self.valid_pdf_bytes("old"), file_type="preprint")
+        new = ui_server.attach_file_to_paper(self.storage, paper_id=paper_id, filename="new.pdf",
+            content=self.valid_pdf_bytes("new"), file_type="unknown")
+        paths = {r["id"]: self.storage.get_paper_resource(r["id"])["stored_path"] for r in (old, new)}
+        self.storage.conn.execute("CREATE TRIGGER fail_primary BEFORE UPDATE OF primary_resource_id ON papers BEGIN SELECT RAISE(FAIL, 'fixture failure'); END")
+        self.storage.conn.commit()
+        with self.assertRaises(sqlite3.Error):
+            ui_server.update_paper_resource_role(self.storage, paper_id, new["id"], "published_version")
+        self.assertEqual(self.storage.get_paper_resource(new["id"])["file_type"], "unknown")
+        with self.assertRaises(sqlite3.Error):
+            ui_server.set_preferred_paper_file(self.storage, paper_id, new["id"])
+        paper = self.storage.get_paper(paper_id)
+        self.assertEqual(paper["primary_resource_id"], old["id"])
+        self.assertFalse(paper["preferred_resource_manual"])
+        for resource, kind in ((old, "old"), (new, "new")):
+            self.assertEqual(self.storage.get_paper_resource(resource["id"])["stored_path"], paths[resource["id"]])
+            self.assertEqual(Path(paths[resource["id"]]).read_bytes(), self.valid_pdf_bytes(kind))
+
+    def test_default_transition_move_failure_keeps_classification_and_bytes(self) -> None:
+        paper_id = "physical-default-move-failure"
+        self.add_paper(paper_id)
+        self.storage.add_my_publication(paper_id=paper_id)
+        resource = ui_server.attach_file_to_paper(self.storage, paper_id=paper_id, filename="blocked.pdf",
+            content=self.valid_pdf_bytes("blocked"), file_type="unknown")
+        with patch.object(ui_server.shutil, "move", side_effect=PermissionError("fixture")):
+            with self.assertRaises(PermissionError):
+                ui_server.update_paper_resource_role(self.storage, paper_id, resource["id"], "published_version")
+        self.assertEqual(self.storage.get_paper_resource(resource["id"])["file_type"], "unknown")
+        self.assertFalse(self.storage.get_paper(paper_id)["main_pdf_path"])
+        self.assertEqual(Path(resource["stored_path"]).read_bytes(), self.valid_pdf_bytes("blocked"))
+
+    def test_default_copies_external_and_shared_bytes_without_overwriting_names(self) -> None:
+        for shared in (False, True):
+            with self.subTest(shared=shared):
+                paper_id = "safe-default-" + str(shared)
+                self.add_paper(paper_id)
+                self.storage.add_my_publication(paper_id=paper_id)
+                source = (self.library_root if shared else self.root / "external") / (paper_id + ".pdf")
+                source.parent.mkdir(parents=True, exist_ok=True)
+                content = self.valid_pdf_bytes(paper_id)
+                source.write_bytes(content)
+                resource = self.storage.create_paper_resource(paper_id=paper_id, stored_path=str(source), file_type="unknown")
+                if shared:
+                    self.add_paper("shared-owner")
+                    other = self.storage.create_paper_resource(paper_id="shared-owner", stored_path=str(source), file_type="unknown")
+                collision = self.publications_root / source.name
+                collision.parent.mkdir(parents=True, exist_ok=True)
+                collision.write_bytes(b"Do not overwrite")
+                ui_server.set_preferred_paper_file(self.storage, paper_id, resource["id"])
+                selected_path = Path(self.storage.get_paper(paper_id)["main_pdf_path"])
+                self.assertNotEqual(selected_path, collision)
+                self.assertTrue(selected_path.is_relative_to(self.publications_root))
+                self.assertEqual(source.read_bytes(), content)
+                self.assertEqual(selected_path.read_bytes(), content)
+                self.assertEqual(collision.read_bytes(), b"Do not overwrite")
+                if shared:
+                    self.assertEqual(self.storage.get_paper_resource(other["id"])["stored_path"], str(source))
+
     def test_preferred_paper_file_http_handler_accepts_any_valid_file(self) -> None:
         self.add_paper("paper-http-current-role")
         current_path = self.write_pdf("HTTP Role/Published.pdf")
@@ -906,9 +1030,9 @@ class PaperResourceStorageTests(unittest.TestCase):
         handler.send_json.assert_called_once()
         attachment_response = handler.send_json.call_args.args[0]
         self.assertEqual(attachment_response["default_resource_id"], int(attachment["id"]))
-        for path, content in before_bytes.items():
-            self.assertTrue(path.exists())
-            self.assertEqual(path.read_bytes(), content)
+        for resource, original in ((current, current_path), (attachment, attachment_path), (preprint, preprint_path)):
+            stored = self.storage.get_paper_resource(int(resource["id"]))
+            self.assertEqual(Path(stored["stored_path"]).read_bytes(), before_bytes[original])
 
         handler.send_error_json.reset_mock()
         handler.send_json.reset_mock()
@@ -925,7 +1049,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(response["preferred_resource_id"], int(preprint["id"]))
         self.assertEqual(response["resolved_resource_id"], int(preprint["id"]))
         paper = self.storage.get_paper("paper-http-current-role")
-        self.assertEqual(int(paper["primary_resource_id"]), int(current["id"]))
+        self.assertEqual(int(paper["primary_resource_id"]), int(preprint["id"]))
         self.assertEqual(int(paper["preferred_resource_id"]), int(preprint["id"]))
 
     def test_explicit_attachment_is_copied_to_mirrored_associated_files(self) -> None:

@@ -441,6 +441,15 @@ class BrowserCaptureService:
                     if (resource.get("file_type") in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
                             and ui.should_promote_new_paper_version(storage, paper_id, resource)):
                         resource = ui.promote_paper_resource(storage, paper_id, resource["id"])
+                    elif (resource.get("file_type") == "unknown"
+                            and resource.get("added_via") == "browser_capture"
+                            and storage.resolve_default_paper_resource(paper_id) is None
+                            and ui.canonical_pdf_path_for_paper(storage.get_paper(paper_id)) is None):
+                        # Saving the first article PDF establishes a reading copy
+                        # even when its publication version is not yet known.
+                        # Keep classification and manual preference untouched.
+                        resource = ui.promote_paper_resource(
+                            storage, paper_id, resource["id"], allow_any_pdf=True)
                     resource["duplicate"] = duplicate
                 except Exception as exc:
                     return {"ok": False, "metadata_saved": True, "paper_id": paper_id,

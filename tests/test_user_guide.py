@@ -444,7 +444,7 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         for phrase in [
-            "Only the four publication types above participate in automatic selection",
+            "The four publication types above take priority in automatic selection",
             "manually choose any existing file except one classified as Invalid file",
             "manual choice is sticky",
         ]:

@@ -8,6 +8,7 @@ import html
 import hashlib
 from io import BytesIO
 import json
+import logging
 import mimetypes
 import os
 import queue
@@ -1446,15 +1447,21 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 content=upload.get("content") or b"",
                 preserve_filename=str(fields.get("preserve_filename") or "") == "1",
             )
+            files_snapshot = paper_files_state_payload(storage, paper_id)
+            paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
         except (FileNotFoundError, ValueError) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not import PDF for %s", paper_id)
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not save the PDF. Check the destination folder and try again.")
+            return
         finally:
             storage.close()
-        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None})
+        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot]})
 
     def handle_add_paper_file(self) -> None:
         fields, files = self.read_multipart_body()
@@ -1629,12 +1636,16 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not paper:
                 self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                 return
-            storage.set_preferred_paper_resource(paper_id, resource_id)
+            set_preferred_paper_file(storage, paper_id, resource_id)
             resolved = storage.resolve_default_paper_resource(paper_id)
             resources = storage.list_paper_resources(paper_id)
             paper = storage.get_paper(paper_id)
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not update default PDF for %s", paper_id)
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not update the main PDF. Check the destination folder and try again.")
             return
         finally:
             storage.close()
@@ -1724,6 +1735,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not update default PDF for %s", paper_id)
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not update the main PDF. Check the destination folder and try again.")
+            return
         finally:
             storage.close()
         self.send_json(response)
@@ -1763,6 +1778,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     source_path=Path(source_path),
                     preserve_filename=payload.get("preserve_filename") is not False,
                 )
+            files_snapshot = paper_files_state_payload(storage, paper_id)
+            paper = storage.get_paper(paper_id)
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
             return
@@ -1772,9 +1789,13 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not import PDF for %s", paper_id)
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not save the PDF. Check the destination folder and try again.")
+            return
         finally:
             storage.close()
-        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None})
+        self.send_json({"result": {"status": "success", "merged_pdf_path": str(target_path)}, "paper": paper_to_api(paper) if paper else None, "paper_files": [files_snapshot]})
 
     def handle_library(self, query: dict[str, list[str]]) -> None:
         storage = Storage(self.configured_db_path)
@@ -21639,6 +21660,19 @@ def update_paper_resource_role(
         ),
     )
     storage.conn.commit()
+    try:
+        synchronize_default_pdf_location(storage, str(paper_id))
+    except Exception:
+        # A failed file transition must not leave the new classification visible.
+        fields = ("file_type", "annotation_state", "file_source", "source_detail",
+                  "file_type_override", "annotation_override", "file_role", "version_role",
+                  "version_label", "version_number", "is_annotated", "updated_at")
+        storage.conn.execute(
+            "UPDATE resources SET " + ", ".join(f"{field} = ?" for field in fields) + " WHERE id = ?",
+            [*(resource.get(field) for field in fields), int(resource_id)],
+        )
+        storage.conn.commit()
+        raise
     return storage.get_paper_resource(int(resource_id)) or {}
 
 
@@ -22570,12 +22604,55 @@ def should_promote_new_paper_version(
     return int((resolved or {}).get("id") or 0) == int(resource.get("id") or 0)
 
 
+def synchronize_default_pdf_location(storage: Storage, paper_id: str) -> dict[str, Any] | None:
+    """Keep the resolved PDF Default and managed primary path in agreement."""
+    resolved = storage.resolve_default_paper_resource(str(paper_id))
+    if not resolved or not storage.resource_is_pdf(resolved):
+        return resolved
+    return promote_paper_resource(
+        storage, str(paper_id), int(resolved["id"]), allow_any_pdf=True,
+    )
+
+
+def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int | None) -> None:
+    previous = storage.get_paper(str(paper_id)) or {}
+    storage.set_preferred_paper_resource(str(paper_id), resource_id)
+    try:
+        synchronize_default_pdf_location(storage, str(paper_id))
+    except Exception:
+        storage.conn.execute(
+            "UPDATE papers SET preferred_resource_id = ?, preferred_resource_manual = ? WHERE paper_id = ?",
+            (previous.get("preferred_resource_id"), previous.get("preferred_resource_manual", 0), str(paper_id)),
+        )
+        storage.conn.commit()
+        raise
+
+
+def paper_resource_path_is_shared(storage: Storage, path: Path, paper_id: str, resource_id: int) -> bool:
+    if any(other != str(paper_id) for other in paper_ids_referencing_pdf_path(storage, path)):
+        return True
+    values = {str(path), str(path.expanduser().resolve())}
+    for value in list(values):
+        if value.startswith(("/private/var/", "/private/tmp/")):
+            values.add(value.removeprefix("/private"))
+        elif value.startswith(("/var/", "/tmp/")):
+            values.add(f"/private{value}")
+    for value in values:
+        if storage.conn.execute(
+            "SELECT 1 FROM resources WHERE id != ? AND (stored_path = ? OR source_path = ?) LIMIT 1",
+            (int(resource_id), value, value),
+        ).fetchone():
+            return True
+    return False
+
+
 def promote_paper_resource(
     storage: Storage,
     paper_id: str,
     resource_id: int,
     *,
     manual_preferred: bool = False,
+    allow_any_pdf: bool = False,
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     candidate = storage.get_paper_resource(int(resource_id))
@@ -22583,7 +22660,9 @@ def promote_paper_resource(
         raise ValueError("File does not belong to this paper")
     if not storage.resource_is_pdf(candidate):
         raise ValueError("Primary file must be a PDF")
-    if clean_text(candidate.get("file_role") or "") != "publication_version":
+    if normalize_paper_file_type(candidate.get("file_type")) == "invalid_file":
+        raise ValueError("Invalid files cannot be selected as the default")
+    if not allow_any_pdf and clean_text(candidate.get("file_role") or "") != "publication_version":
         raise ValueError("Only paper-version PDFs can be selected as current")
     candidate_path_text = storage.resource_local_path(candidate)
     candidate_path = Path(candidate_path_text).expanduser().resolve() if candidate_path_text else None
@@ -22592,12 +22671,15 @@ def promote_paper_resource(
     current_id = int(paper.get("primary_resource_id") or 0)
     current = storage.get_paper_resource(current_id) if current_id else None
     current_path = canonical_pdf_path_for_paper(paper)
-    if current_id == int(resource_id) and current_path == candidate_path:
+    managed_roots = allowed_pdf_roots()
+    current_is_main = bool(current_path and is_allowed_file(current_path, managed_roots)
+                           and not is_relative_to(current_path, ASSOCIATED_FILES_ROOT.resolve()))
+    if current_id == int(resource_id) and current_path == candidate_path and current_is_main:
         if manual_preferred:
             storage.set_preferred_paper_resource(str(paper_id), int(resource_id))
         return candidate
 
-    target_dir = current_path.parent if current_path else preferred_local_pdf_dir_for_paper(storage, str(paper_id))
+    target_dir = current_path.parent if current_is_main else preferred_local_pdf_dir_for_paper(storage, str(paper_id))
     if target_dir is None:
         target_dir = DEFAULT_PDF_DIR / finder_safe_name(str(paper_id), "paper")
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -22611,6 +22693,13 @@ def promote_paper_resource(
     archived_path: Path | None = None
     candidate_original = candidate_path
     target_path = desired_target_path
+    candidate_moved = False
+    candidate_copied = False
+    archive_moved = False
+    current_private = bool(current_path and is_allowed_file(current_path, managed_roots)
+                           and not paper_resource_path_is_shared(storage, current_path, str(paper_id), current_id))
+    candidate_private = bool(is_allowed_file(candidate_path, managed_roots)
+                             and not paper_resource_path_is_shared(storage, candidate_path, str(paper_id), int(resource_id)))
     try:
         if current_path and current_path != candidate_path and current_path.exists():
             versions_dir = work_dir / "Versions"
@@ -22621,11 +22710,20 @@ def promote_paper_resource(
             )
             archived_name = paper_resource_archive_name(current or {}, Path(original_current_name))
             archived_path = unique_path_in_dir(versions_dir / archived_name)
-            shutil.move(str(current_path), str(archived_path))
+            if current_private:
+                shutil.move(str(current_path), str(archived_path))
+                archive_moved = True
+            else:
+                shutil.copy2(current_path, archived_path)
         if candidate_path != target_path:
             if target_path.exists() or target_path.is_symlink():
                 target_path = unique_path_in_dir(target_path)
-            shutil.move(str(candidate_path), str(target_path))
+            if candidate_private:
+                shutil.move(str(candidate_path), str(target_path))
+                candidate_moved = True
+            else:
+                shutil.copy2(candidate_path, target_path)
+                candidate_copied = True
 
         storage.conn.execute("BEGIN IMMEDIATE")
         timestamp = now_iso()
@@ -22633,7 +22731,7 @@ def promote_paper_resource(
             storage.conn.execute(
                 """
                 UPDATE resources
-                SET stored_path = ?, display_name = ?, missing_status = '', updated_at = ?
+                SET stored_path = ?, display_name = ?, storage_mode = 'managed', missing_status = '', updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -22646,7 +22744,7 @@ def promote_paper_resource(
         storage.conn.execute(
             """
             UPDATE resources
-            SET stored_path = ?, display_name = ?, missing_status = '', updated_at = ?
+            SET stored_path = ?, display_name = ?, storage_mode = 'managed', missing_status = '', updated_at = ?
             WHERE id = ?
             """,
             (
@@ -22682,21 +22780,37 @@ def promote_paper_resource(
     except Exception:
         storage.conn.rollback()
         try:
-            if target_path.exists() and target_path != candidate_original and not candidate_original.exists():
+            if candidate_copied and target_path.exists():
+                target_path.unlink()
+            if candidate_moved and target_path.exists() and not candidate_original.exists():
                 candidate_original.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(target_path), str(candidate_original))
-            if archived_path and archived_path.exists() and current_path and not current_path.exists():
-                current_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(archived_path), str(current_path))
+            if archived_path and archived_path.exists():
+                if archive_moved and current_path and not current_path.exists():
+                    current_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(archived_path), str(current_path))
+                elif not archive_moved:
+                    archived_path.unlink()
         except OSError:
             pass
         raise
-    sync_all_pdf_aliases_for_paper(
-        storage,
-        str(paper_id),
-        old_target=current_path,
-        preserve_canonical_name=True,
-    )
+    try:
+        sync_all_pdf_aliases_for_paper(
+            storage,
+            str(paper_id),
+            old_target=current_path if current_private else None,
+            preserve_canonical_name=True,
+        )
+    except (OSError, sqlite3.Error):
+        # The primary transition is committed and recoverable; do not roll back
+        # preference/classification after a later alias operation has failed.
+        logging.getLogger(__name__).exception("Default PDF saved but folder links could not be synchronized for %s", paper_id)
+        storage.conn.rollback()
+        storage.conn.execute(
+            "UPDATE papers SET download_message = ? WHERE paper_id = ?",
+            ("Default PDF saved; some folder links could not be updated.", str(paper_id)),
+        )
+        storage.conn.commit()
     resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
     return next(
         (resource for resource in resources if int(resource.get("id") or 0) == int(resource_id)),
@@ -42308,6 +42422,26 @@ INDEX_HTML = """<!doctype html>
         ? paths.filter((path) => typeof path === "string" && path.trim())
         : [];
       if (!droppedPaths.length) return;
+      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
+      if (pdfTarget) {
+        if (pdfTarget.disabled) {
+          clearLibraryFinderDropTarget();
+          showLibraryPdfDropError("A PDF operation is already running. Please wait, then drop the file again.");
+          return;
+        }
+        const paperId = String(pdfTarget.dataset.paperId || "");
+        clearLibraryFinderDropTarget();
+        if (droppedPaths.length !== 1 || !droppedPaths[0].toLowerCase().endsWith(".pdf")) {
+          showLibraryPdfDropError("Drop exactly one PDF file here.");
+          return;
+        }
+        await importDroppedPdfForLibraryPaper(paperId, {
+          sourcePath: droppedPaths[0],
+          button: pdfTarget,
+          replacing: pdfTarget.dataset.pdfReplace === "1"
+        });
+        return;
+      }
       const associationTarget = libraryFileAssociationTargetFromPoint(dropPoint);
       if (associationTarget) {
         clearLibraryFinderDropTarget();
@@ -42327,19 +42461,10 @@ INDEX_HTML = """<!doctype html>
         }
         return;
       }
-      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
-      if (pdfTarget) {
-        const paperId = String(pdfTarget.dataset.paperId || "");
+
+      if (state.mode === "library" && state.libraryTab === "my-publications") {
         clearLibraryFinderDropTarget();
-        if (droppedPaths.length !== 1 || !droppedPaths[0].toLowerCase().endsWith(".pdf")) {
-          showLibraryPdfDropError("Drop exactly one PDF file here.");
-          return;
-        }
-        await importDroppedPdfForLibraryPaper(paperId, {
-          sourcePath: droppedPaths[0],
-          button: pdfTarget,
-          replacing: pdfTarget.dataset.pdfReplace === "1"
-        });
+        showLibraryPdfDropError("Drop the PDF on Download PDF, or drop files inside Files to attach them.");
         return;
       }
       if (state.mode !== "library") {
@@ -42395,7 +42520,7 @@ INDEX_HTML = """<!doctype html>
       const y = Number(dropPoint?.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
       const target = document.elementFromPoint(x, y)?.closest?.("[data-library-pdf-drop-target]");
-      if (!target || target.disabled || !target.dataset.paperId) return null;
+      if (!target || !target.dataset.paperId) return null;
       return target;
     }
 
@@ -42450,6 +42575,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateNativeFinderDropTarget(dropPoint = null) {
+      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
+      if (pdfTarget) {
+        clearLibraryFinderDropTargetVisuals();
+        state.libraryFinderDropTargetFolderId = 0;
+        state.libraryFinderDropTargetKind = "pdf-button";
+        $("libraryShell")?.classList.remove("finder-drag-over");
+        if (!pdfTarget.disabled) pdfTarget.classList.add("drag-over");
+        return;
+      }
       const associationTarget = libraryFileAssociationTargetFromPoint(dropPoint);
       if (associationTarget) {
         clearLibraryFinderDropTargetVisuals();
@@ -42459,15 +42593,7 @@ INDEX_HTML = """<!doctype html>
         associationTarget.element?.classList.add("finder-drop-association-target");
         return;
       }
-      const pdfTarget = libraryPdfDropTargetFromPoint(dropPoint);
-      if (pdfTarget) {
-        clearLibraryFinderDropTargetVisuals();
-        state.libraryFinderDropTargetFolderId = 0;
-        state.libraryFinderDropTargetKind = "pdf-button";
-        $("libraryShell")?.classList.remove("finder-drag-over");
-        pdfTarget.classList.add("drag-over");
-        return;
-      }
+
       if (state.mode !== "library" || state.libraryTab !== "library") {
         clearLibraryFinderDropTarget();
         return;
@@ -45320,7 +45446,7 @@ INDEX_HTML = """<!doctype html>
           <span class="paper-file-footer">
             <span class="paper-file-file-meta">${metaTail.map((value) => `<span>${escapeHtml(value)}</span>`).join('<span aria-hidden="true"> · </span>')}</span>
             <span class="paper-file-actions">
-              ${file.exists && file.file_type !== "invalid_file" && !file.is_default ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}" title="Use this file for Open in Preview and paper preview">Set as Default</button>` : ""}
+              ${file.exists && file.file_type !== "invalid_file" && !file.is_preferred ? `<button class="action" type="button" data-action="prefer-paper-file" data-paper-file-id="${Number(file.id || 0)}" title="Use this file for Open in Preview and paper preview">Set as Default</button>` : ""}
               ${file.is_default && file.is_preferred ? `<button class="action" type="button" data-action="auto-paper-file" title="Let Gewu Insight choose the default from file type">Use Automatic Selection</button>` : ""}
               ${file.exists ? `<button class="action" type="button" data-action="reveal-paper-file" data-file-path="${escapeAttr(file.local_path || "")}">Show in Finder</button>` : ""}
               ${!file.is_primary ? `<button class="action delete-paper-file" type="button" data-action="delete-paper-file" data-paper-file-id="${Number(file.id || 0)}" data-paper-file-name="${escapeAttr(name)}">Delete</button>` : ""}
@@ -48307,7 +48433,7 @@ INDEX_HTML = """<!doctype html>
         revealNativePaperFile({native_file_path: file.local_path}, {missingMessage: "Attached file not found."});
       };
       if (preferButton) {
-        const canPrefer = Boolean(file?.exists && file?.file_type !== "invalid_file" && !file?.is_default);
+        const canPrefer = Boolean(file?.exists && file?.file_type !== "invalid_file" && !file?.is_preferred);
         preferButton.style.display = canPrefer ? "" : "none";
         preferButton.onclick = async () => {
           hidePaperResourceContextMenu();
@@ -49504,37 +49630,48 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wireLibraryPdfDropTarget(root, paper) {
-      const button = root?.querySelector?.("[data-library-pdf-drop-target]");
-      if (!button || !paper?.paper_id) return;
+      // Keep listeners on the detail root: its buttons are replaced by async
+      // metadata/file refreshes while a Finder drag may already be in progress.
+      if (!root || !paper?.paper_id || root.dataset.pdfDropWired === "1") return;
+      root.dataset.pdfDropWired = "1";
+      const targetFor = (event) => {
+        const button = event.target?.closest?.("[data-library-pdf-drop-target]");
+        return button && root.contains(button) ? button : null;
+      };
       ["dragenter", "dragover"].forEach((eventName) => {
-        button.addEventListener(eventName, (event) => {
-          if (!event.dataTransfer?.types?.includes("Files")) return;
+        root.addEventListener(eventName, (event) => {
+          const button = targetFor(event);
+          if (!button || !Array.from(event.dataTransfer?.types || []).includes("Files")) return;
           event.preventDefault();
           event.stopPropagation();
-          event.dataTransfer.dropEffect = "copy";
-          button.classList.add("drag-over");
-        });
+          event.dataTransfer.dropEffect = button.disabled ? "none" : "copy";
+          if (!button.disabled) button.classList.add("drag-over");
+        }, true);
       });
-      button.addEventListener("dragleave", (event) => {
-        if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+      root.addEventListener("dragleave", (event) => {
+        const button = targetFor(event);
+        if (!button || (event.relatedTarget && button.contains(event.relatedTarget))) return;
         button.classList.remove("drag-over");
-      });
-      button.addEventListener("drop", async (event) => {
+      }, true);
+      root.addEventListener("drop", async (event) => {
+        const button = targetFor(event);
+        if (!button) return;
         event.preventDefault();
         event.stopPropagation();
-        button.classList.remove("drag-over");
         clearLibraryFinderDropTarget();
+        if (button.disabled) {
+          showLibraryPdfDropError("A PDF operation is already running. Please wait, then drop the file again.");
+          return;
+        }
         const file = libraryPdfDropFile(event.dataTransfer?.files);
         if (!file || Number(event.dataTransfer?.files?.length || 0) !== 1) {
           showLibraryPdfDropError("Drop exactly one PDF file here.");
           return;
         }
-        await importDroppedPdfForLibraryPaper(paper.paper_id, {
-          file,
-          button,
-          replacing: Boolean(paper.merged_pdf_path)
+        await importDroppedPdfForLibraryPaper(String(button.dataset.paperId || ""), {
+          file, button, replacing: button.dataset.pdfReplace === "1"
         });
-      });
+      }, true);
     }
 
     async function importDroppedPdfForLibraryPaper(paperId, options = {}) {
@@ -49576,6 +49713,7 @@ INDEX_HTML = """<!doctype html>
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "PDF import failed");
         updatePaperState(paperId, data.paper);
+        applyPaperFilesPayloads(data.paper_files);
         if (state.libraryTab === "my-publications") renderMyPublications();
         else renderLibrary();
         const nextStatus = $("libraryDetailStatus");
