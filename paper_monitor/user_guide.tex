@@ -3369,7 +3369,56 @@ Gewu Key & The stable identifier of a paper. It selects the article; the access 
 \GewuTableEnd
 }
 
-The request flows from Codex to the local MCP adapter, then to the Gewu API, which checks the token before reading or saving data. Gewu supplies the research material; Codex performs the analysis.
+\subsection{Methodology: a stateful information infrastructure}\label{methodology-a-stateful-information-infrastructure}
+
+Gewu Insight gives people and AI clients a shared, persistent research workspace. \textbf{Stateful} means that cataloged papers, their identities, registered files and saved analyses remain available between tasks. SQLite is the source of truth for records and relationships; the documents remain local files. The Gewu Key lets a person or an authorized AI return to the same paper across conversations and clients.
+
+The API exposes supported operations with defined inputs and structured results. An AI can retrieve a paper by key without navigating the interface or depending on the internal database schema. MCP makes those operations discoverable as tools; a script can use the HTTP API directly. Both use the same underlying records and authorization rules. Gewu supplies the material and stores approved results; the connected AI performs the analysis.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Design choice & How it helps research work \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Stable paper identity & Use one Gewu Key to connect the article, its files and analyses across tasks. A title or filename is not the identity, and knowing a key does not grant access. \\
+Explicit, bounded operations & Search with pagination and read selected pages or text chunks. Programs can compose these steps and limit unnecessary retrieval without relying on screen coordinates. \\
+Persistent, traceable results & Save a Markdown analysis under the same key with source file references. People can inspect it in Paper Files, and another authorized session can retrieve it later. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+This provides a foundation for continuing literature analysis and reusing saved knowledge. It does not automatically preserve an AI\textquotesingle s conversation or reasoning, build a semantic memory index, or synchronize model memory. A later session must explicitly retrieve the records and notes it needs; access still depends on its current grant and the continued availability of those records and files.
+
+\subsection{Two API routes, one authorization boundary}\label{two-api-routes-one-authorization-boundary}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Route & Where permission is checked \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+AI client {\symbolfont →} MCP adapter {\symbolfont →} Gewu API & The adapter sends the connection token to the API. MCP does not grant additional access. \\
+AI client or script {\symbolfont →} Gewu API & The caller supplies the same kind of token directly. Skipping MCP does not skip API authorization. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection\textquotesingle s collection, and the operation is permitted. Metadata access alone does not authorize file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.
+
+\begin{quote}
+\textbf{Interface authorization and local file permissions}
+
+AI Access controls requests through Gewu\textquotesingle s interfaces. It does not encrypt or isolate SQLite and document files from software that already has operating-system permission to read them. Such software can read the disk without contacting MCP or the API; administrator privileges are not necessarily required. Turning off AI Access or revoking a token stops access through that grant, but does not revoke independent filesystem permissions. This broader local access is outside the AI Access permission boundary.
+\end{quote}
 
 \subsection{Create a connection}\label{create-a-connection}
 
@@ -3428,6 +3477,22 @@ Tool & Result \\
 For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper\textquotesingle s file panel.
 
 Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.
+
+\subsection{A repeatable research workflow}\label{a-repeatable-research-workflow}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Identify.} Give the AI an authorized Gewu Key, or use \texttt{search\_papers} to find candidates and confirm the intended paper with \texttt{get\_paper}.
+\item
+  \textbf{Read.} Inspect the file inventory, then use \texttt{read\_paper} for the relevant Default PDF pages or attachments. Retain the returned file ID, SHA-256 and page references.
+\item
+  \textbf{Analyze and save.} Ask the AI to produce a Chinese Markdown analysis. With analysis-writing permission, call \texttt{save\_analysis} under the same key and include the source references. Reuse the request ID only for an identical retry; changed source bytes require a fresh read before saving.
+\item
+  \textbf{Review and continue.} Inspect the note in Paper Files. In another task, retrieve that same paper and explicitly read the saved note before continuing. Each session works with the current authorized state.
+\end{enumerate}
+
+These steps can be combined into a scripted workflow or repeated over a selected collection. Pagination and bounded reads help control how much material is retrieved; they do not guarantee model accuracy or a particular speed. Review the analysis against its cited sources.
 
 \subsection{Example: connect Codex on macOS}\label{example-connect-codex-on-macos}
 
@@ -3533,7 +3598,7 @@ The AI client must run on the same computer, and Gewu Insight\textquotesingle s 
 
 PDF reading is on demand, at most ten pages per request, with a 64 MiB file limit and a bounded extraction time. Text is returned in chunks. Scanned PDFs may need separate OCR; no OCR or model runs automatically. Analysis notes are limited to 256 KiB. A busy response means retry later. An unavailable paper or file may be outside the connection\textquotesingle s collection, missing, or no longer accessible.
 
-Permissions apply to API access. Software already granted direct operating-system access to your database or files has a separate, broader permission. Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. The native App manages its own private workspace session automatically.
+Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. Configure each client with the collection and operations its task needs. The interface and filesystem permission boundary is explained above.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[privacy]{Local Data and Privacy}

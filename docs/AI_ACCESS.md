@@ -4,6 +4,48 @@ Gewu Insight provides an opt-in local HTTP API and an MCP stdio adapter. Both
 use the existing SQLite paper identity and Gewu Key. The App does not call an
 AI model, upload your collection, or start analysis jobs when you enable access.
 
+## Methodology: a stateful information infrastructure
+
+Gewu is a persistent research workspace shared by people and authorized AI
+clients. SQLite is the source of truth for paper records and relationships;
+documents remain local files. Stable Gewu Keys connect papers, registered files
+and saved analyses across tasks and clients. A key identifies a paper; it does
+not authorize access to it.
+
+The API provides defined inputs, structured results and supported operations,
+so clients can work without screen coordinates or knowledge of internal tables.
+MCP exposes those operations as discoverable tools. Scripts can call the HTTP
+API directly. Both paths use the same records and grant checks:
+
+- AI client -> MCP adapter -> Gewu API -> authorized operation.
+- AI client or script -> Gewu API -> authorized operation.
+
+The API checks the enable switch, token validity, expiry, revocation, paper
+collection and operation permissions. Skipping MCP does not skip authorization.
+MCP is an adapter, not a separate source of permission. Native UI endpoints use
+their own private workspace session and do not accept AI tokens.
+
+A repeatable workflow is identify -> read -> analyze and save -> review and
+continue. Confirm the intended Gewu Key, inspect its registered files, read the
+needed pages or chunks, and append a Markdown analysis with source file ID,
+SHA-256 and page references. An identical save retry reuses its request ID;
+changed source bytes require a fresh read. A person can review the result in
+Paper Files, and a later authorized session can explicitly retrieve that paper
+and note before continuing.
+
+Pagination, bounded reads and structured results support programmatic workflows
+over selected collections and limit unnecessary retrieval. They do not guarantee
+analysis accuracy or a particular speed. The persistent state belongs to Gewu;
+it does not automatically preserve conversations, synchronize model memory or
+create a semantic memory index. Later retrieval still requires a valid grant
+and available records and files. Review generated analyses against their sources.
+
+**Permission boundary:** these grants control interface access, not independent
+operating-system access to SQLite or documents. Software allowed to read the
+files can do so without contacting the API or MCP, even without administrator
+privileges. Disabling AI Access or revoking a token does not revoke filesystem
+permissions. This broader local access is outside the AI Access boundary.
+
 ## Connect an AI client
 
 1. Keep Gewu Insight running. Open **Setting > AI Access** and enable access.

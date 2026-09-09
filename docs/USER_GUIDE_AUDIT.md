@@ -1,5 +1,13 @@
 # User Guide audit — September 6, 2026
 
+## September 9 AI methodology follow-up
+
+- Expand AI Access before the connection instructions with the roles of stable Gewu Keys, persistent SQLite records and local files, structured API operations, and MCP tool discovery. Explain that later sessions explicitly retrieve saved state; automatic model-memory synchronization and semantic indexing are not implemented.
+- Document both MCP-to-API and direct HTTP routes under the same token, collection and operation checks. Separate these interface permissions from independent operating-system file access, which is outside AI Access's scope and does not necessarily require administrator privileges.
+- Add an identify/read/analyze-and-save/review-and-continue workflow with source file IDs, hashes, page references, retry IDs and human review. Keep the existing Codex setup example, path placeholders and screenshots.
+- Synchronize the shared HTML, generated LaTeX/PDF, bundled PDF and developer-facing `AI_ACCESS.md`. Allow long AI Access UI labels to wrap in the narrow HTML guide; this affects documentation presentation only.
+- Validation: 26 existing Guide/audit checks and six PDF structure checks pass. Headless HTML layout, methodology search and navigation pass at 1440, 960 and 520 pixels after fixing the narrow-width label overflow. The initial sandboxed Chrome launch failed; the temporary-profile rerun succeeded. The 102-page PDF retains all 32 screenshots; AI Access pages 81–86 and continuous Product Identity pages 90–92 were rendered and visually reviewed. No API behavior, grants, schema or research data changed, and the broader runtime test suite was not rerun for this documentation update.
+
 ## September 9 illustrated-window follow-up
 
 - Expand the original seven screenshot slots to 32 real App captures, with one shared asset set for HTML and PDF. The [screenshot inventory](USER_GUIDE_SCREENSHOTS.md) records every figure and its capture boundaries.

@@ -505,6 +505,7 @@
     }
 
     @media (max-width: 620px) {
+      #ai-access .ui { white-space: normal; }
       .interface-map { grid-template-columns: 1fr; }
       .architecture-row, .architecture-row.two, .architecture-row.four, .invariant-list, .identity-symbols, .identity-rules { grid-template-columns: 1fr; }
     }
@@ -2446,7 +2447,7 @@
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#browser">Browse, Bookmark, and Revisit Websites</a><a href="#paper-details">Use Paper Details</a><a href="#quick-look-settings">Quick Look Settings</a></div></div>
         </article>
 
-        <article class="help-topic guide-topic" id="ai-access" data-group="Settings and Safety" data-title="AI Access" data-keywords="AI API MCP Codex STDIO TOML config token permissions authorization Gewu Key analysis Markdown privacy connection revoke">
+        <article class="help-topic guide-topic" id="ai-access" data-group="Settings and Safety" data-title="AI Access" data-keywords="AI API MCP Codex STDIO TOML config token permissions authorization Gewu Key analysis Markdown privacy connection revoke methodology stateful information infrastructure persistent programmatic filesystem">
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Connect an AI to Your Papers</h1>
           <p class="lead">Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.</p>
@@ -2465,7 +2466,24 @@
             <tr><td>Access token</td><td>A private credential issued by Gewu Insight. It authorizes a connection's paper collection and permissions; it is separate from your AI account login and from text tokens counted by models.</td></tr>
             <tr><td>Gewu Key</td><td>The stable identifier of a paper. It selects the article; the access token authorizes access to it.</td></tr>
           </table>
-          <p>The request flows from Codex to the local MCP adapter, then to the Gewu API, which checks the token before reading or saving data. Gewu supplies the research material; Codex performs the analysis.</p>
+          <h2>Methodology: a stateful information infrastructure</h2>
+          <p>Gewu Insight gives people and AI clients a shared, persistent research workspace. <strong>Stateful</strong> means that cataloged papers, their identities, registered files and saved analyses remain available between tasks. SQLite is the source of truth for records and relationships; the documents remain local files. The Gewu Key lets a person or an authorized AI return to the same paper across conversations and clients.</p>
+          <p>The API exposes supported operations with defined inputs and structured results. An AI can retrieve a paper by key without navigating the interface or depending on the internal database schema. MCP makes those operations discoverable as tools; a script can use the HTTP API directly. Both use the same underlying records and authorization rules. Gewu supplies the material and stores approved results; the connected AI performs the analysis.</p>
+          <table class="plain-table">
+            <tr><th>Design choice</th><th>How it helps research work</th></tr>
+            <tr><td>Stable paper identity</td><td>Use one Gewu Key to connect the article, its files and analyses across tasks. A title or filename is not the identity, and knowing a key does not grant access.</td></tr>
+            <tr><td>Explicit, bounded operations</td><td>Search with pagination and read selected pages or text chunks. Programs can compose these steps and limit unnecessary retrieval without relying on screen coordinates.</td></tr>
+            <tr><td>Persistent, traceable results</td><td>Save a Markdown analysis under the same key with source file references. People can inspect it in Paper Files, and another authorized session can retrieve it later.</td></tr>
+          </table>
+          <p>This provides a foundation for continuing literature analysis and reusing saved knowledge. It does not automatically preserve an AI's conversation or reasoning, build a semantic memory index, or synchronize model memory. A later session must explicitly retrieve the records and notes it needs; access still depends on its current grant and the continued availability of those records and files.</p>
+          <h2>Two API routes, one authorization boundary</h2>
+          <table class="plain-table">
+            <tr><th>Route</th><th>Where permission is checked</th></tr>
+            <tr><td>AI client &rarr; MCP adapter &rarr; Gewu API</td><td>The adapter sends the connection token to the API. MCP does not grant additional access.</td></tr>
+            <tr><td>AI client or script &rarr; Gewu API</td><td>The caller supplies the same kind of token directly. Skipping MCP does not skip API authorization.</td></tr>
+          </table>
+          <p>For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection's collection, and the operation is permitted. Metadata access alone does not authorize file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.</p>
+          <div class="note"><span class="callout-title">Interface authorization and local file permissions</span>AI Access controls requests through Gewu's interfaces. It does not encrypt or isolate SQLite and document files from software that already has operating-system permission to read them. Such software can read the disk without contacting MCP or the API; administrator privileges are not necessarily required. Turning off AI Access or revoking a token stops access through that grant, but does not revoke independent filesystem permissions. This broader local access is outside the AI Access permission boundary.</div>
           <h2>Create a connection</h2>
           <ol>
             <li>Keep Gewu Insight running and enable <span class="ui">AI access</span>.</li>
@@ -2491,6 +2509,14 @@
           </table>
           <p>For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper's file panel.</p>
           <p>Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.</p>
+          <h2>A repeatable research workflow</h2>
+          <ol>
+            <li><strong>Identify.</strong> Give the AI an authorized Gewu Key, or use <code>search_papers</code> to find candidates and confirm the intended paper with <code>get_paper</code>.</li>
+            <li><strong>Read.</strong> Inspect the file inventory, then use <code>read_paper</code> for the relevant Default PDF pages or attachments. Retain the returned file ID, SHA-256 and page references.</li>
+            <li><strong>Analyze and save.</strong> Ask the AI to produce a Chinese Markdown analysis. With analysis-writing permission, call <code>save_analysis</code> under the same key and include the source references. Reuse the request ID only for an identical retry; changed source bytes require a fresh read before saving.</li>
+            <li><strong>Review and continue.</strong> Inspect the note in Paper Files. In another task, retrieve that same paper and explicitly read the saved note before continuing. Each session works with the current authorized state.</li>
+          </ol>
+          <p>These steps can be combined into a scripted workflow or repeated over a selected collection. Pagination and bounded reads help control how much material is retrieved; they do not guarantee model accuracy or a particular speed. Review the analysis against its cited sources.</p>
           <h2>Example: connect Codex on macOS</h2>
           <p>This example connects a local Codex client to Gewu Insight on the same Mac. Keep Gewu running. Create a connection named <span class="ui">Codex</span> using the steps above. Enable <span class="ui">Read PDF, attachment and note contents</span> to read full text; metadata-only access cannot read PDFs. Enable <span class="ui">Add new Markdown analyses to Paper Files</span> only when you also want Codex to save analyses.</p>
           <ol>
@@ -2536,7 +2562,7 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <h2>Limits and troubleshooting</h2>
           <p>The AI client must run on the same computer, and Gewu Insight's local service must be running. The local MCP adapter supports protocol 2025-11-25 and earlier negotiated versions. There is no remote MCP endpoint in this version. Developers can retrieve the authenticated API v1 specification at <code>/api/v1/openapi.json</code>.</p>
           <p>PDF reading is on demand, at most ten pages per request, with a 64 MiB file limit and a bounded extraction time. Text is returned in chunks. Scanned PDFs may need separate OCR; no OCR or model runs automatically. Analysis notes are limited to 256 KiB. A busy response means retry later. An unavailable paper or file may be outside the connection's collection, missing, or no longer accessible.</p>
-          <p>Permissions apply to API access. Software already granted direct operating-system access to your database or files has a separate, broader permission. Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. The native App manages its own private workspace session automatically.</p>
+          <p>Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. Configure each client with the collection and operations its task needs. The interface and filesystem permission boundary is explained above.</p>
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#paper-files">Understand Paper Files</a><a href="#quick-look">Preview Files with Quick Look</a><a href="#privacy">Local Data and Privacy</a></div></div>
         </article>
 
