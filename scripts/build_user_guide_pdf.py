@@ -36,6 +36,31 @@ IMAGE_ROUTES = {
     "/user-guide-assets/subject-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-monitor.png",
     "/user-guide-assets/author-monitor.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-monitor.png",
     "/user-guide-assets/browser.png": ROOT / "assets" / "user-guide" / "screenshots" / "browser.png",
+    "/user-guide-assets/open-source.png": ROOT / "assets" / "user-guide" / "screenshots" / "open-source.png",
+    "/user-guide-assets/arxiv-scope.png": ROOT / "assets" / "user-guide" / "screenshots" / "arxiv-scope.png",
+    "/user-guide-assets/field-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "field-settings.png",
+    "/user-guide-assets/quick-look-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "quick-look-settings.png",
+    "/user-guide-assets/website-links.png": ROOT / "assets" / "user-guide" / "screenshots" / "website-links.png",
+    "/user-guide-assets/ai-access.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-access.png",
+    "/user-guide-assets/ai-new-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-new-connection.png",
+    "/user-guide-assets/pdf-rename-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "pdf-rename-settings.png",
+    "/user-guide-assets/font-size.png": ROOT / "assets" / "user-guide" / "screenshots" / "font-size.png",
+    "/user-guide-assets/folder-loader.png": ROOT / "assets" / "user-guide" / "screenshots" / "folder-loader.png",
+    "/user-guide-assets/loader-metadata.png": ROOT / "assets" / "user-guide" / "screenshots" / "loader-metadata.png",
+    "/user-guide-assets/loader-identifiers.png": ROOT / "assets" / "user-guide" / "screenshots" / "loader-identifiers.png",
+    "/user-guide-assets/browser-home.png": ROOT / "assets" / "user-guide" / "screenshots" / "browser-home.png",
+    "/user-guide-assets/save-gewu-compact.png": ROOT / "assets" / "user-guide" / "screenshots" / "save-gewu-compact.png",
+    "/user-guide-assets/save-gewu-details.png": ROOT / "assets" / "user-guide" / "screenshots" / "save-gewu-details.png",
+    "/user-guide-assets/library-destination-picker.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-destination-picker.png",
+    "/user-guide-assets/subject-editor.png": ROOT / "assets" / "user-guide" / "screenshots" / "subject-editor.png",
+    "/user-guide-assets/add-shortcut.png": ROOT / "assets" / "user-guide" / "screenshots" / "add-shortcut.png",
+    "/user-guide-assets/add-space.png": ROOT / "assets" / "user-guide" / "screenshots" / "add-space.png",
+    "/user-guide-assets/library-search.png": ROOT / "assets" / "user-guide" / "screenshots" / "library-search.png",
+    "/user-guide-assets/pdf-quick-look.png": ROOT / "assets" / "user-guide" / "screenshots" / "pdf-quick-look.png",
+    "/user-guide-assets/markdown-quick-look.png": ROOT / "assets" / "user-guide" / "screenshots" / "markdown-quick-look.png",
+    "/user-guide-assets/author-add.png": ROOT / "assets" / "user-guide" / "screenshots" / "author-add.png",
+    "/user-guide-assets/about-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "about-window.png",
+    "/user-guide-assets/user-guide-window.png": ROOT / "assets" / "user-guide" / "screenshots" / "user-guide-window.png",
 }
 
 PART_BY_GROUP = {
@@ -293,6 +318,7 @@ def clean_guide_html() -> str:
 
     for figure in body.select("figure.guide-screenshot"):
         replacement = _new_tag(output, "div")
+        replacement.append(_new_tag(output, "p", "GEWUFIGURESTART"))
         image = figure.find("img")
         if image is not None:
             image_paragraph = _new_tag(output, "p")
@@ -305,6 +331,7 @@ def clean_guide_html() -> str:
                 "GEWUCAPTIONSTART" + caption.get_text(" ", strip=True) + "GEWUCAPTIONEND"
             )
             replacement.append(caption_paragraph)
+        replacement.append(_new_tag(output, "p", "GEWUFIGUREEND"))
         figure.replace_with(replacement)
 
     for symbol_group in body.select("div.identity-symbols"):
@@ -649,6 +676,12 @@ def prepare_latex_body(source: str) -> str:
     ).replace(
         "GEWURESULTEND", "\n\\end{GewuResult}"
     )
+    # Keep each real UI capture with its explanation, including compact settings.
+    source = source.replace(
+        "GEWUFIGURESTART", r"\par\noindent\begin{minipage}{\linewidth}"
+    ).replace(
+        "GEWUFIGUREEND", r"\end{minipage}\par\medskip"
+    )
     source = source.replace(
         "GEWUCAPTIONSTART", "\\begin{GewuCaption}\n"
     ).replace(
@@ -674,6 +707,7 @@ def prepare_latex_body(source: str) -> str:
         "gewu-insight-app-icon.png": "0.18\\linewidth",
         **{path.name: "0.96\\linewidth" for route, path in IMAGE_ROUTES.items()
            if route.startswith("/user-guide-assets/")},
+        "about-window.png": "0.48\\linewidth",
     }
     for filename, width in image_widths.items():
         pattern = re.compile(
@@ -683,6 +717,7 @@ def prepare_latex_body(source: str) -> str:
             lambda match: (
                 "\\begin{center}\\includegraphics[width="
                 + width
+                + (",height=0.72\\textheight" if filename not in {"GewuAboutCalligraphy.png", "gewu-insight-app-icon.png"} else "")
                 + ",keepaspectratio]{"
                 + match.group(2)
                 + "}\\end{center}"

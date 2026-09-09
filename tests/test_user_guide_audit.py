@@ -90,7 +90,7 @@ class GuideAuditTests(unittest.TestCase):
         figure = self.soup.find("article", id="browser").find("figure")
         caption = figure.find("figcaption").get_text(" ", strip=True)
         self.assertIn("Captured from the original App", caption)
-        self.assertIn("Nature's research articles", caption)
+        self.assertIn("Nature Physics PDF", caption)
         self.assertIn("real bookmark collection", caption)
         self.assertIn("not a generated demonstration", caption)
         self.assertNotIn("public sample bookmarks", caption)

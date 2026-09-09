@@ -121,14 +121,15 @@ def test_identity_chapter_break_suppression_is_local_and_keeps_chapter_semantics
     assert r"\begingroup" not in command
 
 
-def test_every_registered_screenshot_is_constrained_to_page_width():
+def test_every_registered_screenshot_is_constrained_to_page_width_and_height():
     builder = _builder_module()
     for route, path in builder.IMAGE_ROUTES.items():
         if not route.startswith('/user-guide-assets/'):
             continue
         source = r'\pandocbounded{\includegraphics[keepaspectratio,alt={Screenshot}]{' + str(path) + '}}'
         result = builder.prepare_latex_body(source)
-        assert r'\includegraphics[width=0.96\linewidth,keepaspectratio]' in result
+        width = '0.48' if path.name == 'about-window.png' else '0.96'
+        assert r'\includegraphics[width=' + width + r'\linewidth,height=0.72\textheight,keepaspectratio]' in result
         assert r'\pandocbounded' not in result
 
 

@@ -461,6 +461,7 @@
       background: #f6f8fb;
       box-shadow: 0 10px 26px rgba(27, 48, 73, .08);
     }
+    .compact-screenshot { max-width: 380px; margin-left: auto; margin-right: auto; }
     .guide-screenshot img {
       display: block;
       width: 100%;
@@ -658,9 +659,9 @@
           <p class="topic-kicker">Start Here</p>
           <h1>Welcome to Gewu Insight</h1>
           <p class="lead">Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.</p>
-          <p class="guide-revision">Guide revision · September 9, 2026 · Codex connection example</p>
+          <p class="guide-revision">Guide revision · September 9, 2026 · Illustrated windows and settings</p>
 
-          <h2>Why this workspace exists</h2>
+<h2>Why this workspace exists</h2>
           <p>Research rarely arrives as one clean collection. A paper may first appear in a feed, later acquire an arXiv version and a DOI, be downloaded under several filenames, reappear through an author's profile, and eventually become part of a project or your own publication record. Publisher pages, alerts, PDFs, folders, notes, and citation services each preserve only part of that history.</p>
 
           <p>Gewu Insight is designed to keep those fragments connected. It treats discovery, identity, files, versions, organization, reading state, and provenance as parts of one continuing research process. The aim is not to accumulate the largest possible list. The aim is to preserve enough context that a useful paper remains understandable and usable months or years after it was first found.</p>
@@ -838,6 +839,12 @@
           <p>Selection, keyboard focus, menus, and scroll position are temporary interface state. Paper identity, placements, resource properties, read state, provenance, and completed operations persist when saved. A breathing progress message means work is active, not that a paper or folder was created.</p>
 
           <div class="important"><span class="callout-title">Keep the active context visible</span>Before moving, deleting, or attaching, check the focused pane and selected Paper Details. Similar names can identify different targets: a paper placement, one Paper Files resource, or a standalone file.</div>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/user-guide-window.png" alt="The User Guide window in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>The User Guide window.</strong> Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF.</figcaption>
+          </figure>
+
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#library-layout">Library Layout</a><a href="#navigation">Navigate with Mouse and Keyboard</a><a href="#keyboard">Keyboard Shortcuts</a></div></div>
         </article>
@@ -1362,6 +1369,16 @@
 
           <p>Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press <kbd>←</kbd> from the leftmost content column to focus this rail, use <kbd>↑</kbd> and <kbd>↓</kbd> to open another source, then press <kbd>→</kbd> to enter its content.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/add-shortcut.png" alt="Add Shortcut in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Add Shortcut.</strong> Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder.</figcaption>
+          </figure>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/add-space.png" alt="Add Space in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Add Space.</strong> Give the independent workspace a name, then choose Add. Cancel closes this form without creating a Space.</figcaption>
+          </figure>
+
           <h2>Color folders and remove navigation entries</h2>
           <p>Control-click an ordinary folder and choose <span class="ui">Color</span> to change its folder color. Protected roots do not offer this command. On the source rail, <span class="ui">Remove Shortcut</span> removes only the shortcut, leaving its folder and papers intact. <span class="ui">Remove Empty Space</span> works only after both its managed contents and remaining files are empty; move the Space into Library if you want to keep its hierarchy.</p>
 
@@ -1392,6 +1409,11 @@
           <p class="topic-kicker">Library</p>
           <h1>Search and Change Views</h1>
           <p class="lead">Search locates items across the managed collection. List View emphasizes browsing; Table View emphasizes metadata comparison.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/library-search.png" alt="Search Library in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Search Library.</strong> The search field filters the current workspace. Select a result or use Show in Library to reveal its folder location.</figcaption>
+          </figure>
 
           <h2>Search the collection</h2>
           <ol class="steps">
@@ -1554,6 +1576,11 @@
 
           <p>With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue moving through Library or Paper Files while the system panel follows the selection. Rapid navigation is serialized so an older preview request cannot replace a newer selection.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/pdf-quick-look.png" alt="Built-in PDF Quick Look in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Built-in PDF Quick Look.</strong> The selected Library PDF appears with page thumbnails and Open in Preview. The document and thumbnail column scroll independently.</figcaption>
+          </figure>
+
           <h2>Read the built-in PDF loading sequence</h2>
           <p>The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails are scheduled after the embedded document reports loading, so the document and thumbnail strip may appear at different times. That loading signal is not a guarantee that every PDF page has finished painting.</p>
 
@@ -1564,6 +1591,11 @@
           <p>Markdown files (<code>.md</code>, <code>.markdown</code>, <code>.mdown</code>, and <code>.mkd</code>) use a formatted reading view in built-in Quick Look, including headings, emphasis, nested lists, quotations, code blocks, and tables. The view follows keyboard selection, including Markdown attachments in Paper Files. Nearby images in the same folder or its subfolders can appear inline; remote images are links that you open explicitly. Website links follow Website Links settings. Raw HTML is shown as text. Large files are limited to a 256 KiB preview and marked [Preview truncated]; the original file is unchanged. Complex notes may use a shorter preview to keep navigation responsive. Native Quick Look modes keep the system's own renderer.</p>
           <p>Supported images, audio, video, and text files can also be inspected inside the workspace. A long text preview may end with [Preview truncated]; use Open File to read the complete original. Other formats show a file card with <span class="ui">Open File</span>; that opens the file in its macOS application. Choose a native mode in <a href="#quick-look-settings">Quick Look Settings</a> for formats better handled by system Quick Look.</p>
           <p>Switching between PDFs in the built-in viewer can briefly flash while the next document loads. It does not guarantee the same switching speed or continuity as macOS Quick Look. For rapid comparison, try <span class="ui">macOS Quick Look for all files</span>.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/markdown-quick-look.png" alt="Built-in Markdown Quick Look in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Built-in Markdown Quick Look.</strong> This existing README.md renders headings and links. Remote images remain explicit links; nearby local images can appear inline.</figcaption>
+          </figure>
 
           <h2>Choose Quick Look or Preview</h2>
           <table class="plain-table">
@@ -1739,6 +1771,12 @@
           <h1>Use Folder Loader</h1>
           <p class="lead">Folder Loader imports an existing directory tree into managed Library storage while preserving relative paths.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/folder-loader.png" alt="Folder Loader in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Folder Loader.</strong> Choose a source directory and metadata mode before Import. The live log and Result Guide fill the remaining window height and scroll independently.</figcaption>
+          </figure>
+
+
           <h2>Import a folder</h2>
           <ol class="steps">
             <li><strong>Choose <span class="ui">Loader &gt; Open Loader</span>.</strong> Outside Browser, you can also press <kbd>⌘</kbd><kbd>L</kbd>; inside Browser that shortcut focuses its address field.</li>
@@ -1779,17 +1817,29 @@
           <h1>Refresh an Imported Library</h1>
           <p class="lead">Loader maintenance commands fill metadata in batches after the files and folder structure are safely imported.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/loader-metadata.png" alt="Refresh All Metadata in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Refresh All Metadata.</strong> The maintenance window shows its Library scope, metadata mode and skip rule before Start Refresh.</figcaption>
+          </figure>
+
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/loader-identifiers.png" alt="Find All Missing Identifiers in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Find All Missing Identifiers.</strong> Start Search checks eligible Library PDFs for missing identifiers. The right pane explains the source policy and retry cooldowns.</figcaption>
+          </figure>
+
+
           <h2>Refresh known works</h2>
           <ol class="steps">
             <li><strong>Choose <span class="ui">Loader &gt; Refresh All Metadata</span>.</strong></li>
-            <li><strong>Let the queue run.</strong> Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.</li>
+            <li><strong>Choose <span class="ui">Start Refresh</span>.</strong> Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.</li>
             <li><strong>Review the log.</strong> Recently successful records may be skipped to avoid unnecessary requests.</li>
           </ol>
 
           <h2>Find missing identifiers</h2>
           <ol class="steps">
             <li><strong>Choose <span class="ui">Loader &gt; Find All Missing Identifiers</span>.</strong></li>
-            <li><strong>Wait for supported services.</strong> The app checks active Library and Space PDFs using Crossref, OpenAlex, and Semantic Scholar where available.</li>
+            <li><strong>Choose <span class="ui">Start Search</span>.</strong> The app checks active Library and Space PDFs using Crossref, OpenAlex, and Semantic Scholar where available.</li>
             <li><strong>Review uncertain matches.</strong> Refresh or recover DOI evidence as needed, and edit an incorrect arXiv identifier inline before downloading versions.</li>
           </ol>
 
@@ -2013,6 +2063,11 @@
 
           <p>Keywords use case-insensitive literal matching. Enter the words or phrases you expect to appear; they are not regular expressions and are not silently expanded into unrelated concepts.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/subject-editor.png" alt="Add Subject in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Add Subject.</strong> Enter a name and one keyword or phrase per line. The same form is used when editing an existing subject; Cancel leaves its saved keywords unchanged.</figcaption>
+          </figure>
+
           <h2>Edit keywords without losing history</h2>
           <p>Control-click a subject and choose <span class="ui">Edit</span>. Saving a new name or keywords keeps its existing paper list, calendar counts, selection, and reading position. New keywords apply to future retrieval. Existing date windows, including empty and incomplete results, remain preserved after a keyword change; background retries and later local arXiv matching do not silently reclassify those windows.</p>
           <p>Choose <span class="ui">Refresh This Subject</span> explicitly to rebuild that subject's selected date with the current keywords. A successful refresh replaces only that result window; other dates and subjects remain unchanged. An incomplete refresh preserves previous results. Editing during an active retrieval discards the obsolete result instead of replacing history. Deleting a subject still clears its Subject Monitor matches, without deleting the underlying shared papers or Library files. Previously cleared matches from an older software version are not automatically reconstructed by this fix.</p>
@@ -2075,6 +2130,11 @@
 
           <p>Without a verified publication-data match, the ResearchGate profile and homepage can be saved, but automatic publication refresh remains unavailable. Profile, publication, and citation sources remain distinct evidence; a fallback does not change the author identity.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/author-add.png" alt="Add Monitored Author in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Add Monitored Author.</strong> Enter an author name or a profile URL. This real capture also shows the local Google Scholar pause and retry time; ResearchGate metadata sources remain available.</figcaption>
+          </figure>
+
           <h2>Review updates</h2>
           <p>Later refreshes can mark newly discovered publications as unread. Use the <span class="ui">New</span> filter and other author/result controls to focus the list. Select <span class="ui">Date</span> or <span class="ui">Citations</span> to sort; selecting the active sort reverses its direction. <span class="ui">Conferences · n</span> opens conference publications in a separate, independently scrolling popover, so they are not missing from the ordinary article list. Close the popover with its close control or Escape.</p>
           <p>Control-click <span class="ui">New</span> and choose <span class="ui">Read All</span>. For one selected author, it marks every unread publication as read, including offscreen papers; other authors keep their unread state, even for a shared paper. With <span class="ui">All Authors</span> selected, it marks all authors' new publications as read. Papers and Library placements are preserved. The New filter remains active; click New again to see read papers. Read state persists after reopening.</p>
@@ -2113,7 +2173,7 @@
           <p class="lead">Browser is the sixth main tab, after Author Monitor. By default, website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages. Choose <a href="#website-link-settings">Setting &gt; Website Links</a> to use the system default browser instead.</p>
           <figure class="guide-screenshot">
             <img src="/user-guide-assets/browser.png" alt="Real Gewu Browser displaying Nature research articles, actual Nature bookmarks and website icons, and the compact B menu">
-            <figcaption><strong>Browser in use.</strong> Captured from the original App displaying Nature's research articles. The real bookmark collection is filtered to Nature; website icons, the webpage tab, and the compact B menu are visible. This is a live interface capture, not a generated demonstration.</figcaption>
+            <figcaption><strong>Browser in use.</strong> Captured from the original App displaying a fully loaded Nature Physics PDF. The real bookmark collection, webpage tab and Save to Gewu button are visible. This is a live interface capture, not a generated demonstration.</figcaption>
           </figure>
 
           <h2>Search and navigate</h2>
@@ -2128,6 +2188,11 @@
           <p>When you search or follow a link from Home, Home remains visible while the destination begins loading, then gives way to that destination. It should not flash the page you visited before Home. A cancelled or failed pending navigation leaves Home available rather than presenting that older page as the result.</p>
           <p><span class="key">⌘F</span> opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native <span class="ui">Gewu Insight.app</span>; opening the local UI in a separate web browser does not embed another browser engine.</p>
           <p><strong>Favorites on Home.</strong> Favorites/Favourites (including localized names) supplies the tiles; use <span class="ui">Create Favorites Folder</span> if missing. Open nested folders and return through breadcrumbs; use <span class="ui">Add Favorite</span> or right-click to edit. The grid uses the whole main area, without a Google section or divider. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Opening google.com explicitly shows an ordinary webpage, without Home-specific styling or zoom. Bookmarks are not sent to Google.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/browser-home.png" alt="Browser Home in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Browser Home.</strong> The original App displays the user's real Favorites and bookmarks. Home is local; use the address field or a bookmark to open a website.</figcaption>
+          </figure>
 
           <h2>Use multiple webpage tabs</h2>
           <p>Below the address toolbar, adjoining rectangular tabs show icons, titles and <span class="ui">×</span> above the webpage column only. The sidebar begins directly below the toolbar; it is not pushed down by the webpage tabs. The top-right <span class="ui">+</span> (<span class="ui">New Tab</span>, <span class="key">⌘T</span>) opens Home. Switching preserves each page, position and Back/Forward history without reloading or stopping background loads.</p>
@@ -2194,6 +2259,21 @@
           <p><strong>Source context is a hint.</strong> An Open Website link may lead to another work. Gewu checks the current article and PDF identity before attachment. If identification fails, you can explicitly choose the source article when offered. Conflicting identifiers block saving; open the correct PDF separately or select its matching local file.</p>
           <p><strong>If PDF retrieval fails:</strong> retry after opening the site's PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site's login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu's built-in Browser; a Safari extension is not included.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/save-gewu-compact.png" alt="Save to Gewu: compact review in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Save to Gewu: compact review.</strong> After the article and PDF have been identified, the compact panel keeps File type, Add to Library and the final save action visible.</figcaption>
+          </figure>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/save-gewu-details.png" alt="Save to Gewu: Details in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Save to Gewu: Details.</strong> Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. The PDF is Ready and classified as Published version before saving.</figcaption>
+          </figure>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/library-destination-picker.png" alt="Choose a Library destination in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Choose a Library destination.</strong> Read the columns from workspace to folder to subfolder. The bottom path follows the selection. Confirm selects a destination; Save to Library performs the import.</figcaption>
+          </figure>
+
           <h2>Privacy and compatibility boundaries</h2>
           <p>Bookmarks/history use <a href="#privacy">local SQLite</a>; cookies/cache use Browser's persistent profile, not Safari synchronization. Browsing/search reaches websites, but external pages have no Library/credential bridge. Local/file/application addresses are blocked. Standard internal child documents use WebKit's origin and sandbox rules; they cannot become address-bar destinations. HTTP recovery retries once as same-host HTTPS GET, without replaying forms or bypassing certificates; errors include reason/code. The local server rejects cross-site API requests and unrecognized hosts.</p>
 
@@ -2209,6 +2289,12 @@
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Configure Open Source Settings</h1>
           <p class="lead">Built-in sources work without setup. Optional credentials improve access or coverage for supported services.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/open-source.png" alt="Open Source Settings in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Open Source Settings.</strong> Configure discovery and metadata services in one panel. Saved credentials remain masked; each service has its own Save, Test and Clear controls.</figcaption>
+          </figure>
+
 
           <h2>Open settings</h2>
           <p>Choose <span class="ui">Setting &gt; Open Source Settings</span>, or press <kbd>⌘</kbd><kbd>,</kbd>.</p>
@@ -2244,6 +2330,12 @@
           <h1>Choose arXiv Discovery Scopes</h1>
           <p class="lead">Choose one or more arXiv subject archives for discovery. Selections can span several research fields or combine several groups within one field.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/arxiv-scope.png" alt="arXiv Scope Settings in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>arXiv Scope Settings.</strong> Choose subject archives for future Journal Monitor discovery. Expand a group to inspect its categories; the displayed Condensed Matter selection is an example of a saved preference.</figcaption>
+          </figure>
+
+
           <h2>Open arXiv Scope Settings</h2>
           <p>Choose <span class="ui">Setting &gt; arXiv Scope Settings</span>. The window lists every supported primary subject and its archive groups. Select at least one group, then choose <span class="ui">Save</span>.</p>
 
@@ -2268,6 +2360,12 @@
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Choose Which Research Fields Appear Separately</h1>
           <p class="lead">Choose which research fields appear as separate filters across the workspaces.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/field-settings.png" alt="Field Settings in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Field Settings.</strong> Choose which research fields appear as separate filters. Unchecked fields remain searchable under Other Fields.</figcaption>
+          </figure>
+
 
           <h2>Open Field Settings</h2>
           <p>Choose <span class="ui">Setting &gt; Field Settings</span>. Select a field to show it as a separate filter and label. Clear it to collect that field under <span class="ui">Other Fields</span>, then choose <span class="ui">Save</span>. Closing without saving leaves the earlier presentation in effect.</p>
@@ -2299,6 +2397,12 @@
           <h1>Choose How Quick Look Opens Files</h1>
           <p class="lead">Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look, or divide the work by file format.</p>
 
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/quick-look-settings.png" alt="Quick Look Settings in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Quick Look Settings.</strong> Choose built-in previews for all files, a mixed PDF/native workflow, or macOS Quick Look for all supported files.</figcaption>
+          </figure>
+
+
           <h2>Open Quick Look Settings</h2>
           <p>Choose <span class="ui">Setting &gt; Quick Look Settings</span>. Select a mode and choose <span class="ui">Save</span>. The setting applies to Space-bar previews in Library, Spaces, Paper Files, and the other research views when a local file is available. Closing without saving leaves the previous mode in effect. <span class="ui">Restore Default</span> immediately saves Gewu Insight for all files. The saved mode persists after restarting the App; it does not change Open in Preview. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.</p>
 
@@ -2325,6 +2429,12 @@
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Choose Where Website Links Open</h1>
           <p class="lead">Choose one browser preference for website actions across your research workspaces.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/website-links.png" alt="Website Links in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Website Links.</strong> Choose the browser used by Open Website and the initial Details state of Save to Gewu. The checkbox shown here is a saved user preference; the shipped Details default is collapsed.</figcaption>
+          </figure>
+
           <p>Open <span class="ui">Setting &gt; Website Links</span>, select an option, and click <span class="ui">Save</span>. The choice applies to the next website action and is remembered after restarting Gewu Insight. Closing the dialog without saving leaves the previous preference in effect.</p>
           <table class="feature-table"><thead><tr><th>Option</th><th>Behavior</th></tr></thead><tbody>
             <tr><td><span class="ui">Gewu Insight Browser</span> (default)</td><td>Opens a new built-in Browser tab, preserving existing pages. Press <kbd>⌘</kbd><kbd>[</kbd> to return to the source workspace.</td></tr>
@@ -2340,6 +2450,12 @@
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Connect an AI to Your Papers</h1>
           <p class="lead">Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/ai-access.png" alt="AI Access in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>AI Access.</strong> The enable switch, existing connections and Recent Activity share a compact settings panel. Expand New Connection to choose a scope and permissions.</figcaption>
+          </figure>
+
           <p><span class="ui">Setting &gt; AI Access</span> is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.</p>
           <h2>API, MCP and your token</h2>
           <table class="plain-table">
@@ -2360,6 +2476,11 @@
             <li>Use <span class="ui">Copy MCP Configuration</span> to obtain the local adapter path, Python executable, port and token. Enter these in your AI client's MCP settings using its required format. See the Codex example below.</li>
           </ol>
           <div class="note"><span class="callout-title">Keep the connection private</span>The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.</div>
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/ai-new-connection.png" alt="New AI connection in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>New AI connection.</strong> Set the connection name, accessible papers, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.</figcaption>
+          </figure>
+
           <h2>What an authorized AI can do</h2>
           <table class="plain-table">
             <tr><th>Tool</th><th>Result</th></tr>
@@ -2423,6 +2544,12 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p class="topic-kicker">Settings and Safety</p>
           <h1>Set Naming and PDF Rename Rules</h1>
           <p class="lead">Display naming and physical PDF renaming are separate choices. Review metadata before renaming files.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/pdf-rename-settings.png" alt="PDF Rename Settings in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>PDF Rename Settings.</strong> Edit the filename template and inspect its preview before saving. Available tokens appear beside the template.</figcaption>
+          </figure>
+
 
           <h2>Choose the Library naming rule</h2>
           <p>Choose <span class="ui">Setting &gt; Naming Rule &gt; Use Title</span> or <span class="ui">Use Citation</span>. The choice is saved immediately and supplies the default name for a newly added Library placement that has no name yet. It does not rename the existing collection. The default rule is Use Citation; physical PDF renaming uses the separate template below.</p>
@@ -2510,6 +2637,11 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p class="lead">Gewu Insight uses three related marks—the calligraphic Chinese name, the app icon, and a seal-script watermark—to connect a contemporary research workspace with the longer Chinese tradition of examining things in order to form insight.</p>
 
           <div class="identity-intro">The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.</div>
+
+          <figure class="guide-screenshot compact-screenshot">
+            <img src="/user-guide-assets/about-window.png" alt="About Gewu Insight in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>About Gewu Insight.</strong> Open the application menu and choose About Gewu Insight to see the product name, version and calligraphic signature.</figcaption>
+          </figure>
 
           <h2>The calligraphic name</h2>
           <figure class="wordmark-figure">
@@ -2628,6 +2760,12 @@ GEWU_API_TOKEN = "&lt;GEWU_TOKEN&gt;"</code></pre>
           <p class="topic-kicker">Reference</p>
           <h1>Manage Startup, Monitor Cache, and Text Size</h1>
           <p class="lead">The macOS app shows its branded startup view immediately, starts or connects to the local UI service, and reveals the workspace when Library is ready.</p>
+
+          <figure class="guide-screenshot">
+            <img src="/user-guide-assets/font-size.png" alt="Font Size in the original Gewu Insight App" loading="lazy">
+            <figcaption><strong>Font Size.</strong> Preview one of five reading sizes. Save keeps the selected size; Cancel restores the previous preference.</figcaption>
+          </figure>
+
 
           <h2>Normal startup</h2>
           <p>The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.</p>

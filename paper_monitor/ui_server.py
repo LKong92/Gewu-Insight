@@ -33052,8 +33052,10 @@ INDEX_HTML = """<!doctype html>
     }
     .app.loader-window-mode .settings-modal-body.loader-modal-body {
       height: 100%;
+      max-height: none;
       box-sizing: border-box;
       padding: 10px 12px 12px;
+      overflow: hidden;
     }
     .app.loader-window-mode .loader-panel {
       gap: 8px;

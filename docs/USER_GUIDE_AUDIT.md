@@ -1,5 +1,15 @@
 # User Guide audit — September 6, 2026
 
+## September 9 illustrated-window follow-up
+
+- Expand the original seven screenshot slots to 32 real App captures, with one shared asset set for HTML and PDF. The [screenshot inventory](USER_GUIDE_SCREENSHOTS.md) records every figure and its capture boundaries.
+- Replace Browser's unloaded-ad example and the unsuccessful arXiv identification attempt with a fully loaded Nature Physics PDF; the expanded Save to Gewu capture confirms an existing key, DOI, PDF Ready and Published version.
+- Recapture Field Settings with unrelated settings closed. All packaged settings illustrations use a single foreground panel.
+- Fix native Loader's inherited body-height cap so both lower panels reach the normal 12-point bottom padding. Match AI Access to the compact settings type scale and use flat permission separators. These are presentation changes, with no discovery, import, token or database logic changes.
+- Explicitly name Start Refresh and Start Search in the maintenance instructions. Preserve the existing topic anchors, Codex configuration example and Product Identity's continuous chapter flow.
+- Validation: actual Loader geometry at three heights and AI Access at three widths passed using temporary test data; final images were inspected from the installed original App. All 26 guide checks, six PDF structure checks and 36 Python compile checks pass. The rebuilt 101-page PDF has 32 screenshots; 43 relevant pages were rendered and visually reviewed. Each capture stays with its caption, and Product Identity chapters still flow continuously.
+
+
 ## Scope and method
 
 Re-audited all 47 registered in-app topics against product checkpoint

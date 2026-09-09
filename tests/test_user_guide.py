@@ -750,11 +750,36 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/subject-monitor.png",
                 "/user-guide-assets/author-monitor.png",
                 "/user-guide-assets/browser.png",
+                "/user-guide-assets/open-source.png",
+                "/user-guide-assets/arxiv-scope.png",
+                "/user-guide-assets/field-settings.png",
+                "/user-guide-assets/quick-look-settings.png",
+                "/user-guide-assets/website-links.png",
+                "/user-guide-assets/ai-access.png",
+                "/user-guide-assets/pdf-rename-settings.png",
+                "/user-guide-assets/font-size.png",
+                "/user-guide-assets/folder-loader.png",
+                "/user-guide-assets/loader-metadata.png",
+                "/user-guide-assets/loader-identifiers.png",
+                "/user-guide-assets/ai-new-connection.png",
+                "/user-guide-assets/browser-home.png",
+                "/user-guide-assets/save-gewu-compact.png",
+                "/user-guide-assets/save-gewu-details.png",
+                "/user-guide-assets/library-destination-picker.png",
+                "/user-guide-assets/subject-editor.png",
+                "/user-guide-assets/add-shortcut.png",
+                "/user-guide-assets/add-space.png",
+                "/user-guide-assets/library-search.png",
+                "/user-guide-assets/pdf-quick-look.png",
+                "/user-guide-assets/markdown-quick-look.png",
+                "/user-guide-assets/author-add.png",
+                "/user-guide-assets/about-window.png",
+                "/user-guide-assets/user-guide-window.png",
             },
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 7)
+        self.assertEqual(len(screenshot_figures), 32)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:
