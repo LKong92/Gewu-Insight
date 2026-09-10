@@ -5,5 +5,8 @@
 @interface GewuBrowserCapture : NSObject <WKDownloadDelegate>
 - (void)downloadURL:(NSURL *)url fromView:(WKWebView *)view workspaceURL:(NSURL *)workspaceURL
        uploadToken:(NSString *)token completion:(void (^)(NSString *error))completion;
+// Reuse bytes already displayed by the native Browser; no publisher GET replay.
+- (void)uploadPDFData:(NSData *)data filename:(NSString *)filename sourceURL:(NSURL *)url
+        workspaceURL:(NSURL *)workspaceURL uploadToken:(NSString *)token completion:(void (^)(NSString *error))completion;
 - (void)cancel;
 @end

@@ -1,5 +1,20 @@
 # User Guide audit — September 6, 2026
 
+## September 11 Browser PDF downloads
+
+- Explain website PDF downloads opening in Browser, public-origin page-generated files, retained website login/consent, transfer progress and cancellation on source-page navigation/close. Preview uses temporary storage; recent bytes are reused for Save to Gewu, refresh and explicit Save Download. Library placement, classification and Default rules are unchanged.
+- The regenerated Guide remains 103 pages with all 32 original-App screenshots. Updated pages 68–69 were rendered and visually inspected; all six PDF structure checks passed and Product Identity still starts on page 91 with continuous chapter flow.
+- Validation: the full product run passed all 907 tests (66.492 s). After final navigation/capture guards and Guide edits, all 84 focused Browser/Guide checks passed (10.654 s); the final real ephemeral WebKit fixture passed 51 checks, including one POST without GET replay, actual Save to Gewu byte upload, popup/blob paths, ordinary inline PDFs, explicit Save Download, retained focus and cancellation cleanup. A rendered generated PDF confirmed visible output. No live publisher compatibility is inferred from those fixtures.
+- The universal original App was built, signed, installed and normally restarted after the user confirmed no pending work. Verification at 00:37:46 found App 15879 and one healthy UI service 15881; served Browser JS and Guide HTML/PDF match source, and installed binary/Guide/signature match the signed stage. No direct Library/SQLite maintenance or credential export. Author Monitor and Browser changes are included together in the September 11 delivery following checkpoint `5ac4368`. QA, staged App and before-App backup: `/private/tmp/gewu-browser-pdf-qa/`.
+
+## September 10 Author Monitor background work
+
+- Document immediate reuse of local cards, retained controls/selection during background updates, persistent publication and metadata status, shared request-level Scholar cooldown checks, and bounded automatic metadata work (20/batch, 80/local day, approximately two-minute slices, at least five-minute rests, seven-day retry waits).
+- The regenerated PDF remains 103 pages with all 32 original-App screenshots. Pages 63–64 and Product Identity 91–93 were rendered and visually reviewed; continuous Identity layout is preserved. Six PDF structure checks passed.
+- Final full product regression: all 907 tests passed in 63.814 s, using temporary databases and simulated remote responses. The real Chrome DOM probe passed expired-cache opening without remote work, cooldown and persistent status display, stable cards and reading anchor, retained input/tab focus, and preserving current selection over an older remembered selection. Python compilation, embedded JavaScript syntax and diff checks passed.
+- Original App normally restarted after confirming no active registered downloads, author imports or publication imports. Verification at 23:22:34 found one service (13358, App 13356), healthy status, matching served functions and HTML/PDF Guide bytes, and a valid installed signature. The all-author local API returned 9,472 cards in 0.448 s; this excludes visual rendering. A separate read-only check confirmed 23 authors and matching source/cache totals. Normal bounded metadata work was observed running after restart; no verification request initiated a Scholar refresh or file download.
+- Checkpoint `5ac4368` was pushed to main before implementation; these Author Monitor changes are included in the September 11 delivery. The Windows branch and disabled test App were untouched. Evidence, signed staged App and prior-App backup: `/private/tmp/gewu-author-monitor-qa/`.
+
 ## September 10 file order, capture destination and tab focus
 
 - Document Default-first file display with matching arrow navigation; Browser reuse of existing active placements, unsorted for first Library placement and explicit folder confirmation for another location; clicking a top tab restores its existing keyboard focus style.

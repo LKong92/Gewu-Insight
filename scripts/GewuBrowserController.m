@@ -50,6 +50,14 @@
 @property(nonatomic) BOOL historyTraversal;
 @property(nonatomic) BOOL allowsInitialBlank;
 @property(nonatomic, copy) NSString *errorMessage;
+@property(nonatomic, strong) NSURL *blobRequestURL;
+@property(nonatomic, strong) NSURL *blobSourceURL;
+@property(nonatomic) BOOL downloadTransitionPending;
+@property(nonatomic) BOOL openingPDF;
+@property(nonatomic) double pdfProgress;
+@property(nonatomic, strong) NSMutableDictionary *pendingPDFDocument;
+@property(nonatomic, strong) WKNavigation *pdfNavigation;
+@property(nonatomic, strong) NSMapTable<id, NSDictionary *> *pdfDocuments;
 @end
 @implementation GewuBrowserPage
 @end
@@ -167,7 +175,7 @@
         NSString *url = home ? @"" : (page.failedURL ?: page.view.URL ?: page.mainNavigationRequest.URL).absoluteString ?: @"";
         NSString *title = home ? @"Favorites" : presented.view.title;
         if (!title.length) title = [NSURL URLWithString:url].host ?: @"New Tab";
-        [items addObject:@{@"id":tab.identifier, @"title":title, @"url":url, @"home":@(home), @"loading":@(page.view.loading || (tab.contentPendingFromHome && !page.errorMessage.length))}];
+        [items addObject:@{@"id":tab.identifier, @"title":title, @"url":url, @"home":@(home), @"loading":@(page.openingPDF || page.view.loading || (tab.contentPendingFromHome && !page.errorMessage.length))}];
     }
     [self emit:@{@"event":@"tabs", @"tabs":items, @"selected":self.selectedTab.identifier ?: @""}];
 }
@@ -209,6 +217,8 @@
 }
 - (void)disposePage:(GewuBrowserPage *)page {
     if (!page) return;
+    [self cancelPDFDownloadsForPage:page];
+    [page.pdfDocuments removeAllObjects]; page.pendingPDFDocument = nil;
     for (NSString *key in @[@"URL", @"title", @"loading", @"estimatedProgress", @"canGoBack", @"canGoForward"])
         [page.view removeObserver:self forKeyPath:key];
     page.view.navigationDelegate = nil; page.view.UIDelegate = nil;
@@ -356,10 +366,10 @@
     WKWebView *presented = [self presentedPageForTab:self.selectedTab].view;
     BOOL home = [self presentedPageForTab:self.selectedTab] == self.homePage;
     [self emit:@{ @"event": @"state", @"url": home ? @"" : (self.currentPage.failedURL ?: self.webView.URL).absoluteString ?: @"",
-        @"home":@(home), @"title": home ? @"Favorites" : presented.title ?: @"", @"loading": @(self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
-        @"progress": @(self.webView.estimatedProgress), @"canBack": @(self.session.index > 0),
+        @"home":@(home), @"title": home ? @"Favorites" : presented.title ?: @"", @"loading": @(self.currentPage.openingPDF || self.webView.loading || (pending && !self.currentPage.errorMessage.length)),
+        @"progress": @(self.currentPage.openingPDF ? self.currentPage.pdfProgress : self.webView.estimatedProgress), @"canBack": @(self.session.index > 0),
         @"canForward": @(self.session.index + 1 < self.session.entries.count),
-        @"tab_id":self.selectedTab.identifier ?: @"", @"error":self.currentPage.errorMessage ?: @"" }];
+        @"tab_id":self.selectedTab.identifier ?: @"", @"openingPDF":@(self.currentPage.openingPDF), @"error":self.currentPage.errorMessage ?: @"" }];
     [self emitTabs];
 }
 
@@ -570,6 +580,12 @@
     } else if ([action isEqualToString:@"back"]) { [self moveInSession:-1]; }
     else if ([action isEqualToString:@"forward"]) { [self moveInSession:1]; }
     else if ([action isEqualToString:@"reload"]) {
+        NSDictionary *pdf = self.currentPage.failedURL ? nil : [self PDFDocumentForPage:self.currentPage];
+        if (pdf) {
+            self.currentPage.pendingPDFDocument = [pdf mutableCopy];
+            self.currentPage.pdfNavigation = [self.webView loadData:pdf[@"data"] MIMEType:@"application/pdf" characterEncodingName:@"UTF-8" baseURL:self.webView.URL];
+            return;
+        }
         self.currentPage.attemptedHTTPSRecovery = NO;
         if (self.currentPage == self.homePage && !self.selectedTab.contentPendingFromHome) {
             [self showHomeRecordingVisit:NO];
@@ -580,7 +596,7 @@
         } else if (self.currentPage.failedURL && [self.currentPage.mainNavigationRequest.HTTPMethod isEqualToString:@"GET"]) [self.webView loadRequest:[NSURLRequest requestWithURL:self.currentPage.failedURL]];
         else [self.webView reload];
     }
-    else if ([action isEqualToString:@"stop"]) { [self.webView stopLoading]; [self returnToRetainedHomeInTab:self.selectedTab]; }
+    else if ([action isEqualToString:@"stop"]) { [self cancelPDFDownloadsForPage:self.currentPage]; [self.webView stopLoading]; [self returnToRetainedHomeInTab:self.selectedTab]; [self emitState]; }
     else if ([action isEqualToString:@"focus"]) { [self.workspace.window makeFirstResponder:[self presentedPageForTab:self.selectedTab] == self.homePage ? self.workspace : [self presentedPageForTab:self.selectedTab].view]; }
     else if ([action isEqualToString:@"suggestions"]) { [self showAddressSuggestions:command]; }
     else if ([action isEqualToString:@"editor"]) { [self presentEditor:command]; }
@@ -616,9 +632,13 @@
             if (safari) [[NSWorkspace sharedWorkspace] openURLs:@[url] withApplicationAtURL:safari configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
         }
     } else if ([action isEqualToString:@"download"]) {
-        if (GewuBrowserPublicURL(self.webView.URL)) {
+        if (self.currentPage.openingPDF) return;
+        NSDictionary *pdf = self.currentPage.failedURL ? nil : [self PDFDocumentForPage:self.currentPage];
+        if (pdf) { [self saveDisplayedPDF:pdf]; return; }
+        NSURL *downloadURL = self.currentPage.failedURL ?: self.webView.URL;
+        if (GewuBrowserPublicURL(downloadURL)) {
             __weak typeof(self) weakSelf = self;
-            [self.webView startDownloadUsingRequest:[NSURLRequest requestWithURL:self.webView.URL] completionHandler:^(WKDownload *download) {
+            [self.webView startDownloadUsingRequest:[NSURLRequest requestWithURL:downloadURL] completionHandler:^(WKDownload *download) {
                 [weakSelf registerDownload:download];
             }];
         }
@@ -669,7 +689,7 @@
     GewuBrowserPage *page = self.currentPage;
     GewuBrowserTab *tab = self.selectedTab;
     NSURL *url = page.view.URL;
-    if (page == tab.homePage || page.view.loading || !GewuBrowserPublicURL(url)) {
+    if (page == tab.homePage || page.view.loading || page.openingPDF || page.errorMessage.length || !GewuBrowserPublicURL(url)) {
         [self emit:@{@"event":@"capture-metadata", @"request_id":requestID, @"error":@"Wait for an article or PDF to finish loading, then try Save to Gewu again."}]; return;
     }
     [self captureBackdropForPage:page requestID:requestID];
@@ -714,10 +734,15 @@
     GewuBrowserCapture *capture = [[GewuBrowserCapture alloc] init];
     self.captures[token] = capture;
     __weak typeof(self) weakSelf = self;
-    [capture downloadURL:[NSURL URLWithString:url] fromView:page.view workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:^(NSString *error) {
+    void (^completion)(NSString *) = ^(NSString *error) {
         [weakSelf.captures removeObjectForKey:token];
         [weakSelf emit:@{@"event":@"capture-pdf", @"token":token, @"error":error ?: @""}];
-    }];
+    };
+    NSDictionary *pdf = [self PDFDocumentForPage:page];
+    if (pdf && [url isEqual:page.view.URL.absoluteString])
+        [capture uploadPDFData:pdf[@"data"] filename:pdf[@"filename"] sourceURL:[NSURL URLWithString:url]
+            workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
+    else [capture downloadURL:[NSURL URLWithString:url] fromView:page.view workspaceURL:self.workspace.URL uploadToken:command[@"upload_token"] completion:completion];
 }
 
 - (void)showAddressSuggestions:(NSDictionary *)command {
@@ -962,13 +987,22 @@
         decisionHandler(WKNavigationActionPolicyCancel); return;
     }
     NSURL *url = action.request.URL;
+    BOOL blob = [url.scheme.lowercaseString isEqual:@"blob"];
+    if (blob) {
+        NSURL *source = action.sourceFrame.request.URL;
+        if (GewuBrowserBlobURL(url, source)) {
+            page.blobRequestURL = url; page.blobSourceURL = source;
+        } else if (![url isEqual:page.blobRequestURL] || !GewuBrowserBlobURL(url, page.blobSourceURL)) {
+            decisionHandler(WKNavigationActionPolicyCancel); return;
+        }
+    }
     // Challenge widgets and ordinary embeds use local child documents. Leave
     // their origin/sandbox rules to WebKit; never expose the trusted workspace.
     if (action.targetFrame && !action.targetFrame.isMainFrame && GewuBrowserInternalFrameURL(url)) {
         decisionHandler(WKNavigationActionPolicyAllow); return;
     }
     if ([url.absoluteString isEqualToString:@"about:blank"] && (!action.targetFrame.isMainFrame || page.allowsInitialBlank)) { decisionHandler(WKNavigationActionPolicyAllow); return; }
-    if (!GewuBrowserPublicURL(url)) {
+    if (!GewuBrowserPublicURL(url) && !blob) {
         BOOL wasActive = webView == self.webView;
         if (action.targetFrame.isMainFrame || !action.targetFrame) [self returnToRetainedHomeInTab:tab];
         if (wasActive && (action.targetFrame.isMainFrame || !action.targetFrame)) [self emit:@{ @"event": @"error", @"message": @"This address cannot be opened here. Use Open in Safari for application links or special sign-in flows." }];
@@ -982,6 +1016,7 @@
         GewuBrowserTab *opened = [self addTabWithRequest:action.request configuration:nil];
         opened.originPaperID = origin.originPaperID; opened.originURL = origin.originURL;
         opened.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+        if (blob) { opened.currentPage.blobRequestURL = page.blobRequestURL; opened.currentPage.blobSourceURL = page.blobSourceURL; }
         return;
     }
     // target=_blank is handled by createWebView using WebKit's configuration,
@@ -1001,12 +1036,15 @@
 }
 
 - (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)windowFeatures {
+    GewuBrowserPage *opener = [self pageForView:webView];
+    BOOL blob = [action.request.URL isEqual:opener.blobRequestURL] && GewuBrowserBlobURL(action.request.URL, opener.blobSourceURL);
     if (webView != self.webView || !self.active || !self.visible || action.targetFrame
-        || !(GewuBrowserPublicURL(action.request.URL) || [action.request.URL.absoluteString isEqualToString:@"about:blank"])) return nil;
+        || !(GewuBrowserPublicURL(action.request.URL) || blob || [action.request.URL.absoluteString isEqualToString:@"about:blank"])) return nil;
     GewuBrowserTab *origin = [self tabForPage:[self pageForView:webView]];
     GewuBrowserTab *tab = [self addTabWithRequest:action.request configuration:configuration];
     tab.originPaperID = origin.originPaperID; tab.originURL = origin.originURL;
     tab.currentPage.pendingRequestedDownload = action.shouldPerformDownload;
+    if (blob) { tab.currentPage.blobRequestURL = opener.blobRequestURL; tab.currentPage.blobSourceURL = opener.blobSourceURL; }
     return tab.currentPage.view;
 }
 - (void)webViewDidClose:(WKWebView *)webView {
@@ -1020,10 +1058,23 @@
     if (!response.forMainFrame && response.canShowMIMEType && GewuBrowserInternalFrameURL(response.response.URL)) {
         decisionHandler(WKNavigationResponsePolicyAllow); return;
     }
-    if (!GewuBrowserPublicURL(response.response.URL)) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
+    BOOL blob = [response.response.URL isEqual:page.blobRequestURL] && GewuBrowserBlobURL(response.response.URL, page.blobSourceURL);
+    if (!GewuBrowserPublicURL(response.response.URL) && !blob) { decisionHandler(WKNavigationResponsePolicyCancel); return; }
     if (response.forMainFrame) page.documentMIME = response.response.MIMEType;
-    decisionHandler(GewuBrowserResponsePolicy(response.response, response.canShowMIMEType,
-        response.forMainFrame && page.navigationRequestedDownload));
+    WKNavigationResponsePolicy policy = GewuBrowserResponsePolicy(response.response, response.canShowMIMEType,
+        response.forMainFrame && page.navigationRequestedDownload);
+    if (blob && response.forMainFrame) {
+        // A page-generated file gets a public source address after displaying its
+        // bytes; do not turn blob HTML into a privileged or persistent document.
+        NSString *mime = response.response.MIMEType.lowercaseString ?: @"";
+        policy = (GewuBrowserPDFResponse(response.response) || [mime containsString:@"octet-stream"])
+            ? WKNavigationResponsePolicyDownload : WKNavigationResponsePolicyCancel;
+    }
+    // loadData already holds the received bytes, never start a second transfer.
+    if (page.pendingPDFDocument && GewuBrowserPDFResponse(response.response)
+        && ![response.response isKindOfClass:NSHTTPURLResponse.class]) policy = WKNavigationResponsePolicyAllow;
+    page.downloadTransitionPending = policy == WKNavigationResponsePolicyDownload;
+    decisionHandler(policy);
 }
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
@@ -1032,7 +1083,12 @@
     GewuBrowserTab *tab = [self tabForPage:page];
     if (!page || page != tab.currentPage) return;
     if (tab.contentPendingFromHome && tab.pendingHomeNavigation && tab.pendingHomeNavigation != navigation) return;
+    if (navigation != page.pdfNavigation) {
+        [self cancelPDFDownloadsForPage:page];
+        page.pendingPDFDocument = nil;
+    }
     page.failedURL = nil; page.errorMessage = nil;
+    page.ready = NO;
     page.captureDocumentID = NSUUID.UUID.UUIDString; page.documentMIME = nil;
     if (!page.reloadNavigation || !page.visitID) page.visitID = NSUUID.UUID.UUIDString;
     page.reloadNavigation = NO;
@@ -1053,6 +1109,11 @@
     NSMutableArray *items = [list.backList mutableCopy];
     [items addObjectsFromArray:list.forwardList];
     if (list.currentItem) [items addObject:list.currentItem];
+    NSDictionary *generated = page.captureDocumentID ? [page.pdfDocuments objectForKey:page.captureDocumentID] : nil;
+    if (generated && page.ready && list.currentItem) {
+        [page.pdfDocuments setObject:generated forKey:list.currentItem];
+        [page.pdfDocuments removeObjectForKey:page.captureDocumentID];
+    }
     [tab.session pruneSurface:page validItems:items];
     [tab.session recordSurface:page item:list.currentItem
         home:NO
@@ -1075,6 +1136,13 @@
     }
     page.ready = NO; page.terminated = NO;
     [self recordHistoryForPage:page];
+    if (page.pendingPDFDocument && page.pdfNavigation == navigation
+        && [page.view.backForwardList.currentItem.URL isEqual:page.view.URL]) {
+        if (!page.pdfDocuments) page.pdfDocuments = [NSMapTable strongToStrongObjectsMapTable];
+        [page.pdfDocuments setObject:page.pendingPDFDocument forKey:page.view.backForwardList.currentItem];
+        page.pendingPDFDocument = nil; page.pdfNavigation = nil;
+        [self trimPDFCache];
+    }
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
@@ -1082,6 +1150,16 @@
     GewuBrowserTab *tab = [self tabForPage:page];
     if (!page || page != tab.currentPage || tab.contentPendingFromHome) return;
     page.ready = YES; page.terminated = NO; page.attemptedHTTPSRecovery = NO;
+    if (page.pendingPDFDocument && page.pdfNavigation == navigation) {
+        // A new popup's first loadData may finish before WebKit creates a history
+        // item. Bind it to this document generation until an item is available.
+        if (!page.pdfDocuments) page.pdfDocuments = [NSMapTable strongToStrongObjectsMapTable];
+        id key = page.view.backForwardList.currentItem ?: (id)page.captureDocumentID;
+        if (key) [page.pdfDocuments setObject:page.pendingPDFDocument forKey:key];
+        page.pendingPDFDocument = nil; page.pdfNavigation = nil;
+        [self recordHistoryForPage:page]; [self trimPDFCache];
+    }
+    if ([self PDFDocumentForPage:page]) page.documentMIME = @"application/pdf";
     if (webView == self.webView) { [self emitState]; } else [self emitTabs];
     NSURL *pageURL = webView.URL;
     if (GewuBrowserPublicURL(pageURL)) {
@@ -1100,6 +1178,8 @@
 }
 - (void)navigationFailed:(NSError *)error inPage:(GewuBrowserPage *)page {
     if (![self tabForPage:page]) return;
+    if (page.downloadTransitionPending && error.code == 102
+        && ([error.domain isEqual:@"WebKitErrorDomain"] || [error.domain isEqual:WKErrorDomain])) return;
     if (error.code == NSURLErrorCancelled || (error.code == 102 && [error.domain isEqualToString:WKErrorDomain])) return;
     NSURL *secureURL = GewuBrowserHTTPSRecoveryURL(error, page.mainNavigationRequest, page.attemptedHTTPSRecovery);
     if (GewuBrowserPublicURL(secureURL)) {
@@ -1116,6 +1196,8 @@
 }
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     GewuBrowserPage *page = [self pageForView:webView];
+    if ((page.downloadTransitionPending || page.openingPDF) && error.code == 102
+        && ([error.domain isEqual:@"WebKitErrorDomain"] || [error.domain isEqual:WKErrorDomain])) return;
     GewuBrowserTab *tab = [self tabForPage:page];
     if (tab.contentPendingFromHome) {
         if (page != tab.currentPage || (tab.pendingHomeNavigation && navigation != tab.pendingHomeNavigation)) return;
@@ -1176,20 +1258,140 @@
 }
 
 - (void)registerDownload:(WKDownload *)download {
-    if (!download || self.invalidated) return;
+    if (!download) return;
+    if (self.invalidated) { [download cancel:nil]; return; }
     download.delegate = self;
     [self.downloads setObject:[NSMutableDictionary dictionary] forKey:download];
 }
+- (NSDictionary *)PDFDocumentForPage:(GewuBrowserPage *)page {
+    if (!page.pdfDocuments) return nil;
+    return [page.pdfDocuments objectForKey:page.view.backForwardList.currentItem]
+        ?: [page.pdfDocuments objectForKey:page.captureDocumentID];
+}
+- (void)trimPDFCache {
+    NSMutableArray *cached = [NSMutableArray array];
+    NSUInteger bytes = 0;
+    for (GewuBrowserTab *tab in self.tabs) {
+        GewuBrowserPage *page = tab.contentPage;
+        WKBackForwardList *list = page.view.backForwardList;
+        NSMutableArray *valid = [NSMutableArray arrayWithArray:list.backList ?: @[]];
+        [valid addObjectsFromArray:list.forwardList ?: @[]];
+        if (list.currentItem) [valid addObject:list.currentItem];
+        if (page.captureDocumentID) [valid addObject:page.captureDocumentID];
+        for (id item in page.pdfDocuments.keyEnumerator.allObjects) {
+            NSDictionary *doc = [page.pdfDocuments objectForKey:item];
+            if (![valid containsObject:item]) { [page.pdfDocuments removeObjectForKey:item]; continue; }
+            bytes += [doc[@"data"] length];
+            [cached addObject:@{@"page":page, @"item":item, @"doc":doc}];
+        }
+    }
+    [cached sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"doc"][@"date"] compare:b[@"doc"][@"date"]]; }];
+    NSUInteger count = cached.count;
+    for (NSDictionary *entry in cached) {
+        if (bytes <= 256 * 1024 * 1024 && count <= 8) break;
+        GewuBrowserPage *page = entry[@"page"];
+        bytes -= [entry[@"doc"][@"data"] length]; count--;
+        [page.pdfDocuments removeObjectForKey:entry[@"item"]];
+    }
+}
+- (void)saveDisplayedPDF:(NSDictionary *)pdf {
+    if (self.workspace.window.attachedSheet) return;
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    panel.title = @"Save Download"; panel.nameFieldStringValue = pdf[@"filename"] ?: @"Article.pdf";
+    panel.directoryURL = [[NSFileManager defaultManager] URLsForDirectory:NSDownloadsDirectory inDomains:NSUserDomainMask].firstObject;
+    [panel beginSheetModalForWindow:self.workspace.window completionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK || !panel.URL) return;
+        BOOL saved = [pdf[@"data"] writeToURL:panel.URL options:NSDataWritingAtomic error:nil];
+        [self emit:@{@"event":saved ? @"download" : @"error", @"message":saved ? @"File saved to the selected location." : @"The file could not be saved to the selected location."}];
+    }];
+}
+- (void)cancelPDFDownloadsForPage:(GewuBrowserPage *)page {
+    for (WKDownload *download in self.downloads.keyEnumerator.allObjects) {
+        NSDictionary *context = [self.downloads objectForKey:download];
+        if (context[@"page"] != page) continue;
+        [context[@"timer"] invalidate];
+        NSURL *directory = context[@"directory"];
+        download.delegate = nil;
+        [download cancel:^(NSData *resume) { if (directory) [NSFileManager.defaultManager removeItemAtURL:directory error:nil]; }];
+        [self.downloads removeObjectForKey:download];
+    }
+    page.openingPDF = NO; page.downloadTransitionPending = NO;
+}
+- (void)registerPageDownload:(WKDownload *)download view:(WKWebView *)view {
+    GewuBrowserPage *page = [self pageForView:view];
+    if (!page) { [download cancel:nil]; return; }
+    [self cancelPDFDownloadsForPage:page];
+    [self registerDownload:download];
+    NSMutableDictionary *context = [self.downloads objectForKey:download];
+    context[@"page"] = page; context[@"generation"] = page.captureDocumentID ?: @"";
+    context[@"source"] = page.blobSourceURL ?: view.URL ?: page.mainNavigationRequest.URL;
+    page.downloadTransitionPending = YES;
+}
+- (void)failPDFDownload:(WKDownload *)download message:(NSString *)message {
+    NSDictionary *context = [self.downloads objectForKey:download];
+    GewuBrowserPage *page = context[@"page"];
+    if (!page) return;
+    if (GewuBrowserPublicURL(context[@"source"])) page.failedURL = context[@"source"];
+    [self cancelPDFDownloadsForPage:page];
+    if (![self tabForPage:page]) return;
+    page.errorMessage = message;
+    if (page == self.currentPage) [self emitState]; else [self emitTabs];
+}
 - (void)webView:(WKWebView *)webView navigationAction:(WKNavigationAction *)navigationAction didBecomeDownload:(WKDownload *)download {
-    [self registerDownload:download]; [self returnToRetainedHomeInTab:[self tabForPage:[self pageForView:webView]]];
+    [self registerPageDownload:download view:webView];
 }
 - (void)webView:(WKWebView *)webView navigationResponse:(WKNavigationResponse *)navigationResponse didBecomeDownload:(WKDownload *)download {
-    [self registerDownload:download]; [self returnToRetainedHomeInTab:[self tabForPage:[self pageForView:webView]]];
+    [self registerPageDownload:download view:webView];
 }
 - (void)download:(WKDownload *)download willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request decisionHandler:(void (^)(WKDownloadRedirectPolicy))decisionHandler {
     decisionHandler(GewuBrowserPublicURL(request.URL) ? WKDownloadRedirectPolicyAllow : WKDownloadRedirectPolicyCancel);
 }
 - (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response suggestedFilename:(NSString *)suggestedFilename completionHandler:(void (^)(NSURL *))completionHandler {
+    NSMutableDictionary *context = [self.downloads objectForKey:download];
+    if (!context || self.invalidated) { completionHandler(nil); return; }
+    GewuBrowserPage *page = context[@"page"];
+    NSString *mime = response.MIMEType.lowercaseString ?: @"";
+    BOOL binary = [@[@"application/octet-stream", @"binary/octet-stream"] containsObject:mime];
+    BOOL pdf = GewuBrowserPDFResponse(response) || binary
+        || ([suggestedFilename.pathExtension.lowercaseString isEqual:@"pdf"] && ![mime isEqual:@"text/html"]);
+    if (page && pdf) {
+        if (!GewuBrowserPublicURL(response.URL) && !([response.URL isEqual:page.blobRequestURL] && GewuBrowserBlobURL(response.URL, page.blobSourceURL))) {
+            completionHandler(nil); [self failPDFDownload:download message:@"The PDF returned an unsupported address."]; return;
+        }
+        if (response.expectedContentLength > 128 * 1024 * 1024) {
+            completionHandler(nil); [self failPDFDownload:download message:@"This PDF exceeds the 128 MB preview limit. Use Save Download to choose a file location."]; return;
+        }
+        NSURL *directory = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[@"gewu-browser-pdf-" stringByAppendingString:NSUUID.UUID.UUIDString]] isDirectory:YES];
+        if (![NSFileManager.defaultManager createDirectoryAtURL:directory withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:nil]) {
+            completionHandler(nil); [self failPDFDownload:download message:@"Could not prepare the PDF preview."]; return;
+        }
+        context[@"directory"] = directory; context[@"staging"] = [directory URLByAppendingPathComponent:@"preview.pdf"];
+        context[@"preview"] = @YES; context[@"binary"] = @(binary);
+        context[@"filename"] = suggestedFilename.lastPathComponent.length ? suggestedFilename.lastPathComponent : @"Article.pdf";
+        context[@"source"] = GewuBrowserPublicURL(response.URL) ? response.URL : page.blobSourceURL;
+        page.openingPDF = YES; page.pdfProgress = 0; page.errorMessage = nil;
+        __weak typeof(self) weakSelf = self;
+        __weak WKDownload *weakDownload = download;
+        NSDate *started = NSDate.date;
+        context[@"timer"] = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+            typeof(self) self = weakSelf; WKDownload *download = weakDownload;
+            NSDictionary *current = [self.downloads objectForKey:download];
+            if (!current) { [timer invalidate]; return; }
+            NSNumber *size = [NSFileManager.defaultManager attributesOfItemAtPath:[current[@"staging"] path] error:nil][NSFileSize];
+            if (size.unsignedLongLongValue > 128 * 1024 * 1024 || -started.timeIntervalSinceNow > 120) {
+                [self failPDFDownload:download message:@"The PDF preview exceeded its size or time limit. Retry or use Save Download."]; return;
+            }
+            page.pdfProgress = download.progress.fractionCompleted;
+            if (page == self.currentPage) [self emitState]; else [self emitTabs];
+        }];
+        if (page == self.currentPage) [self emitState]; else [self emitTabs];
+        completionHandler(context[@"staging"]); return;
+    }
+    // Other attachments and the explicit Save Download command still ask for a
+    // destination. Never silently write them to Downloads.
+    page.downloadTransitionPending = NO;
+    if (page) { [context removeObjectForKey:@"page"]; [self returnToRetainedHomeInTab:[self tabForPage:page]]; }
+    if (!self.workspace.window || self.workspace.window.attachedSheet) { completionHandler(nil); [self.downloads removeObjectForKey:download]; return; }
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.title = @"Save Download";
     panel.nameFieldStringValue = suggestedFilename.lastPathComponent.length ? suggestedFilename.lastPathComponent : @"Download";
@@ -1210,6 +1412,41 @@
 }
 - (void)downloadDidFinish:(WKDownload *)download {
     NSDictionary *context = [self.downloads objectForKey:download];
+    if (!context) return;
+    if ([context[@"preview"] boolValue]) {
+        [context[@"timer"] invalidate];
+        GewuBrowserPage *page = context[@"page"];
+        NSURL *file = context[@"staging"], *directory = context[@"directory"];
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSData *data = [NSData dataWithContentsOfURL:file options:NSDataReadingMappedIfSafe error:nil];
+            NSData *prefix = [data subdataWithRange:NSMakeRange(0, MIN(data.length, 1024))];
+            BOOL valid = data.length > 0 && data.length <= 128 * 1024 * 1024
+                && [prefix rangeOfData:[@"%PDF-" dataUsingEncoding:NSASCIIStringEncoding] options:0 range:NSMakeRange(0, prefix.length)].location != NSNotFound;
+            [NSFileManager.defaultManager removeItemAtURL:directory error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf;
+                if (!self || self.invalidated || [self.downloads objectForKey:download] != context) return;
+                if (!valid && [context[@"binary"] boolValue] && data.length && data.length <= 128 * 1024 * 1024) {
+                    [self.downloads removeObjectForKey:download];
+                    page.openingPDF = NO; page.downloadTransitionPending = NO;
+                    [self saveDisplayedPDF:@{@"data":data, @"filename":context[@"filename"]}];
+                    [self emitState]; return;
+                }
+                if (!valid) { [self failPDFDownload:download message:@"The website returned a file that is not a readable PDF. Return to the website and check its download or sign-in page."]; return; }
+                [self.downloads removeObjectForKey:download];
+                page.openingPDF = NO; page.downloadTransitionPending = NO;
+                GewuBrowserTab *tab = [self tabForPage:page];
+                if (!tab || tab.currentPage != page || ![(page.captureDocumentID ?: @"") isEqual:context[@"generation"]]) return;
+                page.pendingPDFDocument = [@{@"data":data, @"filename":context[@"filename"], @"date":NSDate.date} mutableCopy];
+                page.navigationRequestedDownload = NO;
+                page.pdfNavigation = [page.view loadData:data MIMEType:@"application/pdf" characterEncodingName:@"UTF-8" baseURL:context[@"source"]];
+                if (tab.contentPendingFromHome) tab.pendingHomeNavigation = page.pdfNavigation;
+                if (page == self.currentPage) [self emitState]; else [self emitTabs];
+            });
+        });
+        return;
+    }
     NSURL *target = context[@"destination"], *staging = context[@"staging"];
     NSFileManager *manager = [NSFileManager defaultManager];
     NSError *error = nil;
@@ -1231,6 +1468,10 @@
 }
 - (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
     NSDictionary *context = [self.downloads objectForKey:download];
+    if (!context) return;
+    if ([context[@"preview"] boolValue]) {
+        [self failPDFDownload:download message:@"The PDF download failed. Return to the website and retry after checking its session and network."]; return;
+    }
     NSURL *directory = context[@"directory"];
     if (directory) [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
     [self.downloads removeObjectForKey:download];
@@ -1247,7 +1488,13 @@
     for (GewuBrowserCapture *capture in self.captures.allValues) [capture cancel];
     [self.captures removeAllObjects]; [self.captureSnapshots removeAllObjects];
     [self.suggestionsView removeFromSuperview]; self.suggestionsView = nil; self.suggestionItems = nil;
-    for (WKDownload *download in self.downloads.keyEnumerator.allObjects) [download cancel:nil];
+    for (WKDownload *download in self.downloads.keyEnumerator.allObjects) {
+        NSDictionary *context = [self.downloads objectForKey:download];
+        [context[@"timer"] invalidate]; download.delegate = nil;
+        NSURL *directory = context[@"directory"];
+        [download cancel:^(NSData *resume) { if (directory) [NSFileManager.defaultManager removeItemAtURL:directory error:nil]; }];
+    }
+    [self.downloads removeAllObjects];
     for (GewuBrowserTab *tab in self.tabs) {
         [self disposePage:tab.homePage]; [self disposePage:tab.contentPage];
         [tab.session.entries removeAllObjects];

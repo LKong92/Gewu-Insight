@@ -39,7 +39,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from . import publication_jobs
+from . import publication_jobs, scholar_access, author_metadata_work
 from .publication_deletion import delete_publications
 from .recycle import delete_recycle_selection, preview_recycle_selection
 from .publication_errors import report_publication_error
@@ -191,7 +191,7 @@ LIBRARY_IMPORT_JOBS_LOCK = threading.Lock()
 MY_PUBLICATION_METRICS_JOBS: dict[str, dict[str, Any]] = {}
 MY_PUBLICATION_METRICS_JOBS_LOCK = threading.Lock()
 AUTHOR_MONITOR_ENRICHMENT_JOBS: dict[str, dict[str, Any]] = {}
-AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK = threading.Lock()
+AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK = threading.RLock()
 ACTIVE_FETCH_DATES: set[str] = set()
 ACTIVE_THEME_FETCH_DATES: set[str] = set()
 ACTIVE_AUTHOR_MONITOR_IDS: set[int] = set()
@@ -467,6 +467,7 @@ def run_ui_server(
         threading.Thread(target=run_auto_arxiv_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_subject_monitor_scheduler, args=(db_path,), daemon=True).start()
         threading.Thread(target=run_auto_author_monitor_scheduler, args=(db_path,), daemon=True).start()
+        threading.Thread(target=author_metadata_work.run_scheduler, args=(db_path,), daemon=True).start()
         publication_jobs.start_workers(db_path)
 
     documentation_mode_enabled = documentation_mode
@@ -491,6 +492,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     documentation_mode = False
 
     server_version = "GewuInsightUI/0.1"
+
+    def handle(self):
+        with scholar_access.database(self.configured_db_path):
+            super().handle()
 
     def end_headers(self):
         if getattr(self, "workspace_cookie_pending", False):
@@ -2027,6 +2032,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                     "unreadCount": sum(int(item.get("unread_count") or 0) for item in authors),
                     "checkedAt": now_iso(),
                     "scholarCooldown": google_scholar_global_cooldown(storage),
+                    "metadataWork": author_metadata_work.snapshot(storage),
                     "indexReady": bool(cache_status.get("ready")),
                     "indexPendingCount": int(cache_status.get("pending_count") or 0),
                 }
@@ -2538,6 +2544,10 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(read_state)
 
     def handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
+        with AUTHOR_MONITOR_ENRICHMENT_JOBS_LOCK:
+            self._handle_enrich_author_monitor(payload)
+
+    def _handle_enrich_author_monitor(self, payload: dict[str, Any]) -> None:
         author_monitor_id = int(payload.get("author_id") or 0)
         paper_id = clean_text(payload.get("paper_id") or "")
         force = bool(payload.get("force"))
@@ -2548,6 +2558,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             priority_queued = bool(
                 paper_id
                 and force
+                and not active.get("automatic")
                 and queue_author_monitor_enrichment_priority(str(active["job_id"]), paper_id)
             )
             self.send_json({
@@ -9693,10 +9704,10 @@ def run_auto_author_monitor_once(db_path: Path, run_date: date) -> dict[str, Any
     }
     storage = Storage(db_path)
     try:
-        storage.set_setting(
-            AUTO_AUTHOR_MONITOR_STATUS_SETTING,
-            json.dumps(status, ensure_ascii=False, sort_keys=True),
-        )
+        previous = json_setting(storage, AUTO_AUTHOR_MONITOR_STATUS_SETTING, {})
+        if not results and isinstance(previous, dict) and previous.get("run_date") == run_date.isoformat():
+            status = {**previous, "last_scheduler_check_at": now_iso(), "scholar_cooldown": global_cooldown}
+        storage.set_setting(AUTO_AUTHOR_MONITOR_STATUS_SETTING, json.dumps(status, ensure_ascii=False, sort_keys=True))
     finally:
         storage.close()
     return status
@@ -14481,6 +14492,9 @@ def start_google_scholar_global_cooldown(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = now or datetime.now(local_timezone())
+    existing = google_scholar_global_cooldown(storage, now=current)
+    if existing.get("active"):
+        return existing
     until = current + timedelta(seconds=GOOGLE_SCHOLAR_GLOBAL_COOLDOWN_SECONDS)
     payload = {
         "until": until.isoformat(timespec="seconds"),
@@ -14511,6 +14525,15 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         author_monitor_id = int(authors[0]["id"]) if authors else 0
     if author_monitor_id and not any(int(item["id"]) == int(author_monitor_id) for item in authors):
         author_monitor_id = 0
+    if storage.author_monitor_card_cache_status().get("ready"):
+        cards = storage.list_author_monitor_cached_cards(author_monitor_id)
+        return {
+            "authors": authors, "papers": annotate_papers_with_library_status(storage, cards),
+            "selectedAuthorId": author_monitor_id, "paperScopeAuthorId": author_monitor_id,
+            "unreadCount": sum(bool(card.get("author_unread")) for card in cards),
+            "checkedAt": now_iso(), "scholarCooldown": google_scholar_global_cooldown(storage),
+            "metadataWork": author_metadata_work.snapshot(storage),
+        }
     # Paper lists are local SQLite data, so load only the selected author here.
     # The client keeps a small LRU cache for fast switching; this avoids parsing
     # and transferring every monitored paper when Author Monitor first opens.
@@ -14538,6 +14561,7 @@ def author_monitor_snapshot(storage: Storage, *, author_monitor_id: int = 0) -> 
         "papers": paper_payloads,
         "selectedAuthorId": int(author_monitor_id),
         "paperScopeAuthorId": int(author_monitor_id),
+        "metadataWork": author_metadata_work.snapshot(storage),
         "unreadCount": sum(1 for paper in paper_payloads if paper.get("author_unread")),
         "checkedAt": now_iso(),
         "scholarCooldown": google_scholar_global_cooldown(storage),
@@ -14561,6 +14585,7 @@ def author_monitor_index_snapshot(storage: Storage) -> dict[str, Any]:
         "scholarCooldown": google_scholar_global_cooldown(storage),
         "indexReady": bool(status.get("ready")),
         "indexTotal": int(status.get("total_count") or 0),
+        "metadataWork": author_metadata_work.snapshot(storage),
         "indexReadyCount": int(status.get("ready_count") or 0),
         "indexPendingCount": int(status.get("pending_count") or 0),
     }
@@ -14713,6 +14738,7 @@ def author_monitor_cooldown_active(monitor: dict[str, Any], now: datetime | None
     return current < until.astimezone(current.tzinfo)
 
 
+@scholar_access.for_database
 def refresh_author_monitor_for_db(
     db_path: Path,
     author_monitor_id: int,
@@ -15748,6 +15774,7 @@ def google_scholar_request_with_spacing(
 ) -> Any:
     global GOOGLE_SCHOLAR_LAST_REQUEST_AT
     with GOOGLE_SCHOLAR_REQUEST_LOCK:
+        scholar_access.check()
         if GOOGLE_SCHOLAR_LAST_REQUEST_AT > 0:
             target_interval = random.uniform(
                 GOOGLE_SCHOLAR_REQUEST_INTERVAL_MIN_SECONDS,
@@ -15756,8 +15783,19 @@ def google_scholar_request_with_spacing(
             elapsed = time.monotonic() - GOOGLE_SCHOLAR_LAST_REQUEST_AT
             if elapsed < target_interval:
                 time.sleep(target_interval - elapsed)
+        scholar_access.check()
         try:
-            return request_with_retries(method, url, **kwargs)
+            # No retry inside this critical section may bypass a new cooldown.
+            kwargs["max_retries"] = 1
+            response = request_with_retries(method, url, **kwargs)
+            if is_google_scholar_block_page(response.text, response.url):
+                raise GoogleScholarBlockedError(google_scholar_block_message())
+            return response
+        except Exception as exc:
+            if isinstance(exc, GoogleScholarBlockedError) or is_google_scholar_block_error(exc):
+                scholar_access.blocked(google_scholar_block_message())
+                raise GoogleScholarBlockedError(google_scholar_block_message()) from exc
+            raise
         finally:
             GOOGLE_SCHOLAR_LAST_REQUEST_AT = time.monotonic()
 
@@ -19350,6 +19388,7 @@ def create_author_monitor_enrichment_job(
     force: bool = False,
     identifiers_only: bool = False,
     max_papers: int = 0,
+    automatic: bool = False,
 ) -> str:
     job_id = uuid.uuid4().hex[:12]
     now = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -19361,6 +19400,7 @@ def create_author_monitor_enrichment_job(
             "force": bool(force),
             "identifiers_only": bool(identifiers_only),
             "max_papers": max(0, int(max_papers or 0)),
+            "automatic": bool(automatic),
             "status": "queued",
             "stage": "queued",
             "started_at": now,
@@ -19517,6 +19557,8 @@ def run_author_monitor_enrichment_job(
     force: bool = False,
     identifiers_only: bool = False,
     max_papers: int = 0,
+    paper_ids: list[str] | None = None,
+    time_budget_seconds: float = 0,
 ) -> None:
     storage = Storage(db_path)
     matched = 0
@@ -19525,7 +19567,8 @@ def run_author_monitor_enrichment_job(
     skipped = 0
     errors: list[str] = []
     try:
-        rows = storage.list_author_monitor_papers(int(author_monitor_id or 0))
+        rows = ([paper for pid in paper_ids if (paper := storage.get_paper(pid))]
+                if paper_ids is not None else storage.list_author_monitor_papers(int(author_monitor_id or 0)))
         selected_paper_id = clean_text(paper_id)
         if selected_paper_id:
             rows = [
@@ -19583,7 +19626,10 @@ def run_author_monitor_enrichment_job(
             skipped=skipped,
         )
         index = 0
+        started = time.monotonic()
         while True:
+            if index and time_budget_seconds and time.monotonic() - started >= time_budget_seconds:
+                break
             promote_priority_requests()
             if not work_queue:
                 break
@@ -35833,8 +35879,7 @@ INDEX_HTML = """<!doctype html>
       authorMonitorImportPoller: 0,
       authorMonitorEnrichmentJobId: "",
       authorMonitorEnrichmentPoller: 0,
-      authorMonitorEnrichmentStarted: false,
-      authorMonitorEnrichmentScheduled: false,
+      authorMonitorMetadataWork: {},
       authorMonitorEnrichmentPendingRequest: null,
       authorMonitorIdentifierRequests: new Set(),
       authorMonitorLoadedAt: 0,
@@ -51625,6 +51670,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyAuthorMonitorSnapshot(data = {}) {
+      if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
       const paperScopeAuthorId = Number(data.paperScopeAuthorId || 0);
       const preserveFullIndex = state.authorMonitorIndexLoaded && paperScopeAuthorId > 0;
       if (!preserveFullIndex) {
@@ -51720,6 +51766,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function applyAuthorMonitorIndex(data = {}) {
+      if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
       if (!data.indexReady || !Array.isArray(data.papers)) return false;
       if (Array.isArray(data.authors)) {
         state.authorMonitors = data.authors;
@@ -51772,13 +51819,9 @@ INDEX_HTML = """<!doctype html>
       const rememberedPaperId = String(
         state.authorMonitorSelectedPaperByAuthor.get(requestedId) || ""
       );
-      if (rememberedPaperId && visible.some((paper) => paper.paper_id === rememberedPaperId)) {
-        state.authorMonitorSelectedPaperId = rememberedPaperId;
-      } else if (
-        !state.authorMonitorSelectedPaperId
-        || !visible.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)
-      ) {
-        state.authorMonitorSelectedPaperId = visible[0]?.paper_id || "";
+      if (!visible.some((paper) => paper.paper_id === state.authorMonitorSelectedPaperId)) {
+        state.authorMonitorSelectedPaperId = visible.some((paper) => paper.paper_id === rememberedPaperId)
+          ? rememberedPaperId : (visible[0]?.paper_id || "");
       }
       state.reportSelectedPaperId = state.authorMonitorSelectedPaperId;
       state.authorMonitorLoaded = true;
@@ -51787,7 +51830,7 @@ INDEX_HTML = """<!doctype html>
       persistAuthorMonitorSelectedId(requestedId);
       updateAuthorMonitorTopDot();
       syncAuthorMonitorBackgroundScholarStatus();
-      if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+      if (state.mode === "author") refreshAuthorMonitorInPlace();
       return true;
     }
 
@@ -51995,7 +52038,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshAuthorMonitorSummary() {
-      if (state.authorMonitorLoading || state.authorMonitorRefreshing) return;
+      if (state.authorMonitorLoading || state.authorMonitorRefreshing || state.authorMonitorSummaryLoading) return;
+      state.authorMonitorSummaryLoading = true;
       try {
         const previousSignature = state.authorMonitors.map(
           (item) => [
@@ -52012,6 +52056,15 @@ INDEX_HTML = """<!doctype html>
           ].join(":")
         ).join("|");
         const data = await fetchAuthorMonitorReadSafeJson("/api/author-monitor?summary=1", 12000);
+        const metadataChanged = Boolean(data.metadataWork?.completed_at)
+          && data.metadataWork.completed_at !== state.authorMonitorMetadataWork?.completed_at;
+        if (metadataChanged) {
+          const invalidate = paper => { paper.full_detail = false; };
+          state.authorMonitorPapers.forEach(invalidate);
+          state.authorMonitorPaperCache.forEach(entry => (entry.papers || []).forEach(invalidate));
+        }
+        if (data.metadataWork) state.authorMonitorMetadataWork = data.metadataWork;
+        syncAuthorMonitorActivityDisplay();
         state.authorMonitors = Array.isArray(data.authors) ? data.authors : [];
         if (data.scholarCooldown && typeof data.scholarCooldown === "object") {
           state.scholarGlobalCooldown = data.scholarCooldown;
@@ -52041,6 +52094,7 @@ INDEX_HTML = """<!doctype html>
         syncAuthorMonitorBackgroundScholarStatus(state.authorMonitors);
         if (
           previousPaperSignature !== nextPaperSignature
+          || metadataChanged
           || data.indexReady === false
           || Number(data.indexPendingCount || 0) > 0
         ) {
@@ -52048,7 +52102,7 @@ INDEX_HTML = """<!doctype html>
         }
         if (previousSignature !== nextSignature) {
           if (state.mode === "author") {
-            renderAuthorMonitor({preserveScroll: true});
+            refreshAuthorMonitorInPlace();
           }
         }
         const pendingImport = state.authorMonitors.find(
@@ -52060,6 +52114,9 @@ INDEX_HTML = """<!doctype html>
       } catch (_error) {
         // Author monitoring continues in the server even when this small badge
         // refresh cannot reach the local API.
+      } finally {
+        state.authorMonitorSummaryLoading = false;
+        syncAuthorMonitorActivityDisplay();
       }
     }
 
@@ -52074,7 +52131,7 @@ INDEX_HTML = """<!doctype html>
       } else {
         window.setTimeout(prefetchIndex, 700);
       }
-      state.authorMonitorSummaryTimer = window.setInterval(refreshAuthorMonitorSummary, 60000);
+      state.authorMonitorSummaryTimer = window.setInterval(refreshAuthorMonitorSummary, 10000);
     }
 
     function selectedAuthorMonitor() {
@@ -52488,6 +52545,7 @@ INDEX_HTML = """<!doctype html>
       const citationSource = String(paper.citation_count_source || "Citation source");
       article.className = `author-paper-card${selected ? " report-selected" : ""}${authorMonitorPaperIsUnread(paper) ? " author-unread" : ""}${conferenceAbstract ? " conference-abstract" : ""}`;
       article.dataset.paperId = paper.paper_id || "";
+      article._paperModel = paper;
       article.tabIndex = -1;
       article.setAttribute("role", "option");
       article.setAttribute("aria-selected", selected ? "true" : "false");
@@ -52551,10 +52609,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wireAuthorMonitorIncrementalRender(list, papers) {
-      if (!list) return;
+      if (!list || list.dataset.authorScrollWired) return;
+      list.dataset.authorScrollWired = "1";
       list.addEventListener("scroll", () => {
         state.authorMonitorListScrollTop = Number(list.scrollTop || 0);
         if (list.scrollTop + list.clientHeight < list.scrollHeight - 640) return;
+        const papers = authorMonitorPartitionedPapers().articles;
         const rendered = Number(list.dataset.renderedCount || 0);
         if (rendered >= papers.length) return;
         appendAuthorMonitorPaperCards(
@@ -52590,15 +52650,121 @@ INDEX_HTML = """<!doctype html>
       );
     }
 
-    function authorMonitorActivityStatusClass(channel = "primary") {
+    function refreshAuthorMonitorInPlace() {
+      if (state.mode !== "author") return;
+      const list = $("authorMonitorPaperList");
+      if (!list) {
+        renderAuthorMonitor({preserveScroll: true});
+        return;
+      }
+      const focused = document.activeElement;
+      const partition = authorMonitorPartitionedPapers();
+      for (const [container, papers] of [[list, partition.articles], [document.querySelector('[data-role="conference-cards"]'), partition.conferences]]) {
+        if (!container) continue;
+        const beforeScroll = container.scrollTop;
+        const nodes = [...container.querySelectorAll(".author-paper-card")];
+        const top = container.getBoundingClientRect().top;
+        const anchor = nodes.find(node => node.getBoundingClientRect().bottom > top);
+        const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+        const existing = new Map(nodes.map(node => [node.dataset.paperId, node]));
+        const count = Math.min(papers.length, Math.max(AUTHOR_MONITOR_INITIAL_CARD_COUNT, nodes.length,
+          papers.findIndex(p => p.paper_id === state.authorMonitorSelectedPaperId) + 1,
+          papers.findIndex(p => p.paper_id === anchor?.dataset.paperId) + 1));
+        const wanted = new Set(papers.slice(0, count).map(p => p.paper_id));
+        nodes.filter(node => !wanted.has(node.dataset.paperId)).forEach(node => node.remove());
+        if (count) container.querySelectorAll(".author-monitor-empty").forEach(node => node.remove());
+        let cursor = container.firstElementChild;
+        for (const paper of papers.slice(0, count)) {
+          const node = existing.get(paper.paper_id) || renderAuthorMonitorPaperCard(paper);
+          if (node._paperModel) Object.assign(node._paperModel, paper);
+          const title = node.querySelector(".author-paper-title");
+          if (title && title.dataset.title !== paper.title) {title.innerHTML = publicationTitleMarkup(paper.title || "Untitled paper"); title.dataset.title = paper.title;}
+          const citation = node.querySelector(".author-paper-citation");
+          if (citation) citation.textContent = authorMonitorCitationText(paper);
+          const cites = node.querySelector(".author-paper-scholar-citations");
+          if (cites && paper.citation_count != null) cites.textContent = `Cited by ${paper.citation_count}`;
+          node.classList.toggle("author-unread", authorMonitorPaperIsUnread(paper));
+          node.classList.toggle("report-selected", paper.paper_id === state.authorMonitorSelectedPaperId);
+          node.setAttribute("aria-selected", paper.paper_id === state.authorMonitorSelectedPaperId ? "true" : "false");
+          if (node !== cursor) container.insertBefore(node, cursor);
+          cursor = node.nextElementSibling;
+        }
+        container.dataset.renderedCount = String(count);
+        if (!count && !container.querySelector(".author-monitor-empty")) {
+          const empty = document.createElement("div");empty.className = "author-monitor-empty";empty.textContent = "No monitored papers match this view.";container.appendChild(empty);
+        }
+        container.scrollTop = beforeScroll;
+        if (anchor?.isConnected) container.scrollTop += anchor.getBoundingClientRect().top - top - offset;
+        if (container === list) {
+          state.authorMonitorRenderedCount = count;
+          state.authorMonitorListScrollTop = container.scrollTop;
+          wireAuthorMonitorIncrementalRender(list, papers);
+        }
+      }
+      // Keep the rail, detail editor, open menus and native preview mounted.
+      document.querySelectorAll("#authorMonitorAuthors [data-author-id]").forEach(row => {
+        const id = Number(row.dataset.authorId);
+        const author = state.authorMonitors.find(a => Number(a.id) === id);
+        const unread = id ? Number(author?.unread_count || 0) : state.authorMonitors.reduce((n, a) => n + Number(a.unread_count || 0), 0);
+        let badge = row.querySelector(".author-monitor-unread");
+        if (!unread) {badge?.remove(); return;}
+        if (!badge) {badge = document.createElement("span");badge.className = "author-monitor-unread";row.appendChild(badge);}
+        badge.textContent = String(unread);
+      });
+      if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});
+      syncAuthorMonitorActivityDisplay();
+      updateAuthorMonitorTopDot();
+    }
+
+    function authorMonitorIdleActivity(channel = "primary") {
+      if (channel === "secondary") {
+        const work = state.authorMonitorMetadataWork || {};
+        const pending = Number(work.eligible || 0);
+        const waiting = Number(work.waiting_retry || 0);
+        const retry = work.retry_at ? ` · Retry after ${autoStatusTime(work.retry_at)}` : "";
+        if (work.status === "running") return {text: `Paper metadata · ${Number(work.current || 0)} / ${Number(work.total || 0)} · ${pending} pending`, live: true};
+        if (work.status === "daily_limit") return {text: `Paper metadata · Daily limit reached · ${pending} pending · Continue ${autoStatusTime(work.next_run_at)}`, live: false};
+        if (work.status === "error") return {text: `Paper metadata check failed · Retry ${autoStatusTime(work.next_run_at)}`, live: false};
+        if (pending) return {text: `Paper metadata · ${pending} pending · ${waiting} waiting for retry · Continue ${autoStatusTime(work.next_run_at)}`, live: false};
+        if (waiting) return {text: `Paper metadata · ${waiting} waiting for retry${retry}`, live: false};
+        return {text: work.status === "complete" ? "Paper metadata is complete." : "Paper metadata · Waiting for background check", live: false};
+      }
+      const authors = state.authorMonitors || [];
+      const selected = selectedAuthorMonitor();
+      if (scholarGlobalCooldownActive() && (!selected || authorMonitorIsScholar(selected))) return {text: scholarGlobalCooldownText(), live: false};
+      const scope = selected ? [selected] : authors;
+      const active = scope.find(authorMonitorIsBackgroundScholarJob);
+      if (active) return {text: `${active.name || "Author"} · ${active.message || "Checking publications..."}`, live: true};
+      const failed = scope.find(a => ["error", "cooldown"].includes(a.status));
+      if (failed) return {text: `${failed.name || "Author"} · ${failed.message || "Last check failed"}`, live: false};
+      const times = scope.map(a => a.last_success_at).filter(Boolean).sort();
+      return {text: times.length ? `Publications · Last successful check ${autoStatusTime(times[times.length - 1])}${selected ? ` · ${selected.message || ""}` : ` · ${times.length} authors`}` : "Publications · Waiting for scheduled check", live: false};
+    }
+
+    function authorMonitorDisplayedActivity(channel = "primary") {
       const secondary = channel === "secondary";
-      const base = `library-activity-status${secondary ? " secondary" : ""}`;
       const text = secondary ? state.authorMonitorSecondaryActivityText : state.authorMonitorActivityText;
       const live = secondary ? state.authorMonitorSecondaryActivityLive : state.authorMonitorActivityLive;
-      if (!text) return base;
+      return text ? {text, live} : authorMonitorIdleActivity(channel);
+    }
+
+    function authorMonitorActivityStatusClass(channel = "primary") {
+      const base = `library-activity-status${channel === "secondary" ? " secondary" : ""}`;
+      const {text, live} = authorMonitorDisplayedActivity(channel);
       if (live) return `${base} live`;
-      if (/failed|could not|error/i.test(text)) return `${base} err`;
-      return `${base} ok`;
+      if (/failed|could not|error|paused/i.test(text)) return `${base} err`;
+      return text ? `${base} ok` : base;
+    }
+
+    function syncAuthorMonitorActivityDisplay() {
+      for (const channel of ["primary", "secondary"]) {
+        const element = $(channel === "secondary" ? "authorMonitorSecondaryActivityStatus" : "authorMonitorActivityStatus");
+        if (!element) continue;
+        const {text} = authorMonitorDisplayedActivity(channel);
+        element.textContent = text;
+        element.title = text;
+        element.className = authorMonitorActivityStatusClass(channel);
+      }
     }
 
     function updateAuthorMonitorActivityStatus(text = "", options = {}) {
@@ -52621,6 +52787,7 @@ INDEX_HTML = """<!doctype html>
         status.title = text;
         status.className = authorMonitorActivityStatusClass(secondary ? "secondary" : "primary");
       }
+      syncAuthorMonitorActivityDisplay();
       if (text && !options.live && options.clear !== false) {
         const scheduledKind = state[kindKey];
         state[timerKey] = window.setTimeout(() => {
@@ -52634,6 +52801,7 @@ INDEX_HTML = """<!doctype html>
             current.title = "";
             current.className = authorMonitorActivityStatusClass(secondary ? "secondary" : "primary");
           }
+          syncAuthorMonitorActivityDisplay();
         }, Number(options.delay || 2200));
       }
     }
@@ -52705,14 +52873,9 @@ INDEX_HTML = """<!doctype html>
           const unresolved = Number(job.unresolved || 0);
           const message = Number(job.total || 0)
             ? `Metadata complete · ${matched} matched${unresolved ? ` · ${unresolved} unresolved` : ""}`
-            : "Imported-paper metadata is up to date.";
+            : "No eligible papers in this batch; recent attempts remain deferred.";
           updateAuthorMonitorActivityStatus(message, {live: false});
-          const snapshotRes = await fetch(`/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`);
-          const snapshot = await snapshotRes.json();
-          if (snapshotRes.ok) {
-            applyAuthorMonitorSnapshot(snapshot);
-            if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
-          }
+          prefetchAuthorMonitorIndex({force: true}).catch(() => {});
           state.authorMonitorIdentifierRequests.clear();
         } else {
           const message = Array.isArray(job.errors) && job.errors.length
@@ -52726,7 +52889,7 @@ INDEX_HTML = """<!doctype html>
         if (pendingRequest) {
           startAuthorMonitorEnrichment(pendingRequest.authorId, pendingRequest);
         } else if (state.mode === "author") {
-          renderAuthorMonitor({preserveScroll: true});
+          refreshAuthorMonitorInPlace();
         }
       } catch (error) {
         state.authorMonitorEnrichmentJobId = "";
@@ -52743,34 +52906,9 @@ INDEX_HTML = """<!doctype html>
         && Number(request.maxPapers || 0) === Number(job?.max_papers || 0);
     }
 
-    function scheduleAuthorMonitorIdleEnrichment(authorId = state.authorMonitorSelectedId) {
-      const targetAuthorId = Number(authorId || 0);
-      if (
-        targetAuthorId <= 0
-        || state.authorMonitorEnrichmentStarted
-        || state.authorMonitorEnrichmentScheduled
-      ) {
-        return;
-      }
-      state.authorMonitorEnrichmentScheduled = true;
-      const startWhenStillUseful = () => {
-        window.setTimeout(() => {
-          state.authorMonitorEnrichmentScheduled = false;
-          if (
-            state.mode !== "author"
-            || state.authorMonitorEnrichmentStarted
-            || Number(state.authorMonitorSelectedId || 0) !== targetAuthorId
-          ) {
-            return;
-          }
-          startAuthorMonitorEnrichment(targetAuthorId, {maxPapers: 80});
-        }, 1800);
-      };
-      if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(startWhenStillUseful, {timeout: 2200});
-      } else {
-        window.setTimeout(startWhenStillUseful, 300);
-      }
+    function scheduleAuthorMonitorIdleEnrichment() {
+      // The bounded server worker owns automatic work, independently of tabs.
+      syncAuthorMonitorActivityDisplay();
     }
 
     async function startAuthorMonitorEnrichment(authorId = state.authorMonitorSelectedId, options = {}) {
@@ -52785,7 +52923,6 @@ INDEX_HTML = """<!doctype html>
         state.authorMonitorEnrichmentPendingRequest = request;
         return;
       }
-      state.authorMonitorEnrichmentStarted = true;
       updateAuthorMonitorActivityStatus("Preparing imported-paper metadata...", {live: true, clear: false});
       try {
         const res = await fetch("/api/author-monitor/enrich", {
@@ -53316,8 +53453,8 @@ INDEX_HTML = """<!doctype html>
             <div class="author-monitor-detail-body library-detail" id="authorMonitorDetailBody"></div>
           </aside>
           <div class="author-monitor-status-bar">
-            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : state.authorMonitorActivityText || "")}</span>
-            <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(state.authorMonitorSecondaryActivityText || "")}">${escapeHtml(state.authorMonitorSecondaryActivityText || "")}</span>
+            <span class="${scholarPauseApplies ? "library-activity-status err" : authorMonitorActivityStatusClass()}" id="authorMonitorActivityStatus" title="${escapeAttr(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}">${escapeHtml(scholarPauseApplies ? scholarGlobalCooldownText() : authorMonitorDisplayedActivity().text)}</span>
+            <span class="${authorMonitorActivityStatusClass("secondary")}" id="authorMonitorSecondaryActivityStatus" title="${escapeAttr(authorMonitorDisplayedActivity("secondary").text)}">${escapeHtml(authorMonitorDisplayedActivity("secondary").text)}</span>
           </div>
         </div>
       `;
@@ -53509,12 +53646,10 @@ INDEX_HTML = """<!doctype html>
       closeAnalysis();
       stopArxivUpdateCountdown();
       setPrimaryView("author");
-      const cacheIsFresh = state.authorMonitorLoaded
-        && Date.now() - Number(state.authorMonitorLoadedAt || 0) < AUTHOR_MONITOR_PAPER_CACHE_TTL_MS
-        && authorMonitorScopeHasExpectedPapers();
-      if (cacheIsFresh) {
+      const hasCachedView = state.authorMonitorLoaded && authorMonitorScopeHasExpectedPapers();
+      if (hasCachedView) {
         renderAuthorMonitor();
-        updateAuthorMonitorActivityStatus("", {live: false});
+        syncAuthorMonitorActivityDisplay();
         refreshAuthorMonitorSummary();
         const pendingImport = state.authorMonitors.find(
           (item) => ["idle", "queued", "refreshing"].includes(String(item.status || ""))
@@ -53533,7 +53668,7 @@ INDEX_HTML = """<!doctype html>
         const requestedId = Number(state.authorMonitorSelectedId) >= 0
           ? Number(state.authorMonitorSelectedId)
           : initialAuthorMonitorSelectedId();
-        await loadAuthorMonitorScope(requestedId, {force: true});
+        await loadAuthorMonitorScope(requestedId, {force: false});
         updateAuthorMonitorActivityStatus("Author Monitor loaded.", {live: false});
       } catch (error) {
         updateAuthorMonitorActivityStatus(error.message || "Could not load Author Monitor", {live: false});
@@ -53708,7 +53843,7 @@ INDEX_HTML = """<!doctype html>
           updateAuthorMonitorTopDot();
           syncAuthorMonitorBackgroundScholarStatus();
         }
-        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
+        if (state.mode === "author") refreshAuthorMonitorInPlace();
         const author = state.authorMonitors.find((item) => Number(item.id) === Number(authorId));
         if (!author) {
           updateAuthorMonitorActivityStatus("The imported author is no longer monitored.", {
@@ -53736,7 +53871,7 @@ INDEX_HTML = """<!doctype html>
               : `${author.name || "Author"} imported successfully · ${Number(author.paper_count || 0)} papers.`,
             {live: false, channel: "secondary", kind: "scholar-background", delay: 4000}
           );
-          if (options.enrichOnSuccess !== false) startAuthorMonitorEnrichment(authorId);
+          if (options.enrichOnSuccess !== false) scheduleAuthorMonitorIdleEnrichment(authorId);
           return;
         }
         updateAuthorMonitorActivityStatus(

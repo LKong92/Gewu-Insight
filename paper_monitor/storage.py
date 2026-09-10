@@ -4899,7 +4899,7 @@ class Storage:
             "pending_count": max(0, total_count - ready_count),
         }
 
-    def list_author_monitor_cached_cards(self) -> list[dict[str, Any]]:
+    def list_author_monitor_cached_cards(self, author_monitor_id: int = 0) -> list[dict[str, Any]]:
         """Return compact cached cards with live author-monitor associations."""
         rows = self.conn.execute(
             """
@@ -4920,10 +4920,12 @@ class Storage:
             LEFT JOIN author_monitor_card_cache_dirty
               ON author_monitor_card_cache_dirty.paper_id = author_monitor_papers.paper_id
             WHERE author_monitor_card_cache_dirty.paper_id IS NULL
+              AND (? = 0 OR author_monitor_papers.author_monitor_id = ?)
             ORDER BY author_monitor_papers.is_unread DESC,
                      author_monitor_papers.first_seen_at DESC,
                      author_monitor_papers.paper_id ASC
-            """
+            """,
+            (int(author_monitor_id or 0), int(author_monitor_id or 0)),
         ).fetchall()
         merged: dict[str, dict[str, Any]] = {}
         order: list[str] = []

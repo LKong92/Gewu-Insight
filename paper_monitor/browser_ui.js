@@ -776,7 +776,7 @@
       if (switched || document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
       $("browserSiteIcon").href = data.url || "#";
       $("browserSiteIcon").draggable = Boolean(data.url);
-      $("browserSaveGewu").disabled = !data.url || data.home || event.loading;
+      $("browserSaveGewu").disabled = !data.url || data.home || event.loading || Boolean(event.error);
       $("browserAddBookmark").disabled = !data.url;
       $("browserDownload").disabled = !data.url;
       $("browserExternal").disabled = !data.url;
@@ -789,6 +789,9 @@
       $("browserProgress").style.width = (event.loading ? Math.max(3, event.progress * 100) : 0) + "%";
       $("browserPageTitle").textContent = data.title;
       if (event.error) message(event.error, true);
+      else if (event.openingPDF) message(event.progress > 0 ? `Opening PDF… ${Math.floor(event.progress * 100)}%` : "Opening PDF…");
+      else if (data.openingPDF) message("");
+      data.openingPDF = Boolean(event.openingPDF);
     } else if (event.event === "navigation-start") { message(""); }
     else if (event.event === "visit") {
       api("visit", {event_id:event.event_id, url:event.url, title:event.title}).then(() => {

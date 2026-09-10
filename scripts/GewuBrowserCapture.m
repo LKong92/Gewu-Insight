@@ -15,6 +15,25 @@
 @end
 
 @implementation GewuBrowserCapture
+- (void)uploadPDFData:(NSData *)data filename:(NSString *)filename sourceURL:(NSURL *)url
+        workspaceURL:(NSURL *)workspaceURL uploadToken:(NSString *)token completion:(void (^)(NSString *error))completion {
+    self.completion = completion;
+    if (!GewuBrowserPublicURL(url) || ![workspaceURL.scheme isEqual:@"http"]
+        || ![@[@"127.0.0.1", @"localhost", @"::1"] containsObject:workspaceURL.host]
+        || token.length < 32 || token.length > 128 || !data.length || data.length > 64 * 1024 * 1024) {
+        [self finish:@"Choose a PDF up to 64 MB and reopen Save to Gewu."]; return;
+    }
+    self.endpoint = [NSURL URLWithString:@"/api/browser-capture-file" relativeToURL:workspaceURL].absoluteURL;
+    self.uploadToken = token; self.sourceURL = url.absoluteString;
+    self.filename = filename.lastPathComponent.length ? filename.lastPathComponent : @"Article.pdf";
+    self.directory = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[@"gewu-capture-native-" stringByAppendingString:NSUUID.UUID.UUIDString]] isDirectory:YES];
+    self.file = [self.directory URLByAppendingPathComponent:@"capture.pdf"];
+    if (![NSFileManager.defaultManager createDirectoryAtURL:self.directory withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:nil]
+        || ![data writeToURL:self.file options:NSDataWritingAtomic error:nil]) {
+        [self finish:@"Could not prepare the displayed PDF for Save to Gewu."]; return;
+    }
+    [self uploadPreparedPDF];
+}
 - (void)downloadURL:(NSURL *)url fromView:(WKWebView *)view workspaceURL:(NSURL *)workspaceURL
        uploadToken:(NSString *)token completion:(void (^)(NSString *error))completion {
     self.completion = completion;
@@ -74,6 +93,9 @@
     completionHandler(self.file);
 }
 - (void)downloadDidFinish:(WKDownload *)download {
+    [self uploadPreparedPDF];
+}
+- (void)uploadPreparedPDF {
     if (!self.completion) return;
     NSNumber *size;
     [self.file getResourceValue:&size forKey:NSURLFileSizeKey error:nil];

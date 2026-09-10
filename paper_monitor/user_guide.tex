@@ -2788,6 +2788,16 @@ Later refreshes can mark newly discovered publications as unread. Use the \textb
 
 Control-click \textbf{New} and choose \textbf{Read All}. For one selected author, it marks every unread publication as read, including offscreen papers; other authors keep their unread state, even for a shared paper. With \textbf{All Authors} selected, it marks all authors\textquotesingle{} new publications as read. Papers and Library placements are preserved. The New filter remains active; click New again to see read papers. Read state persists after reopening.
 
+\subsection{Background work and status}\label{background-work-and-status}
+
+Opening this tab reuses available local cards, including older cached lists, while the background checks for changes. It does not start another Scholar fetch. Background list updates retain your selection, reading position, open controls and details.
+
+The bottom bar keeps the latest publication-check status and the separate paper-metadata status after brief action messages disappear. Pending work, retry waits and daily limits remain visible; hover over shortened text for its full message. A skipped batch does not mean all missing information has been resolved.
+
+Automatic DOI and abstract completion uses other metadata services, independently of Scholar profile checks. It rotates between authors and reuses shared paper identities: up to 20 papers per batch and 80 per local day, yielding between papers after about two minutes and resting at least five minutes between batches. Recent attempts wait seven days before automatic retry. Progress reservations and rest times survive restarting; explicit identifier commands remain available separately.
+
+Scholar requests remain serialized, with 4--8 seconds between requests, 12--24 seconds between profile pages and 45--90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu\textquotesingle s protective waiting period, not a promised unblock time from Google.
+
 \subsection{Refresh one author or find missing identifiers}\label{refresh-one-author-or-find-missing-identifiers}
 
 Control-click the author and choose \textbf{Refresh This Author} to update that person\textquotesingle s publications. \textbf{Find Missing Identifiers} checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose \textbf{Find Missing Identifier}; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from \textbf{Get Identifier from Files}, which uses an available local PDF.
@@ -2964,7 +2974,9 @@ Use {{\symbolfont ↑}}/{{\symbolfont ↓}}, then Enter to open a result, or cli
 
 \subsection{Read PDFs and save downloads}\label{read-pdfs-and-save-downloads}
 
-Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. Save via Download or \textbf{Share \textgreater{} Save Download}; unsupported attachments use a save sheet. This uses Browser\textquotesingle s session, not Python\textquotesingle s downloader. For HTML viewers, use the site\textquotesingle s PDF link. Save Download writes an ordinary downloaded file. To connect an article and its PDF to your research library, use \textbf{Save to Gewu} below or \hyperref[import-files]{import the saved file}. Library PDFs still open in macOS Preview.
+Viewable PDFs stay inline, including attachment/download links, with article/PDF Back/Forward navigation. In a publisher\textquotesingle s HTML viewer, click its PDF download link: Browser receives the PDF using its current website session and opens it in that tab, including supported page-generated files. \textbf{Opening PDF\ldots{}} shows progress. Switching tabs does not interrupt it or let completion take focus; leaving the source page or closing its tab cancels that pending preview. Website sign-in and consent pages remain visible.
+
+Preview uses temporary browser storage, not your Downloads folder or Library. The temporary file is removed after loading. Recent PDF bytes are kept in memory for Save to Gewu and refresh; the transfer limit is 128 MB and two minutes, with up to eight cached PDFs and 256 MB of retained bytes. Save to Gewu retains its separate 64 MB limit and reuses received bytes while cached. To save an ordinary file, explicitly use Download or \textbf{Share \textgreater{} Save Download} and choose a destination; other attachments use a save sheet. To import it, use \textbf{Save to Gewu} below or \hyperref[import-files]{import the saved file}. Library PDFs still open in macOS Preview.
 
 \subsection{System networking and Clash rules}\label{system-networking-and-clash-rules}
 
