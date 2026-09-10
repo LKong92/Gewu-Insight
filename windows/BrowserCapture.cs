@@ -9,10 +9,13 @@ internal sealed partial class WorkspaceWindow
     sealed record ArticleSnapshot(string Id, BrowserPage Page, int Generation, string Url, string[] Candidates);
     ArticleSnapshot? articleSnapshot;
     CancellationTokenSource? captureDownload;
+    long captureGeneration;
+    bool capturePreparing;
 
     void CancelCapture(string snapshotId = "")
     {
         if (snapshotId.Length > 0 && articleSnapshot?.Id != snapshotId) return;
+        captureGeneration++;
         captureDownload?.Cancel();
         articleSnapshot = null;
     }
@@ -28,10 +31,12 @@ internal sealed partial class WorkspaceWindow
         var page = selected;
         int generation = page?.Generation ?? 0;
         string url = page?.Url ?? "";
+        long requestGeneration = captureGeneration;
         try {
             if (page?.View?.CoreWebView2 == null || page.Home || page.Loading || !PublicUrl(url))
                 throw new InvalidOperationException("Wait for a public article page to finish loading.");
             var core = page.View.CoreWebView2;
+            _ = CaptureBackdropAsync(page, requestId, requestGeneration);
             using var tree = JsonDocument.Parse(await core.CallDevToolsProtocolMethodAsync("Page.getFrameTree", "{}"));
             string frameId = tree.RootElement.GetProperty("frameTree").GetProperty("frame").GetProperty("id").GetString()!;
             using var world = JsonDocument.Parse(await core.CallDevToolsProtocolMethodAsync("Page.createIsolatedWorld", JsonSerializer.Serialize(new { frameId, worldName = "GewuArticleCapture" })));
@@ -41,7 +46,7 @@ internal sealed partial class WorkspaceWindow
             if (result.Length > 262144) throw new InvalidOperationException("Article metadata exceeded the capture limit.");
             using var evaluated = JsonDocument.Parse(result);
             if (evaluated.RootElement.TryGetProperty("exceptionDetails", out _)) throw new InvalidOperationException("The article metadata could not be read.");
-            if (stopping || selected != page || page.Generation != generation || page.Url != url || page.Home)
+            if (stopping || captureGeneration != requestGeneration || selected != page || page.Generation != generation || page.Url != url || page.Home)
                 throw new InvalidOperationException("The page changed. Close Save to Gewu and try again.");
             var value = evaluated.RootElement.GetProperty("result").GetProperty("value");
             bool isPdf = value.TryGetProperty("is_pdf", out var pdf) && pdf.GetBoolean();
@@ -54,7 +59,39 @@ internal sealed partial class WorkspaceWindow
                 origin_paper_id = page.OriginPaperId, origin_url = page.OriginUrl
             }});
         } catch (Exception error) {
-            if (!stopping) await EmitAsync(new { @event = "capture-metadata", request_id = requestId, error = error.Message });
+            if (!stopping && captureGeneration == requestGeneration) await EmitAsync(new { @event = "capture-metadata", request_id = requestId, error = error.Message });
+        }
+    }
+
+    async Task CaptureBackdropAsync(BrowserPage page, string requestId, long requestGeneration)
+    {
+        int generation = page.Generation;
+        string url = page.Url;
+        bool Current() => !stopping && browserActive && captureGeneration == requestGeneration &&
+            selected == page && pages.Contains(page) && !page.Home && !page.Loading && page.Generation == generation && page.Url == url;
+        if (!Current() || page.View?.CoreWebView2 == null) return;
+        try {
+            // Screenshot bytes stay in memory; the backend receives metadata only.
+            // Keep the existing surface visible only while the dialog prepares
+            // its snapshot. The UI releases it after 1.5 seconds even on failure.
+            var core = page.View.CoreWebView2;
+            using var metrics = JsonDocument.Parse(await core.CallDevToolsProtocolMethodAsync("Page.getLayoutMetrics", "{}").WaitAsync(TimeSpan.FromSeconds(5)));
+            var viewport = metrics.RootElement.GetProperty("cssVisualViewport");
+            double width = viewport.GetProperty("clientWidth").GetDouble(), height = viewport.GetProperty("clientHeight").GetDouble();
+            if (!Current() || width < 1 || height < 1 || width * height > 32_000_000) return;
+            double pixelsPerCssPixel = Math.Max(1, page.View.DeviceDpi / 96.0 * page.View.ZoomFactor);
+            var clip = new { x = viewport.GetProperty("pageX").GetDouble(), y = viewport.GetProperty("pageY").GetDouble(), width, height, scale = Math.Min(1, 1600 / (width * pixelsPerCssPixel)) };
+            string result = await core.CallDevToolsProtocolMethodAsync("Page.captureScreenshot", JsonSerializer.Serialize(new { format = "jpeg", quality = 55, clip, fromSurface = true, captureBeyondViewport = false })).WaitAsync(TimeSpan.FromSeconds(5));
+            if (!Current() || result.Length > 6 * 1024 * 1024) return;
+            using var image = JsonDocument.Parse(result);
+            string data = TextValue(image.RootElement, "data");
+            if (data.Length == 0 || data.Length > 4 * 1024 * 1024) return;
+            await EmitAsync(new { @event = "capture-backdrop", request_id = requestId, image = "data:image/jpeg;base64," + data });
+        } catch (Exception error) when (error is InvalidOperationException or ArgumentException or TimeoutException or JsonException or System.Runtime.InteropServices.ExternalException) {
+            // A missing decorative image must not block article capture.
+            if (!stopping) log?.WriteLine("Capture background: " + error.Message);
+        } finally {
+            if (Current()) await EmitAsync(new { @event = "capture-backdrop", request_id = requestId, image = "" });
         }
     }
 

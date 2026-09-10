@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <StartupObject>GewuInsight.Windows.ParityProbeMain</StartupObject>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+    <Compile Include="../../windows/*.cs" />
+    <Compile Include="ParityProbe.cs" />
+    <Compile Include="NavigationProbe.cs" />
+    <Compile Include="DownloadProbe.cs" />
+    <Content Include="../../windows/GewuInsight.ico" Link="GewuInsight.ico" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="../../windows/workspace.js" LogicalName="GewuInsight.Windows.workspace.js" />
+    <EmbeddedResource Include="../../windows/pdf-preview.js" LogicalName="GewuInsight.Windows.pdf-preview.js" />
+    <EmbeddedResource Include="../../paper_monitor/pdf_source_hosts.txt" LogicalName="GewuInsight.Windows.pdf_source_hosts.txt" />
+    <EmbeddedResource Include="../../scripts/GewuBrowserCaptureProbe.js" LogicalName="GewuInsight.Windows.capture.js" />
+    <EmbeddedResource Include="../../scripts/GewuBrowserNavigationProbe.js" LogicalName="GewuInsight.Windows.navigation.js" />
+  </ItemGroup>
+  <Target Name="RemoveUnusedWebViewWpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
+  </Target>
+</Project>

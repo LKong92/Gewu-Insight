@@ -1,6 +1,67 @@
-# Windows signing and the 0.1.11 startup recovery
+# Windows signing and local installation recovery
 
-## Current result
+## Current result: 0.1.13 installed and normally reopened (2026-09-10)
+
+The verified 0.1.13 payload was packaged with the existing temporary local
+unsigned Inno recipe and installed successfully at 18:40 JST (exit 0, no Windows
+restart). Installer SHA-256:
+`F228D2269CB6DC1D2CA3AC9982135E67704FBF1C591D5CD849A4A92386A17A40`.
+All 2109 manifest-listed installed payload files match. Two actual-install-path
+starts with a disposable Library pass, followed by opening the original Library
+and normally closing/reopening it. At 18:47 JST the original window is visible,
+file and uninstall versions are 0.1.13, and four live API checks pass. All protected
+paper/Library/Publications/bookmark/history rows and 17 persistent research/cache
+files remain unchanged; schema 18 integrity and foreign keys pass. Only two
+automatic monitor status settings change on restart. The verified backup contains
+2317 files; evidence is ignored `tmp/install-0.1.13-20260910/`.
+
+The installer and Gewu DLL remain unsigned; Smart App Control remains ON (1).
+No protection-policy, trust-store or external-review change occurred. The standard
+release signing gate remains unchanged. Local installation does not establish
+publisher signing or acceptance on other machines. No commit or push occurred.
+
+## Earlier result: 0.1.12 installed and normally reopened (2026-09-10)
+
+At the user's request, the exact previously blocked installer was retried and
+completed successfully at 17:49 JST (exit 0, no Windows restart). Its SHA-256 is
+still `FF5E66709A62BBCB989C7B869573DB051243E342A6EC1AB7D4B16F0ACA189E11`.
+No rebuild, renaming, signing, external submission, protection-policy change or
+trust-store change occurred. Smart App Control remains ON (1). The evidence
+does not establish why Windows now permits the same installer.
+
+The installed file and uninstall-registration versions are 0.1.12; all 2109
+payload files match the validated development package. The actual installed
+EXE passes two hidden-desktop starts with a disposable Library. The original
+Library then opens and normally closes/reopens; the window is visible and four
+live API checks plus the Browser asset hash pass (17:53 JST). All 44 paper rows,
+Library/Publications/bookmarks/history and 17 persistent research/cache files
+remain intact; schema 18 integrity and foreign keys pass. Only the two automatic
+monitor status settings change on restart. Fresh verified backup and evidence:
+ignored `tmp/install-0.1.12-retry-20260910/`.
+
+The installer and Gewu DLL remain unsigned. This is a successful local Preview
+installation, not a completed publisher-signing solution or a guarantee for
+other machines. The standard release signing gate is unchanged. No commit or
+push was performed. Earlier failed-attempt evidence is retained below.
+
+## Earlier 0.1.12 local installation block (2026-09-10)
+
+The user requested directly installing the tested 0.1.12 development payload.
+The earlier stop was the standard builder's conservative signing gate, not an
+observed Windows installation failure. A temporary explicitly unsigned local
+Inno recipe then produced an installer without changing the standard release
+script. Windows blocked this installer before execution (Code Integrity
+3077/3033); no installer log or installed-file change occurred. This block is
+specific evidence about the installer, while the earlier two development-path
+0.1.12 native launches passed. No installation-path 0.1.12 launch was performed.
+
+The original 0.1.11 window was reopened, all 2111 installed files match the
+backup, and the 44 paper rows plus Library/Publications/bookmarks/history and
+research files remain intact. Smart App Control stays ON (1); no protection,
+trust, external review, commit or push change was made. Evidence and rollback
+copy: ignored `tmp/install-0.1.12-20260910/`. See the latest Preview status.
+
+## Earlier 0.1.11 recovery result
 
 **Windows Preview 0.1.11 is now installed and running**, including a normal
 close/reopen of the original Library (2026-09-10, verified at 15:48 JST).
@@ -189,8 +250,9 @@ passed. A real publish command, after replacing paths and obtaining credentials:
   -SigningConfiguration tmp/publisher-signing.json
 ```
 
-Version 0.1.12 is a proposed successor; it has not been built, signed or installed.
-No successful signing is claimed until an actual publisher credential is used.
+Version 0.1.12 has now been built and installed locally as an unsigned Preview,
+as recorded above. No successful signing is claimed until an actual publisher
+credential is used.
 
 ## Local evidence
 

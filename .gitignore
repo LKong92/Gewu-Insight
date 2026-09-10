@@ -20,4 +20,6 @@ windows/bin/
 windows/obj/
 tests/windows_native/obj/
 tests/windows_native/bin/
+tests/windows_browser_parity/obj/
+tests/windows_browser_parity/bin/
 dist/

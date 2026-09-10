@@ -20,6 +20,7 @@
     <EmbeddedResource Include="pdf-preview.js" LogicalName="GewuInsight.Windows.pdf-preview.js" />
     <EmbeddedResource Include="../paper_monitor/pdf_source_hosts.txt" LogicalName="GewuInsight.Windows.pdf_source_hosts.txt" />
     <EmbeddedResource Include="../scripts/GewuBrowserCaptureProbe.js" LogicalName="GewuInsight.Windows.capture.js" />
+    <EmbeddedResource Include="../scripts/GewuBrowserNavigationProbe.js" LogicalName="GewuInsight.Windows.navigation.js" />
   </ItemGroup>
   <Target Name="RemoveUnusedWebViewWpf" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>

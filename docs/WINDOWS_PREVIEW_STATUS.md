@@ -1,5 +1,48 @@
 # Windows Preview — 实现与验收状态
 
+## 2026-09-10：0.1.13 已安装，原应用正常重开
+
+- 已完成备份、安装、原安装目录验证和原库正常关闭/重开。安装器于 18:40 JST 成功退出 0，无需重启 Windows；18:47 JST 核验原窗口可见，App/service PID 29572/26844，文件与卸载登记版本均为 0.1.13。已将用户“继续修复/对齐即默认完成安装和重开验证”的要求写入 `AGENTS.md`，不再等待单独安装指令。
+- 备份共 2317 个文件并逐项校验。2109 个清单内安装文件匹配已验证 payload；实际安装目录的自包含 EXE 在临时 Library 连续两次启动通过。原库重开后 health、认证工作区、Library bootstrap、Publications 四项 API 返回 200，Browser JS 与安装包匹配。
+- 原有 44 篇 papers / 39 Publications / 8 Library items / 5 folders / 4 resources，以及书签、历史、阅读、来源观察和 AI 相关受保护表逐行不变；17 个持久研究/缓存文件哈希不变。schema 18、integrity_check OK、外键错误 0、工作区选择不变。重启只更新 `auto_author_monitor_status` 与 `auto_arxiv_metadata_retry_state` 两项自动状态。
+- 本机未签名安装器 SHA-256 `F228D2269CB6DC1D2CA3AC9982135E67704FBF1C591D5CD849A4A92386A17A40`；DLL SHA-256 `F6DFAF8020C7BA0A2B0A6BA1DB998322DF339A089CBBE7F8B7AB7EC63D99C0A3`。沿用临时本机安装配方，标准发布签名门槛未改；Smart App Control 保持 ON（1），未修改防护/信任或提交外部复核。没有 commit/push 或 Mac 分支修改。
+- 备份、安装器、日志、安装目录双启动、原库关闭/重开及最终状态：ignored `tmp/install-0.1.13-20260910/`。M04/M09/M10 已随本次安装提供；下面的功能测试边界仍有效，M01/M02/M11/M12 继续待完成。
+
+## 2026-09-10：0.1.13 开发包完成（安装前的历史记录）
+
+- 本轮补齐 M04/M09/M10：Browser Save Download/四项页面菜单、本地 Home 与原生历史/草稿保留、原始 popup POST/opener、网页焦点快捷键及 Ctrl+[ 返回来源工作区。M01 缓存维护、M02 批量永久删除、M11 出版商后台后备下载、M12 完整拖放仍待完成。详细行为与验收边界见 [功能差异记录第 9 节](WINDOWS_MAC_PARITY_TRACKER.md#9-2026-09-100113-browser-导航快捷键及页面操作)。
+- 最终真实源码的独立隐藏桌面检查 **80 项全部通过**；生成页面与临时 SQLite，未访问个人浏览器资料。覆盖 Home 往返/草稿/取消迟到/页内分支、popup opener/POST、Win32 键消息 Ctrl+L/F/[、工作区返回、页面菜单、下载原始字节/允许及拒绝重定向/伪装 PDF/64 MB 限制，同时回归 0.1.12 的书签同步、建议、快照和三次服务恢复。实体输入法、全部快捷键、最终 Save 对话框选择和真实登录出版商仍待验收。
+- 共享 **134 项检查：125 通过、9 平台跳过**；初次 GBK 默认编码错误在用 UTF-8 重跑后消除。最终 .NET、JS 语法、变更 Python 编译、diff 检查通过。Windows HTML/PDF 指南同源更新，4 页均经 Poppler 渲染和视觉检查，未替换 Mac 指南或新增假冒原 App 截图。
+- 标准构建脚本生成 `dist/windows-preview-0.1.13/`，EXE 版本 0.1.13；DLL SHA-256 `F6DFAF8020C7BA0A2B0A6BA1DB998322DF339A089CBBE7F8B7AB7EC63D99C0A3`。开发 EXE 在独立隐藏桌面、同一临时 Library 连续两次启动，认证工作区/API 与 Browser 资源匹配；包内 Python/UI/API/MCP 另两次启动，中文分析/幂等重试、跨站拒绝和 SQLite 重启完整性通过。不需要开发 Python/.NET 路径。
+- **没有生成或安装 0.1.13 安装器**。375 个二进制中 300 个既有 RSA 签名有效、75 个未签名；发布签名门槛保留。一次中间测试 DLL 曾被 Windows 应用控制拦截，同文件重试仍阻断；后续实际功能修订的最终测试与开发包启动通过。不改防护/信任、不提交外部复核、不推断放行原因。
+- 原安装目录的 0.1.12 App 仍在运行（PID 38084），本轮没有主动关停；正式资料库、研究文件、Browser profile 未用于测试或直接修改，未宣称阻止了应用自身的自动监控活动。没有 commit/push、Mac 分支修改或外部发布。证据保存在 ignored `tmp/windows-parity-0.1.13/`（最终 `latest-native-result.json`、`payload-native-result.json`、`package-check/`、Guide 渲染）；早期失败保留，不作为通过计数。
+
+## 2026-09-10：重试原安装器成功，0.1.12 已安装并正常重开
+
+- 按用户“继续尝试安装 0.1.12”的要求，重试此前被拦截的同一安装器；SHA-256 仍为 `FF5E66709A62BBCB989C7B869573DB051243E342A6EC1AB7D4B16F0ACA189E11`。先暂停创建进程验证本次允许启动，再正常关闭 0.1.11、备份并逐项校验 2133 个文件，执行原安装器成功退出 0，无需重启 Windows。没有重新构建、改名、签署、外部审核或安全/信任设置变更；本次放行原因未知。
+- **当前安装与运行是 0.1.12**：EXE ProductVersion 为 `0.1.12+4dab1e3728aa3ff94306263a15626323800ffd55`，卸载登记版本 0.1.12，2109 个 payload 文件逐项匹配。DLL SHA-256 `C2A5EB597F5CD0B68A15F6873D55A73BCACABBD35571446A8481A22477FB0F91`，安装器/DLL 仍未签名。Smart App Control 保持 ON（1）。标准发布签名门槛未改，不等于其他机器或未来版本已获放行。
+- 实际安装目录的自包含 EXE 在隐藏桌面、临时 Library 中连续启动两次通过，health、认证工作区、Browser 资源哈希通过，检查进程全部关闭。随后打开用户原库并完成一次正常关闭/重开；17:53 JST 原窗口可见运行，App/service PID 38084/41760，服务使用原正式 SQLite。health、认证工作区、Library bootstrap、Publications 均返回 200，所服务的 Browser JS 匹配安装包。
+- 原库 44 篇 papers / 39 Publications / 8 Library items / 5 folders / 4 resources 保留；论文、书签、历史、阅读、来源观察和 AI 相关受保护表逐行不变，17 个持久研究/缓存文件哈希不变。schema 18、integrity_check OK、外键错误 0，工作目录选择不变。重启只更新两项自动状态：`auto_author_monitor_status`、`auto_arxiv_metadata_retry_state`。首次重开核验错误地将 SQLite 临时 WAL/SHM 纳入固定文件清单，排除瞬态文件并保留逻辑库/资料哈希检查后通过。
+- 新备份、安装日志、安装目录双启动和正式重开证据：ignored `tmp/install-0.1.12-retry-20260910/`。上次阻断证据保留在 `tmp/install-0.1.12-20260910/`。本轮未修改产品运行源码、commit/push 或 Mac 分支；完整功能差异和签名工作仍按台账保留。
+
+## 2026-09-10：首次直接安装 0.1.12 被拦截（已由上方重试成功记录取代）
+
+- 上次停在开发包，是标准构建脚本要求发布者签名的保守工作流决定，不能表述为 Windows 普遍禁止未签名本机安装。用户继续要求直接安装后，用临时、明确标为 Local Unsigned 的 Inno 配方从已验证的原始 0.1.12 payload 构建本机安装器；标准发布脚本和签名要求未改。
+- 0.1.11 正常关闭，程序目录、SQLite 在线备份和研究资料复制后逐项校验，备份共 2124 个文件；正式库为 schema 18、44 篇 papers / 39 Publications / 8 Library items / 5 folders / 4 resources。
+- 启动新安装器时，Windows 返回“应用程序控制策略已阻止此文件”，Code Integrity 3077/3033 指向新安装器 EXE。没有 installer.log，安装未开始。该阻断对象是安装器；此前开发目录的 0.1.12 EXE 两次启动成功仍成立，尚未验证安装路径中的 0.1.12。
+- **实际安装仍是 0.1.11，已恢复原窗口可见运行（PID 34276）**。2111 个原安装文件逐一与备份一致，10 个非会话研究文件不变；论文、Publications、Library、resources、书签和历史行均不变。schema 18 integrity_check OK、外键错误 0，health、认证工作区、Library bootstrap、Publications 返回 200。正常重启仅更新 app_settings 中的 auto_author_monitor_status 与 auto_arxiv_metadata_retry_state 两项自动监控状态。
+- Smart App Control 仍为 ON（1），没有绕过系统阻断、改变保护或信任设置、外部提交、commit/push。备份、临时配方、安装器、3077/3033 事件及恢复证据保留在 ignored `tmp/install-0.1.12-20260910/`。下面“没有新安装器”的开发阶段记录是本次安装尝试之前的状态。
+
+## 2026-09-10：0.1.12 浏览器与服务恢复开发包（安装尝试前的开发记录）
+
+- 本轮补齐开发源码中的 Chrome 书签源同步、原生地址历史建议、匿名网站图标、Save to Gewu 视口模糊快照、服务异常自动恢复。明确只选择 Bookmarks 文件和一个源子目录；共享 SQLite 去重/保留本地修改逻辑复用。图标不携带 UI token/cookie，2 并发、512 KB 输入上限、64px PNG 输出、会话缓存和受限重定向。
+- 快照限制当前视口，纯内存，不进入 capture metadata、API 或磁盘；保持截图前的原生表面，1.5 秒缺图回退让面板仍可用，过期或取消不再写回。服务每分钟最多重启 3 次，刷新私有认证并恢复工作区，保留独立 Browser WebView 和草稿；持续失败停止重试并显示日志位置。不等于全 App/系统崩溃恢复或未保存 Library 表单恢复。
+- **35 项真实 Windows 源码原生集成检查通过**：隐藏桌面、临时 SQLite、虚构网页，验证候选点击/键盘、真实截图和现有 blur、取消/缺图回退、指定子目录同步/重复复用/源文件不变、三次服务崩溃和第 4 次重试限制、草稿与书签保留。未使用用户 Chrome 文件、登录资料、研究库或可见测试面板。首次 sandbox WebView2 初始化未完成；正常桌面权限复验通过。快照遮挡顺序已修正；新增键盘检查最初错误地假定没有 inline completion，按现有自动补全语义纠正后通过。
+- 共享 Browser/同步/capture **84 项检查：78 通过、6 平台跳过**；JS 语法、两份变更 Python 编译和 diff 检查通过。Windows HTML/PDF 指南同源更新，最终 3 页全部渲染检查；没有添加测试截图到用户指南。
+- 构建输出 `dist/windows-preview-0.1.12/`，**没有新安装器**。首次打包网络受限的半成品已完整保留在 ignored `tmp/windows-parity-0.1.12/partial-network-build/`；正常网络权限重建成功。375 个二进制中 300 个有效 RSA 签名、75 项无有效签名；原有 `NU1900` 审计索引不可达警告仍保留。签名构建门槛未更改，未签署、上传外部复核或发布。
+- 新开发包的 embedded Python/UI/API/MCP 在临时库连续两次启动通过（中文分析、重复保存、重启端口跟随与 SQLite 完整性）；真实自包含 EXE 在独立隐藏桌面、无开发 Python/.NET 路径启动两次通过，认证工作区和 Browser 资源与包匹配。DLL SHA-256 `C2A5EB597F5CD0B68A15F6873D55A73BCACABBD35571446A8481A22477FB0F91`。仅证明开发目录中的本机启动，不代表安装路径、其他电脑或完整原生功能验收。
+- **当前安装和使用仍为 0.1.11**。本轮没有关闭或替换用户 App、修改正式 SQLite/资料、提交/推送或变动 Mac 分支。新安装器仍缺发布者签名凭据。完整证据在 ignored `tmp/windows-parity-0.1.12/`；M01/M02/M04/M09/M10/M11/M12 仍未补齐，见 [差异台账](WINDOWS_MAC_PARITY_TRACKER.md)。
+
 ## 2026-09-10：0.1.11 Windows 分支提交验证
 
 - 用户明确授权 commit/push，目标仅为 `codex/windows-preview-0.1.10-20260910`；不向 `main` 或其他 macOS 分支推送。本次提交包含现有 0.1.11 产品源码、指南、签名防护和测试，资料库、研究文件、安装器、诊断产物及备份仍只保留本地。

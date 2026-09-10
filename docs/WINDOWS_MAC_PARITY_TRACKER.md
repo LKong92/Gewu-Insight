@@ -1,8 +1,12 @@
 # Mac → Windows 迁移基线与功能差异记录
 
-记录日期：2026-09-10（Asia/Tokyo）。当前实际安装和运行已恢复为 **Windows Preview 0.1.11**，15:48 JST 正式关闭后重开、About 版本、Library/AI Access 菜单与认证服务均通过。此前受阻的原始 DLL 在 15:37 JST 本地复测获准，随后用原包重新安装；Smart App Control 仍开启，二进制未修改或签名，未提交外部复核。放行变化的具体原因未确定。正式原库已由 schema 16 升至 18，论文/资料/文件保留。0.1.11 源码同步 Mac 至 `2a12320`；用户要求免费使用、保留专有许可。第 3–6 节保留原基线差异，第 7 节记录增量与验证边界。
+记录日期：2026-09-10（Asia/Tokyo）。当前实际安装和运行是 **Windows Preview 0.1.13**，18:40 JST 安装成功，18:47 JST 正式原库正常关闭/重开、可见窗口与认证服务核验通过。原库保持 schema 18、44 篇 papers，受保护论文/资料行和研究文件保留。Smart App Control 仍开启，未修改保护/信任或提交外部复核，仍是本机未签名 Preview。0.1.11 源码同步 Mac 至 `2a12320`，0.1.12–0.1.13 增补下述 Windows 功能；用户要求免费使用、保留专有许可。第 3–6 节保留差异和验收清单，第 7–9 节记录增量与验证边界。
 
 用途：固定 Windows 的 Mac 源码起点，记录尚未迁移的功能与验收缺口，并作为后续 Mac 更新同步的台账。**当前 Windows 仍未达到与该 Mac 基线功能一致的验收状态。**
+
+前一轮更新：**0.1.12 已安装**，接通 M03/M05/M06/M07/M08。35 项隔离原生检查通过；包内服务/MCP 与开发 EXE 各两次启动通过，实际安装目录 EXE 再两次通过，原库正常关闭/重开与数据完整性通过。首次安装器阻断（3077/3033）记录保留；用户要求重试后同一安装器退出 0。仍是未签名本机 Preview，第 3 节的隔离功能检查不等于全部用户场景验收；详细边界见第 8 节。
+
+最新更新：**0.1.13 已安装并正常重开**，补齐 M04/M09/M10 的实现；80 项隔离原生检查通过，实际安装目录双启动及原库重开/数据核验通过，详见第 9 节。M01/M02/M11/M12 继续未完成，平台专属差异与 V/R 验收清单仍保留。
 
 首次建档只核对本地 Git 记录、当前源码及已有验收文档，未执行功能测试。随后用户要求独立提交并推送 Windows 版；提交检查另见 [Preview 状态](WINDOWS_PREVIEW_STATUS.md)。下文的“原 Mac”指迁移起点及本地保留的 Mac 实现，不代表 GitHub 当前最新版本；本表的功能盘点未做实机复现。
 
@@ -20,7 +24,7 @@
 | 首个 Windows 源码提交 | [`59fa205c3037db0c387d9456cb8d0cc3a4370b51`](https://github.com/LKong92/Gewu-Insight/commit/59fa205c3037db0c387d9456cb8d0cc3a4370b51)，已于 2026-09-10 推送至全新的 Windows 分支 |
 | 本地工作目录 | `C:\Users\Zhengran\Desktop\gewu-insight` |
 | 首次建档时的分支 HEAD | 为上述基线；当时 Windows 产品改动尚未形成新提交。该项是历史起点，不随后续 Windows 提交移动 |
-| 当前安装 / 原生验收版本 | `0.1.11` 已恢复安装并通过正式启动/重开，About 与 AI Access 首屏通过；仍未完整验收所有原生功能 |
+| 当前安装 / 原生验收版本 | `0.1.13` 已安装；安装目录两次隔离启动、正式原库启动/重开和 API/资料核验通过，仍未完整验收所有原生功能 |
 
 证据链：本地 `.git/config` 记录仓库 URL；`.git/logs/HEAD` 和 `.git/logs/refs/heads/main` 记录克隆到该 SHA；`.git/refs/heads/codex/windows-migration` 记录当前 HEAD。[迁移审计](WINDOWS_MIGRATION_AUDIT.md)与 [Preview 状态](WINDOWS_PREVIEW_STATUS.md)也记录同一完整基线。
 
@@ -35,24 +39,24 @@
 
 表中的源码路径均相对仓库根目录。代码检查只能证明实现边界；真实拖放、登录网站、外部编辑器和故障恢复等仍需相应实机验收。旧版本文档中的“未接通”不能覆盖后续版本的完成记录。
 
-## 3. 原 Mac 功能中，Windows 明确尚未实现或仅部分实现
+## 3. 原 Mac 功能对齐状态（安装版与开发源码分开记录）
 
 | 编号 | 原 Mac 功能 | 当前 Windows 差异与状态 | 证据 / 对应实现 |
 | --- | --- | --- | --- |
-| M01 | Settings → Clear Monitor Cache | **未实现**。Windows 菜单明确禁用，不能通过该入口执行清理。 | `windows/Program.cs` 的菜单；Mac `scripts/PaperMonitorApp.m` 的 `clearWebCache:` |
+| M01 | Settings → Clear Monitor Cache | **未实现 Windows 对应维护操作**。Mac 清的是 `~/Library/Caches/local.paper-monitor/WebKit/NetworkCache`；Windows 没有该 WebKit 缓存，直接调用共享 API 只会空清理。Windows 菜单仍禁用，不能把 Browser profile 清理冒充原 Monitor 缓存清理。 | `windows/Program.cs`；Mac `clearWebCache:`；`ui_server.py` 的 `clear_webkit_network_cache()` |
 | M02 | Library Recycle 中整篇论文、文件夹的永久移除及文件回收 | **部分实现**。整批永久删除仍被阻止；已有 Paper Files 单附件回收及恢复事务，不能据此开放整篇或文件夹删除。 | `paper_monitor/windows_recycle.py` 的批量删除拦截；Preview 0.1.8/0.1.9 记录 |
-| M03 | 从 Chrome 书签源选择文件与子目录，执行单向刷新 | **未实现**。Sync from Chrome 禁用；普通书签 HTML Import/Export 已接通。 | `paper_monitor/browser_ui.js` 的 `bookmarkMenu()`；`windows/Program.cs` 缺少源同步命令处理 |
-| M04 | Browser 的 Save Download 工具栏按钮和 Share 页面操作菜单 | **未实现**。这两个入口禁用。网页自身触发的普通下载和 Save to Gewu 内的 Get PDF 已另行接通。 | `paper_monitor/browser_ui.js` 的 Windows 入口门控；Mac `scripts/GewuBrowserController.m` 的 `download` / `share` |
-| M05 | 地址栏可见的历史建议下拉列表 | **部分实现**。共享页面仍查询建议并处理补全，但 Windows 原生 `suggestions` 命令直接返回，未显示 Mac 对应的候选列表。 | `paper_monitor/browser_ui.js` 的 `showSuggestions()`；`windows/Program.cs` 的 `case "suggestions"` |
-| M06 | 书签及 Favorites 的真实网站图标 | **未实现**对应获取通道。Windows 原生 `favicon` 命令直接返回；仍可显示默认地球图标或字母占位。 | `windows/Program.cs` 的 `case "favicon"`；共享 `browser_ui.js`；Mac `GewuBrowserController.m` 的 favicon 请求 |
-| M07 | Save to Gewu 面板后方当前网页的一次性模糊快照 | **未实现**。共享面板有 `capture-backdrop` 接收逻辑，Windows capture 只回传文章元数据，未接入网页背景快照。 | `windows/BrowserCapture.cs` 的 `CaptureArticleAsync()`；Mac `GewuBrowserController.m` 的 `captureBackdropForPage:` |
-| M08 | 本地服务异常退出后自动重启，恢复后自动回到工作界面 | **未实现**对应运行期恢复。Windows 有启动等待、日志、工作区锁和失败提示，但没有 Mac 的退出监听与重启/重载流程。 | `windows/Program.cs` 的 `StartServerAsync()`；Mac `PaperMonitorApp.m` 的 `terminationHandler` / `restartServerForCurrentOutageIfPossible` |
-| M09 | 本地 Home 与网页共同组成的前进/后退历史，取消或下载后回到保留的 Home | **部分实现**。Home/Favorites 与多标签已接通；Windows Back/Forward 直接调用 WebView2 网页历史，未建立 Mac 的 Home 逻辑历史与完整返回状态机制。 | `windows/Program.cs` 的 `OpenPageAsync()` / `BrowserCommandAsync()`；Mac `GewuBrowserController.m` 的保留 Home 与 session 实现 |
-| M10 | 网页获得焦点时，原生快捷键返回来源研究工作区、网页边界方向键交还侧栏等 | **部分实现**。共享工作区保留返回状态与 Web 键盘逻辑，但 Windows 远程 WebView2 没有 Mac 对应的原生按键转接。完整菜单、标签与输入焦点仍待逐项验收。 | `windows/Program.cs` 的远程 view 事件；`paper_monitor/browser_ui.js` 的 `workspaceReturn`；Mac `GewuBrowserController.m` 的原生 key monitor |
+| M03 | 从 Chrome 书签源选择文件与子目录，执行单向刷新 | **0.1.12 已安装，待完整验收**。明确选择一个 Bookmarks 文件和子目录；沿用共享 SQLite 同步、去重和保留本地修改逻辑。隔离原生目录选择/重复同步/源文件不变通过；真实个人 Chrome 文件选择仍待验收。已随本机 0.1.12 安装。 | `windows/BrowserDialogs.cs`；`paper_monitor/browser_ui.js`；`tests/windows_browser_parity/` |
+| M04 | Browser 的 Save Download 工具栏按钮和 Share 页面操作菜单 | **0.1.13 已安装，待完整验收**。原生四项页面菜单、独立同 profile 下载、64 MB 限制、原始响应字节及 PDF/重定向来源检查已验证；不写 Library。最终 Save 对话框操作、更多真实网站和登录流程待验收。已随本机 0.1.13 安装。 | `windows/BrowserPageActions.cs`；共享 `browser_ui.js`；第 9 节 |
+| M05 | 地址栏可见的历史建议下拉列表 | **0.1.12 已安装，待完整验收**。原生候选层位于网页之上，保留输入焦点，复用本地历史与补全；鼠标选取、方向键、Esc 的隔离流程通过。实体 IME/更多 DPI/无障碍仍待验收。已随本机 0.1.12 安装。 | `windows/BrowserSuggestions.cs`；`windows/Program.cs`；共享 `showSuggestions()` |
+| M06 | 书签及 Favorites 的真实网站图标 | **0.1.12 已安装，待完整验收**。独立匿名 HTTPS 客户端、同站图标提示、2 并发、限量/重定向检查，归一成 64px PNG；使用会话内缓存，没有移植 Mac 磁盘缓存。隔离传输与图像检查通过，更多真实网站图标仍待验收。已随本机 0.1.12 安装。 | `windows/BrowserFavicons.cs`；WebView2 `FaviconChanged`；`tests/windows_browser_parity/` |
+| M07 | Save to Gewu 面板后方当前网页的一次性模糊快照 | **0.1.12 已安装，待完整验收**。单次当前视口 JPEG、原有 blur、纯内存与过期/取消保护；截图前保留原生表面，1.5 秒后即使缺图也显示面板。真实 WebView2 生成页截图、取消和缺图回退通过。已随本机 0.1.12 安装。 | `windows/BrowserCapture.cs`；共享 capture/layout；`tests/windows_browser_parity/` |
+| M08 | 本地服务异常退出后自动重启，恢复后自动回到工作界面 | **0.1.12 已安装，待完整验收**。退出监听、认证会话重载、每分钟最多 3 次重启；保留远程页面及未提交表单。临时服务连续 3 次崩溃后恢复、第 4 次停止重试、书签和草稿保留通过。已随本机 0.1.12 安装；不覆盖 OS/App 崩溃或未保存的 Library 表单。 | `windows/ServiceRecovery.cs`；`windows/Program.cs`；共享 tabs 恢复 |
+| M09 | 本地 Home 与网页共同组成的前进/后退历史，取消或下载后回到保留的 Home | **0.1.13 已安装，待完整验收**。每标签本地 Home 与 Chromium 原生 history ID 组合，保留文档/草稿、页内历史和前进分支，取消及迟到响应不能显示旧网页。弹窗直接接收原始请求，POST/opener 已验证；真实复杂网站、普通下载离开 Home 等仍待完整验收。 | `windows/BrowserNavigation.cs`、`Program.cs`；第 9 节 |
+| M10 | 网页获得焦点时，原生快捷键返回来源研究工作区、网页边界方向键交还侧栏等 | **0.1.13 已安装，待完整验收**。WinForms 原生键盘事件、当前 Win32 活动窗口/焦点/菜单边界、Ctrl+[ 返回来源工作区，以及一次性隔离方向键几何检查。向隐藏测试窗口发送的 Ctrl+L/F/[ 消息及完整返回流程通过；实体键盘、IME、全部快捷键/DPI/无障碍待验收。 | `windows/BrowserKeyboard.cs`；共享 `GewuBrowserNavigationProbe.js` 与 `workspaceReturn`；第 9 节 |
 | M11 | 论文下载 API 返回出版商浏览器后备请求时，后台浏览器继续获取正文或补充文件 | **未实现**此独立通道。共享 `requestPaperPdfDownload()` 会调用 `publisherPdfDownload`，Windows bridge 未注册它。Browser → Save to Gewu → Get PDF 是另一条已实现流程，不能作为这项已完成的证据。 | `paper_monitor/ui_server.py` 的 `downloadPublishedPdfInBackground()`；`windows/workspace.js`；Mac `PaperMonitorApp.m` 的 `publisherPdfDownload` |
 | M12 | Library 文件夹向外拖出，以及 Library 条目原生拖动的完整接力 | **部分实现**。Windows 当前提供 Paper Files 单文件 CF_HDROP，原生 `DragFile()` 只接受文件；没有接入共享页面的 `nativeFileDrag` 文件夹通道或 `libraryItemDrag` 通道。不能据此否定仍可用的普通 Web 内部拖动。 | `windows/NativeIntegration.cs`、`windows/workspace.js`；`ui_server.py` 的 `prepareNativeFolderDrag()` / `armNativeLibraryItemDrop()` |
 
-M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实机复现，不将代码分析写成已经观察到的用户操作结果。
+M05–M12 最初由源码对照识别。0.1.12 对 M05–M08 的新检查见第 8 节；其余未完成项仍不能把源码分析写成实际用户操作结果。
 
 ## 4. 已有实现，但尚未完成 Windows 全流程验收
 
@@ -90,7 +94,7 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 | --- | --- | --- |
 | R01 | 旧 Mac Library → Windows 的完整迁移工具 | 尚未交付可正式迁入的工具。须在副本上验证 SQLite、文件 hash、路径重定位、Gewu Key、资源/位置/Default/Source/批注关系与可中断恢复。现有 Windows 资料目录搬迁不等于跨平台整库迁移。 |
 | R02 | 完整备份与恢复 | 已有本机升级/搬迁时的备份与数据核对，但没有完整 Windows 备份、还原、异常中断与跨机器验收。导出报告或重新导入论文不能替代整库恢复。 |
-| R03 | 安装与运行生命周期 | 同机多次安装升级、包内服务启动和数据保留已有记录；首次离线启动、全新机器、故障重启及全面卸载/恢复仍待验收。M08 是明确代码缺口。 |
+| R03 | 安装与运行生命周期 | 同机多次安装升级、包内服务启动和数据保留已有记录；M08 已在 0.1.12 开发源码补齐并隔离验证。首次离线启动、全新机器、完整安装/卸载/恢复仍待验收。 |
 | R04 | 正式发布和完整手册 | 当前为未签名 Preview；本机 Windows 11 x64 已测，Windows 10、ARM64 未验收。Windows HTML/PDF 简明指南已有；完整 Windows 实机截图与全功能手册仍待补齐。 |
 
 ## 7. Mac 后续新增修改的追踪台账
@@ -102,7 +106,7 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 | Mac 原始迁移基线 | `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d` |
 | 后续 Mac 增量已检查到 | `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`；8 个提交已合入，Windows 0.1.11 已安装并正常启动/重开 |
 | 已完整适配并验收的 Mac 截止提交 | 尚无；基线缺项保留。0.1.11 本机安装/启动和 AI Access 首屏已验证，不能替代完整功能验收 |
-| Windows 当前版本依据 | Preview `0.1.10+57a8b2d` 的已有安装验收记录 |
+| Windows 当前版本依据 | 已安装并运行 `0.1.13`，文件/卸载登记版本一致，2109 个 payload 文件匹配；仍未签名 |
 | 独立提交目标 | 仅 `refs/heads/codex/windows-preview-0.1.10-20260910`；不合并、推送更新或覆盖 Mac `main`，不创建合并到 Mac 的 PR |
 | 已发布 Windows 源码快照 | `59fa205c3037db0c387d9456cb8d0cc3a4370b51`；后续仅记录发布结果的文档提交不代表新安装版本 |
 
@@ -125,7 +129,31 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 4. 验证在隔离资料上进行；SQLite 是唯一事实来源，保留身份、Default、来源、文件关联及下载/分析状态。PDF 来源约束和 Subject Monitor 的 Zenodo 拒绝规则持续有效。
 5. 只有功能已实现且相关 CLI/UI/原生流程实际通过，才标为完成；模拟输入、源码契约或 Mac 测试不能冒充 Windows 实机结果。提交与推送仍需用户明确要求。
 
-## 8. 参考记录与本次核对范围
+## 8. 2026-09-10：0.1.12 本地开发对齐
+
+- 开发阶段范围：M03/M05/M06/M07/M08。仍在独立 Windows 分支；该开发阶段没有 commit/push、Mac 分支更新、正式资料库写入、用户 App 关闭或覆盖安装。随后本机安装结果见下方重试记录。
+- `tests/windows_browser_parity/` 编译真实 Windows 源码；独立隐藏桌面、虚构网页与临时 SQLite 的 **35 项检查通过**。包括实际原生候选控件、共享键盘路径、真实视口截图/blur、取消/缺图回退、原生子目录选择及重复同步，以及三次服务崩溃恢复和重试上限。虚构图标使用隔离 HTTP transport，未使用真实登录会话；不代替全部网站、实体输入法/DPI和用户安装验收。
+- 共享后端 **84 项：78 通过、6 项平台跳过**；JS 语法、变更 Python 编译和 diff 检查通过。Windows 指南更新为 3 页并经 Poppler 渲染检查；没有使用生成页截图冒充原 App 指南截图。
+- `dist/windows-preview-0.1.12/` 是未签名开发产物，包内 Python/UI/API/MCP 两次启动通过；独立 EXE 在隐藏桌面使用临时库、无开发运行时路径启动两次通过。该项只验证开发目录中的本机启动，不能承诺安装目录或其他电脑放行。
+- 首次 sandbox 原生启动停在 WebView2 初始化，正常桌面权限复验通过；开发打包首次因网络限制失败，半成品保留在 `tmp/windows-parity-0.1.12/partial-network-build/`，正常网络权限重建成功。NuGet `NU1900` 漏洞索引不可达仍存在，不声称依赖安全审计通过。标准发布脚本的签名要求保留；随后按用户要求用临时本机未签名配方生成安装器，Windows 在执行前阻断该 EXE（3077/3033）。旧安装逐文件不变，0.1.11 已重开；无安全设置/外部审核变化。备份与恢复核对见 `tmp/install-0.1.12-20260910/` 和 Preview 状态顶部。
+- 后续用户要求重试安装：同一个未签名安装器本次允许执行，退出 0。2109 个实际安装文件匹配，安装目录 EXE 在临时 Library 连续两次启动通过，原库正常关闭/重开通过，窗口可见且四项 API 与 Browser JS 哈希通过。44 篇 papers 和受保护研究/书签/历史行不变，17 个持久研究/缓存文件不变，schema 18 integrity/FK 通过；仅两项自动监控状态设置随启动更新。新备份/安装/重开证据：ignored `tmp/install-0.1.12-retry-20260910/`。Smart App Control 仍 ON（1），没有保护/信任/外部复核变更、重新构建、commit/push；放行变化原因未知。
+- 开发证据：ignored `tmp/windows-parity-0.1.12/latest-native-result.json`、`payload-native-result.json`、`package-check/`、指南渲染；原生截图只含生成的测试页面。完整未对齐项 M01/M02/M04/M09/M10/M11/M12 继续保留。
+- 快照 API 依据：[Chromium Page.captureScreenshot](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-captureScreenshot)。实际输出和交互以本机检查为准。
+
+## 9. 2026-09-10：0.1.13 Browser 导航、快捷键及页面操作
+
+- 在独立 Windows 分支完成开发和本机安装，未 commit/push 或改变 Mac 分支。本轮对齐本地已保留的 Mac 实现（增量此前核对至 `2a12320`），没有宣称拉取了新的远端 Mac 更新。用户原有工作树修改保留。
+- M09：Home 是内存逻辑记录，网页条目引用 Chromium history ID；Back/Forward 调用原生历史，不重建 GET。显示 Favorites 直到新正文提交，取消/失败保留 Home；页内导航、历史分支、旧条目淘汰、迟到回调和关闭标签有边界保护。NewWindowRequested 直接提供目的 WebView，保留原始 POST 与 opener。
+- M10：页面焦点下 Ctrl+L/F/D/T/W/R 与 Ctrl+[ 接通。只有本窗口、选中且可见的网页、无模态窗口/菜单时接管；不接管额外修饰键。Up/Left 原事件照常交给网页，隔离世界只读边界几何，输入/iframe/PDF/自定义控件拒绝交还；最多一个在途探针，迟到结果不改变焦点。
+- M04：Share 菜单含 Add Bookmark、Copy Link、Save Download、Open in Default Browser；工具栏 Save Download 使用同 Browser profile 的独立视图，流式暂存原始 HTTP 响应（64 MB/2 分钟限制），然后系统 Save 对话框选择位置。先完成同目录临时写入再替换目标；取消/异常清理自身暂存，不改变源标签或 Library。PDF/二进制与伪装 PDF 必须来自核实来源，重定向/public URL 限制和独立 workspace token 边界保留。
+- 最终 **80 项隐藏原生检查通过**：实际 WebView2 历史与草稿、取消/迟到、页内分支、popup opener/POST、Win32 消息 Ctrl+L/F/[ 与 Library 返回、四项原生菜单、HTML/PDF 原始字节/允许重定向、未核实/本地重定向/伪装/超限拒绝；并回归 0.1.12 的书签、建议、快照、三次服务恢复及重试上限。所有页面、资料库及下载响应为隔离测试数据；不是实体按键、用户网站登录或完整 Save 对话框验收。
+- 共享 **134 项：125 通过、9 项跳过**；最初未开启 UTF-8 的运行出现 GBK 解码错误，修正运行环境后通过。最终 .NET 编译、JS 语法、Python 编译和 diff 检查通过。Windows HTML/PDF 同源指南为 4 页，全部 Poppler 渲染并检查；未新增或伪造原 App 截图。
+- `dist/windows-preview-0.1.13/` 为标准脚本生成的未签名开发包；开发阶段先验证包内服务/API/MCP 两次启动、中文分析幂等和数据库重启完整性，以及独立原生 EXE 双启动。随后使用临时本机安装配方生成安装器并安装，正式 SQLite、文件与 Browser profile 未用于功能测试。
+- 早期测试遇到 sandbox WebView2 初始化阻塞、WinForms/Win32 焦点差异、测试初始 Library 载入竞争，以及虚拟文件映射不支持 POST；分别在隔离正常权限环境或修正测试/实现后复验。一次中间测试 DLL 被应用控制拦截，原文件重试仍阻断；随后实际功能修订的最终源码检查获准运行。没有修改系统防护、信任或外部复核，不推断放行原因。
+- 安装结果（18:47 JST）：2317 个备份文件已校验，安装退出 0、无需 Windows 重启；2109 个清单内 payload 文件匹配，实际安装目录 EXE 在临时 Library 连续两次启动通过。原库正常关闭/重开后窗口可见，版本登记 0.1.13，四项 API/Browser JS 哈希通过；44 篇 papers 与所有受保护资料/书签/历史行及 17 个持久研究文件不变，schema 18 integrity/FK 通过。仅两项自动监控状态设置随重启更新。证据：ignored `tmp/install-0.1.13-20260910/`；本机仍未签名、Smart App Control ON（1），标准签名门槛不变，没有防护/信任/外部复核或 commit/push 变更。
+- 证据：ignored `tmp/windows-parity-0.1.13/`；API 依据：[Chromium 原生历史](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-getNavigationHistory)、[响应流读取](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-takeResponseBodyAsStream)。M01/M02/M11/M12 和第 4–6 节的真实环境验收仍待完成。
+
+## 10. 参考记录与本次核对范围
 
 - [Windows Preview 状态](WINDOWS_PREVIEW_STATUS.md)：各版本实现及实际验收记录，是本表验证状态的主要来源。
 - [Windows 迁移审计](WINDOWS_MIGRATION_AUDIT.md)：原始基线、产品范围、历史方案与平台边界。

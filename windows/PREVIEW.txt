@@ -7,6 +7,16 @@ Do not relocate or import an existing macOS Library database into this build.
 Included: native Windows window, bundled Python/.NET service, shared research UI,
 SQLite model, file opening, Explorer reveal, and managed .lnk file placements.
 
+Added in 0.1.13: Browser Home/Back/Forward history with retained documents,
+original popup requests (including POST), focused-page keyboard routing and
+Ctrl+[ return to the source workspace, and Save Download/page actions.
+Standalone downloads preserve the source tab and save up to 64 MB; PDF/binary
+responses and redirects remain subject to the verified-source policy.
+
+Added in 0.1.12: selected Chrome bookmark-subtree sync, native history suggestions,
+anonymous session favicons, in-memory blurred capture and bounded local-service
+recovery retaining Browser tabs and unsent webpage forms.
+
 Added in 0.1.11 (Mac changes through 2a12320): scoped AI Access/API/MCP,
 resumable Add All Publications, reference-aware publication deletion with Windows
 Recycle Bin recovery, Subject keyword history and numeric calendars, synchronized

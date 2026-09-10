@@ -174,10 +174,6 @@
     </div><div id="browserContext" class="browser-context" hidden></div>`;
   document.body.append(root);
   if (windowsPreview) {
-    for (const id of ["browserDownload", "browserShare"]) {
-      $(id).disabled = true;
-      $(id).title = "Not available in this Windows Preview yet";
-    }
     $("browserExternal").title = "Open in Default Browser";
     $("browserExternal").setAttribute("aria-label", "Open in Default Browser");
     $("browserAddBookmark").title = "Add Bookmark";
@@ -367,6 +363,7 @@
     if (typeof closeLibraryAddMenus === "function") closeLibraryAddMenus();
     capturePanel = null;
     clearTimeout(c.timer);
+    clearTimeout(c.backdropTimer);
     native({action:"capture-cancel", request_id:c.requestID, token:c.review?.token || "", snapshot_id:c.snapshot?.snapshot_id || ""});
     if (c.review?.token) api("capture_cancel", {token:c.review.token}).catch(() => {});
     c.element.querySelector(".capture-page-backdrop").removeAttribute("src");
@@ -555,6 +552,9 @@
       event.target.value = "";
     };
     c.timer = setTimeout(() => { if (capturePanel === c && !c.snapshot) { captureBusy(c, false); captureStatus(c, "The page did not respond. Close this panel and retry after it loads.", true); } }, 15000);
+    if (windowsPreview) c.backdropTimer = setTimeout(() => {
+      if (capturePanel === c) { c.backdropDone = true; scheduleLayout(); }
+    }, 1500);
     native({action:"capture", request_id:c.requestID});
   }
   async function captureEvent(event) {
@@ -564,7 +564,9 @@
       return;
     }
     if (event.event === "capture-backdrop") {
-      if (event.request_id !== c.requestID || typeof event.image !== "string" || event.image.length > 6 * 1024 * 1024 || !event.image.startsWith("data:image/jpeg;base64,")) return;
+      if (event.request_id !== c.requestID) return;
+      if (windowsPreview) { clearTimeout(c.backdropTimer); c.backdropDone = true; scheduleLayout(); }
+      if (typeof event.image !== "string" || event.image.length > 6 * 1024 * 1024 || !event.image.startsWith("data:image/jpeg;base64,")) return;
       const image = c.element.querySelector(".capture-page-backdrop");
       image.src = event.image; image.hidden = false; scheduleLayout();
     } else if (event.event === "capture-metadata") {
@@ -606,6 +608,7 @@
     }
     const active = data.active;
     const payload = {action:"layout", active, visible:active && !visibleDialog(), sidebarVisible:!data.hidden, canReturnToWorkspace:active && Boolean(data.workspaceReturn), x:rect.x, y:rect.y, width:rect.width, height:rect.height, viewportWidth:innerWidth};
+    if (windowsPreview) payload.capturePreparing = Boolean(capturePanel && !capturePanel.backdropDone);
     const signature = JSON.stringify(payload);
     if (signature !== data.layout) { data.layout = signature; native(payload); }
   }
@@ -707,8 +710,7 @@
     ]) {
       if (windowsPreview && id === "browserSyncSafari") continue;
       const item = document.createElement("button"); item.id = id; item.textContent = title; item.setAttribute("role", "menuitem");
-      item.disabled = Boolean(data.sourceSyncBusy) || (windowsPreview && id.startsWith("browserSync"));
-      if (windowsPreview && id.startsWith("browserSync")) item.title = "Not available in this Windows Preview yet; use HTML Import";
+      item.disabled = Boolean(data.sourceSyncBusy);
       item.onclick = () => { closeContext(); anchor.focus(); Promise.resolve(action()).catch(fail); };
       menu.append(item);
     }
@@ -776,6 +778,7 @@
       }).catch(fail);
     } else if (event.event === "tabs") {
       data.browserTabs = event.tabs || [];
+      if (windowsPreview && data.browserTabs.length) data.opened = true;
       for (const id of data.tabChrome.keys()) if (!data.browserTabs.some(tab => tab.id === id)) data.tabChrome.delete(id);
       renderTabs();
     } else if (event.event === "state") {
@@ -799,9 +802,9 @@
       $("browserSaveGewu").disabled = global.gewuPlatform?.capture === false || !data.url || data.home || event.loading;
       if (global.gewuPlatform?.capture === false) $("browserSaveGewu").title = "Not available in this Windows development build yet";
       $("browserAddBookmark").disabled = !data.url;
-      $("browserDownload").disabled = windowsPreview || !data.url;
+      $("browserDownload").disabled = !data.url;
       $("browserExternal").disabled = !data.url;
-      $("browserShare").disabled = windowsPreview || !data.url;
+      $("browserShare").disabled = !data.url;
       $("browserSiteIcon").title = data.home ? "Local Favorites" : data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
       $("browserBack").disabled = !event.canBack; $("browserForward").disabled = !event.canForward;
       $("browserReload").innerHTML = icon(event.loading ? "stop" : "reload");

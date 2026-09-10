@@ -30,6 +30,12 @@ internal sealed class BrowserPage
     public int Generation;
     public string OriginPaperId = "";
     public string OriginUrl = "";
+    public readonly List<BrowserHistoryEntry> History = [new(null)];
+    public int HistoryIndex;
+    public int? HistoryTarget;
+    public bool DepartingHome;
+    public ulong ActiveNavigation;
+    public Task? Initializing;
 }
 
 internal sealed partial class WorkspaceWindow : Form
@@ -37,6 +43,7 @@ internal sealed partial class WorkspaceWindow : Form
     readonly WebView2 workspace = new() { Dock = DockStyle.Fill };
     readonly Label startup = new() { Text = "Gewu Insight\nStarting your research workspace…", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter };
     readonly List<BrowserPage> pages = [];
+    readonly BrowserFavicons favicons;
     readonly string root;
     readonly string dataRoot;
     readonly string python;
@@ -61,10 +68,14 @@ internal sealed partial class WorkspaceWindow : Form
         Text = "Gewu Insight — Windows Preview";
         Icon = new Icon(Path.Combine(AppContext.BaseDirectory, "GewuInsight.ico"), 256, 256);
         MinimumSize = new Size(900, 640); Size = new Size(1360, 900); StartPosition = FormStartPosition.CenterScreen;
-        Controls.Add(workspace); Controls.Add(startup); startup.BringToFront();
+        favicons = new BrowserFavicons(PublicUrl, (host, data) => EmitAsync(new { @event = "favicon", host, data_url = data }));
+        Controls.Add(workspace); Controls.Add(startup); Controls.Add(suggestions); startup.BringToFront();
+        suggestions.Chosen += async url => await EmitAsync(new { @event = "address-suggestion", url });
+        Deactivate += async (_, _) => { suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
+        ResizeBegin += async (_, _) => { suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
         Activated += (_, _) => { if (!startup.Visible) { var view = selected?.View?.Visible == true ? selected.View : workspace; ActiveControl = view; view.Focus(); } };
         Shown += async (_, _) => { try { await StartAsync(); } catch (Exception error) { startup.Text = "Startup failed\n" + error.Message; } };
-        FormClosing += (_, _) => { stopping = true; CancelCapture(); StopServer(); };
+        FormClosing += (_, _) => { stopping = true; applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); };
         FormClosed += (_, _) => { foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose(); };
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
@@ -136,12 +147,9 @@ internal sealed partial class WorkspaceWindow : Form
         log.WriteLine("Workspace: " + dataRoot);
         using (var socket = new TcpListener(IPAddress.Loopback, 0)) { socket.Start(); origin = new Uri($"http://127.0.0.1:{((IPEndPoint)socket.LocalEndpoint).Port}/"); }
         await StartServerAsync();
-        workspaceToken = File.ReadAllText(Path.Combine(dataRoot, "data", ".gewu-workspace-token")).Trim();
-        if (workspaceToken.Length != 64 || workspaceToken.Any(c => !"0123456789abcdef".Contains(c)))
-            throw new IOException("The private workspace session is invalid. Restore its backup before reopening.");
+        RefreshWorkspaceSession();
         // This client only contacts the workspace origin; redirects are disabled.
         // The remote Browser has a separate profile and never receives this token.
-        client.DefaultRequestHeaders.Add("X-Gewu-Workspace", workspaceToken);
         try { CoreWebView2Environment.GetAvailableBrowserVersionString(); }
         catch (WebView2RuntimeNotFoundException) { throw new InvalidOperationException("Microsoft Edge WebView2 Runtime is required. Install the Evergreen Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and reopen Gewu Insight."); }
         var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "workspace"));
@@ -165,7 +173,7 @@ internal sealed partial class WorkspaceWindow : Form
                     var paths = e.AdditionalObjects.OfType<CoreWebView2File>().Select(file => file.Path).Where(path => File.Exists(path) || Directory.Exists(path)).Take(256).ToArray();
                     if (paths.Length > 0) await WorkspaceScriptAsync("window.handleNativeFinderDrop(" + JsonSerializer.Serialize(paths) + "," + doc.RootElement.GetProperty("payload").GetRawText() + ")");
                 }
-                else if (channel == "appReady") startup.Visible = false;
+                else if (channel == "appReady" && !recoveringService) startup.Visible = false;
                 else if (channel == "paperFileChooser") {
                     using var chooser = new OpenFileDialog { Multiselect = true, Title = "Add Paper Files" };
                     var paperId = TextValue(doc.RootElement.GetProperty("payload"), "paper_id");
@@ -182,10 +190,12 @@ internal sealed partial class WorkspaceWindow : Form
             await workspace.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(bridge.ReadToEnd().Replace("__WORKSPACE_ORIGIN__", JsonSerializer.Serialize(origin!.GetLeftPart(UriPartial.Authority))));
         using (var preview = new StreamReader(typeof(Program).Assembly.GetManifestResourceStream("GewuInsight.Windows.pdf-preview.js")!))
             await workspace.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("if(location.origin === " + JsonSerializer.Serialize(origin!.GetLeftPart(UriPartial.Authority)) + ") {" + preview.ReadToEnd() + "}");
-        workspace.CoreWebView2.NavigationCompleted += (_, e) => { if (e.IsSuccess) { startup.Visible = false; ActiveControl = workspace; workspace.Focus(); } };
+        workspace.CoreWebView2.NavigationCompleted += (_, e) => { if (e.IsSuccess && !recoveringService) { startup.Visible = false; ActiveControl = workspace; workspace.Focus(); } };
         var initialRequest = environment.CreateWebResourceRequest(origin!.AbsoluteUri, "GET", null,
             "X-Gewu-Workspace: " + workspaceToken + "\r\n");
         workspace.CoreWebView2.NavigateWithWebResourceRequest(initialRequest);
+        workspaceReady = true;
+        if (server!.HasExited) await RecoverServiceAsync(server);
     }
 
     async Task StartServerAsync()
@@ -201,13 +211,14 @@ internal sealed partial class WorkspaceWindow : Form
         start.Environment["PYTHONUTF8"] = "1";
         start.Environment["PYTHONIOENCODING"] = "utf-8";
         server = Process.Start(start) ?? throw new IOException("Could not start the local service.");
+        WatchService(server);
         server.OutputDataReceived += (_, e) => { if (e.Data != null) lock (log!) log.WriteLine(e.Data); };
         server.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (log!) log.WriteLine(e.Data); };
         server.BeginOutputReadLine(); server.BeginErrorReadLine();
         for (int i = 0; i < 600; i++) {
             if (server.HasExited) throw new IOException("The local service stopped. See logs/windows-launcher.log.");
             try { using var response = await client.GetAsync(new Uri(origin, "api/health")); if (response.IsSuccessStatusCode) return; } catch (HttpRequestException) { }
-            await Task.Delay(200);
+            await Task.Delay(200, applicationLifetime.Token);
         }
         throw new TimeoutException("The local service did not become ready in two minutes.");
     }
@@ -226,11 +237,19 @@ internal sealed partial class WorkspaceWindow : Form
         if (address.AddressFamily == AddressFamily.InterNetwork) return bytes[0] is not (0 or 10 or 127) && !(bytes[0] == 169 && bytes[1] == 254) && !(bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) && !(bytes[0] == 192 && bytes[1] == 168) && bytes[0] < 224;
         return !IPAddress.IsLoopback(address) && !address.IsIPv6LinkLocal && !address.IsIPv6SiteLocal && !address.IsIPv6Multicast && (bytes[0] & 0xfe) != 0xfc && !address.Equals(IPAddress.IPv6Any);
     }
-    Task EmitAsync(object payload) => stopping || workspace.CoreWebView2 == null ? Task.CompletedTask : workspace.CoreWebView2.ExecuteScriptAsync("window.gewuBrowserNativeEvent?.(" + JsonSerializer.Serialize(payload) + ");");
+    async Task EmitAsync(object payload)
+    {
+        if (stopping || workspace.CoreWebView2 == null) return;
+        try { await workspace.CoreWebView2.ExecuteScriptAsync("window.gewuBrowserNativeEvent?.(" + JsonSerializer.Serialize(payload) + ");"); }
+        catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) {
+            // Native callbacks can finish while the workspace is being replaced.
+            if (!stopping) log?.WriteLine("Workspace event: " + error.Message);
+        }
+    }
     async Task SendStateAsync()
     {
         await EmitAsync(new { @event = "tabs", tabs = pages.Select(p => new { id = p.Id, title = p.Title, url = p.Url, home = p.Home, loading = p.Loading }).ToArray() });
-        await EmitAsync(new { @event = "state", tab_id = selected?.Id, url = selected?.Url ?? "", title = selected?.Title ?? "Home", home = selected?.Home ?? true, loading = selected?.Loading ?? false, progress = 0.5, canBack = selected?.View?.CanGoBack ?? false, canForward = selected?.View?.CanGoForward ?? false });
+        await EmitAsync(new { @event = "state", tab_id = selected?.Id, url = selected?.Url ?? "", title = selected?.Title ?? "Home", home = selected?.Home ?? true, loading = selected?.Loading ?? false, progress = 0.5, canBack = selected != null && selected.HistoryIndex > 0, canForward = selected != null && selected.HistoryIndex < selected.History.Count - 1 });
     }
 
     async Task OpenPageAsync(string url, bool newTab, string originPaperId = "")
@@ -240,21 +259,48 @@ internal sealed partial class WorkspaceWindow : Form
         var page = selected;
         page.OriginPaperId = originPaperId;
         page.OriginUrl = originPaperId.Length > 0 ? url : "";
-        if (url.Length == 0) { page.Home = true; page.Title = "Home"; page.Url = ""; LayoutBrowser(); await SendStateAsync(); return; }
+        if (url.Length == 0) { await ShowHomeAsync(page); return; }
+        await EnsureBrowserViewAsync(page);
+        if (!pages.Contains(page)) return;
+        StopNavigation(page); page.DepartingHome = page.Home;
+        page.View!.CoreWebView2.Navigate(url); LayoutBrowser(); await SendStateAsync();
+    }
+
+    Task EnsureBrowserViewAsync(BrowserPage page) => page.Initializing ??= CreateBrowserViewAsync(page);
+
+    async Task CreateBrowserViewAsync(BrowserPage page)
+    {
         if (page.View == null) {
             page.View = new WebView2 { Visible = false }; Controls.Add(page.View);
             await page.View.EnsureCoreWebView2Async(remoteEnvironment);
-            page.View.GotFocus += (_, _) => DismissMenus();
+            page.View.GotFocus += async (_, _) => { DismissMenus(); suggestions.Hide(); await EmitAsync(new { @event = "suggestions-dismissed" }); };
             var core = page.View.CoreWebView2;
             core.Settings.AreHostObjectsAllowed = false; core.Settings.IsWebMessageEnabled = false;
             core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
-            core.NavigationStarting += async (_, e) => { if (!PublicUrl(e.Uri)) { e.Cancel = true; return; } page.Generation++; page.Loading = true; await SendStateAsync(); };
-            core.SourceChanged += async (_, _) => { page.Url = core.Source; page.Home = false; LayoutBrowser(); await SendStateAsync(); };
-            core.DocumentTitleChanged += async (_, _) => { page.Title = core.DocumentTitle; await SendStateAsync(); };
-            core.NavigationCompleted += async (_, e) => { page.Loading = false; await SendStateAsync(); if (e.IsSuccess && PublicUrl(page.Url)) await EmitAsync(new { @event = "visit", event_id = Guid.NewGuid().ToString("N"), url = page.Url, title = page.Title }); };
-            core.NewWindowRequested += (_, e) => { e.Handled = true; if (PublicUrl(e.Uri)) _ = OpenPageAsync(e.Uri, true); };
+            ConnectNavigation(page);
+            ConnectBrowserKeys(page);
+            core.FaviconChanged += async (_, _) => await favicons.RequestAsync(core.Source, core.FaviconUri);
+            core.NewWindowRequested += async (_, e) => {
+                using var deferral = e.GetDeferral();
+                e.Handled = true;
+                if (!PublicUrl(e.Uri) || pages.Count >= 32 || stopping) return;
+                var popup = new BrowserPage(); pages.Add(popup);
+                try {
+                    await EnsureBrowserViewAsync(popup);
+                    if (stopping || !pages.Contains(popup)) return;
+                    popup.DepartingHome = true; selected = popup;
+                    // Hand Chromium the destination view. The original popup
+                    // request/body and opener relationship stay browser-owned.
+                    e.NewWindow = popup.View!.CoreWebView2;
+                    LayoutBrowser(); await SendStateAsync();
+                } catch (Exception error) {
+                    await ClosePageAsync(popup.Id);
+                    await EmitAsync(new { @event = "error", message = error.Message });
+                }
+            };
             core.WindowCloseRequested += async (_, _) => await ClosePageAsync(page.Id);
             core.DownloadStarting += (_, e) => {
+                if (page.Home) { StopNavigation(page); _ = SendStateAsync(); }
                 string mime = e.DownloadOperation.MimeType ?? "";
                 bool document = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) || mime.Contains("octet-stream", StringComparison.OrdinalIgnoreCase)
                     || Path.GetExtension(e.ResultFilePath).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
@@ -268,10 +314,9 @@ internal sealed partial class WorkspaceWindow : Form
             core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
             core.WebResourceRequested += (_, e) => { if (!PublicUrl(e.Request.Uri) && !e.Request.Uri.StartsWith("data:") && !e.Request.Uri.StartsWith("blob:")) e.Response = remoteEnvironment!.CreateWebResourceResponse(Stream.Null, 403, "Blocked local resource", ""); };
         }
-        page.View.Source = new Uri(url); LayoutBrowser(); await SendStateAsync();
     }
 
-    void LayoutBrowser() { foreach (var page in pages) if (page.View != null) { page.View.Bounds = browserBounds; page.View.Visible = browserVisible && page == selected && !page.Home; if (page.View.Visible) page.View.BringToFront(); } }
+    void LayoutBrowser() { foreach (var page in pages) if (page.View != null) { page.View.Bounds = browserBounds; page.View.Visible = (browserVisible || (browserActive && capturePreparing)) && page == selected && !page.Home; if (page.View.Visible) page.View.BringToFront(); } if (suggestions.Visible) suggestions.BringToFront(); }
     async Task ClosePageAsync(string id) { var page = pages.FirstOrDefault(p => p.Id == id); if (page == null) return; pages.Remove(page); page.View?.Dispose(); if (selected == page) selected = pages.LastOrDefault(); if (selected == null) await OpenPageAsync("", true); LayoutBrowser(); await SendStateAsync(); }
     static string TextValue(JsonElement e, string key) => e.TryGetProperty(key, out var value) ? value.GetString() ?? "" : "";
 
@@ -280,6 +325,12 @@ internal sealed partial class WorkspaceWindow : Form
         string action = TextValue(command, "action");
         switch (action) {
             case "layout":
+                browserActive = command.TryGetProperty("active", out var active) && active.GetBoolean();
+                canReturnToWorkspace = command.TryGetProperty("canReturnToWorkspace", out var canReturn) && canReturn.GetBoolean();
+                browserSidebarVisible = command.TryGetProperty("sidebarVisible", out var sidebar) && sidebar.GetBoolean();
+                capturePreparing = command.TryGetProperty("capturePreparing", out var preparing) && preparing.GetBoolean();
+                favicons.Active = browserActive;
+                if (!browserActive) { suggestions.Hide(); CancelCapture(); }
                 double scale = workspace.Width / Math.Max(1.0, command.GetProperty("viewportWidth").GetDouble());
                 browserBounds = new Rectangle(workspace.Left + (int)(command.GetProperty("x").GetDouble() * scale), workspace.Top + (int)(command.GetProperty("y").GetDouble() * scale), Math.Max(0, (int)(command.GetProperty("width").GetDouble() * scale)), Math.Max(0, (int)(command.GetProperty("height").GetDouble() * scale)));
                 browserVisible = command.GetProperty("visible").GetBoolean(); LayoutBrowser(); break;
@@ -288,17 +339,21 @@ internal sealed partial class WorkspaceWindow : Form
             case "home": await OpenPageAsync("", false); break;
             case "select-tab": selected = pages.FirstOrDefault(p => p.Id == TextValue(command, "tab_id")) ?? selected; LayoutBrowser(); await SendStateAsync(); break;
             case "close-tab": await ClosePageAsync(TextValue(command, "tab_id")); break;
-            case "back": if (selected?.View?.CanGoBack == true) selected.View.GoBack(); break;
-            case "forward": if (selected?.View?.CanGoForward == true) selected.View.GoForward(); break;
+            case "back": if (selected != null) await TraverseHistoryAsync(selected, -1); break;
+            case "forward": if (selected != null) await TraverseHistoryAsync(selected, 1); break;
             case "reload": if (selected?.Home != true) selected?.View?.Reload(); else await SendStateAsync(); break;
-            case "stop": selected?.View?.CoreWebView2.Stop(); break;
+            case "stop": if (selected != null) StopNavigation(selected); await SendStateAsync(); break;
             case "focus": selected?.View?.Focus(); break;
             case "external": if (selected != null && PublicUrl(selected.Url)) Process.Start(new ProcessStartInfo(selected.Url) { UseShellExecute = true }); break;
+            case "share": ShowPageActions(command); break;
+            case "download": if (selected != null) await SaveBrowserDownloadAsync(selected); break;
             case "editor": await EditBookmarkAsync(command); break;
             case "confirm": await ConfirmBrowserActionAsync(command); break;
             case "capture": await CaptureArticleAsync(command); break;
             case "capture-download": await CapturePdfAsync(command); break;
             case "capture-cancel": CancelCapture(TextValue(command, "snapshot_id")); break;
+            case "read-bookmark-source": await ReadBookmarkSourceAsync(command); break;
+            case "choose-bookmark-source-folder": await ChooseBookmarkSourceFolderAsync(command); break;
             case "import-bookmarks":
                 using (var open = new OpenFileDialog { Filter = "Bookmark files|*.html;*.htm;*.zip", Title = "Import Bookmarks" }) {
                     if (open.ShowDialog(this) == DialogResult.OK) {
@@ -320,7 +375,8 @@ internal sealed partial class WorkspaceWindow : Form
                     await EmitAsync(new { @event = "find-result", found = found == "true" });
                 }
                 break;
-            case "favicon": case "suggestions": break;
+            case "favicon": await favicons.RequestAsync(TextValue(command, "url")); break;
+            case "suggestions": ShowSuggestions(command); break;
             default: await EmitAsync(new { @event = "error", message = $"Windows development build: {action} is not connected yet." }); break;
         }
     }
