@@ -2,6 +2,7 @@
 
 ## 2026-09-10：Windows 独立分支提交检查
 
+- **已完成**：Windows 源码提交 [`59fa205c3037db0c387d9456cb8d0cc3a4370b51`](https://github.com/LKong92/Gewu-Insight/commit/59fa205c3037db0c387d9456cb8d0cc3a4370b51) 已推送至新分支 [`codex/windows-preview-0.1.10-20260910`](https://github.com/LKong92/Gewu-Insight/tree/codex/windows-preview-0.1.10-20260910)。实际推送前 Mac `main` 已更新为 `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`；推送后全部既有远端分支与即时推送前完全一致。只创建了 Windows 分支，未创建 PR、合并或强推。
 - 用户明确要求提交 Windows 版并推送至全新分支，绝不能混入远端 Mac 版。目标为 `codex/windows-preview-0.1.10-20260910`；原始源码基线仍为 `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`，不合并 Mac 后续提交，不向 `main` 推送，也不创建合并到 Mac 的 PR。
 - 准备阶段只读查询确认远端 `main` 为 `3e1e50aaffd0822fe9f74df70e07f282daae8adb`，新 Windows 分支尚不存在。后续 Mac 源码差异未检查或移植；详见 [基线与功能差异记录](WINDOWS_MAC_PARITY_TRACKER.md)。
 - 本次重新运行 18 组隔离 Python 检查，共 260 项：258 通过、2 项 macOS 专用跳过，包含 4 项真实 Windows Shell 回收恢复检查。隔离服务健康检查和全部主要区域标记通过；自动 Monitor 关闭，未使用用户研究库或浏览器配置。

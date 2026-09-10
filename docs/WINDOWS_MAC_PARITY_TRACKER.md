@@ -17,6 +17,7 @@
 | 本机克隆时间 | 2026-09-08 16:04:56 +09:00；对应北京时间 15:04:56 |
 | Windows 初始开发分支 | `codex/windows-migration`，从该基线创建 |
 | Windows 独立提交分支 | `codex/windows-preview-0.1.10-20260910`，承接本地 Windows 改动，禁止混入远端 Mac 分支 |
+| 首个 Windows 源码提交 | [`59fa205c3037db0c387d9456cb8d0cc3a4370b51`](https://github.com/LKong92/Gewu-Insight/commit/59fa205c3037db0c387d9456cb8d0cc3a4370b51)，已于 2026-09-10 推送至全新的 Windows 分支 |
 | 本地工作目录 | `C:\Users\Zhengran\Desktop\gewu-insight` |
 | 首次建档时的分支 HEAD | 为上述基线；当时 Windows 产品改动尚未形成新提交。该项是历史起点，不随后续 Windows 提交移动 |
 | 当前 Windows 安装验收版本 | `0.1.10+57a8b2d`；`57a8b2d` 是来源标识，不表示功能已经完全对齐 |
@@ -94,7 +95,7 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 
 ## 7. Mac 后续新增修改的追踪台账
 
-**固定起点永远保留为 `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`。尚未核对该提交之后的 Mac 源码增量。** 2026-09-10 的独立提交准备通过 `ls-remote` 只读确认远端 `main` 已到 `3e1e50aaffd0822fe9f74df70e07f282daae8adb`；这只证明远端已有更新，不代表已审查或移植这些变化。本地缓存的 `origin/main` 不能代替实时远端状态。
+**固定起点永远保留为 `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`。尚未核对该提交之后的 Mac 源码增量。** 2026-09-10 准备阶段的只读查询看到远端 `main` 为 `3e1e50aaffd0822fe9f74df70e07f282daae8adb`；实际推送前再次查询时已到 `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`。Windows 推送之后逐项比对全部既有远端分支，均与即时推送前一致，只有新的 Windows 分支被创建。Mac 源码的这些后续变化没有被合并或移植；本地缓存的 `origin/main` 不能代替实时远端状态。
 
 | 追踪字段 | 当前值 |
 | --- | --- |
@@ -103,6 +104,7 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 | 已完整适配并验收的 Mac 截止提交 | 尚无；基线能力仍存在上述缺项 |
 | Windows 当前版本依据 | Preview `0.1.10+57a8b2d` 的已有安装验收记录 |
 | 独立提交目标 | 仅 `refs/heads/codex/windows-preview-0.1.10-20260910`；不合并、推送更新或覆盖 Mac `main`，不创建合并到 Mac 的 PR |
+| 已发布 Windows 源码快照 | `59fa205c3037db0c387d9456cb8d0cc3a4370b51`；后续仅记录发布结果的文档提交不代表新安装版本 |
 
 后续每次同步，应保留当前 Windows 改动，以原始/上次对照基线、Mac 新源码和 Windows 当前源码做三方比较，逐项填写下表；仅检查过某个提交，不代表已经完成适配。
 
