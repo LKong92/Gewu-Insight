@@ -45,8 +45,10 @@
     byId('aiAccessState').textContent = data.enabled ? 'Enabled for the active connections below.' : 'Disabled. All AI connections are paused.';
     const list = byId('aiConnections');
     list.replaceChildren();
-    if (!data.connections.length) appendText(list, 'p', 'No AI connections yet.', 'ai-muted');
-    for (const connection of data.connections) {
+    const connections = data.connections.filter(connection => !connection.revoked_at);
+    if (secret && !connections.some(connection => connection.id === secret.connectionId)) clearSecret();
+    if (!connections.length) appendText(list, 'p', 'No AI connections. Create a new connection to get started.', 'ai-muted');
+    for (const connection of connections) {
       const row = appendText(list, 'div', '', 'ai-connection');
       const text = appendText(row, 'div', '');
       appendText(text, 'strong', connection.name);
@@ -56,18 +58,20 @@
       const permissions = ['Metadata', ...(connection.scopes.includes('files:read') ? ['File contents'] : []), ...(connection.scopes.includes('analysis:write') ? ['Add analyses'] : [])];
       appendText(text, 'p', range + ' · ' + permissions.join(', '), 'ai-muted');
       const expired = Date.parse(connection.expires_at) <= Date.now();
-      appendText(text, 'small', connection.revoked_at ? 'Revoked' : expired ? 'Expired' : `Expires ${new Date(connection.expires_at).toLocaleDateString()}`);
-      if (!connection.revoked_at) {
-        const revoke = appendText(row, 'button', 'Revoke', 'smallbtn');
-        revoke.type = 'button';
-        revoke.addEventListener('click', () => mutate({action: 'revoke', connection_id: connection.id}, 'Connection revoked.'));
-      }
+      appendText(text, 'small', expired ? 'Expired' : `Expires ${new Date(connection.expires_at).toLocaleDateString()}`);
+      const revoke = appendText(row, 'button', 'Revoke', 'smallbtn');
+      revoke.type = 'button';
+      revoke.addEventListener('click', () => mutate({action: 'revoke', connection_id: connection.id}, 'Connection revoked.'));
     }
     const activity = byId('aiActivity');
     activity.replaceChildren();
+    byId('aiActivityTitle').textContent = `Recent Activity (${data.activity.length})`;
     if (!data.activity.length) appendText(activity, 'p', 'No API activity yet.', 'ai-muted');
-    for (const event of data.activity) appendText(activity, 'p',
-      `${new Date(event.created_at).toLocaleString()} · ${event.name || 'Connection'} · ${event.operation} · ${event.gewu_key || ''} · ${event.outcome}`);
+    for (const event of data.activity) {
+      const row = appendText(activity, 'div', '', 'ai-activity-row');
+      appendText(row, 'p', [event.name || 'Connection', event.operation, event.outcome].join(' · '));
+      appendText(row, 'p', [new Date(event.created_at).toLocaleString(), event.gewu_key].filter(Boolean).join(' · '), 'ai-muted');
+    }
   }
   async function mutate(payload, message) {
     if (busy) return;
@@ -80,7 +84,7 @@
       const data = await request(payload);
       render(data);
       if (data.token) {
-        secret = {token: data.token, config: data.mcp_config};
+        secret = {token: data.token, config: data.mcp_config, connectionId: data.connection.id};
         byId('aiToken').value = data.token;
         byId('aiMcpConfig').value = JSON.stringify(data.mcp_config, null, 2);
         byId('aiCreated').hidden = false;
@@ -125,9 +129,13 @@
           <button id="aiCopyMcp" class="smallbtn" type="button">Copy MCP Configuration</button>
           <details><summary>Configuration</summary><textarea id="aiMcpConfig" readonly rows="9" aria-label="MCP connection configuration"></textarea></details>
         </div>
-        <h3>Connections</h3><div id="aiConnections"></div>
-        <details><summary>Recent Activity</summary><div id="aiActivity"></div></details>
         <p id="aiAccessStatus" class="citation-settings-status" role="status" aria-live="polite"></p>
+        <h3>Connections</h3><div id="aiConnections"></div>
+        <section class="ai-activity-section" aria-labelledby="aiActivityTitle">
+          <h3 id="aiActivityTitle">Recent Activity</h3>
+          <p class="ai-muted" id="aiActivityHint">Latest requests first · up to 50 shown</p>
+          <div id="aiActivity" role="region" aria-labelledby="aiActivityTitle" aria-describedby="aiActivityHint" tabindex="0"></div>
+        </section>
         <button id="aiRefresh" class="smallbtn" type="button">Refresh</button>
       </div></section>`;
     document.body.appendChild(backdrop);
@@ -176,7 +184,7 @@
         event.preventDefault(); event.stopImmediatePropagation();
         if (picker) window.closeLibraryAddMenus?.(); else close();
       } else if (event.key === 'Tab' && !picker) {
-        const controls = [...backdrop.querySelectorAll('button,input,select,textarea,summary')].filter(el => !el.disabled && el.getClientRects().length);
+        const controls = [...backdrop.querySelectorAll('button,input,select,textarea,summary,[tabindex="0"]')].filter(el => !el.disabled && el.getClientRects().length);
         const first = controls[0], last = controls.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
