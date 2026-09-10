@@ -184,7 +184,7 @@ These paths intentionally share one manual. The user-facing behavior, the produc
 Gewu Insight is a local workspace for collecting papers, preserving their files and versions, and following journals, subjects, authors, and your own publications.
 \end{GewuLead}
 
-Guide revision · September 7, 2026 · Browser capture update
+Guide revision · September 9, 2026 · Illustrated windows and settings
 
 \section{Why this workspace exists}\label{why-this-workspace-exists}
 
@@ -565,6 +565,16 @@ Selection, keyboard focus, menus, and scroll position are temporary interface st
 
 Before moving, deleting, or attaching, check the focused pane and selected Paper Details. Similar names can identify different targets: a paper placement, one Paper Files resource, or a standalone file.
 \end{quote}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/user-guide-window.png}\end{center}
+
+\begin{GewuCaption}
+The User Guide window. Help opens a separate searchable manual. The sidebar selects topics; Print Guide opens the complete fixed-layout PDF.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[library-layout]{Library Layout} · \hyperref[navigation]{Navigate with Mouse and Keyboard} · \hyperref[keyboard]{Keyboard Shortcuts}
@@ -1082,9 +1092,9 @@ Folder Loader is a migration-oriented workflow. It imports a visible collection 
 
 \section{How the default file is resolved}\label{how-the-default-file-is-resolved}
 
-An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. Secondary and unknown types remain visible peers but never become automatic defaults.
+An explicit manual default takes precedence while it still exists and is not classified as Invalid file. Otherwise, usable files are ranked as Corrected published version, Published version, Accepted manuscript, then Preprint. If no Default or main PDF exists, Browser Save establishes its first article PDF as a fallback Default even when its type is Unknown. This keeps the version classification intact.
 
-\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, \textbf{Unknown}, and \textbf{Invalid file} do not become the automatic default. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
+\textbf{Supplementary material}, \textbf{Peer review file}, \textbf{Other}, and \textbf{Invalid file} do not become the automatic default. Other Unknown attachments remain peers until selected manually. Any valid resource can still be selected manually; \textbf{Invalid file} is never eligible and remains visible only for audit and repair.
 
 \begin{quote}
 \textbf{Published files}
@@ -1333,11 +1343,15 @@ Quit Gewu Insight, preserve the entire project data set, verify the backup can b
 The Library uses a Finder-style column view, but the database---not the visible folder alone---defines the paper and its relationships.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/library-paper-files.png}\end{center}
 
 \begin{GewuCaption}
 Library and Paper Files. This real paper has two already-classified files: Preprint and Published version. The published file is marked Default. Its folder placement, related files, and Paper Details remain connected.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Read the columns from left to right}\label{read-the-columns-from-left-to-right}
 
@@ -1451,11 +1465,15 @@ Single-click selects a Paper Files item. Double-click opens it. This prevents an
 Folders organize a root. Shortcuts provide another entrance to the Library. Spaces keep an independent root for a project or research context.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/space-workspace.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/space-workspace.png}\end{center}
 
 \begin{GewuCaption}
 A Space. Spaces use the same paper identity and Paper Files model as the Library while keeping an independent organizational root.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Choose the right structure}\label{choose-the-right-structure}
 
@@ -1489,6 +1507,26 @@ Space & An independent project, course, collaboration, or temporary collection. 
 \end{enumerate}
 
 Shortcut and Space tabs can be dragged to change their order. Their inactive colors distinguish the tab groups; the active tab uses the common selected style. With the keyboard, press \texttt{{\symbolfont ←}} from the leftmost content column to focus this rail, use \texttt{{\symbolfont ↑}} and \texttt{{\symbolfont ↓}} to open another source, then press \texttt{{\symbolfont →}} to enter its content.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/add-shortcut.png}\end{center}
+
+\begin{GewuCaption}
+Add Shortcut. Choose an existing Library folder through the column picker. Add creates a navigation shortcut to that folder.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/add-space.png}\end{center}
+
+\begin{GewuCaption}
+Add Space. Give the independent workspace a name, then choose Add. Cancel closes this form without creating a Space.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Color folders and remove navigation entries}\label{color-folders-and-remove-navigation-entries}
 
@@ -1537,6 +1575,16 @@ Move managed papers in Gewu Insight, not directly in Finder. The app updates the
 \begin{GewuLead}
 Search locates items across the managed collection. List View emphasizes browsing; Table View emphasizes metadata comparison.
 \end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/library-search.png}\end{center}
+
+\begin{GewuCaption}
+Search Library. The search field filters the current workspace. Select a result or use Show in Library to reveal its folder location.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Search the collection}\label{search-the-collection}
 
@@ -1799,6 +1847,16 @@ Press Space to inspect the selected resource without changing its paper record. 
 
 With macOS Quick Look, Gewu Insight keeps keyboard focus so you can continue moving through Library or Paper Files while the system panel follows the selection. Rapid navigation is serialized so an older preview request cannot replace a newer selection.
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/pdf-quick-look.png}\end{center}
+
+\begin{GewuCaption}
+Built-in PDF Quick Look. The selected Library PDF appears with page thumbnails and Open in Preview. The document and thumbnail column scroll independently.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \subsection{Read the built-in PDF loading sequence}\label{read-the-built-in-pdf-loading-sequence}
 
 The document viewer starts first and requests the bytes it needs from the local file instead of waiting for the whole PDF to be copied into memory. Page count and other metadata load in parallel. Page thumbnails are scheduled after the embedded document reports loading, so the document and thumbnail strip may appear at different times. That loading signal is not a guarantee that every PDF page has finished painting.
@@ -1814,6 +1872,16 @@ Markdown files (\texttt{.md}, \texttt{.markdown}, \texttt{.mdown}, and \texttt{.
 Supported images, audio, video, and text files can also be inspected inside the workspace. A long text preview may end with {[}Preview truncated{]}; use Open File to read the complete original. Other formats show a file card with \textbf{Open File}; that opens the file in its macOS application. Choose a native mode in \hyperref[quick-look-settings]{Quick Look Settings} for formats better handled by system Quick Look.
 
 Switching between PDFs in the built-in viewer can briefly flash while the next document loads. It does not guarantee the same switching speed or continuity as macOS Quick Look. For rapid comparison, try \textbf{macOS Quick Look for all files}.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/markdown-quick-look.png}\end{center}
+
+\begin{GewuCaption}
+Built-in Markdown Quick Look. This existing README.md renders headings and links. Remote images remain explicit links; nearby local images can appear inline.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Choose Quick Look or Preview}\label{choose-quick-look-or-preview}
 
@@ -1852,11 +1920,11 @@ The default file is the preferred local representation of the paper. You can cho
 
 \subsection{Automatic selection}\label{automatic-selection}
 
-The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, Unknown, and Invalid file never become the automatic default.
+The automatic order is \textbf{Corrected published version}, \textbf{Published version}, \textbf{Accepted manuscript}, then \textbf{Preprint}. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.
 
 \subsection{Automatic and manual eligibility}\label{automatic-and-manual-eligibility}
 
-Only the four publication types above participate in automatic selection. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Use Automatic Selection}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
+The four publication types above take priority in automatic selection, ahead of the first Browser PDF fallback. You may manually choose any existing file except one classified as \textbf{Invalid file}. A manual choice is sticky across rescans, metadata refreshes, and later downloads until you choose \textbf{Use Automatic Selection}. Newly arriving files remain peer rows and do not erase or silently reclassify older files.
 
 \subsection{Choose a file manually}\label{choose-a-file-manually}
 
@@ -1867,11 +1935,11 @@ Only the four publication types above participate in automatic selection. You ma
 \item
   \textbf{Select the file you want.}
 \item
-  \textbf{Choose \textbf{Set as Default}.} This file will be used by \textbf{Open in Preview} and paper preview.
+  \textbf{Choose \textbf{Set as Default}.} This file will be used by \textbf{Open in Preview} and paper preview. You can also pin the automatically selected Default this way.
 \end{enumerate}
 
 \begin{GewuResult}
-\textbf{Result.} The selected file becomes the manual default. Its existing filename and physical location are preserved.
+\textbf{Result.} The selected file becomes the manual default. When it is a PDF, Gewu Insight places it in the main managed file folder and keeps the previous primary PDF in Associated Files. The article and file identities stay unchanged. External originals and files shared with another article are copied safely; existing filenames are retained unless a name conflict requires a unique name. Non-PDF defaults keep their existing location.
 \end{GewuResult}
 
 \subsection{Return to automatic selection}\label{return-to-automatic-selection}
@@ -1899,7 +1967,7 @@ Annotation state is selected independently as \textbf{Annotated}, \textbf{Unanno
 \begin{quote}
 \textbf{Note}
 
-Changing a type, annotation state, source, or default changes database metadata only. It does not rename the file merely to match the label.
+Changing File type can change the automatic Default. When the selected Default is a PDF, its main file location is synchronized too. Annotation and Source remain independent properties; changing a label does not apply a filename template or rewrite the PDF.
 \end{quote}
 
 \begin{GewuRelated}
@@ -2060,6 +2128,12 @@ Deleting a paper reference either removes only that reference or moves the last 
   \textbf{Check the result.} If another Library location or My Publications still refers to the same work, only the selected reference is removed. Otherwise the item moves to \textbf{Recycle} and remains recoverable.
 \end{enumerate}
 
+\subsection{Delete from My Publications}\label{delete-from-my-publications}
+
+Select one or more publications and choose \textbf{Delete}. If a Library, Space, Shortcut or Recycle location still refers to the work, its shared article record, Gewu Key and files remain. Otherwise, deleting this last placement also removes the article record and its identifier tasks from SQLite; private managed files move to macOS Trash. External originals and bytes shared with other articles are preserved. Import history does not keep an otherwise unreferenced article alive.
+
+Removing every currently saved article of a running profile import pauses that import. Continue Import does not restore previously removed source entries. An explicit Add All Publications recheck after completion can add those articles again.
+
 \subsection{Recover an item}\label{recover-an-item}
 
 \begin{enumerate}
@@ -2074,7 +2148,7 @@ Deleting a paper reference either removes only that reference or moves the last 
 
 \subsection{Delete permanently}\label{delete-permanently}
 
-Use final deletion only inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.
+Final deletion of Library items takes place inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.
 
 \begin{quote}
 \textbf{Important}
@@ -2093,6 +2167,16 @@ Use final deletion only inside Recycle. The confirmation summarizes how many pap
 \begin{GewuLead}
 Folder Loader imports an existing directory tree into managed Library storage while preserving relative paths.
 \end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/folder-loader.png}\end{center}
+
+\begin{GewuCaption}
+Folder Loader. Choose a source directory and metadata mode before Import. The live log and Result Guide fill the remaining window height and scroll independently.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Import a folder}\label{import-a-folder}
 
@@ -2162,6 +2246,26 @@ For an ordinary folder, Loader does not guess which files are ``primary'' versus
 Loader maintenance commands fill metadata in batches after the files and folder structure are safely imported.
 \end{GewuLead}
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/loader-metadata.png}\end{center}
+
+\begin{GewuCaption}
+Refresh All Metadata. The maintenance window shows its Library scope, metadata mode and skip rule before Start Refresh.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/loader-identifiers.png}\end{center}
+
+\begin{GewuCaption}
+Find All Missing Identifiers. Start Search checks eligible Library PDFs for missing identifiers. The right pane explains the source policy and retry cooldowns.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \subsection{Refresh known works}\label{refresh-known-works}
 
 \begin{enumerate}
@@ -2169,7 +2273,7 @@ Loader maintenance commands fill metadata in batches after the files and folder 
 \item
   \textbf{Choose \textbf{Loader \textgreater{} Refresh All Metadata}.}
 \item
-  \textbf{Let the queue run.} Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.
+  \textbf{Choose \textbf{Start Refresh}.} Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.
 \item
   \textbf{Review the log.} Recently successful records may be skipped to avoid unnecessary requests.
 \end{enumerate}
@@ -2181,7 +2285,7 @@ Loader maintenance commands fill metadata in batches after the files and folder 
 \item
   \textbf{Choose \textbf{Loader \textgreater{} Find All Missing Identifiers}.}
 \item
-  \textbf{Wait for supported services.} The app checks active Library and Space PDFs using Crossref, OpenAlex, and Semantic Scholar where available.
+  \textbf{Choose \textbf{Start Search}.} The app checks active Library and Space PDFs using Crossref, OpenAlex, and Semantic Scholar where available.
 \item
   \textbf{Review uncertain matches.} Refresh or recover DOI evidence as needed, and edit an incorrect arXiv identifier inline before downloading versions.
 \end{enumerate}
@@ -2308,11 +2412,15 @@ Never migrate by copying only \texttt{paper\_monitor.sqlite} or only the visible
 My Publications keeps a managed publication list, citation sources, author-role statistics, and export tools for your own work.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/my-publications.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/my-publications.png}\end{center}
 
 \begin{GewuCaption}
 My Publications. The active profile, DOI-resolved publication list, citation evidence, article figure, and authorship summary share one view.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Choose your profile}\label{choose-your-profile}
 
@@ -2323,10 +2431,20 @@ My Publications. The active profile, DOI-resolved publication list, citation evi
 \item
   \textbf{Choose \textbf{Find Profile}.} Review candidate profiles carefully.
 \item
-  \textbf{Choose \textbf{Use Profile}.} The saved strip shows the active name and profile photo. Select the photo to open the profile using \hyperref[website-link-settings]{Website Links}; use the remove control to forget it.
+  \textbf{Choose \textbf{Use Profile} to review candidates individually, or \textbf{Add All Publications} to import the complete profile.} The saved strip shows the active name and profile photo. Select the photo to open the profile using \hyperref[website-link-settings]{Website Links}; use the remove control to forget it.
 \end{enumerate}
 
 Already have the paper in Library? Control-click its row and choose \textbf{Add to My Publications}. Multiple selected papers can be added together. The publication list and Library then refer to the same work, files, and Gewu Key.
+
+\subsection{Add all publications or choose individual papers}\label{add-all-publications-or-choose-individual-papers}
+
+\textbf{Use Profile} opens a candidate list where each article retains its own \textbf{Add} button. To import the author\textquotesingle s entire profile, choose \textbf{Add All Publications} beside the correct search profile or at the top of its article candidate list. These controls appear only inside the search/add area; the normal publication table keeps its original layout. The complete import reads successive source pages until the profile ends; it is independent of the 200-title candidate preview and has no 300- or 5,000-paper cutoff. Existing canonical articles and My Publications entries are reused.
+
+The bottom status bar continuously shows active import counts and DOI/arXiv progress, including running, processed, paused, and retry-needed states. Completed imports move into \textbf{Import history}, which distinguishes original import counts from articles currently saved in My Publications. When only history remains, the footer entry reads \textbf{History}. Old imports do not appear in a new author search; its own status or error stays visible in the search panel. Choose \textbf{Details} in that bar to view full progress and import controls without searching again. The search/add panel opens when searching or choosing a profile and stays open until you choose its \textbf{Close} button; clicking a publication or completing a task does not dismiss it. Closing the panel keeps background work running and preserves the table position. \textbf{Pause Import} preserves completed work; \textbf{Continue Import} resumes it. An interrupted source page is retried without adding its successful articles twice. A blocked, unreadable, repeated, or interrupted source page is reported as incomplete with a short reason and guidance to try again later. Technical connection details stay in the diagnostic log. Individual identity conflicts do not stop later articles and remain reported for review and retry. Adding all again after completion explicitly checks the profile from its first page for additional articles.
+
+Both individual Add and Add All automatically queue missing DOI/arXiv identifiers. Articles are saved first, and identifier completion runs separately in the background. Its progress distinguishes matched, unmatched, failed, and pending work. Switching tabs does not stop either task; unfinished work resumes after app restart. Identifier updates preserve the article\textquotesingle s Gewu Key and file relationships. The existing per-candidate \textbf{Retry ID} remains available. When saved articles have unmatched or failed identifiers, \textbf{Retry Unresolved IDs} appears with progress inside the search/add area. Pausing the profile import does not pause identifier work already queued. Articles without a confident match remain saved. This operation does not automatically download PDFs.
+
+After Scholar reports an access restriction, Gewu Insight applies a shared 24-hour pause to Scholar requests. The prompt shows the local retry time; this is an application pause, not a Google-provided IP-ban deadline. Changing authors or restarting does not clear it.
 
 \subsection{Add and update publications}\label{add-and-update-publications}
 
@@ -2388,11 +2506,15 @@ The Overleaf option creates a project ZIP, copies it to the Desktop, and opens O
 Journal Monitor collects papers for a selected publication date and lets you narrow the result by journal, preprint source, and field.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/journal-monitor.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/journal-monitor.png}\end{center}
 
 \begin{GewuCaption}
 Journal Monitor. Nature is selected for August 12, 2026, with scientific figures visible beside the paper cards. The independent sidebar retains calendar counts, the monitor summary, and journal and field filters.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Refresh a date}\label{refresh-a-date}
 
@@ -2498,11 +2620,15 @@ Per-paper status text and the bottom progress area make completed downloads and 
 Subject Monitor discovers papers for reusable topics. Each subject stores a name and literal discovery terms; an optional copied prompt can help you draft those terms outside the app.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/subject-monitor.png}\end{center}
 
 \begin{GewuCaption}
-Subject Monitor. Superconductivity is selected, with matching papers and a superscript asterisk on the partially completed count. The explanation sits below Updates at the bottom of Monitor Summary. Completed empty dates show an unmarked zero.
+Subject Monitor. Superconductivity is selected, with matching papers and numeric calendar counts for that subject. Recorded counts include zero; dates without stored results remain blank.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Create a subject}\label{create-a-subject}
 
@@ -2520,13 +2646,29 @@ Subject Monitor. Superconductivity is selected, with matching papers and a super
 
 Keywords use case-insensitive literal matching. Enter the words or phrases you expect to appear; they are not regular expressions and are not silently expanded into unrelated concepts.
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/subject-editor.png}\end{center}
+
+\begin{GewuCaption}
+Add Subject. Enter a name and one keyword or phrase per line. The same form is used when editing an existing subject; Cancel leaves its saved keywords unchanged.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\subsection{Edit keywords without losing history}\label{edit-keywords-without-losing-history}
+
+Control-click a subject and choose \textbf{Edit}. Saving a new name or keywords keeps its existing paper list, calendar counts, selection, and reading position. New keywords apply to future retrieval. Existing date windows, including empty and incomplete results, remain preserved after a keyword change; background retries and later local arXiv matching do not silently reclassify those windows.
+
+Choose \textbf{Refresh This Subject} explicitly to rebuild that subject\textquotesingle s selected date with the current keywords. A successful refresh replaces only that result window; other dates and subjects remain unchanged. An incomplete refresh preserves previous results. Editing during an active retrieval discards the obsolete result instead of replacing history. Deleting a subject still clears its Subject Monitor matches, without deleting the underlying shared papers or Library files. Previously cleared matches from an older software version are not automatically reconstructed by this fix.
+
 \subsection{Keep one subject selected across dates}\label{keep-one-subject-selected-across-dates}
 
 Selecting a subject makes it the active topic until you choose another one. Moving to a date with no result does not switch the tab back to the first subject, and a subject with zero papers remains selectable. The calendar\textquotesingle s day numbers describe the active subject, so you can see which dates contain papers for that topic rather than a total across every subject. The count beside each subject tab describes that subject on the selected date.
 
-After all sources complete successfully for that subject and date, the calendar shows the stored count, including \textbf{0} for no matching papers. A partially completed fetch also shows its current count, including zero, with a superscript asterisk. The asterisk means one or more sources did not complete, so the count may be incomplete; zero with an asterisk is not a confirmed empty result. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.
+The calendar shows the stored count as a number, including \textbf{0}, for the selected subject and date. Counts have no completeness marker. A date with no stored results and no fetch record remains blank. While a fetch is running, the progress indicator remains visible.
 
-The \textbf{Discovery} row describes the selected subject; its asterisk legend appears at the bottom of \textbf{Monitor Summary}, after Updates and any Errors. Discovery distinguishes \textbf{Completed}, \textbf{Partially completed}, failed, and deferred discovery; failed or deferred attempts also keep their provisional counts marked. Switching subjects changes both the counts and their completion markers. A later successful refresh removes the asterisk, and reopening the app preserves the status recorded in SQLite.
+The \textbf{Discovery} row describes the recorded retrieval status for the selected subject. A completed retrieval is not a guarantee that every relevant paper has been found. Switching subjects changes the counts and recorded status; reopening the app preserves the status stored in SQLite.
 
 \subsection{Refresh subjects}\label{refresh-subjects}
 
@@ -2584,11 +2726,15 @@ Subject Monitor rejects Zenodo records during ingestion and when cached results 
 Author Monitor follows researchers and separates a first-import baseline from newly discovered work.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/author-monitor.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/author-monitor.png}\end{center}
 
 \begin{GewuCaption}
 Author Monitor. Hong Ding\textquotesingle s profile is selected. The paper title leads the details pane, followed by compact actions and a visible Gewu Key; local portraits keep the author list stable.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Add an author}\label{add-an-author}
 
@@ -2607,6 +2753,16 @@ Author Monitor. Hong Ding\textquotesingle s profile is selected. The paper title
 Google Scholar profiles refresh through Scholar with shared pacing and cooldown. A ResearchGate URL identifies the public profile; its publications are matched separately through OpenAlex when configured. If unavailable, Gewu Insight automatically falls back to Semantic Scholar. Confirm the proposed person, especially for similar names.
 
 Without a verified publication-data match, the ResearchGate profile and homepage can be saved, but automatic publication refresh remains unavailable. Profile, publication, and citation sources remain distinct evidence; a fallback does not change the author identity.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/author-add.png}\end{center}
+
+\begin{GewuCaption}
+Add Monitored Author. Enter an author name or a profile URL. This real capture also shows the local Google Scholar pause and retry time; ResearchGate metadata sources remain available.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Review updates}\label{review-updates}
 
@@ -2666,11 +2822,15 @@ Google Scholar requests are paced and protected by a cooldown. Repeated manual r
 Browser is the sixth main tab, after Author Monitor. By default, website links across Library, My Publications and all three Monitors switch here, opening a new webpage tab without replacing existing pages. Choose Setting \textgreater{} Website Links to use the system default browser instead.
 \end{GewuLead}
 
-\begin{center}\includegraphics[width=0.96\linewidth,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/browser.png}\end{center}
 
 \begin{GewuCaption}
-Browser in use. Captured from the original App displaying Nature\textquotesingle s research articles. The real bookmark collection is filtered to Nature; website icons, the webpage tab, and the compact B menu are visible. This is a live interface capture, not a generated demonstration.
+Browser in use. Captured from the original App displaying a fully loaded Nature Physics PDF. The real bookmark collection, webpage tab and Save to Gewu button are visible. This is a live interface capture, not a generated demonstration.
 \end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Search and navigate}\label{search-and-navigate}
 
@@ -2695,6 +2855,16 @@ When you search or follow a link from Home, Home remains visible while the desti
 {{\symbolfont ⌘}F} opens Find on Page. Enter moves to the next match; Shift-Enter moves to the previous match. Browser is available in the native \textbf{Gewu Insight.app}; opening the local UI in a separate web browser does not embed another browser engine.
 
 \textbf{Favorites on Home.} Favorites/Favourites (including localized names) supplies the tiles; use \textbf{Create Favorites Folder} if missing. Open nested folders and return through breadcrumbs; use \textbf{Add Favorite} or right-click to edit. The grid uses the whole main area, without a Google section or divider. Excess tiles use Previous/Next, not vertical scrolling. Bottom bars align; hiding the sidebar keeps Favorites visible. Opening google.com explicitly shows an ordinary webpage, without Home-specific styling or zoom. Bookmarks are not sent to Google.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/browser-home.png}\end{center}
+
+\begin{GewuCaption}
+Browser Home. The original App displays the user\textquotesingle s real Favorites and bookmarks. Home is local; use the address field or a bookmark to open a website.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Use multiple webpage tabs}\label{use-multiple-webpage-tabs}
 
@@ -2795,7 +2965,7 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
 \item
   \textbf{Choose the PDF in Details.} A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click \textbf{Get PDF}, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave \textbf{Include this PDF in Paper Files} selected to attach it.
 \item
-  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. Main article PDFs enable the PDF icon and Space preview. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
+  \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
 \end{enumerate}
 
 Opening Details, identifying or cancelling does not import anything. Save creates or reuses the article and chosen placement, immediately refreshing Paper Files. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. Click \textbf{Show in Library} beside the success message to select the saved article in its Library or Space folder. Browser keeps the webpage.
@@ -2803,6 +2973,36 @@ Opening Details, identifying or cancelling does not import anything. Save create
 \textbf{Source context is a hint.} An Open Website link may lead to another work. Gewu checks the current article and PDF identity before attachment. If identification fails, you can explicitly choose the source article when offered. Conflicting identifiers block saving; open the correct PDF separately or select its matching local file.
 
 \textbf{If PDF retrieval fails:} retry after opening the site\textquotesingle s PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site\textquotesingle s login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu\textquotesingle s built-in Browser; a Safari extension is not included.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/save-gewu-compact.png}\end{center}
+
+\begin{GewuCaption}
+Save to Gewu: compact review. After the article and PDF have been identified, the compact panel keeps File type, Add to Library and the final save action visible.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/save-gewu-details.png}\end{center}
+
+\begin{GewuCaption}
+Save to Gewu: Details. Expanded Details identifies this existing Nature Physics article by its Gewu Key and DOI. The PDF is Ready and classified as Published version before saving.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/library-destination-picker.png}\end{center}
+
+\begin{GewuCaption}
+Choose a Library destination. Read the columns from workspace to folder to subfolder. The bottom path follows the selection. Confirm selects a destination; Save to Library performs the import.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Privacy and compatibility boundaries}\label{privacy-and-compatibility-boundaries}
 
@@ -2831,6 +3031,16 @@ Publisher, Google Scholar, author/profile, preprint, citation-source, Note, remo
 \begin{GewuLead}
 Built-in sources work without setup. Optional credentials improve access or coverage for supported services.
 \end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/open-source.png}\end{center}
+
+\begin{GewuCaption}
+Open Source Settings. Configure discovery and metadata services in one panel. Saved credentials remain masked; each service has its own Save, Test and Clear controls.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Open settings}\label{open-settings}
 
@@ -2890,6 +3100,16 @@ Credentials are local-only: store them in local SQLite or approved environment v
 Choose one or more arXiv subject archives for discovery. Selections can span several research fields or combine several groups within one field.
 \end{GewuLead}
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/arxiv-scope.png}\end{center}
+
+\begin{GewuCaption}
+arXiv Scope Settings. Choose subject archives for future Journal Monitor discovery. Expand a group to inspect its categories; the displayed Condensed Matter selection is an example of a saved preference.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \subsection{Open arXiv Scope Settings}\label{open-arxiv-scope-settings}
 
 Choose \textbf{Setting \textgreater{} arXiv Scope Settings}. The window lists every supported primary subject and its archive groups. Select at least one group, then choose \textbf{Save}.
@@ -2929,6 +3149,16 @@ The category checkboxes in Journal Monitor are display filters. They do not narr
 \begin{GewuLead}
 Choose which research fields appear as separate filters across the workspaces.
 \end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/field-settings.png}\end{center}
+
+\begin{GewuCaption}
+Field Settings. Choose which research fields appear as separate filters. Unchecked fields remain searchable under Other Fields.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Open Field Settings}\label{open-field-settings}
 
@@ -3004,6 +3234,16 @@ Use \textbf{Restore Defaults} to save the four-field default immediately. Field 
 Choose whether Space-bar previews stay inside Gewu Insight, use macOS Quick Look, or divide the work by file format.
 \end{GewuLead}
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/quick-look-settings.png}\end{center}
+
+\begin{GewuCaption}
+Quick Look Settings. Choose built-in previews for all files, a mixed PDF/native workflow, or macOS Quick Look for all supported files.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \subsection{Open Quick Look Settings}\label{open-quick-look-settings}
 
 Choose \textbf{Setting \textgreater{} Quick Look Settings}. Select a mode and choose \textbf{Save}. The setting applies to Space-bar previews in Library, Spaces, Paper Files, and the other research views when a local file is available. Closing without saving leaves the previous mode in effect. \textbf{Restore Default} immediately saves Gewu Insight for all files. The saved mode persists after restarting the App; it does not change Open in Preview. If a preview is already open, saving a different mode refreshes that preview with the newly selected behavior.
@@ -3053,6 +3293,16 @@ When the macOS panel is used, keyboard focus remains in Gewu Insight so \texttt{
 Choose one browser preference for website actions across your research workspaces.
 \end{GewuLead}
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/website-links.png}\end{center}
+
+\begin{GewuCaption}
+Website Links. Choose the browser used by Open Website and the initial Details state of Save to Gewu. The checkbox shown here is a saved user preference; the shipped Details default is collapsed.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 Open \textbf{Setting \textgreater{} Website Links}, select an option, and click \textbf{Save}. The choice applies to the next website action and is remembered after restarting Gewu Insight. Closing the dialog without saving leaves the previous preference in effect.
 
 {\def\LTcaptype{none} % do not increment counter
@@ -3081,11 +3331,294 @@ Local PDFs still open in Preview; Finder, Quick Look, and file downloads retain 
 \textbf{See also:} \hyperref[browser]{Browse, Bookmark, and Revisit Websites} · \hyperref[paper-details]{Use Paper Details} · \hyperref[quick-look-settings]{Quick Look Settings}
 \end{GewuRelated}
 
+\section{AI Access}\label{ai-access}
+
+\begin{GewuLead}
+Give an AI client access to selected papers through their stable Gewu Keys, without navigating the interface.
+\end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/ai-access.png}\end{center}
+
+\begin{GewuCaption}
+AI Access. The enable switch, existing connections and Recent Activity share a compact settings panel. Expand New Connection to choose a scope and permissions.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\textbf{Setting \textgreater{} AI Access} is off by default. Normal App use needs no AI token. Enabling it does not start a model, analyze papers or upload your library. Requests happen only when a connected AI client calls the local service.
+
+\subsection{API, MCP and your token}\label{api-mcp-and-your-token}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Name & Meaning in this connection \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+API & \textbf{Application Programming Interface}: the operations another program can request from Gewu Insight. \\
+MCP & \textbf{Model Context Protocol}: a shared way for an AI client to discover and call tools. Gewu\textquotesingle s local MCP adapter translates those calls into its API requests. \\
+Access token & A private credential issued by Gewu Insight. It authorizes a connection\textquotesingle s paper collection and permissions; it is separate from your AI account login and from text tokens counted by models. \\
+Gewu Key & The stable identifier of a paper. It selects the article; the access token authorizes access to it. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+\subsection{Methodology: a stateful information infrastructure}\label{methodology-a-stateful-information-infrastructure}
+
+Gewu Insight gives people and AI clients a shared, persistent research workspace. \textbf{Stateful} means that cataloged papers, their identities, registered files and saved analyses remain available between tasks. SQLite is the source of truth for records and relationships; the documents remain local files. The Gewu Key lets a person or an authorized AI return to the same paper across conversations and clients.
+
+The API exposes supported operations with defined inputs and structured results. An AI can retrieve a paper by key without navigating the interface or depending on the internal database schema. MCP makes those operations discoverable as tools; a script can use the HTTP API directly. Both use the same underlying records and authorization rules. Gewu supplies the material and stores approved results; the connected AI performs the analysis.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Design choice & How it helps research work \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Stable paper identity & Use one Gewu Key to connect the article, its files and analyses across tasks. A title or filename is not the identity, and knowing a key does not grant access. \\
+Explicit, bounded operations & Search with pagination and read selected pages or text chunks. Programs can compose these steps and limit unnecessary retrieval without relying on screen coordinates. \\
+Persistent, traceable results & Save a Markdown analysis under the same key with source file references. People can inspect it in Paper Files, and another authorized session can retrieve it later. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+This provides a foundation for continuing literature analysis and reusing saved knowledge. It does not automatically preserve an AI\textquotesingle s conversation or reasoning, build a semantic memory index, or synchronize model memory. A later session must explicitly retrieve the records and notes it needs; access still depends on its current grant and the continued availability of those records and files.
+
+\subsection{Two API routes, one authorization boundary}\label{two-api-routes-one-authorization-boundary}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Route & Where permission is checked \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+AI client {\symbolfont →} MCP adapter {\symbolfont →} Gewu API & The adapter sends the connection token to the API. MCP does not grant additional access. \\
+AI client or script {\symbolfont →} Gewu API & The caller supplies the same kind of token directly. Skipping MCP does not skip API authorization. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+For either route, the API checks that AI access is enabled, the token is valid, unexpired and unrevoked, the requested paper is in the connection\textquotesingle s collection, and the operation is permitted. Metadata access alone does not authorize file reading or analysis writing. The native App uses a separate private workspace session for normal human use; an AI token cannot call those internal UI endpoints.
+
+\begin{quote}
+\textbf{Interface authorization and local file permissions}
+
+AI Access controls requests through Gewu\textquotesingle s interfaces. It does not encrypt or isolate SQLite and document files from software that already has operating-system permission to read them. Such software can read the disk without contacting MCP or the API; administrator privileges are not necessarily required. Turning off AI Access or revoking a token stops access through that grant, but does not revoke independent filesystem permissions. This broader local access is outside the AI Access permission boundary.
+\end{quote}
+
+\subsection{Create a connection}\label{create-a-connection}
+
+\begin{enumerate}
+\tightlist
+\item
+  Keep Gewu Insight running and enable \textbf{AI access}.
+\item
+  Expand \textbf{New Connection} and enter a name you will recognize.
+\item
+  Choose Library, Spaces and My Publications; one folder and its subfolders using the usual folder picker; or specific Gewu Keys. A folder connection follows current membership.
+\item
+  Article metadata and file names are readable by default. Separately allow file contents and/or adding new Markdown analyses when your task needs them.
+\item
+  Choose an expiry, then \textbf{Create Connection}. The default is 30 days.
+\item
+  Use \textbf{Copy MCP Configuration} to obtain the local adapter path, Python executable, port and token. Enter these in your AI client\textquotesingle s MCP settings using its required format. See the Codex example below.
+\end{enumerate}
+
+\begin{quote}
+\textbf{Keep the connection private}
+
+The token is shown only after creation. Store it in client configuration, not in a chat message or shared document. If it is lost, revoke that connection and create another. An AI client may send authorized content to its model provider.
+\end{quote}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/ai-new-connection.png}\end{center}
+
+\begin{GewuCaption}
+New AI connection. Set the connection name, accessible papers, file-reading permission, analysis-writing permission and expiry before Create Connection. This example leaves optional permissions unchecked.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
+\subsection{What an authorized AI can do}\label{what-an-authorized-ai-can-do}
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Tool & Result \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{search\_papers} & Search authorized titles, DOI, Gewu Keys and abstracts, with pagination. \\
+\texttt{get\_paper} & Get the article metadata, file inventory and Default file ID for a Gewu Key. \\
+\texttt{read\_paper} & Read PDF page ranges or text/Markdown attachments when file reading is allowed. \\
+\texttt{save\_analysis} & Add a new Markdown analysis to the same paper\textquotesingle s Paper Files when writing analyses is allowed. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+For example, give the AI a Gewu Key, ask it to read the Default PDF, and save a Chinese analysis with source page references. The saved note records its connection, time, key, request ID and supplied source file hash/pages. It remains an ordinary associated Markdown file, available in built-in Quick Look. Returning to Library refreshes the selected paper\textquotesingle s file panel.
+
+Saving an analysis preserves the article identity, existing files, metadata and Default choice. A retry using the same request ID and identical content reuses the saved file. A new analysis needs a new request ID. This API cannot delete papers, edit your original files, change folders or alter the Default.
+
+\subsection{A repeatable research workflow}\label{a-repeatable-research-workflow}
+
+\begin{enumerate}
+\tightlist
+\item
+  \textbf{Identify.} Give the AI an authorized Gewu Key, or use \texttt{search\_papers} to find candidates and confirm the intended paper with \texttt{get\_paper}.
+\item
+  \textbf{Read.} Inspect the file inventory, then use \texttt{read\_paper} for the relevant Default PDF pages or attachments. Retain the returned file ID, SHA-256 and page references.
+\item
+  \textbf{Analyze and save.} Ask the AI to produce a Chinese Markdown analysis. With analysis-writing permission, call \texttt{save\_analysis} under the same key and include the source references. Reuse the request ID only for an identical retry; changed source bytes require a fresh read before saving.
+\item
+  \textbf{Review and continue.} Inspect the note in Paper Files. In another task, retrieve that same paper and explicitly read the saved note before continuing. Each session works with the current authorized state.
+\end{enumerate}
+
+These steps can be combined into a scripted workflow or repeated over a selected collection. Pagination and bounded reads help control how much material is retrieved; they do not guarantee model accuracy or a particular speed. Review the analysis against its cited sources.
+
+\subsection{Example: connect Codex on macOS}\label{example-connect-codex-on-macos}
+
+This example connects a local Codex client to Gewu Insight on the same Mac. Keep Gewu running. Create a connection named \textbf{Codex} using the steps above. Enable \textbf{Read PDF, attachment and note contents} to read full text; metadata-only access cannot read PDFs. Enable \textbf{Add new Markdown analyses to Paper Files} only when you also want Codex to save analyses.
+
+\begin{enumerate}
+\tightlist
+\item
+  Open the desktop client\textquotesingle s \textbf{Settings \textgreater{} MCP servers \textgreater{} Add server}.
+\item
+  Name the server \texttt{gewu-insight} and choose \textbf{STDIO}. This starts our adapter as a local process.
+\item
+  Fill the command, one argument and two environment variables shown below. Use the values from your own \textbf{Copy MCP Configuration}.
+\item
+  Save, then choose \textbf{Restart} to reload the MCP connection.
+\end{enumerate}
+
+These fields follow \href{https://learn.chatgpt.com/docs/extend/mcp?surface=cli}{OpenAI\textquotesingle s MCP configuration documentation} (checked September 9, 2026). The same local Codex host shares MCP configuration across the desktop app, CLI and IDE extension.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Codex field & Example value \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Name & \texttt{gewu-insight} \\
+Type & \texttt{STDIO} \\
+Command & \texttt{\textless{}GEWU\_ROOT\textgreater{}/.venv/bin/python} \\
+Arguments: one entry & \texttt{\textless{}GEWU\_ROOT\textgreater{}/scripts/gewu\_mcp.py} \\
+\end{longtable}
+\GewuTableEnd
+}
+
+\begin{quote}
+\textbf{What \textless GEWU\_ROOT\textgreater{} means}
+
+\texttt{\textless{}GEWU\_ROOT\textgreater{}} is a placeholder for the absolute path to your Gewu program folder: the folder containing \texttt{scripts/gewu\_mcp.py}. It is not the Library folder or the \texttt{.app} bundle. This setup does not require one fixed installation location. Replace the entire placeholder, including the angle brackets, before saving; Codex will not expand it automatically. The command example assumes a project-local \texttt{.venv}. If your Python executable is elsewhere, use the complete \texttt{command} from \textbf{Copy MCP Configuration} instead. Its first \texttt{args} entry supplies the actual script path. Keep a path containing spaces as one field. If you move the installation later, update both paths from a newly generated configuration.
+\end{quote}
+
+\subsubsection{Fill in Environment variables}\label{fill-in-environment-variables}
+
+Under \textbf{Environment variables}, enter the first row below: the left \textbf{Key} box holds the variable name and the right \textbf{Value} box holds its value. Click \textbf{Add environment variable} to add the second row. Enter each name and value separately, without quotation marks or an equals sign.
+
+{\def\LTcaptype{none} % do not increment counter
+\GewuTableStart
+\begin{longtable}[]{@{}>{\RaggedRight\arraybackslash}p{0.27\textwidth}>{\RaggedRight\arraybackslash}p{0.63\textwidth}@{}}
+\toprule\noalign{}
+\rowcolor{GewuTableHeader}
+Key (left box) & Value (right box) \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\texttt{GEWU\_API\_URL} & \texttt{http://127.0.0.1:8765}, or the exact address under \texttt{env} in your generated configuration if the port differs. \\
+\texttt{GEWU\_API\_TOKEN} & Paste the token just created in Gewu Insight using \textbf{Copy Token}. \\
+\end{longtable}
+\GewuTableEnd
+}
+
+Leave \textbf{Environment variable passthrough} empty. It is for forwarding variables already present in the client\textquotesingle s environment; this example supplies both values explicitly above. The API address belongs in these variables while the server type remains \textbf{STDIO}. Copy the token into settings, not the chat.
+
+\subsubsection{Alternative: edit Codex\textquotesingle s configuration file}\label{alternative-edit-codexs-configuration-file}
+
+\textbf{Copy MCP Configuration} currently produces generic JSON. Codex\textquotesingle s file uses TOML, so do not paste that JSON directly into it. If you prefer editing the file, merge this equivalent block into \texttt{\textasciitilde{}/.codex/config.toml}. Replace \texttt{\textless{}GEWU\_ROOT\textgreater{}} as explained above and \texttt{\textless{}GEWU\_TOKEN\textgreater{}} with your copied token; use the generated command and port if they differ. Preserve your other settings; update an existing \texttt{gewu-insight} block instead of adding a duplicate. Keep the quotation marks in this TOML version and reload the connection after saving.
+
+\begin{verbatim}
+[mcp_servers.gewu-insight]
+command = "<GEWU_ROOT>/.venv/bin/python"
+args = ["<GEWU_ROOT>/scripts/gewu_mcp.py"]
+
+[mcp_servers.gewu-insight.env]
+GEWU_API_URL = "http://127.0.0.1:8765"
+GEWU_API_TOKEN = "<GEWU_TOKEN>"
+\end{verbatim}
+
+\subsubsection{Verify a real paper, then request an analysis}\label{verify-a-real-paper-then-request-an-analysis}
+
+Type \texttt{/mcp} in Codex to inspect the connected server. Replace \texttt{YOUR\_GEWU\_KEY} below with the exact key of an authorized paper that has a local PDF, then send:
+
+\begin{quote}
+Use the gewu-insight MCP tools to get the paper with Gewu Key YOUR\_GEWU\_KEY. Show its title and Default filename, then read the first three pages of the Default PDF and summarize them in Chinese.
+\end{quote}
+
+This checks both metadata access and PDF reading. When analysis-writing permission is enabled, you can follow with:
+
+\begin{quote}
+Read the relevant remaining PDF pages, then save a Chinese Markdown analysis to this same paper through save\_analysis. Include the source file ID, SHA-256 and page references, and use a unique request ID.
+\end{quote}
+
+The saved analysis appears as an associated Markdown file under that paper\textquotesingle s Paper Files; the Default PDF stays unchanged. If a tool is missing, check that connection\textquotesingle s permissions and reload MCP. If the service is unavailable, start Gewu; if access is rejected, check the AI switch, expiry, revocation and selected paper collection. A connection that you create later supplies a new token, which must also be updated in Codex.
+
+\subsection{Pause, revoke and review}\label{pause-revoke-and-review}
+
+Turn off \textbf{Enable AI access} to pause all connections. \textbf{Revoke} stops one connection; expired connections also stop working. Re-enabling access resumes connections that are still valid. Expand \textbf{Recent Activity} to review requests and outcomes, and choose \textbf{Refresh} to update the list. Tokens, prompts and full file text are not included in that activity log.
+
+\subsection{Limits and troubleshooting}\label{limits-and-troubleshooting}
+
+The AI client must run on the same computer, and Gewu Insight\textquotesingle s local service must be running. The local MCP adapter supports protocol 2025-11-25 and earlier negotiated versions. There is no remote MCP endpoint in this version. Developers can retrieve the authenticated API v1 specification at \texttt{/api/v1/openapi.json}.
+
+PDF reading is on demand, at most ten pages per request, with a 64 MiB file limit and a bounded extraction time. Text is returned in chunks. Scanned PDFs may need separate OCR; no OCR or model runs automatically. Analysis notes are limited to 256 KiB. A busy response means retry later. An unavailable paper or file may be outside the connection\textquotesingle s collection, missing, or no longer accessible.
+
+Source editing, building and temporary tests require no AI token; calling this API against your collection does require one. Configure each client with the collection and operations its task needs. The interface and filesystem permission boundary is explained above.
+
+\begin{GewuRelated}
+\textbf{See also:} \hyperref[paper-files]{Understand Paper Files} · \hyperref[quick-look]{Preview Files with Quick Look} · \hyperref[privacy]{Local Data and Privacy}
+\end{GewuRelated}
+
 \section{Naming and PDF Rename Rules}\label{naming}
 
 \begin{GewuLead}
 Display naming and physical PDF renaming are separate choices. Review metadata before renaming files.
 \end{GewuLead}
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/pdf-rename-settings.png}\end{center}
+
+\begin{GewuCaption}
+PDF Rename Settings. Edit the filename template and inspect its preview before saving. Available tokens appear beside the template.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \subsection{Choose the Library naming rule}\label{choose-the-library-naming-rule}
 
@@ -3128,7 +3661,7 @@ Edit \textbf{Filename Template} and inspect the sample \textbf{Preview}, then ch
 \begin{quote}
 \textbf{Note}
 
-Changing a Paper Files property or choosing \textbf{Set as Default} does not rename that file. A rename occurs only through a naming or rename action.
+Choosing a Default PDF can move it to the main file folder and archive the previous main PDF in Associated Files. This does not apply the filename template or rewrite file contents; name conflicts use a unique filename. Use a naming or rename action to apply your preferred naming rule.
 \end{quote}
 
 \begin{GewuRelated}
@@ -3222,6 +3755,16 @@ Gewu Insight uses three related marks---the calligraphic Chinese name, the app i
 \end{GewuLead}
 
 The marks do not decorate every surface. Each has a different job: the icon identifies the application, the calligraphic name gives the product a human signature, and the quiet seal-script pattern belongs to transitional or otherwise empty space.
+
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.48\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/about-window.png}\end{center}
+
+\begin{GewuCaption}
+About Gewu Insight. Open the application menu and choose About Gewu Insight to see the product name, version and calligraphic signature.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
 
 \GewuIdentityChapter{The calligraphic name}\label{the-calligraphic-name}
 
@@ -3410,6 +3953,16 @@ Do not attempt to bypass a paywall, CAPTCHA, browser verification, or access con
 The macOS app shows its branded startup view immediately, starts or connects to the local UI service, and reveals the workspace when Library is ready.
 \end{GewuLead}
 
+\par\noindent\begin{minipage}{\linewidth}
+
+\begin{center}\includegraphics[width=0.96\linewidth,height=0.72\textheight,keepaspectratio]{/Users/lingyuan/.codex/worktrees/1870/PaperMonitor-20260516/assets/user-guide/screenshots/font-size.png}\end{center}
+
+\begin{GewuCaption}
+Font Size. Preview one of five reading sizes. Save keeps the selected size; Cancel restores the previous preference.
+\end{GewuCaption}
+
+\end{minipage}\par\medskip
+
 \section{Normal startup}\label{normal-startup}
 
 The first window frame contains the warm background, packaged icon, and Starting Gewu Insight panel. The native startup view is installed before the window is shown, so an empty white web background does not precede the branding. The panel stays visible while the local service and first Library view prepare, then fades into the workspace.
@@ -3554,7 +4107,7 @@ Open the live or previous Loader log and the result guide. Confirm the metadata 
 
 \section{A default file cannot be deleted}\label{a-default-file-cannot-be-deleted}
 
-The preferred Default and the protected physical primary file are not always the same resource. \textbf{Set as Default} changes the reading preference, not the Library\textquotesingle s compatibility primary path; switching defaults does not guarantee that the old file becomes deletable. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An \textbf{Invalid file} remains an audit record and is never eligible to become default.
+A Default PDF is kept as the protected main file. Choose another PDF with \textbf{Set as Default} to move the previous primary PDF into Associated Files, where it remains available as a separate file. A non-PDF default changes the reading preference and leaves the main PDF in place. Remove ordinary non-primary resources through Paper Files. To remove the managed paper itself, use the normal Library reference/Recycle workflow, which preserves shared references. Do not bypass a primary-file warning in Finder. An \textbf{Invalid file} remains an audit record and is never eligible to become default.
 
 \section{Change where website links open}\label{change-where-website-links-open}
 

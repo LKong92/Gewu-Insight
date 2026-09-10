@@ -1,7 +1,7 @@
 """Recoverable Windows Paper Files deletion with a private SQLite journal.
 
-Only the resource-delete transaction is enabled. Other legacy bulk-removal
-paths must remain blocked until they have an equivalent transaction boundary.
+Resource and reference-aware My Publications transactions are enabled. Library
+Recycle bulk removal stays blocked until it has an equivalent transaction.
 The Shell owns its Recycle Bin records; never edit $I/$R internals directly.
 """
 from contextlib import contextmanager
@@ -146,6 +146,13 @@ def recover_pending(storage):
     try:
         records = journal.execute("SELECT * FROM removals").fetchall()
         for record in records:
+            if record["resource_id"] is None:
+                # Publication cleanup is committed only when its canonical paper
+                # disappeared in the same SQLite transaction as its placement.
+                if storage.get_paper(record["paper_id"]):
+                    restore_record(record)
+                finish_record(journal, record)
+                continue
             resource = storage.get_paper_resource(record["resource_id"])
             if resource:
                 if resource["paper_id"] != record["paper_id"] or Path(resource["stored_path"]).resolve() != Path(record["source"]):
@@ -167,6 +174,9 @@ class ResourceRemoval:
         source = Path(source).resolve()
         if not resource or resource["paper_id"] != self.paper_id or Path(resource["stored_path"]).resolve() != source:
             raise OSError("The selected file changed before deletion.")
+        return self.recycle_verified(source)
+
+    def recycle_verified(self, source):
         self.journal, directory = open_journal(self.storage)
         operation_id = uuid.uuid4().hex
         backup = directory / (operation_id + ".backup")
@@ -187,6 +197,35 @@ class ResourceRemoval:
         self.journal.execute("UPDATE removals SET recycled = ? WHERE id = ?", (str(destination), operation_id))
         self.journal.commit()
         return destination
+
+
+class PublicationRemoval:
+    def __init__(self, storage):
+        self.storage = storage
+        self.removals = []
+
+    def recycle(self, source, paper_id):
+        if not self.storage.get_paper(paper_id):
+            raise OSError("The publication changed before deletion.")
+        removal = ResourceRemoval(self.storage, paper_id, None)
+        self.removals.append(removal)
+        return removal.recycle_verified(Path(source).resolve())
+
+    def finish(self):
+        error = None
+        for removal in reversed(self.removals):
+            try:
+                if removal.record:
+                    if self.storage.get_paper(removal.paper_id):
+                        restore_record(removal.record)
+                    finish_record(removal.journal, removal.record)
+            except Exception as exc:
+                error = error or exc
+            finally:
+                if removal.journal:
+                    removal.journal.close()
+        if error:
+            raise error
 
 
 @contextmanager

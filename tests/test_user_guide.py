@@ -18,7 +18,7 @@ class UserGuideTests(unittest.TestCase):
     def local_handler(self):
         handler = object.__new__(ui_server.PaperMonitorUiHandler)
         handler.headers = {"Host": "127.0.0.1:8765"}
-        handler.server = SimpleNamespace(server_port=8765)
+        handler.server = SimpleNamespace(server_port=8765, workspace_access=MagicMock())
         return handler
 
     def test_offline_guide_asset_is_loaded_from_the_python_package(self) -> None:
@@ -113,6 +113,9 @@ class UserGuideTests(unittest.TestCase):
             "arXiv Scope Settings",
             "Field Settings",
             "Quick Look Settings",
+            "AI Access",
+            "Copy MCP Configuration",
+            "save_analysis",
             "Visual Identity and Cultural Elements",
             "Keyboard Shortcuts",
             "Back Up and Upgrade",
@@ -444,7 +447,7 @@ class UserGuideTests(unittest.TestCase):
             " ", strip=True
         )
         for phrase in [
-            "Only the four publication types above participate in automatic selection",
+            "The four publication types above take priority in automatic selection",
             "manually choose any existing file except one classified as Invalid file",
             "manual choice is sticky",
         ]:
@@ -561,10 +564,10 @@ class UserGuideTests(unittest.TestCase):
         for phrase in [
             "Moving to a date with no result does not switch",
             "calendar's day numbers describe the active subject",
-            "including zero, with a superscript asterisk",
-            "zero with an asterisk is not a confirmed empty result",
+            "Counts have no completeness marker",
+            "not a guarantee that every relevant paper has been found",
             "no stored results and no fetch record remains blank",
-            "A later successful refresh removes the asterisk",
+            "reopening the app preserves the status stored in SQLite",
             "arXiv display option is enabled by default",
         ]:
             self.assertIn(phrase, subject_text)
@@ -747,11 +750,36 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/subject-monitor.png",
                 "/user-guide-assets/author-monitor.png",
                 "/user-guide-assets/browser.png",
+                "/user-guide-assets/open-source.png",
+                "/user-guide-assets/arxiv-scope.png",
+                "/user-guide-assets/field-settings.png",
+                "/user-guide-assets/quick-look-settings.png",
+                "/user-guide-assets/website-links.png",
+                "/user-guide-assets/ai-access.png",
+                "/user-guide-assets/pdf-rename-settings.png",
+                "/user-guide-assets/font-size.png",
+                "/user-guide-assets/folder-loader.png",
+                "/user-guide-assets/loader-metadata.png",
+                "/user-guide-assets/loader-identifiers.png",
+                "/user-guide-assets/ai-new-connection.png",
+                "/user-guide-assets/browser-home.png",
+                "/user-guide-assets/save-gewu-compact.png",
+                "/user-guide-assets/save-gewu-details.png",
+                "/user-guide-assets/library-destination-picker.png",
+                "/user-guide-assets/subject-editor.png",
+                "/user-guide-assets/add-shortcut.png",
+                "/user-guide-assets/add-space.png",
+                "/user-guide-assets/library-search.png",
+                "/user-guide-assets/pdf-quick-look.png",
+                "/user-guide-assets/markdown-quick-look.png",
+                "/user-guide-assets/author-add.png",
+                "/user-guide-assets/about-window.png",
+                "/user-guide-assets/user-guide-window.png",
             },
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 7)
+        self.assertEqual(len(screenshot_figures), 32)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:

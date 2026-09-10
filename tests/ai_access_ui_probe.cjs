@@ -1,0 +1,52 @@
+const {chromium}=require('playwright');
+// Run against a synthetic test server only; argv[2] is its private fixture JSON.
+const fs=require('fs'), assert=require('assert'), path=require('path');
+const output=path.dirname(path.resolve(process.argv[2]));
+(async()=>{
+ const fixture=JSON.parse(fs.readFileSync(process.argv[2]));
+ const browser=await chromium.launch({headless:true,channel:process.env.GEWU_TEST_BROWSER || 'chrome'});
+ const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{'X-Gewu-Workspace':fixture.token}});
+ if(process.platform==='win32')await context.addInitScript(()=>{window.gewuPlatform={os:'windows'};});
+ await context.route('**/*',r=>r.request().url().startsWith(fixture.url)?r.continue():r.abort());
+ const page=await context.newPage(); const errors=[];let settingsRequests=0;
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.url().endsWith('/api/settings/ai-access'))settingsRequests++;});
+ await page.goto(fixture.url);await page.waitForFunction(()=>typeof window.openAIAccessSettings==='function');
+ assert.equal(settingsRequests,0);assert.equal(await page.locator('#aiAccessBackdrop').count(),0);
+ await page.waitForFunction(()=>state.libraryItemsById.size>0);
+ await page.evaluate(()=>{state.mode='library';state.libraryTab='library';state.librarySelection={type:'item',id:[...state.libraryItemsById.keys()][0]};setGewuAIAccessEnabled(false);});
+ await page.evaluate(async()=>{const item=state.libraryItemsById.get(state.librarySelection.id);await loadPaperFiles(item.paper_id || item.paper.paper_id);});
+ await page.waitForLoadState('networkidle');
+ let fileCalls=0;page.on('request',r=>{if(r.url().includes('/api/paper-files?'))fileCalls++;});
+ const before=fileCalls;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await page.waitForTimeout(150);assert.equal(fileCalls,before);
+ await page.evaluate(()=>setGewuAIAccessEnabled(true));await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await page.waitForTimeout(250);assert(fileCalls>before);
+ await page.evaluate(()=>{setGewuAIAccessEnabled(false);});
+ await page.evaluate(()=>window.openAIAccessSettings());await page.waitForFunction(()=>document.querySelector('#aiAccessState').textContent.startsWith('Disabled'));
+ assert.equal(await page.locator('#aiReadFiles').isChecked(),false);assert.equal(await page.locator('#aiWriteAnalysis').isChecked(),false);
+ await page.locator('#aiNewConnection summary').click();await page.locator('#aiName').fill('UI Fixture');
+ await page.locator('#aiSelection').selectOption('folder');await page.locator('#aiChooseFolder').click();
+ await page.waitForSelector('.library-add-menu.open .library-add-column');
+ await page.screenshot({path:path.join(output,'folder.png')});
+ await page.locator('.library-add-menu.open').getByRole('menuitem',{name:'Research Group',exact:true}).click();
+ await page.locator(`.library-add-menu.open button[data-folder-id="${fixture.folder}"]`).click();
+ await page.locator('.library-add-menu.open').getByRole('button',{name:'Confirm',exact:true}).click();
+ assert((await page.locator('#aiChooseFolder').textContent()).includes('Research Group / Quantum Notes'));
+ await page.locator('#aiChooseFolder').click();
+ await page.waitForSelector('.library-add-menu.open .library-add-column');
+ await page.keyboard.press('Escape');assert.equal(await page.locator('#aiAccessBackdrop.open').count(),1);
+ await page.locator('#aiSelection').selectOption('saved');await page.locator('#aiReadFiles').check();await page.locator('#aiWriteAnalysis').check();
+ await page.locator('#aiConnectionForm button[type=submit]').click();await page.waitForSelector('#aiCreated:not([hidden])');
+ assert((await page.locator('#aiToken').inputValue()).startsWith('gewu_ai_'));
+ const config=JSON.parse(await page.locator('#aiMcpConfig').inputValue());assert(config.mcpServers['gewu-insight'].args[0].endsWith('gewu_mcp.py'));
+ await page.locator('#aiAccessEnabled').check();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='AI access enabled.');
+ for(const [w,h] of [[1280,900],[800,650],[520,600]]){
+  await page.setViewportSize({width:w,height:h});await page.screenshot({path:path.join(output,`settings-${w}.png`)});
+  const rect=await page.locator('.ai-access-modal').boundingBox();assert(rect.x>=0&&rect.x+rect.width<=w+1&&rect.y>=0&&rect.y+rect.height<=h+1,JSON.stringify(rect));
+ }
+ await page.locator('#aiClose').click();assert.equal(await page.locator('#aiToken').inputValue(),'');assert.equal(await page.locator('#aiMcpConfig').inputValue(),'');
+ await page.evaluate(()=>window.openAIAccessSettings());await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='');
+ assert.equal(await page.locator('#aiCreated').isVisible(),false);
+ await page.locator('.ai-connection').filter({hasText:'UI Fixture'}).getByRole('button',{name:'Revoke'}).click();
+ await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='Connection revoked.');
+ await page.locator('#aiAccessEnabled').uncheck();await page.waitForFunction(()=>document.querySelector('#aiAccessStatus').textContent==='AI access disabled.');
+ await page.locator('#aiClose').click();assert.deepEqual(errors,[]);console.log('UI probe passed');await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});

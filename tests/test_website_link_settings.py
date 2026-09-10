@@ -50,9 +50,11 @@ class WebsiteLinkSettingsTests(unittest.TestCase):
             self.handler.send_json.assert_called_with({"browser": "system", "capture_details_expanded": False})
         storage = Storage(self.path)
         try:
+            storage.set_setting(ui_server.WEBSITE_LINK_BROWSER_SETTING, 'builtin')
+            default_html = ui_server.workspace_html(storage)
             storage.set_setting(ui_server.WEBSITE_LINK_BROWSER_SETTING, '</script><script>alert(1)</script>')
             self.assertEqual(ui_server.website_link_settings_payload(storage), {"browser": "builtin", "capture_details_expanded": False})
-            self.assertEqual(ui_server.workspace_html(storage), ui_server.INDEX_HTML)
+            self.assertEqual(ui_server.workspace_html(storage), default_html)
         finally:
             storage.close()
 

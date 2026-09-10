@@ -7,12 +7,14 @@ import sqlite3
 import threading
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import unquote, urlparse
 
 from .aps import APS_MONITORED_JOURNALS, is_aps_version_of_record
 from .config import DEFAULT_DB_PATH
 from .browser_store import ensure_browser_schema
+from .workflow_store import ensure_workflow_schema, PUBLICATION_REMOVED_BY_USER
+from .ai_store import ensure_ai_schema
 from .text import (
     is_placeholder_publication_title,
     normalize_doi,
@@ -22,7 +24,7 @@ from .text import (
 from .time_utils import local_timezone, now_iso, system_timezone_name
 
 
-STORAGE_SCHEMA_VERSION = 16
+STORAGE_SCHEMA_VERSION = 18
 _STORAGE_SCHEMA_LOCK = threading.RLock()
 APS_RECLASSIFICATION_SETTING = "aps_lifecycle_reclassification_version"
 APS_RECLASSIFICATION_VERSION = "1"
@@ -730,17 +732,23 @@ class Storage:
                 self._seed_library_from_existing_papers()
                 self._ensure_file_path_indexes()
                 ensure_browser_schema(self.conn)
+                ensure_workflow_schema(self.conn)
+                ensure_ai_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
                 self.conn.commit()
             elif schema_version < STORAGE_SCHEMA_VERSION:
                 # Incremental upgrades never repeat provenance backfill or seed
-                # Library placements. v16 adds browser-only tables and indexes.
+                # Library placements. v17 adds resumable jobs and Subject history guards.
                 if schema_version < 15:
                     self._ensure_file_path_indexes()
                 if schema_version < 16:
                     ensure_browser_schema(self.conn)
+                if schema_version < 17:
+                    ensure_workflow_schema(self.conn)
+                if schema_version < 18:
+                    ensure_ai_schema(self.conn)
                 self.conn.execute(
                     f"PRAGMA user_version = {max(schema_version, STORAGE_SCHEMA_VERSION)}"
                 )
@@ -3339,7 +3347,18 @@ class Storage:
             ),
             reverse=True,
         )
-        return automatic[0] if automatic else None
+        if automatic:
+            return automatic[0]
+        # Browser Save can establish the first main PDF before its version is
+        # known. This fallback never outranks a recognized publication version
+        # or a manual Default, and does not adopt ordinary Unknown attachments.
+        primary = by_id.get(int(paper.get("primary_resource_id") or 0))
+        if (primary and primary.get("exists")
+                and primary.get("added_via") == "browser_capture"
+                and normalize_paper_file_type(primary.get("file_type")) == "unknown"
+                and Storage.resource_is_pdf(primary)):
+            return primary
+        return None
 
     def resolve_default_paper_resource(self, paper_id: str) -> dict[str, Any] | None:
         paper = self.get_paper(str(paper_id))
@@ -3480,6 +3499,7 @@ class Storage:
         hits: list[str],
         window_start: str,
         window_end: str,
+        commit: bool = True,
     ) -> None:
         timestamp = now_iso()
         try:
@@ -3516,7 +3536,8 @@ class Storage:
                 last_seen_at=timestamp,
                 commit=False,
             )
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
@@ -4208,9 +4229,53 @@ class Storage:
             raise
         return self.get_my_publication(publication_id=publication_id) or {}
 
-    def delete_my_publication(self, *, publication_id: int) -> None:
-        self.conn.execute("DELETE FROM my_publications WHERE id = ?", (int(publication_id),))
-        self.conn.commit()
+    def delete_my_publication(self, *, publication_id: int) -> dict[str, Any]:
+        return self.delete_my_publications(publication_ids=[publication_id])
+
+    def delete_my_publications(
+        self, *, publication_ids: list[int],
+        prepare_file_cleanup: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Remove placements, then delete last-reference papers atomically.
+
+        Library items include Spaces, Shortcuts and recoverable Recycle entries.
+        Source observations and import history are not ownership references.
+        The UI supplies transactional managed-file cleanup before the SQL delete.
+        """
+        deleted, cleaned, retained = [], [], []
+        affected_jobs = set()
+        try:
+            self.conn.execute('BEGIN IMMEDIATE')
+            for publication_id in dict.fromkeys(int(value) for value in publication_ids):
+                row = self.conn.execute('SELECT paper_id FROM my_publications WHERE id=?', (publication_id,)).fetchone()
+                if not row:
+                    continue
+                paper_id = row['paper_id']
+                affected_jobs.update(r[0] for r in self.conn.execute(
+                    'SELECT DISTINCT job_id FROM publication_import_items WHERE paper_id=?', (paper_id,)))
+                self.conn.execute('UPDATE publication_import_items SET error=? WHERE paper_id=?', (PUBLICATION_REMOVED_BY_USER, paper_id))
+                self.conn.execute('DELETE FROM my_publications WHERE id=?', (publication_id,))
+                deleted.append(publication_id)
+                if self.conn.execute('SELECT 1 FROM library_items WHERE paper_id=? LIMIT 1', (paper_id,)).fetchone():
+                    retained.append(paper_id)
+                    continue
+                paper = self.get_paper(paper_id)
+                if paper and prepare_file_cleanup:
+                    prepare_file_cleanup(paper)
+                self.conn.execute('DELETE FROM papers WHERE paper_id=?', (paper_id,))
+                cleaned.append(paper_id)
+            for job_id in affected_jobs:
+                self.conn.execute('''
+                    UPDATE publication_import_jobs SET status='paused', message='Import paused after deletion', updated_at=?
+                    WHERE id=? AND status IN ('queued','running') AND NOT EXISTS (
+                        SELECT 1 FROM publication_import_items i JOIN my_publications p ON p.paper_id=i.paper_id WHERE i.job_id=?
+                    )
+                ''', (now_iso(), job_id, job_id))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return {'deleted_publication_ids': deleted, 'deleted_paper_ids': cleaned, 'retained_paper_ids': retained}
 
     def reorder_my_publications(self, publication_ids: list[int]) -> None:
         timestamp = now_iso()

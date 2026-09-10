@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -61,6 +62,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertNotIn('class="app-startup-brand-seal"', INDEX_HTML)
         self.assertNotIn('<div class="app-startup-icon">D</div>', INDEX_HTML)
 
+    @unittest.skipUnless(shutil.which("cksum"), "POSIX cksum is required for the macOS bundle icon check")
     def test_dock_and_startup_icons_use_the_current_versioned_asset(self) -> None:
         app = ROOT / "Gewu Insight.app"
         resources = app / "Contents" / "Resources"
@@ -154,11 +156,24 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[LICENSE](LICENSE)", readme)
         self.assertNotIn("Licensed under the MIT License", readme)
 
-        self.assertTrue(readme.startswith("# Gewu Insight\n\n**Keep research objects visible"))
+        heading = "# Gewu Insight\n\n"
+        self.assertTrue(readme.startswith(heading))
+        introduction = readme[len(heading):]
+        windows_branch = introduction.startswith("> This is the independent Windows Preview branch ")
+        if windows_branch:
+            branch_notice, separator, introduction = introduction.partition("\n\n")
+            self.assertEqual(separator, "\n\n")
+            self.assertTrue(all(line.startswith("> ") for line in branch_notice.splitlines()))
+            self.assertIn("The macOS product continues on `main`", branch_notice)
+        self.assertTrue(introduction.startswith("**Keep research objects visible"))
         self.assertIn("## Platform support", readme)
         self.assertIn("the current native desktop release", readme)
-        self.assertIn("planned as an experimental desktop release", readme)
-        self.assertIn("not yet a supported distribution", readme)
+        if windows_branch:
+            self.assertIn("an experimental x64 installer", readme)
+            self.assertIn("not feature complete or accepted as equivalent to macOS", readme)
+        else:
+            self.assertIn("planned as an experimental desktop release", readme)
+            self.assertIn("not yet a supported distribution", readme)
         self.assertIn("## Name and Chinese origin", readme)
         self.assertGreater(readme.index("格物洞见"), readme.index("## Name and Chinese origin"))
 
@@ -172,7 +187,7 @@ class MacosWindowBehaviorTests(unittest.TestCase):
         self.assertIn("[self.window.contentView addSubview:self.startupView", source)
         self.assertIn("overlay.animator.alphaValue = 0.0;", source)
         self.assertIn("[overlay removeFromSuperview];", source)
-        self.assertIn("[self.webView loadRequest:[NSURLRequest requestWithURL:self.url]];", source)
+        self.assertIn("[self.webView loadRequest:[self workspaceRequestForURL:self.url]];", source)
 
         self.assertIn("function finishAppStartup()", INDEX_HTML)
         self.assertIn("window.webkit?.messageHandlers?.appReady", INDEX_HTML)

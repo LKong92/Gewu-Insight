@@ -1,5 +1,23 @@
 # User Guide audit — September 6, 2026
 
+## September 9 AI methodology follow-up
+
+- Expand AI Access before the connection instructions with the roles of stable Gewu Keys, persistent SQLite records and local files, structured API operations, and MCP tool discovery. Explain that later sessions explicitly retrieve saved state; automatic model-memory synchronization and semantic indexing are not implemented.
+- Document both MCP-to-API and direct HTTP routes under the same token, collection and operation checks. Separate these interface permissions from independent operating-system file access, which is outside AI Access's scope and does not necessarily require administrator privileges.
+- Add an identify/read/analyze-and-save/review-and-continue workflow with source file IDs, hashes, page references, retry IDs and human review. Keep the existing Codex setup example, path placeholders and screenshots.
+- Synchronize the shared HTML, generated LaTeX/PDF, bundled PDF and developer-facing `AI_ACCESS.md`. Allow long AI Access UI labels to wrap in the narrow HTML guide; this affects documentation presentation only.
+- Validation: 26 existing Guide/audit checks and six PDF structure checks pass. Headless HTML layout, methodology search and navigation pass at 1440, 960 and 520 pixels after fixing the narrow-width label overflow. The initial sandboxed Chrome launch failed; the temporary-profile rerun succeeded. The 102-page PDF retains all 32 screenshots; AI Access pages 81–86 and continuous Product Identity pages 90–92 were rendered and visually reviewed. No API behavior, grants, schema or research data changed, and the broader runtime test suite was not rerun for this documentation update.
+
+## September 9 illustrated-window follow-up
+
+- Expand the original seven screenshot slots to 32 real App captures, with one shared asset set for HTML and PDF. The [screenshot inventory](USER_GUIDE_SCREENSHOTS.md) records every figure and its capture boundaries.
+- Replace Browser's unloaded-ad example and the unsuccessful arXiv identification attempt with a fully loaded Nature Physics PDF; the expanded Save to Gewu capture confirms an existing key, DOI, PDF Ready and Published version.
+- Recapture Field Settings with unrelated settings closed. All packaged settings illustrations use a single foreground panel.
+- Fix native Loader's inherited body-height cap so both lower panels reach the normal 12-point bottom padding. Match AI Access to the compact settings type scale and use flat permission separators. These are presentation changes, with no discovery, import, token or database logic changes.
+- Explicitly name Start Refresh and Start Search in the maintenance instructions. Preserve the existing topic anchors, Codex configuration example and Product Identity's continuous chapter flow.
+- Validation: actual Loader geometry at three heights and AI Access at three widths passed using temporary test data; final images were inspected from the installed original App. All 26 guide checks, six PDF structure checks and 36 Python compile checks pass. The rebuilt 101-page PDF has 32 screenshots; 43 relevant pages were rendered and visually reviewed. Each capture stays with its caption, and Product Identity chapters still flow continuously.
+
+
 ## Scope and method
 
 Re-audited all 47 registered in-app topics against product checkpoint
@@ -106,7 +124,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Backup and Migration](../paper_monitor/user_guide.html#backup-migrate) | Clarify quit versus close, database/file consistency, Browser profile exclusion and API-key sensitivity. |
 | [My Publications](../paper_monitor/user_guide.html#my-publications) | Find Profile, Manual Metadata, individual author marks, Files controls, Library add, visible-row export scope and Desktop Overleaf ZIP; publication/render/export handlers. |
 | [Journal Monitor](../paper_monitor/user_guide.html#journal-monitor) | Retain Nature example, counts, subscriptions and provenance; clarify Website Links, Refresh This Journal and Note drawer controls. |
-| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Retain keyword groups, matching scores, saved results after Library add, superscript incomplete marker and Zenodo exclusion; theme/UI tests. |
+| [Subject Monitor](../paper_monitor/user_guide.html#subject-monitor) | Retain keyword groups, matching scores, saved results after Library add, numeric calendar counts and Zenodo exclusion; theme/UI tests. |
 | [Author Monitor](../paper_monitor/user_guide.html#author-monitor) | Retain Hong Ding, profile matching and New/Read All; add Date/Citations, Conferences, author/identifier refresh and exact profile menu labels. |
 | [Browser](../paper_monitor/user_guide.html#browser) | Expand current navigation, tabs, history suggestions, lifecycle and credential limits; Browser store/native/policy/layout tests. |
 | [Open Source Settings](../paper_monitor/user_guide.html#citation-settings) | Preserve old anchor for links; complete Save/Test/Clear, masks/Show, status and free-only budget behavior. Source settings tests. |
@@ -114,6 +132,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Field Settings](../paper_monitor/user_guide.html#field-settings) | Clarify Save, unsaved close and immediate Restore Defaults; preserve canonical classification versus visible grouping. |
 | [Quick Look Settings](../paper_monitor/user_guide.html#quick-look-settings) | Three mode labels, Save/unsaved-close and immediate Restore Default; `saveQuickLookSettings`, `resetQuickLookSettings`, shared preview routing. |
 | [Website Links](../paper_monitor/user_guide.html#website-link-settings) | Built-in default or macOS default browser; Save, unsaved close, Restore Default, persistence, research-link scope, Preview/Finder and Browser exceptions. |
+| [AI Access](../paper_monitor/user_guide.html#ai-access) | Default-off local API and MCP; Codex STDIO fields, explicit environment rows, path placeholders, TOML and verification prompts; connection collection, permissions, expiry and revoke; file reads, append-only Markdown analysis, provenance, limits and the filesystem permission boundary. |
 | [Naming](../paper_monitor/user_guide.html#naming) | New unnamed placements versus explicit file rename; tokens, sample, Save/Default and batch rename checked against native menu, settings and rename handlers. |
 | [Storage Model](../paper_monitor/user_guide.html#storage-model) | Retain managed roots, associated bundles and identity independent of filenames; storage/file-operation tests. |
 | [Privacy](../paper_monitor/user_guide.html#privacy) | Retain local-first, network access, private exports and credentials; Browser/profile details cross-referenced. |
@@ -142,7 +161,7 @@ Current refresh status:
 | Author Monitor | Newly captured with Hong Ding selected. Reviewed without pointer overlay. |
 | Journal Monitor | Newly captured on August 12, 2026 with Nature selected and article figures visible. Reviewed without pointer overlay. |
 | My Publications | Existing real App capture reviewed; no pointer found. |
-| Subject Monitor | Newly captured from the original App on August 27, 2026 with Superconductivity selected, cached papers and the partial-count legend visible. Window-only capture is pointer-free. |
+| Subject Monitor | Recaptured September 9, 2026 from the original App, matching the user's view: August 2026 calendar, September 2 results, Superconductivity selected (16 shown / 40 visible), beginning with the Ising-superconductor diode paper. Numeric counts, with no asterisk or legend. Native window-content capture excludes the title bar and contains no pointer, Computer Use badge, or sharing overlay. |
 | Space | Newly captured from the original Tobit Space with Single-shot parity readout of a minimal Kitaev chain selected and Paper Files visible. Window-only capture is pointer-free. |
 
 The original App became responsive after the intervening system WebCrypto
@@ -414,3 +433,77 @@ settings dialog is left open. Health, served HTML/PDF and resource hashes pass.
 Only normal UI preference/history/selection changes occurred; no direct research
 data, credential or benchmark operations. These validation runs did not commit or push;
 subsequent commit/push was explicitly requested by the user.
+
+
+## Numeric Subject calendar (September 9)
+
+The Subject calendar now shows stored numbers without the completeness asterisk,
+its tooltip or its sidebar legend. Fetch status, retry behavior and stored
+results are unchanged. The in-app text and generated manual describe the numeric
+counts and distinguish retrieval completion from exhaustive literature coverage.
+The Subject illustration is retained and replaced with a fresh original-App
+capture matching the user's date and subject selection. The August 2026 calendar
+is visible beside September 2 results for Superconductivity, starting with the
+Ising-superconductor diode paper (16 shown / 40 visible). A native Core Graphics
+window-content capture frames the full calendar, summary and result area below
+the title bar, excluding the Computer Use sharing badge without retouching the
+image. No pointer or control overlay is included. All seven original-App
+illustrations remain in both the interactive and fixed-layout guides.
+
+Validation: 52 focused Subject/history/Guide tests and six PDF structure checks
+pass, along with Python compilation and diff checks. The regenerated PDF has
+79 pages; pages 54–55 were rendered and visually checked. All seven screenshot
+figures remain, and Product Identity 4-1–4-4 flows continuously on pages 69–70.
+Original and worktree source/Guide assets and signed bundles are synchronized.
+The disabled isolated App is not updated. No direct database or fetch changes.
+
+
+## September 9 AI Access update
+
+Added the AI Access settings chapter and navigation entry to the shared HTML/PDF
+source. The API v1 developer reference is `docs/AI_ACCESS.md`; generated OpenAPI
+is `paper_monitor/ai_openapi.json`. This is opt-in access, not automatic analysis.
+The guide distinguishes normal App sessions from scoped AI tokens and direct
+filesystem permission. Both editions document the four implemented MCP tools,
+file/analysis permission choices, expiry, revocation, provenance and retry rules.
+All seven existing screenshots are preserved. The new PDF section on pages 66–67
+was rendered and inspected; Product Identity chapters still flow continuously.
+
+
+## September 9 Codex connection example
+
+Both Guide editions and `docs/AI_ACCESS.md` now explain API, MCP, the private
+access token and the Gewu Key, followed by an end-to-end Codex example. The
+example separates Command/Arguments from the two Environment variables rows,
+identifies the left Key and right Value boxes, explains Add environment variable,
+and explicitly leaves Environment variable passthrough empty.
+
+`<GEWU_ROOT>` denotes the actual absolute program folder containing
+`scripts/gewu_mcp.py`; it is neither the Library nor the App bundle. No fixed
+installation location is assumed. The project-local Python path is only an
+example: the generated configuration supplies the installation's real interpreter,
+script and port. Placeholders must be replaced, paths with spaces stay in one
+field, and moving the installation requires updating the paths. Only placeholder
+tokens are printed. The generic copied JSON is distinguished from Codex's TOML,
+with a matching TOML block, metadata/PDF validation prompt and optional analysis
+save prompt. Local desktop configuration follows the
+[official OpenAI MCP documentation](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+checked September 9, 2026.
+
+Validation: all 26 existing Guide/audit tests and six PDF structure checks pass.
+The HTML and Markdown TOML examples parse and match, with the expected two
+environment keys. The 82-page PDF was rendered and pages 66–69 visually reviewed;
+the final example pages 66–68 are pixel-identical to that review. All seven
+original-App illustrations remain, and Product Identity chapters 4-1–4-4 still
+flow continuously on pages 72–73. The interactive Guide fits 1280, 900 and 640 px
+windows; environment names remain unbroken and no page overflow occurs. The
+initial sandbox browser launch was denied; an authorized temporary headless
+browser completed the layout checks. No new illustration is used.
+
+The original source and both signed App bundles contain the same PDF; the live
+original service serves matching HTML/PDF bytes and remains healthy with the
+same UI process (78889). No App restart, AI connection creation, client
+configuration change or research-data modification was performed during this
+documentation update. Commit and push were requested afterward.
+The documentation/App backup and installation verification are retained at
+`/private/tmp/gewu-codex-guide-before-2eow2ja4/`.

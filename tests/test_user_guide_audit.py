@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("September 7, 2026", self.topic("welcome"))
+        self.assertIn("September 9, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 
@@ -38,8 +38,9 @@ class GuideAuditTests(unittest.TestCase):
         self.assertNotIn("Choose Image, Data, Code", adoption)
         self.assertIn("Supplementary material", adoption)
         self.assertIn("Other", adoption)
-        self.assertIn("physical primary", self.topic("troubleshooting"))
-        self.assertIn("switching defaults does not guarantee", self.topic("troubleshooting"))
+        self.assertIn("Default PDF is kept as the protected main file", self.topic("troubleshooting"))
+        self.assertIn("previous primary PDF into Associated Files", self.topic("troubleshooting"))
+        self.assertIn("Non-PDF defaults keep their existing location", self.topic("versions-current"))
 
     def test_profile_and_loader_instructions_use_real_labels_and_context(self):
         profile_button = BeautifulSoup(ui_server.INDEX_HTML, "html.parser").find(id="findMyPublications")
@@ -89,7 +90,7 @@ class GuideAuditTests(unittest.TestCase):
         figure = self.soup.find("article", id="browser").find("figure")
         caption = figure.find("figcaption").get_text(" ", strip=True)
         self.assertIn("Captured from the original App", caption)
-        self.assertIn("Nature's research articles", caption)
+        self.assertIn("Nature Physics PDF", caption)
         self.assertIn("real bookmark collection", caption)
         self.assertIn("not a generated demonstration", caption)
         self.assertNotIn("public sample bookmarks", caption)

@@ -30,6 +30,9 @@ UninstallDisplayIcon={app}\Gewu Insight.exe
 CloseApplications=no
 RestartApplications=no
 InfoBeforeFile=PREVIEW.txt
+SignTool=gewu
+SignedUninstaller=yes
+SignToolRunMinimized=yes
 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

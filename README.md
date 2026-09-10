@@ -435,6 +435,13 @@ export CROSSREF_MAILTO=your.name@example.edu
 
 ## User Guide
 
+**Setting → AI Access** provides optional, revocable access for AI clients through
+Gewu Keys. It is off by default. Create a connection with a paper collection and
+permissions, then copy its MCP configuration into your AI client. Reading file
+contents and adding Markdown analyses are separate permissions; ordinary App use
+needs no AI token. See [AI Access and API v1](docs/AI_ACCESS.md) for setup, limits
+and the access boundary.
+
 Choose **Help → User Guide** inside the app. The offline manual covers:
 
 - product philosophy and the persistent paper object;

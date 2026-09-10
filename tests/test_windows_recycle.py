@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from paper_monitor import ui_server as ui, windows_recycle as recycle
 from paper_monitor.storage import Storage
+from paper_monitor.publication_deletion import delete_publications
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows Shell integration")
@@ -78,3 +79,46 @@ class WindowsRecycleTests(unittest.TestCase):
         self.assertEqual(recycle.recover_pending(self.storage), 0)
         recycle.restore_shell_item(receipts[0], self.path)  # Clean only this test's Shell item.
         self.assertEqual(self.path.read_bytes(), b"Disposable file recovery check")
+
+    def test_publication_sql_failure_restores_managed_file(self):
+        publication = self.storage.add_my_publication(paper_id='fixture')
+        self.storage.conn.execute("CREATE TRIGGER publication_abort BEFORE DELETE ON papers BEGIN SELECT RAISE(ABORT, 'publication rollback'); END")
+        self.storage.conn.commit()
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'publication rollback'):
+            delete_publications(self.storage, [publication['id']])
+        self.assertEqual(self.path.read_bytes(), b'Disposable file recovery check')
+        self.assertIsNotNone(self.storage.get_paper('fixture'))
+        self.assertEqual(len(self.storage.list_my_publications()), 1)
+        self.assertEqual(recycle.recover_pending(self.storage), 0)
+
+    def test_publication_commit_recycles_file_and_preserves_shared_reference(self):
+        publication = self.storage.add_my_publication(paper_id='fixture')
+        self.storage.add_library_item(paper_id='fixture', folder_id=1)
+        result = delete_publications(self.storage, [publication['id']])
+        self.assertEqual(result['retained_paper_ids'], ['fixture'])
+        self.assertTrue(self.path.exists())
+        self.storage.conn.execute('DELETE FROM library_items WHERE paper_id=?', ('fixture',))
+        self.storage.conn.commit()
+        publication = self.storage.add_my_publication(paper_id='fixture')
+        receipts = []
+        original = recycle.recycle_file
+        def capture(path):
+            receipt = original(path); receipts.append(receipt); return receipt
+        with patch.object(recycle, 'recycle_file', side_effect=capture):
+            result = delete_publications(self.storage, [publication['id']])
+        self.assertEqual(result['deleted_paper_ids'], ['fixture'])
+        self.assertEqual(result['trashed_file_count'], 1)
+        self.assertFalse(self.path.exists())
+        self.assertEqual(recycle.recover_pending(self.storage), 0)
+        recycle.restore_shell_item(receipts[0], self.path)
+
+    def test_publication_interruption_recovers_using_canonical_paper(self):
+        self.storage.add_my_publication(paper_id='fixture')
+        removal = recycle.PublicationRemoval(self.storage)
+        receipt = removal.recycle(self.path, 'fixture')
+        for pending in removal.removals:
+            pending.journal.close()
+        self.assertFalse(self.path.exists())
+        self.assertEqual(recycle.recover_pending(self.storage), 1)
+        self.assertEqual(self.path.read_bytes(), b'Disposable file recovery check')
+        self.assertFalse(receipt.exists())

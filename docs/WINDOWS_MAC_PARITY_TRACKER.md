@@ -1,6 +1,6 @@
 # Mac → Windows 迁移基线与功能差异记录
 
-记录日期：2026-09-10（Asia/Tokyo）。适用版本：Windows Preview `0.1.10+57a8b2d`，版本依据为现有安装验收记录，本次未重新运行安装版。
+记录日期：2026-09-10（Asia/Tokyo）。当前实际安装和运行已恢复为 **Windows Preview 0.1.11**，15:48 JST 正式关闭后重开、About 版本、Library/AI Access 菜单与认证服务均通过。此前受阻的原始 DLL 在 15:37 JST 本地复测获准，随后用原包重新安装；Smart App Control 仍开启，二进制未修改或签名，未提交外部复核。放行变化的具体原因未确定。正式原库已由 schema 16 升至 18，论文/资料/文件保留。0.1.11 源码同步 Mac 至 `2a12320`；用户要求免费使用、保留专有许可。第 3–6 节保留原基线差异，第 7 节记录增量与验证边界。
 
 用途：固定 Windows 的 Mac 源码起点，记录尚未迁移的功能与验收缺口，并作为后续 Mac 更新同步的台账。**当前 Windows 仍未达到与该 Mac 基线功能一致的验收状态。**
 
@@ -20,7 +20,7 @@
 | 首个 Windows 源码提交 | [`59fa205c3037db0c387d9456cb8d0cc3a4370b51`](https://github.com/LKong92/Gewu-Insight/commit/59fa205c3037db0c387d9456cb8d0cc3a4370b51)，已于 2026-09-10 推送至全新的 Windows 分支 |
 | 本地工作目录 | `C:\Users\Zhengran\Desktop\gewu-insight` |
 | 首次建档时的分支 HEAD | 为上述基线；当时 Windows 产品改动尚未形成新提交。该项是历史起点，不随后续 Windows 提交移动 |
-| 当前 Windows 安装验收版本 | `0.1.10+57a8b2d`；`57a8b2d` 是来源标识，不表示功能已经完全对齐 |
+| 当前安装 / 原生验收版本 | `0.1.11` 已恢复安装并通过正式启动/重开，About 与 AI Access 首屏通过；仍未完整验收所有原生功能 |
 
 证据链：本地 `.git/config` 记录仓库 URL；`.git/logs/HEAD` 和 `.git/logs/refs/heads/main` 记录克隆到该 SHA；`.git/refs/heads/codex/windows-migration` 记录当前 HEAD。[迁移审计](WINDOWS_MIGRATION_AUDIT.md)与 [Preview 状态](WINDOWS_PREVIEW_STATUS.md)也记录同一完整基线。
 
@@ -95,13 +95,13 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 
 ## 7. Mac 后续新增修改的追踪台账
 
-**固定起点永远保留为 `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`。尚未核对该提交之后的 Mac 源码增量。** 2026-09-10 准备阶段的只读查询看到远端 `main` 为 `3e1e50aaffd0822fe9f74df70e07f282daae8adb`；实际推送前再次查询时已到 `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`。Windows 推送之后逐项比对全部既有远端分支，均与即时推送前一致，只有新的 Windows 分支被创建。Mac 源码的这些后续变化没有被合并或移植；本地缓存的 `origin/main` 不能代替实时远端状态。
+**固定起点永远保留为 `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`。本次已核对并三方合入其后至 `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42` 的 8 个提交。** 此前 Windows 分支首次推送没有移植这些变化，也没有改变任何既有远端分支；那是历史操作。本次用户明确要求同步，已获取并检查远端，但仅修改本地 Windows 工作树，没有新的 commit/push。0.1.11 的后端、MCP、headless UI、升级副本及本机正式安装/启动/重开已验证；原包放行后的恢复与仍待完成的签名工作详见 [Windows Preview 状态](WINDOWS_PREVIEW_STATUS.md)。
 
 | 追踪字段 | 当前值 |
 | --- | --- |
 | Mac 原始迁移基线 | `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d` |
-| 后续 Mac 增量已检查到 | 尚未检查；只确认原始基线 |
-| 已完整适配并验收的 Mac 截止提交 | 尚无；基线能力仍存在上述缺项 |
+| 后续 Mac 增量已检查到 | `2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`；8 个提交已合入，Windows 0.1.11 已安装并正常启动/重开 |
+| 已完整适配并验收的 Mac 截止提交 | 尚无；基线缺项保留。0.1.11 本机安装/启动和 AI Access 首屏已验证，不能替代完整功能验收 |
 | Windows 当前版本依据 | Preview `0.1.10+57a8b2d` 的已有安装验收记录 |
 | 独立提交目标 | 仅 `refs/heads/codex/windows-preview-0.1.10-20260910`；不合并、推送更新或覆盖 Mac `main`，不创建合并到 Mac 的 PR |
 | 已发布 Windows 源码快照 | `59fa205c3037db0c387d9456cb8d0cc3a4370b51`；后续仅记录发布结果的文档提交不代表新安装版本 |
@@ -110,7 +110,12 @@ M05–M12 中部分缺口是本次源码对照单独识别的；本次没有实�
 
 | Mac 提交 / 对照区间 | Mac 功能变化与文件 | Windows 对应修改或无需修改的理由 | 状态 | Windows 版本 / 提交及实际验证 |
 | --- | --- | --- | --- | --- |
-| 基线之后的增量待获取 | 尚未核对 | 尚未评估 | 待检查 | 无 |
+| `af4fcf3` | Subject 历史、Add All Publications、标识补全、引用感知删除 | 共享模块合入；删除增加 Windows Shell/SQLite 恢复事务 | 源码及隔离流程通过；0.1.11 已恢复安装/运行，正式库 schema 18 | 0.1.11；335 项通过/18 跳过中的对应测试及 headless UI |
+| `f961a49` | Subject 纯数字日历，移除星号与说明 | 共享 UI、测试及 AGENTS 规则同步；内部状态保留 | 同上 | Subject 历史/日历检查通过 |
+| `d5cacfc` | Default PDF 主路径、Unknown 首份 PDF、PDF 按钮拖入 | 保留 Windows 预览和 .lnk 实现；共享身份/位置/拖入逻辑三方合入 | 共享流程通过，真实手势待验收 | 合成上传/保存/重复/回滚及 DOM 拖入检查通过 |
+| `ac290ca` | AI Access/API/MCP、私有 UI 会话、schema 18 | Settings/原生请求适配，Windows 私有 DACL，包内脚本、UTF-8、重启端口跟随 | 服务/MCP/headless UI 通过；0.1.11 真实 AI Access 首屏与重开后认证服务通过 | 两次包内服务启动、PDF 读取、中文分析与幂等重试通过 |
+| `520bc56`、`5151c04`、`3e1e50a` | AI 说明、32 张截图/102 页指南、Loader/Settings 布局 | Mac 参考指南及共享 CSS 更新；独立 Windows HTML/PDF 补充新功能与安装版配置 | Windows 指南与 headless 布局通过 | 3 页 Windows PDF 渲染检查；原生窗口待验收 |
+| `2a12320` | Browser 标签禁止选字 | 共享 CSS 合入 | CSS 与目标提交一致，原生实际双击待验收 | 未恢复或改变正文/地址栏选字规则 |
 
 维护规则：
 

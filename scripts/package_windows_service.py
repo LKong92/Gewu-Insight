@@ -22,6 +22,8 @@ source.mkdir()
 for name in ("paper_monitor", "assets"):
     shutil.copytree(root / name, source / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 (source / "config").mkdir()
+(source / "scripts").mkdir()
+shutil.copy2(root / "scripts" / "gewu_mcp.py", source / "scripts" / "gewu_mcp.py")
 shutil.copy2(root / "config" / "journals.json", source / "config" / "journals.json")
 shutil.copy2(root / "windows" / "service_entry.py", output / "service_entry.py")
 # No import site: disable user site-packages, environment and registry paths.

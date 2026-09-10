@@ -37,10 +37,11 @@ assert.ok(dayMarkup().includes('<span class="count"></span>'));
 state.themeCounts[iso] = {alpha: 0, beta: 4};
 rememberThemeLastFetch(iso, "ALL", {groups: {alpha: {status: "partial"}, beta: {status: "success"}}});
 let markup = dayMarkup();
-assert.ok(markup.includes('>0<sup class="calendar-count-partial"'));
-assert.ok(markup.includes('aria-label="Incomplete discovery"'));
+assert.ok(markup.includes('class="count">0</span>'));
+assert.ok(!markup.includes('<sup'));
+assert.ok(!markup.includes('Incomplete discovery'));
 state.themeCounts[iso].alpha = 3;
-assert.ok(dayMarkup().includes('>3<sup'));
+assert.ok(dayMarkup().includes('class="count">3</span>'));
 state.activeThemeGroupKey = "beta";
 assert.ok(dayMarkup().includes('class="count">4</span>'));
 assert.ok(!dayMarkup().includes('<sup'));
@@ -53,7 +54,8 @@ assert.ok(dayMarkup().includes('class="count">0</span>'));
 assert.equal(state.themeCalendarFetches[iso].beta.status, "success");
 for (const status of ["partial", "error", "deferred", "waiting"]) {
   rememberThemeLastFetch(iso, "alpha", {groups: {alpha: {status}}});
-  assert.ok(dayMarkup().includes('>0<sup'), status);
+  assert.ok(dayMarkup().includes('class="count">0</span>'), status);
+  assert.ok(!dayMarkup().includes('<sup'), status);
 }
 state.themeFetchingDates.add(iso);
 assert.ok(dayMarkup().includes('class="fetching-dot"'));
@@ -75,7 +77,7 @@ assert.ok(dayMarkup().includes('class="count"></span>'));
         self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for sidebar rendering tests")
-    def test_discovery_sidebar_uses_selected_subject_and_explains_the_asterisk(self):
+    def test_discovery_sidebar_uses_selected_subject_without_asterisk_legend(self):
         helpers = "function themeCalendarFetchStatus" + INDEX_HTML.split(
             "function themeCalendarFetchStatus", 1
         )[1].split("function updateCalendarDayButton", 1)[0]
@@ -101,13 +103,13 @@ function autoMonitorStatusDetails() { return {parts: [], warning: false}; }
 ''' + helpers + sidebar + r'''
 renderMonitorSidebarSummary();
 assert.ok(root.innerHTML.includes('Partially completed'));
-assert.ok(root.innerHTML.includes('<sup>*</sup> Incomplete discovery'));
-assert.ok(root.innerHTML.includes('counts may be incomplete'));
-assert.ok(root.innerHTML.indexOf('Updates') < root.innerHTML.indexOf('monitor-discovery-note'));
+assert.ok(!root.innerHTML.includes('Incomplete discovery'));
+assert.ok(!root.innerHTML.includes('monitor-discovery-note'));
+assert.ok(root.innerHTML.includes('Updates'));
 state.themeSummary.errors = ["One source did not complete"];
 renderMonitorSidebarSummary();
-assert.ok(root.innerHTML.indexOf('Errors') < root.innerHTML.indexOf('monitor-discovery-note'));
-assert.ok(root.innerHTML.endsWith('Counts and status refer to the selected subject.</div>'));
+assert.ok(root.innerHTML.includes('Errors'));
+assert.ok(!root.innerHTML.includes('monitor-discovery-note'));
 state.themeSummary.errors = [];
 state.activeThemeGroupKey = "beta";
 renderMonitorSidebarSummary();

@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from pypdf import PdfWriter
 
@@ -25,6 +25,7 @@ class ManualPdfAttachmentTests(unittest.TestCase):
             patch.object(ui_server, "SPACES_LOCAL_COPY_ROOT", self.spaces_root),
             patch.object(ui_server, "MY_PUBLICATIONS_LOCAL_COPY_ROOT", self.publications_root),
             patch.object(ui_server, "DEFAULT_PDF_DIR", self.pdf_root),
+            patch.object(ui_server, "ASSOCIATED_FILES_ROOT", self.root / "data" / "Associated Files"),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -97,6 +98,38 @@ class ManualPdfAttachmentTests(unittest.TestCase):
         self.assertEqual(target, self.publications_root / "Publication.pdf")
         self.assertTrue(source.exists())
         self.assertEqual(paper["merged_pdf_path"], str(target))
+
+    def test_pdf_import_handlers_return_current_file_snapshot_in_both_workspaces(self) -> None:
+        for native_path in (False, True):
+            for workspace in ("library", "my-publications"):
+                with self.subTest(native_path=native_path, workspace=workspace):
+                    paper_id = "http-" + workspace + str(native_path)
+                    self.add_paper(paper_id)
+                    if workspace == "my-publications":
+                        self.storage.add_my_publication(paper_id=paper_id)
+                    else:
+                        self.storage.add_library_item(paper_id=paper_id, folder_id=1)
+                    source = self.write_pdf("external/" + paper_id + ".pdf")
+                    handler = object.__new__(ui_server.PaperMonitorUiHandler)
+                    handler.configured_db_path = self.storage.db_path
+                    handler.send_json = MagicMock()
+                    handler.send_error_json = MagicMock()
+                    payload = {"paper_id": paper_id, "context": workspace, "folder_id": 1}
+                    if native_path:
+                        handler.handle_manual_pdf_path({**payload, "source_path": str(source)})
+                    else:
+                        handler.read_multipart_body = MagicMock(return_value=(payload, {
+                            "pdf": {"filename": source.name, "content": source.read_bytes()}
+                        }))
+                        handler.handle_manual_pdf()
+                    handler.send_error_json.assert_not_called()
+                    response = handler.send_json.call_args.args[0]
+                    snapshot = response["paper_files"][0]
+                    self.assertEqual(snapshot["paper_id"], paper_id)
+                    self.assertEqual(len(snapshot["files"]), 1)
+                    self.assertEqual(snapshot["files"][0]["local_path"], response["paper"]["merged_pdf_path"])
+                    self.assertEqual(Path(snapshot["files"][0]["local_path"]).read_bytes(), source.read_bytes())
+                    self.assertTrue(source.exists())
 
     def test_non_pdf_content_is_rejected_without_writing_a_copy(self) -> None:
         self.add_paper("paper-invalid")
@@ -254,7 +287,7 @@ class ManualPdfAttachmentTests(unittest.TestCase):
     def test_existing_pdf_download_buttons_are_drop_replacement_targets(self) -> None:
         self.assertIn('data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}"', ui_server.INDEX_HTML)
         self.assertIn('data-pdf-replace="1"].drag-over::after', ui_server.INDEX_HTML)
-        self.assertIn('replacing: Boolean(paper.merged_pdf_path)', ui_server.INDEX_HTML)
+        self.assertIn('replacing: button.dataset.pdfReplace === "1"', ui_server.INDEX_HTML)
 
     def test_science_supplement_is_merged_after_main_and_temporary_source_is_not_stored(self) -> None:
         self.add_paper("paper-science")

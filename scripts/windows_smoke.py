@@ -73,7 +73,8 @@ def run(output: Path, *, tests: bool, test_patterns: list[str] | None = None) ->
                         time.sleep(0.15)
                 else:
                     raise TimeoutError("UI did not become healthy in 30 seconds")
-                with opener.open(base, timeout=5) as response:
+                token = (workspace / 'data' / '.gewu-workspace-token').read_text(encoding='utf-8').strip()
+                with opener.open(urllib.request.Request(base, headers={'X-Gewu-Workspace': token}), timeout=5) as response:
                     page = response.read().decode("utf-8")
                 result["ui"] = {label: label in page for label in (
                     "Library", "My Publications", "Journal Monitor", "Subject Monitor",

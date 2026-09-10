@@ -40,7 +40,8 @@ internal sealed partial class WorkspaceWindow : Form
     readonly string root;
     readonly string dataRoot;
     readonly string python;
-    readonly HttpClient client = new(new HttpClientHandler { UseProxy = false });
+    readonly HttpClient client = new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+    string workspaceToken = "";
     Process? server;
     CoreWebView2Environment? remoteEnvironment;
     BrowserPage? selected;
@@ -112,7 +113,7 @@ internal sealed partial class WorkspaceWindow : Form
             } catch (Exception error) { log?.WriteLine("Naming Rule menu: " + error.Message); }
         };
         settings.DropDownItems.Add(naming);
-        foreach (var (label, function) in new[] { ("PDF Rename Settings", "openPdfRenameSettings"), ("Preview Settings", "openQuickLookSettings"), ("Website Links", "openWebsiteLinkSettings"), ("arXiv Scope Settings", "openArxivSettings"), ("Open Source Settings", "openCitationSettings"), ("Field Settings", "openFieldSettings"), ("Font Size", "openFontSizeSettings") }) {
+        foreach (var (label, function) in new[] { ("PDF Rename Settings", "openPdfRenameSettings"), ("Preview Settings", "openQuickLookSettings"), ("Website Links", "openWebsiteLinkSettings"), ("AI Access", "openAIAccessSettings"), ("arXiv Scope Settings", "openArxivSettings"), ("Open Source Settings", "openCitationSettings"), ("Field Settings", "openFieldSettings"), ("Font Size", "openFontSizeSettings") }) {
             settings.DropDownItems.Add(label, null, async (_, _) => { if (workspace.CoreWebView2 != null) await workspace.CoreWebView2.ExecuteScriptAsync(function + "()"); });
         }
         settings.DropDownItems.Add(new ToolStripMenuItem("Clear Monitor Cache (not yet available)") { Enabled = false });
@@ -135,6 +136,12 @@ internal sealed partial class WorkspaceWindow : Form
         log.WriteLine("Workspace: " + dataRoot);
         using (var socket = new TcpListener(IPAddress.Loopback, 0)) { socket.Start(); origin = new Uri($"http://127.0.0.1:{((IPEndPoint)socket.LocalEndpoint).Port}/"); }
         await StartServerAsync();
+        workspaceToken = File.ReadAllText(Path.Combine(dataRoot, "data", ".gewu-workspace-token")).Trim();
+        if (workspaceToken.Length != 64 || workspaceToken.Any(c => !"0123456789abcdef".Contains(c)))
+            throw new IOException("The private workspace session is invalid. Restore its backup before reopening.");
+        // This client only contacts the workspace origin; redirects are disabled.
+        // The remote Browser has a separate profile and never receives this token.
+        client.DefaultRequestHeaders.Add("X-Gewu-Workspace", workspaceToken);
         try { CoreWebView2Environment.GetAvailableBrowserVersionString(); }
         catch (WebView2RuntimeNotFoundException) { throw new InvalidOperationException("Microsoft Edge WebView2 Runtime is required. Install the Evergreen Runtime from https://developer.microsoft.com/microsoft-edge/webview2/ and reopen Gewu Insight."); }
         var environment = await CoreWebView2Environment.CreateAsync(null, Path.Combine(dataRoot, "webview", "workspace"));
@@ -176,7 +183,9 @@ internal sealed partial class WorkspaceWindow : Form
         using (var preview = new StreamReader(typeof(Program).Assembly.GetManifestResourceStream("GewuInsight.Windows.pdf-preview.js")!))
             await workspace.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync("if(location.origin === " + JsonSerializer.Serialize(origin!.GetLeftPart(UriPartial.Authority)) + ") {" + preview.ReadToEnd() + "}");
         workspace.CoreWebView2.NavigationCompleted += (_, e) => { if (e.IsSuccess) { startup.Visible = false; ActiveControl = workspace; workspace.Focus(); } };
-        workspace.Source = origin;
+        var initialRequest = environment.CreateWebResourceRequest(origin!.AbsoluteUri, "GET", null,
+            "X-Gewu-Workspace: " + workspaceToken + "\r\n");
+        workspace.CoreWebView2.NavigateWithWebResourceRequest(initialRequest);
     }
 
     async Task StartServerAsync()

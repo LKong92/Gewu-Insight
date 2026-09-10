@@ -1,4 +1,70 @@
-# Windows Preview 0.1.10 — 实现与验收状态
+# Windows Preview — 实现与验收状态
+
+## 2026-09-10：0.1.11 Windows 分支提交验证
+
+- 用户明确授权 commit/push，目标仅为 `codex/windows-preview-0.1.10-20260910`；不向 `main` 或其他 macOS 分支推送。本次提交包含现有 0.1.11 产品源码、指南、签名防护和测试，资料库、研究文件、安装器、诊断产物及备份仍只保留本地。
+- 对 20 个变更测试模块重新执行 333 项：331 通过，2 项因需要 macOS Cocoa/WebKit/xcrun 或 POSIX `cksum` 跳过；69 个 Python 文件编译与 6 个 JavaScript 语法检查通过。修正了测试对 `cksum` 和 README 平台说明的旧假设；不是全仓库测试。现有 UI 字符串的 `\s` SyntaxWarning 仍存在。
+- 签名工具的 5 项防护断言全部通过，包括保留已有有效签名、拒绝无效签名和缺失发布凭据、含特殊字符的 Inno 回调，以及签名失败时禁止产出安装器。负向测试的 Inno 退出码 2 为预期结果；没有真实发布凭据，也没有声称完成发行签名。
+- 52 个源码、资源和 Windows 指南文件逐一匹配已安装的 0.1.11；本轮只增加测试兼容性与状态记录，没有重建或改动正式安装。此前原安装位置的真实启动、正常关闭重开与打包 MCP 检查见下文。验证记录保留在 ignored `tmp/windows-push-0.1.11-20260910/`。
+
+## 2026-09-10 16:07 JST：按用户确认删除 3159 条未收藏论文记录
+
+- 用户明确要求删除此前 3203 条中的其余 **3159 条**，保留关联 Publications、Library 或研究文件的 **44 篇**。原生应用正常关闭后，对正式 schema 18 数据库作独立备份，并备份/核对 11 个受管及引用文件；先在数据库副本验证同一删除事务，再应用于正式库。
+- 仅删除明确列出的 3159 个 paper_id，并按现有 SQLite 外键规则移除其监控结果、来源观察、已读状态等关联记录。44 篇完整论文行、39 项 Publications、8 个 Library 条目、5 个文件夹、4 项 resources 均逐行不变，文件字节与选择的工作区不变；所有表的最终变化均与事先计算的级联结果一致，integrity_check OK、外键错误 0。
+- 取消 3 项属于被清理 Subject 窗口的旧重试记录，同步剩余重试数为 0，避免旧任务立即补回这些记录。保留监控配置、历史 fetch_runs、正常每日监控机制和手动刷新功能；这次是既有记录清理，不是永久禁止未来获取论文。没有删除研究文件、报告、浏览器配置或历史备份。
+- 0.1.11 正常重开后仍恰好为 44 篇，全部 3159 个删除 ID 均不存在；保留的论文/资料表与 11 个文件再次核对一致。真实 Library 原目录和条目可见，health、认证工作区、Library bootstrap、My Publications 均返回 200。当前 App/服务为 35068/27072；程序仍使用原安装目录和原研究库。
+- 记录及恢复资料保留在 ignored `tmp/paper-cleanup-3159-20260910/`：`before.sqlite`、研究文件备份、`plan.json`（精确保留/删除清单和摘要）、`trial-result.json`、`result.json`、`reopened.json`。只执行了用户批准的数据清理和本地状态文档更新；没有产品源码/安装包改动或 commit/push。下方 3203 篇的数字是清理前安装核对的历史状态。
+
+## 2026-09-10 15:48 JST：0.1.11 已恢复启动并通过正式重开
+
+- **当前安装和运行均为 0.1.11**。15:37 JST 直接复测此前受阻的原始 DLL，在隐藏桌面、独立临时库中成功启动。随后用原安装器恢复正式安装目录，退出 0；2109 个程序文件逐一匹配原包。实际安装位置的隔离启动和认证工作区也通过后，15:43 JST 打开正式库，正常关闭并再次打开成功。真实 About 显示 0.1.11，Library 原目录/文件可见，Settings → AI Access 正常打开，保持 Disabled、无连接。最后留在可响应的 Library 窗口。
+- Smart App Control 一直为 1（开启）；DLL 仍未签名，SHA-256 仍为 `F7E53BDE8D88469F96BC51264720B6E28493460EC49ED8E830E5EC58E09349B4`。没有重新编译、修改二进制、签名、外部复核、证书信任或防护设置改动。当前放行结果已实测，但现有证据不能说明同一文件为何由阻止变为允许，也不能承诺其他电脑或后续构建一定获准。正规发布签名仍待真实凭据。
+- 恢复前完整备份并核对 2083 个旧版/研究文件；旧版正常运行期间仅自动监控的三个状态设置发生变化，关闭后另存 `before-launch.sqlite` 静止检查点。新版打开前，26 张原有表和 10 个研究文件均与该检查点/备份一致。首次正常启动将 schema 16 升至 18，新增 7 张工作流/AI 表；原 papers、Publications、Library、资源内容保留，仍为 **3203 papers / 39 Publications / 8 items / 5 folders / 4 resources**，10 个原研究文件哈希和工作区选择未变，integrity_check OK、外键错误 0。
+- 正常自动监控随后新增 2 条 fetch_runs；194 条旧记录不变。3 张监控表仅 `last_seen_at`、`fetched_at`、`searched_at` 更新时间戳，其余字段逐行相同；另有三个监控状态设置变化。其余 21 张既有表逐行摘要相同。不能把正常运行后的数据库描述为全表字节不变，也没有为了验证而修改正式库或重新导入资料。
+- 原包服务在合成库中连续两次启动，工作区/指南/API、跨站拒绝、MCP 读合成 PDF/中文分析/重复保存、原配置跟随重启端口和 SQLite 完整性通过。正式两次启动后 health、认证工作区、Library bootstrap、AI Access 资源/API 均 200，跨站访问 403；真实窗口和版本另经 Computer Use 核对。没有新建正式 AI grant、执行用户资料写入测试或重复全部功能验收。早期诊断探针误用 `/ai-access-ui.js` 标记而返回 false；产品实际路径是 `/ai-access.js`，正式两次检查均确认存在且可访问。
+- 本轮仅更新状态文档；未改产品源码、重建安装包、commit/push 或改动远端 Mac 分支。`tmp/reinstall-0.1.11-20260910/` 保存完整旧版/资料备份、安装日志、`after.json`（启动前）、`installed-native-check.json`、`service-check/result.json`、`running-first.json`、`running-restart.json`、`native-running.json`。此前的旧版、新版受阻目录和备份均保留；正式库现已为 schema 18，不能未经迁移评估直接降回旧版使用。
+
+## 2026-09-10 15:14 JST：本地恢复 0.1.10 可用性
+
+- 用户禁止外部复核；没有提交文件，复核草稿已取消。只在本机检查未修改的 0.1.10 备份，DLL 哈希 `1B98B35D6792B1D9477F2DBF336DBB5E0A18765C6D360C8079C9EE013EBEFC97`。在独立隐藏桌面、空白临时库、自动监控关闭的环境下，原生启动和服务 health 通过；测试进程树随后关闭。测试脚本最初遇到 Windows API 空名称参数错误，修正后才执行成功，不将该失败计为通过。
+- 为恢复应用可用性，先对当前 schema 16 库作在线备份，再把完整受阻 0.1.11 安装目录移入项目 ignored 备份目录。源和目标绝对路径已验证，未删除文件。用原 0.1.10 安装器恢复原安装位置，退出 0；安装器 SHA-256 `19CFA991453E2E650FAFC9298AFBD8C4EB1C4E1E48F907465D662AAEF3C22E04` 与历史发布记录一致。
+- **当前实际安装和运行版本为 0.1.10**。2070 个非缓存 payload 文件逐一匹配；重新打开前，26 张数据库表逐行摘要与最新备份一致，10 个研究文件字节不变，quick_check OK：3203 papers / 39 Publications / 8 Library items / 5 folders / 4 resources。没有对数据做降级或重新导入。
+- 重新打开实际安装 App 后，显示正式窗口 `Gewu Insight — Windows Preview`，响应正常；其子服务明确使用原库 `%USERPROFILE%/Gewu Insight Preview/data/paper_monitor.sqlite`，health 和 workspace 均为 HTTP 200，没有新增对应 CodeIntegrity 拦截。首次后台启动隐藏了正式窗口，随后仅按进程和准确标题显示该产品窗口；没有显示测试面板。
+- `tmp/local-restore-0.1.10-20260910/` 保留本轮在线数据库备份、完整 `blocked-install-0.1.11/`、安装日志、`verified.json` 和 `running.json`；旧备份、新版源码及 dist 安装包也保留。**这是临时恢复，0.1.11 Mac 同步版的启动阻塞仍未解决。** 没有修改系统防护、证书信任、专有许可或远端分支。
+
+## 2026-09-10：许可已澄清，用户拒绝外部复核
+
+- 用户随后明确要求“不要外部复核”。未上传或提交任何样本；本地复核草稿已标记取消。不要再次推进或反复请求同一项外部提交批准。后续仅作本地诊断与恢复检查，保留免费使用/专有许可的选择。
+
+- 用户明确选择“免费使用，保留专有许可”。保留 LICENSE 和 README 的专有授权，不继续申请仅面向开源项目的 SignPath Foundation，也不自动改为 MIT 等开源许可。
+- 已核实微软 Security Intelligence 官方提交页面支持 Smart App Control，可按被误拦截的正常程序请求文件复核。准备了实际安装 DLL（215040 字节，SHA-256 `F7E53BDE8D88469F96BC51264720B6E28493460EC49ED8E830E5EC58E09349B4`）、1671 字符英文说明和用户审阅说明，位于 ignored `tmp/microsoft-sac-review-0.1.11/`。
+- 尚未上传或提交。发送专有程序文件给微软分析需用户明确确认；样本不带研究资料库、论文、笔记、凭据、浏览器配置、独立源码/PDB，但编译 DLL 本身含产品代码/资源/构建元数据。微软条款说明分析数据存储于美国；登录或验证码由用户完成。复核结果和时长不能保证，现有 0.1.11 启动阻塞仍未解决。
+- Store MSIX 经认证后由微软重新签名也是适用于专有软件的正规分发路线，但需要开发者账号、打包和提交流程，本次未创建账号、构建 MSIX 或发布产品。详见 [签名与复核说明](WINDOWS_SIGNING.md)。
+
+## 2026-09-10：正规签名修复准备（尚缺发布者凭据）
+
+- 用户随后明确意图是免费开源软件。已核实 SignPath Foundation 对符合条件的开源项目提供免费签名；不将付费个人/公司证书当作唯一途径。但当前 `LICENSE` 和 README 明确为 proprietary、非开源，尚不满足该项目的开源许可条件，已请求用户澄清，未修改授权。Foundation 禁止用项目证书重签第三方代码，现有逐文件本地签名脚本不能直接当作 SignPath 集成。免费路线、资格和待办见 [签名说明](WINDOWS_SIGNING.md)。
+- 用户要求解决启动问题并强调必须合法。查明旧、新包均使用相同 .NET 10.0.11 与打包方式；旧版也未签名，未将云端信誉推测写成旧版获准的确定原因。用户 11:50 的两次启动仍有 CodeIntegrity 3033/3077 与 .NET 1026，程序在窗口创建前退出。
+- 实际包扫描 375 个 EXE/DLL/PYD：300 个有效 RSA 签名，75 个未签名。微软 SDK SignTool 独立验证自身签名有效、已安装 Gewu DLL 无签名。保留已分发依赖许可证文件；没有改动第三方代码、用户资料、系统安全设置或证书信任库。
+- 新增 `scripts/windows_signing.ps1` 和 Inno 签名入口；构建安装器必须提供真实发布者的证书或 Microsoft Artifact Signing Public Trust 配置。逐个签署未签名二进制、保留有效上游签名、拒绝覆盖无效签名、检查 RSA/SHA-256/时间戳、签名后生成摘要；Setup 与卸载器同样签名。见 [签名说明](WINDOWS_SIGNING.md)。这不会自动修复已经安装的无签名 DLL。
+- PowerShell 语法与无凭据提前终止检查通过；真实包严格检查准确拒绝 75/375 项。隔离检查验证有效供应商文件字节不变、受损签名不被重签覆盖、缺失证书被拒绝，以及带空格/美元符路径的真实 Inno 回调因缺少证书退出 2、没有产生可安装 Setup。检查不使用真实私钥，未声称真实签名成功；完整签名及正常启动验收仍待真实凭据。
+- 本机两个个人证书库均无代码签名证书。已向用户询问是否有证书或已验证签名账号，尚未收到回答。身份验证、费用和任何外部提交需发布者参与；未注册、购买、上传、发布或 commit/push。0.1.11 保持已安装但无法运行，旧版和资料备份仍保留。
+
+## 2026-09-10：0.1.11 Mac 更新同步版（已安装，启动被系统阻止）
+
+- 用户要求同步 Mac 远端的 8 个更新；范围固定为 `57a8b2d..2a123205ad0c13a8a1fdec4cdb4157d6bb0b5b42`。源码在原 Windows 分支 `codex/windows-preview-0.1.10-20260910` 上做三方合入，保留 Windows 预览、回收、文件关联、正版 PDF 下载限制和界面文案。没有 commit、push、切换或改写 Mac 分支。用户原有未跟踪迁移附件未修改。
+- 新增 AI Access/API/MCP、Subject 关键词修改历史保留与纯数字日历、可暂停/继续/重试的 Add All Publications 与标识补全、引用感知的 My Publications 删除、Default PDF 物理位置同步与首份 Unknown 文章 PDF 后备选择、PDF 按钮拖入修复、Browser 标签不可选字。Mac 原生源码与手册作为参考同步；Mac `.app` 二进制未替换或作为 Windows 发布。
+- Windows 适配：AI Access 接入原生 Settings；首次工作区导航和原生 Naming Rule 请求携带独立私有会话，HTTP 客户端禁止重定向。工作区 token 文件由 Windows DACL 限制到当前所有者。远程 Browser 继续使用独立 profile，不收到该会话。安装包包含 MCP 脚本；生成配置使用包内 Python，并通过仅含 loopback URL 的 `.gewu-api-url` 导出跟随 App 重启后的端口。中文 MCP stdio 明确使用 UTF-8；PDF 解析子进程无控制台窗口。
+- My Publications 私有受管文件删除接入既有 Windows Shell 回收与 SQLite 恢复日志；以主库 canonical paper 的删除提交为准，支持多文件失败恢复和启动恢复。共享引用、外部原件及 Library Recycle 批量永久删除的既有边界保留。
+- 最终 34 组隔离 Python 检查共 **353 项：335 通过、18 跳过**（41.444 s），包括真实 Shell 的原有单资源及新增 Publications 成功、SQL 失败和中断恢复。49 个 Python 文件编译、6 个 JS 文件语法及 `git diff --check` 通过。保留原有 `ui_server.py` 的 `\s` SyntaxWarning。早期失败包含 sandbox Shell 拦截、Windows ACL 适配错误和两个测试的 Mac/接口形状假设；均已修正或在正常桌面隔离环境复验，未把失败运行称为通过。
+- Headless Edge：AI Access 三宽度、目录选择、权限、创建/清除/撤销、启停、焦点刷新；Publications/Subject 状态控件；PDF 按钮优先、替换后目标、权威文件快照、忙碌/多文件/误投；既有 Windows 剪贴板回归均通过。AI probe 的初始文件请求等待已修正，避免把启动请求误算为 AI 焦点刷新。
+- 最终包的 embedded Python 服务连续两次启动，工作区/API/指南和跨站拒绝、MCP 初始化/工具发现/读合成 PDF/写中文分析/重复保存均通过；第二次复用第一次生成的配置，端口变化无需重配。SQLite 重启完整性通过。未连接用户实际 AI 客户端、没有新建正式 AI grant 或导入测试资料到用户库。
+- 用户库在线备份后，只在第二份副本上执行 schema **16 → 18** 升级；原有 **26 张表逐行摘要一致**，新增 7 张工作流/AI 表，quick_check 正常、外键错误 0。备份时为 3203 papers / 39 Publications / 8 Library items / 5 folders / 4 resources。原库没有升级或修改。私人副本和摘要在 ignored `tmp/mac-sync-2a12320/migration/`。
+- Windows HTML/PDF Guide 已同源补充本次研究更新与安装版 MCP 配置，PDF 3 页均已渲染检查。上游 102 页/32 图 Mac 参考手册保留；Windows Help 仍打开独立 Windows 指南，不冒用 Mac 截图。
+- **11:41 JST 的安装已完成，原生启动被系统阻止。** 用户明确要求执行安装；先备份原安装、在线 SQLite、受管资料/报告和工作区选择，共校验 2083 个备份文件。安装器退出 0，无需重启，覆盖原目录 `C:\Users\Zhengran\AppData\Local\Programs\Gewu Insight Preview`；当时注册表 DisplayVersion 为 0.1.11，DLL FileVersion 为 0.1.11.0，2109 个正式 payload 文件逐一哈希一致（排除可重新生成的 Python 字节码缓存）。后续 15:14 JST 已恢复 0.1.10，见本页最新记录。
+- 11:42 JST 启动实际安装 EXE 时，`Gewu Insight.dll` 在服务启动前被 Windows Code Integrity 拦截（事件 3033/3077，`0x800711C7`，policy `0283ac0f-fff1-49ae-ada1-8a933130cad6`）。该 GUID 对应 [Smart App Control 的 VerifiedAndReputableDesktop 策略](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/operations/inbox-appcontrol-policies)，本机状态值为 1。旧、新 DLL 均未签名，新版没有 Zone.Identifier；不能仅凭日志中的 Enterprise signing level 推断企业管理。当前用户没有可用代码签名证书；[微软说明](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)推荐给应用添加有效签名，且不支持单独放行一个应用。没有关闭或更改系统防护。需可信签名途径后继续原生菜单、认证首屏、预览及会话抓取验收；目前没有运行中的新版 App 或服务。
+- 安装后只读核对原资料库：schema 仍为 16，26 张既有表逐行摘要与安装前一致，quick_check 正常；3203 papers / 39 Publications / 8 Library items / 5 folders / 4 resources 保留，受管研究文件和工作区选择的字节不变。完整安装备份、研究数据备份、安装/启动日志和 `after.json` 在 ignored `tmp/install-0.1.11-20260910/`。安装不等于启动通过，之前版本的原生验收不替代本版。
+- 构建成功，仍有 NuGet 漏洞索引不可达的 NU1900 警告。安装器 `dist/installers/Gewu-Insight-Windows-Preview-0.1.11-x64-Setup.exe`，SHA-256 `4F69464B32568FBF7D83BE9774CA6D3CA944B5E03DF3474B5CFB16F3648712D1`。这是已按用户要求本机安装、但启动受系统阻止的预览包，未发布。原检查日志/截图在 ignored `tmp/mac-sync-2a12320/`；旧包与正式资料保留。
 
 ## 2026-09-10：Windows 独立分支提交检查
 

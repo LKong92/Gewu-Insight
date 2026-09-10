@@ -27,6 +27,7 @@ internal static class NativeAcceptance
         form.Shown += async (_, _) => {
             try {
                 await Until(async () => workspace.CoreWebView2 != null && await Js("typeof state !== 'undefined' && typeof quickLookLibraryPdf === 'function'") == "true", 60);
+                await TestAIAccess();
                 await TestPreview();
                 await TestCapture();
                 File.WriteAllText(output, JsonSerializer.Serialize(new { ok = true, results }, new JsonSerializerOptions { WriteIndented = true }));
@@ -92,6 +93,32 @@ internal static class NativeAcceptance
         await AssertJs("state.libraryQuickLookPath === __files[4].path", "image attachment renders without supplied MIME metadata");
         await Js("closeLibraryQuickLook({restoreFocus:true})");
         await AssertJs("!state.libraryQuickLookOpen", "preview close");
+    }
+
+    static async Task TestAIAccess()
+    {
+        var settings = form.MainMenuStrip!.Items.OfType<ToolStripMenuItem>().Single(item => item.Text == "Settings");
+        settings.DropDownItems.OfType<ToolStripMenuItem>().Single(item => item.Text == "AI Access").PerformClick();
+        await Until(async () => await Js("document.querySelector('#aiAccessState')?.textContent.startsWith('Disabled')") == "true");
+        await AssertJs("!document.querySelector('#aiReadFiles').checked && !document.querySelector('#aiWriteAnalysis').checked", "native AI Access menu and conservative defaults");
+        await AssertJs("(()=>{const r=document.querySelector('.ai-access-modal').getBoundingClientRect();return r.x>=0 && r.right<=innerWidth && r.y>=0 && r.bottom<=innerHeight})()", "AI Access layout fits Windows workspace");
+        using (var screenshot = File.Create(Path.Combine(Path.GetDirectoryName(output)!, "ai-access.png")))
+            await workspace.CoreWebView2.CapturePreviewAsync(Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, screenshot);
+        await Js("document.querySelector('#aiNewConnection').open=true; document.querySelector('#aiName').value='Native fixture'; document.querySelector('#aiConnectionForm').requestSubmit()");
+        await Until(async () => await Js("document.querySelector('#aiCreated')?.hidden === false") == "true");
+        await AssertJs("(()=>{const c=JSON.parse(document.querySelector('#aiMcpConfig').value).mcpServers['gewu-insight'];return c.command.endsWith('python.exe') && c.args[0].endsWith('gewu_mcp.py') && c.env.GEWU_API_URL_FILE.endsWith('.gewu-api-url')})()", "Windows MCP paths and restart endpoint configuration");
+        await Js("document.querySelector('#aiAccessEnabled').click()");
+        await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === 'AI access enabled.'") == "true");
+        await Js("document.querySelector('#aiClose').click()");
+        await AssertJs("document.querySelector('#aiToken').value === '' && document.querySelector('#aiMcpConfig').value === ''", "closing AI Access clears displayed credentials");
+        await Js("openAIAccessSettings()");
+        await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === ''") == "true");
+        await Js("document.querySelector('.ai-connection button').click()");
+        await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === 'Connection revoked.'") == "true");
+        await Js("document.querySelector('#aiAccessEnabled').click()");
+        await Until(async () => await Js("document.querySelector('#aiAccessStatus').textContent === 'AI access disabled.'") == "true");
+        await Js("document.querySelector('#aiClose').click()");
+        await AssertJs("!document.querySelector('#aiAccessBackdrop').classList.contains('open')", "AI enable revoke disable workflow");
     }
 
     static async Task TestCapture()

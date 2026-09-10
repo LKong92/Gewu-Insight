@@ -7,6 +7,13 @@ Do not relocate or import an existing macOS Library database into this build.
 Included: native Windows window, bundled Python/.NET service, shared research UI,
 SQLite model, file opening, Explorer reveal, and managed .lnk file placements.
 
+Added in 0.1.11 (Mac changes through 2a12320): scoped AI Access/API/MCP,
+resumable Add All Publications, reference-aware publication deletion with Windows
+Recycle Bin recovery, Subject keyword history and numeric calendars, synchronized
+Default PDF placement, PDF-button drop imports, and unselectable Browser tabs.
+The installed MCP adapter uses bundled Python and follows app port changes.
+Schema 18 adds workflow and AI authorization tables; AI Access starts disabled.
+
 Added in 0.1.5: Windows-specific settings, larger app icon and visible seal,
 menu dismissal, native folder selection/import, PDF thumbnail rendering,
 article metadata capture with local-PDF selection and History time ranges.
