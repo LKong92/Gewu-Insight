@@ -30185,6 +30185,17 @@ INDEX_HTML = """<!doctype html>
     .library-activity-status:empty {
       display: none;
     }
+    .library-import-status-action {
+      flex: 0 0 auto;
+      border: 0;
+      padding: 2px 3px;
+      background: transparent;
+      color: var(--accent-strong);
+      font: inherit;
+      cursor: pointer;
+    }
+    .library-import-status-action[hidden] { display: none; }
+    .library-import-status-action:hover { text-decoration: underline; }
     .library-activity-status.live {
       color: var(--accent-strong);
       font-weight: 700;
@@ -35637,6 +35648,10 @@ INDEX_HTML = """<!doctype html>
       libraryImportJobId: "",
       libraryImportJob: null,
       libraryImportPoller: null,
+      libraryImportInFlight: false,
+      libraryImportPollFailures: 0,
+      libraryImportNextPollAt: 0,
+      libraryImportNotice: null,
       libraryImportReadyRefreshDone: false,
       libraryImportMissingIndex: 0,
       libraryImportMissingDoiIndex: 0,
@@ -36930,12 +36945,12 @@ INDEX_HTML = """<!doctype html>
       window.requestAnimationFrame(() => surface.focus({preventScroll: true}));
     }
 
-    function openLibraryLoader() {
-      if (!IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
+    function openLibraryLoader(options = {}) {
+      if (!options.currentJob && !IS_STANDALONE_LOADER_WINDOW && window.webkit?.messageHandlers?.libraryLoaderWindow) {
         window.webkit.messageHandlers.libraryLoaderWindow.postMessage({type: "open"});
         return;
       }
-      loadPendingLibraryImportDraft();
+      if (!options.currentJob) loadPendingLibraryImportDraft();
       state.libraryLoaderOpen = true;
       renderLibraryLoader();
       focusDialogSurface($("libraryLoaderBackdrop"));
@@ -41575,6 +41590,8 @@ INDEX_HTML = """<!doctype html>
           <div class="library-path-bar" id="libraryPathBar" title="${escapeAttr(librarySelectionPathText())}">
             <span class="library-path-parts">${librarySelectionPathMarkup()}</span>
             <span class="${libraryActivityStatusClass()}" id="libraryActivityStatus">${escapeHtml(libraryActivityStatusText())}</span>
+            <button class="library-import-status-action" id="libraryImportDetails" type="button" hidden>Details</button>
+            <button class="library-import-status-action" id="libraryImportDismiss" type="button" aria-label="Dismiss import result" hidden>Dismiss</button>
             <span class="library-view-toggle" id="libraryViewToggle" role="group" aria-label="Library content view">
               <button type="button" data-library-content-view="list" title="Finder list view">List View</button>
               <span class="library-view-toggle-separator">/</span>
@@ -41628,6 +41645,13 @@ INDEX_HTML = """<!doctype html>
       `;
       renderLibraryShortcutTabs();
       updateLibraryViewToggle();
+      renderLibraryActivityStatus();
+      $("libraryImportDetails")?.addEventListener("click", () => openLibraryLoader({currentJob: true}));
+      $("libraryImportDismiss")?.addEventListener("click", () => {
+        if (state.libraryImportBusy) return;
+        state.libraryImportNotice = null;
+        updateLibraryActivityStatus("");
+      });
       wireLibraryPaneTools();
       resizeLibraryViewport();
       if (librarySearchIsActive()) renderLibrarySearchResults();
@@ -41754,15 +41778,29 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryActivityStatusText() {
-      return state.libraryActivityText || "";
+      return state.libraryImportNotice?.text || state.libraryActivityText || "";
     }
 
     function libraryActivityStatusClass() {
       const base = "library-activity-status";
-      if (!state.libraryActivityText) return base;
-      if (state.libraryActivityLive) return `${base} live`;
-      if (/failed|could not|error/i.test(state.libraryActivityText)) return `${base} err`;
+      const text = libraryActivityStatusText();
+      if (!text) return base;
+      if (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive) return `${base} live`;
+      if (/failed|could not|error|partial|review|unavailable/i.test(text)) return `${base} err`;
       return `${base} ok`;
+    }
+
+    function renderLibraryActivityStatus() {
+      const status = $("libraryActivityStatus");
+      if (status) {
+        status.textContent = libraryActivityStatusText();
+        status.title = libraryActivityStatusText();
+        status.className = libraryActivityStatusClass();
+      }
+      const details = $("libraryImportDetails");
+      const dismiss = $("libraryImportDismiss");
+      if (details) details.hidden = !state.libraryImportNotice;
+      if (dismiss) dismiss.hidden = !state.libraryImportNotice || state.libraryImportBusy;
     }
 
     function updateLibraryActivityStatus(text = "", options = {}) {
@@ -41772,20 +41810,12 @@ INDEX_HTML = """<!doctype html>
       }
       state.libraryActivityText = text;
       state.libraryActivityLive = Boolean(options.live);
-      const status = $("libraryActivityStatus");
-      if (status) {
-        status.textContent = libraryActivityStatusText();
-        status.className = libraryActivityStatusClass();
-      }
+      renderLibraryActivityStatus();
       if (text && !options.live && options.clear !== false) {
         state.libraryActivityTimer = window.setTimeout(() => {
           state.libraryActivityText = "";
           state.libraryActivityLive = false;
-          const current = $("libraryActivityStatus");
-          if (current) {
-            current.textContent = "";
-            current.className = libraryActivityStatusClass();
-          }
+          renderLibraryActivityStatus();
         }, Number(options.delay || 1800));
       }
     }
@@ -42217,6 +42247,8 @@ INDEX_HTML = """<!doctype html>
     function startLibraryImportPolling() {
       stopLibraryImportPolling();
       if (!state.libraryImportJobId) return;
+      state.libraryImportPollFailures = 0;
+      state.libraryImportNextPollAt = 0;
       state.libraryImportPoller = window.setInterval(refreshLibraryImportJob, 500);
       refreshLibraryImportJob();
     }
@@ -42230,7 +42262,7 @@ INDEX_HTML = """<!doctype html>
     function resumeLibraryImportPollingIfNeeded() {
       if (!state.libraryImportJobId || state.libraryImportPoller) return;
       const status = state.libraryImportJob?.status || "";
-      if (["completed", "failed", "cancelled", "deleted", "loaded"].includes(status)) return;
+      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable"].includes(status)) return;
       startLibraryImportPolling();
     }
 
@@ -42246,9 +42278,12 @@ INDEX_HTML = """<!doctype html>
       }
       if (status === "failed") {
         const message = job.error || (Array.isArray(result.errors) ? result.errors[0] : "") || "Unknown error";
-        return `Library load failed for ${target}: ${message}`;
+        const count = Number(result.library_items_created || 0);
+        const conflicts = Array.isArray(result.identity_conflicts) ? result.identity_conflicts.length : 0;
+        return `${count ? `Partial import: ${count} items loaded` : "Library load failed"} into ${target}. ${conflicts ? `${conflicts} identity conflict(s) need review.` : message}`;
       }
-      if (status === "cancelled") return `Library load cancelled for ${target}.`;
+      if (status === "cancelled") return `Library load cancelled for ${target}; ${Number(result.library_items_created || 0)} items loaded.`;
+      if (status === "unavailable") return `Import status unavailable for ${target}. ${job.error || "Check Details before retrying."}`;
       const percent = Number(job.percent);
       const percentText = Number.isFinite(percent) && percent > 0 ? ` · ${Math.min(100, Math.max(0, Math.round(percent)))}%` : "";
       const stageText = job.stage ? ` · ${job.stage}` : "";
@@ -42260,51 +42295,75 @@ INDEX_HTML = """<!doctype html>
 
     function updateLibraryDroppedImportActivity(job = {}) {
       if (!state.libraryImportBackground) return;
-      const terminal = ["completed", "failed", "cancelled"].includes(String(job.status || "").toLowerCase());
-      updateLibraryActivityStatus(libraryDroppedImportActivityText(job), {
-        live: !terminal,
-        clear: terminal,
-        delay: terminal ? 6000 : undefined
-      });
+      const terminal = ["completed", "failed", "cancelled", "unavailable"].includes(String(job.status || "").toLowerCase());
+      state.libraryImportNotice = {text: libraryDroppedImportActivityText(job), live: !terminal};
+      renderLibraryActivityStatus();
     }
 
     async function refreshLibraryImportJob() {
-      if (!state.libraryImportJobId) return;
+      const jobId = state.libraryImportJobId;
+      if (!jobId || state.libraryImportInFlight || Date.now() < state.libraryImportNextPollAt) return;
+      state.libraryImportInFlight = true;
       try {
-        const res = await fetch(`/api/library/import-folder/progress?job_id=${encodeURIComponent(state.libraryImportJobId)}`);
+        const res = await fetch(`/api/library/import-folder/progress?job_id=${encodeURIComponent(jobId)}`);
         const data = await parseJsonResponse(res);
-        if (!res.ok) throw new Error(data.error || "Could not read loader progress");
-        const job = data.job || {};
+        if (jobId !== state.libraryImportJobId) return;
+        if (!res.ok) {
+          const error = new Error(data.error || "Could not read loader progress");
+          error.status = res.status;
+          throw error;
+        }
+        if (!data.job?.status) throw new Error("Invalid loader progress response");
+        const job = data.job;
+        state.libraryImportPollFailures = 0;
+        state.libraryImportNextPollAt = 0;
         state.libraryImportJob = job;
         state.libraryImportStatus = loaderStatusText(job);
-        updateLibraryDroppedImportActivity(job);
         if (job.result) {
           state.libraryImportLastResult = job.result;
           if (job.result.report_path) state.libraryImportReportPath = job.result.report_path;
         }
-        if (job.library_ready && !state.libraryImportReadyRefreshDone) {
+        const terminal = ["completed", "failed", "cancelled", "deleted"].includes(job.status);
+        if (terminal) {
+          state.libraryImportBusy = false;
+          stopLibraryImportPolling();
+        }
+        updateLibraryDroppedImportActivity(job);
+        if (terminal) {
+          state.libraryImportReportsLoaded = false;
+          // Failed/cancelled imports may already have committed visible items.
+          await refreshLibraryAfterImportCompletion();
+          state.libraryImportBackground = false;
+        } else if (job.library_ready && !state.libraryImportReadyRefreshDone) {
           state.libraryImportReadyRefreshDone = true;
           await refreshLibraryAfterImportReady();
         }
-        if (["completed", "failed", "cancelled", "deleted"].includes(job.status)) {
-          state.libraryImportBusy = false;
-          stopLibraryImportPolling();
-          if (job.status === "completed") {
-            if (job.result?.report_path) state.libraryImportReportsLoaded = false;
-            await refreshLibraryAfterImportCompletion();
-          }
-          state.libraryImportBackground = false;
-        }
         if (state.libraryLoaderOpen) renderLibraryLoader();
       } catch (error) {
-        state.libraryImportStatus = error.message || "Could not read loader progress";
-        state.libraryImportBusy = false;
-        stopLibraryImportPolling();
-        if (state.libraryImportBackground) {
-          updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
+        if (jobId !== state.libraryImportJobId) return;
+        if ([401, 403, 404].includes(error.status)) {
+          state.libraryImportStatus = error.status === 404
+            ? "The server no longer tracks this import. Check Library and Previous Logs before retrying."
+            : "Import status access is unavailable. Reopen Gewu Insight to reconnect.";
+          state.libraryImportBusy = false;
+          stopLibraryImportPolling();
+          state.libraryImportJob = {...state.libraryImportJob, status: "unavailable", error: state.libraryImportStatus};
+          updateLibraryDroppedImportActivity(state.libraryImportJob);
           state.libraryImportBackground = false;
+          if (error.status === 404) await refreshLibraryAfterImportCompletion();
+        } else {
+          // A transport error is not evidence that the worker failed or stopped.
+          state.libraryImportPollFailures += 1;
+          state.libraryImportNextPollAt = Date.now() + Math.min(10000, 1000 * 2 ** Math.min(4, state.libraryImportPollFailures));
+          state.libraryImportStatus = "Progress temporarily unavailable; reconnecting. The import may still be running.";
+          if (state.libraryImportBackground) {
+            state.libraryImportNotice = {text: state.libraryImportStatus, live: true};
+            renderLibraryActivityStatus();
+          }
         }
         if (state.libraryLoaderOpen) renderLibraryLoader();
+      } finally {
+        state.libraryImportInFlight = false;
       }
     }
 
@@ -42700,6 +42759,7 @@ INDEX_HTML = """<!doctype html>
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = true;
+      state.libraryImportJobId = "";
       state.libraryTaskMode = "import";
       state.libraryImportSourcePaths = [...paths];
       state.libraryImportPath = paths.length === 1 ? paths[0] : `${paths.length} dropped items`;
@@ -42727,11 +42787,12 @@ INDEX_HTML = """<!doctype html>
         startLibraryImportPolling();
       } catch (error) {
         state.libraryImportBusy = false;
-        state.libraryImportBackground = false;
         state.libraryImportStatus = error.message || "Could not start dropped import";
         state.libraryImportLastResult = {errors: [state.libraryImportStatus]};
         appendLibraryImportLog(state.libraryImportStatus, "error");
-        updateLibraryActivityStatus(`Library load failed: ${state.libraryImportStatus}`, {live: false, delay: 6000});
+        state.libraryImportJob = {...state.libraryImportJob, status: "failed", error: state.libraryImportStatus};
+        updateLibraryDroppedImportActivity(state.libraryImportJob);
+        state.libraryImportBackground = false;
       }
     }
 
