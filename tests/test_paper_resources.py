@@ -392,7 +392,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         resources = self.storage.list_paper_resources("published-with-arxiv-history")
         preprints = [resource for resource in resources if resource["version_role"] == "preprint"]
         self.assertEqual([resource["version_number"] for resource in preprints], [1, 2, 3])
-        self.assertTrue(all("Associated Files/Library" in resource["stored_path"] for resource in preprints))
+        self.assertTrue(all("Associated Files/Library" in Path(resource["stored_path"]).as_posix() for resource in preprints))
         self.assertEqual(
             [resource["version_label"] for resource in preprints],
             ["Preprint v1", "Preprint v2", "Preprint v3"],
@@ -1022,7 +1022,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         attached_path = Path(attached["stored_path"])
         self.assertTrue(attached_path.exists())
         self.assertEqual(attached_path.read_bytes(), b"processed data")
-        self.assertIn("Associated Files/Library", str(attached_path))
+        self.assertIn("Associated Files/Library", attached_path.as_posix())
 
     def test_two_resource_conversion_second_move_failure_restores_database_and_files_exactly(self) -> None:
         self.add_paper("conversion-rollback-target")
@@ -1159,7 +1159,7 @@ class PaperResourceStorageTests(unittest.TestCase):
             attached_path = Path(attached["stored_path"])
             self.assertTrue(attached_path.exists())
             self.assertEqual(attached_path.read_bytes(), originals[attached_path.name])
-            self.assertIn("Associated Files/Library", str(attached_path))
+            self.assertIn("Associated Files/Library", attached_path.as_posix())
         self.assertEqual(self.storage.conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_shared_library_work_is_not_destructively_converted_to_attachment(self) -> None:
@@ -1238,7 +1238,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         resources = self.storage.list_paper_resources("paper-promote")
         archived = next(resource for resource in resources if int(resource["id"]) != int(promoted["id"]))
         archived_path = Path(archived["stored_path"])
-        self.assertIn("Associated Files/Library/Topic", str(archived_path))
+        self.assertIn("Associated Files/Library/Topic", archived_path.as_posix())
         self.assertEqual(archived_path.name, "Current [Imported PDF].pdf")
         self.assertEqual(archived["display_name"], "Current [Imported PDF].pdf")
         self.assertEqual(promoted["display_name"], "Published.pdf")
@@ -1349,7 +1349,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(publisher.read_bytes(), publisher_bytes)
         self.assertEqual(late_preprint["version_role"], "preprint")
         self.assertNotEqual(int(late_preprint["id"]), int(version_of_record["id"]))
-        self.assertIn("Associated Files/Library/Topic", late_preprint["stored_path"])
+        self.assertIn("Associated Files/Library/Topic", Path(late_preprint["stored_path"]).as_posix())
         self.assertEqual(
             len(
                 self.storage.list_paper_resources(
@@ -1406,7 +1406,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(version_of_record["source_url"], publisher_url)
         self.assertEqual(late_accepted["version_role"], "accepted_manuscript")
         self.assertNotEqual(int(late_accepted["id"]), int(version_of_record["id"]))
-        self.assertIn("Associated Files/Library/Topic", late_accepted["stored_path"])
+        self.assertIn("Associated Files/Library/Topic", Path(late_accepted["stored_path"]).as_posix())
         self.assertEqual(
             len(
                 self.storage.list_paper_resources(
@@ -1560,7 +1560,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         resources = self.storage.list_paper_resources("paper-download-history")
         previous = next(resource for resource in resources if int(resource["id"]) != int(current["id"]))
         previous_path = Path(previous["stored_path"])
-        self.assertIn("Associated Files/Library/Topic", str(previous_path))
+        self.assertIn("Associated Files/Library/Topic", previous_path.as_posix())
         self.assertEqual(previous_path.read_bytes(), old_bytes)
         current_path = Path(paper["merged_pdf_path"])
         self.assertEqual(current_path.name, "example [Published Version].pdf")
@@ -1627,7 +1627,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(published["version_role"], "version_of_record")
         self.assertEqual(published["file_type"], "published_version")
         self.assertEqual(Path(published["stored_path"]).resolve(), target)
-        self.assertIn("Associated Files/Library/Topic", str(target))
+        self.assertIn("Associated Files/Library/Topic", target.as_posix())
         self.assertEqual(target.name, publisher.name)
         self.assertEqual(target.read_bytes(), publisher.read_bytes())
         self.assertEqual(int(paper["primary_resource_id"]), int(current["id"]))
@@ -1895,7 +1895,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         moved_note = next(resource for resource in resources if resource["file_role"] == "note")
         moved_path = Path(moved_note["stored_path"])
         self.assertFalse(old_attached_path.exists())
-        self.assertIn("Associated Files/Library/New Folder", str(moved_path))
+        self.assertIn("Associated Files/Library/New Folder", moved_path.as_posix())
         self.assertEqual(moved_path.read_bytes(), b"move with work")
         payload = ui_server.paper_files_state_payload(self.storage, "paper-move-bundle")
         payload_note = next(file for file in payload["files"] if file["file_role"] == "note")
@@ -2056,7 +2056,7 @@ class PaperResourceStorageTests(unittest.TestCase):
         self.assertEqual(Path(paper["merged_pdf_path"]).resolve(), primary.resolve())
         self.assertFalse(imported.exists())
         self.assertEqual(adopted["version_role"], "preprint")
-        self.assertIn("Associated Files/Library/Topic", adopted["stored_path"])
+        self.assertIn("Associated Files/Library/Topic", Path(adopted["stored_path"]).as_posix())
         self.assertEqual(Path(adopted["stored_path"]).read_bytes(), b"%PDF-1.4\nfixture\n%%EOF\n")
 
     def test_existing_resource_can_be_recovered_from_its_source_path(self) -> None:

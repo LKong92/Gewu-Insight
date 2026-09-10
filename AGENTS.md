@@ -20,9 +20,11 @@
 - Keep the left calendar/filter column independent from report scrolling.
 - Calendar day counts should show numbers only, with a superscript asterisk for incomplete Subject Monitor discovery.
 - Preserve download and analysis status so repeated actions are visible and avoidable.
+- Download PDFs only from verified publishers or authorized repositories. Stop on unverified sources/redirects; never use piracy services or bypass subscription/access controls.
 - Subject Monitor must reject Zenodo records during candidate ingestion and cached-result display; do not expose a Zenodo show/hide control.
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
+- Windows development and releases stay on a separate Windows branch (`codex/windows-preview-0.1.10-20260910` or an explicitly chosen successor). Never merge or push Windows changes into remote `main` or any macOS branch without a new explicit user request.
 
 ## Commit Messages
 

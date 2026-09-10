@@ -1,0 +1,3 @@
+# Preserve Windows binary assets across checkouts with automatic line endings.
+windows/*.pdf binary
+windows/*.ico binary

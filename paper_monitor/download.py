@@ -7,7 +7,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urljoin
 
 from bs4 import BeautifulSoup
 
@@ -15,10 +15,34 @@ from .aps import aps_journal_slug as canonical_aps_journal_slug
 from .config import DEFAULT_PDF_DIR
 from .http import request_with_retries
 from .pdf_utils import is_valid_pdf_file as structurally_valid_pdf_file, merge_pdfs
+from .pdf_sources import approved_pdf_source, UNVERIFIED_PDF_SOURCE
 from .sources.openalex import openalex_request
 from .sources.publisher import request_aps_page
 from .storage import Storage
 from .text import safe_slug
+
+
+def document_request(url: str, *, aps: bool = False, **options):
+    """Validate before every request and before reading a redirect body."""
+    current = url
+    for _ in range(12):
+        if not approved_pdf_source(current):
+            raise ValueError(UNVERIFIED_PDF_SOURCE)
+        response = (request_aps_page(current, allow_redirects=False, stream=True) if aps else
+                    request_with_retries("GET", current, allow_redirects=False, stream=True, **options))
+        if response is None:
+            raise RuntimeError("Publisher request paused by rate-limit protection")
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            if not approved_pdf_source(response.url or current):
+                response.close()
+                raise ValueError(UNVERIFIED_PDF_SOURCE)
+            return response
+        target = urljoin(current, response.headers.get("Location") or response.headers.get("location") or "")
+        response.close()
+        if target == current:
+            raise ValueError("PDF redirect did not provide a new destination")
+        current = target
+    raise ValueError("Too many PDF source redirects")
 
 
 def download_paper(
@@ -268,14 +292,10 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
     landing_url = paper.get("landing_url") or paper.get("url")
     if landing_url:
         try:
-            if doi.startswith("10.1103/"):
-                response = request_aps_page(landing_url)
-                if response is None:
-                    raise RuntimeError("APS page request paused by rate-limit protection")
-            else:
-                response = request_with_retries("GET", landing_url)
+            response = document_request(landing_url, aps=doi.startswith("10.1103/"))
             page_url = response.url or landing_url
             soup = BeautifulSoup(response.text, "html.parser")
+            response.close()
             for tag in soup.find_all("meta", attrs={"name": "citation_pdf_url"}):
                 if tag.get("content"):
                     main.append(_absolute(page_url, tag["content"]))
@@ -294,7 +314,7 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
         except Exception:
             pass
 
-    main = dedup(main)
+    main = [url for url in dedup(main) if approved_pdf_source(url)]
     if doi.startswith("10.1038/"):
         main = [url for url in main if not is_nature_reference_pdf_url(url)] + [
             url for url in main if is_nature_reference_pdf_url(url)
@@ -302,8 +322,8 @@ def collect_pdf_candidates(paper: dict[str, Any]) -> dict[str, list[str]]:
 
     return {
         "main": main,
-        "supplements": [url for url in dedup(supplements) if url not in main],
-        "supplement_documents": dedup(supplement_documents),
+        "supplements": [url for url in dedup(supplements) if url not in main and approved_pdf_source(url)],
+        "supplement_documents": [url for url in dedup(supplement_documents) if approved_pdf_source(url)],
     }
 
 
@@ -648,14 +668,14 @@ def try_download_pdf(
     request_max_retries: int | None = None,
 ) -> bool:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:8]}.part")
+    response = None
     try:
         request_options: dict[str, Any] = {
             "headers": pdf_request_headers(url),
-            "stream": True,
         }
         if request_max_retries is not None:
             request_options["max_retries"] = max(1, int(request_max_retries))
-        response = request_with_retries("GET", url, **request_options)
+        response = document_request(url, **request_options)
         content_type = response.headers.get("content-type", "").lower()
         guessed_type = mimetypes.guess_type(urlparse(response.url).path)[0] or ""
         if "pdf" not in content_type and "pdf" not in guessed_type and not response.url.lower().endswith(".pdf"):
@@ -675,6 +695,9 @@ def try_download_pdf(
         temporary.unlink(missing_ok=True)
         messages.append(f"{url}: {download_error_message(exc)}")
         return False
+    finally:
+        if response is not None:
+            response.close()
 
 
 def try_download_word_supplement(
@@ -682,12 +705,11 @@ def try_download_word_supplement(
     path_without_suffix: Path,
     messages: list[str],
 ) -> Path | None:
+    response = None
     try:
-        response = request_with_retries(
-            "GET",
+        response = document_request(
             url,
             headers=pdf_request_headers(url),
-            stream=True,
         )
         content = response.content
         content_type = response.headers.get("content-type", "").lower()
@@ -704,6 +726,9 @@ def try_download_word_supplement(
     except Exception as exc:
         messages.append(f"{url}: {download_error_message(exc)}")
         return None
+    finally:
+        if response is not None:
+            response.close()
 
 
 def convert_word_document_to_pdf(source_path: Path, target_path: Path) -> Path:

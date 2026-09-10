@@ -1,5 +1,10 @@
 # Gewu Insight
 
+> This is the independent Windows Preview branch `codex/windows-preview-0.1.10-20260910`,
+> based on Mac source commit `57a8b2dcea77e97fd6b5acdd5e076c1aee61042d`.
+> The macOS product continues on `main`. Windows updates must remain on their own branch.
+> See the [migration baseline and feature differences](docs/WINDOWS_MAC_PARITY_TRACKER.md).
+
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
 Gewu Insight is a local-first desktop workspace for discovering, organizing,
@@ -128,10 +133,14 @@ platform-specific desktop integration.
 - **macOS** — the current native desktop release. It is the primary development
   and validation platform and includes Finder, Preview, Quick Look, Dock, and
   native drag-and-drop integration.
-- **Windows** — planned as an experimental desktop release. A Windows package is
-  not yet a supported distribution, and its Explorer, PDF-viewer, Recycle Bin,
-  native drag-and-drop, installer, and update behavior still require dedicated
-  implementation and validation.
+- **Windows** — an experimental x64 installer is now built locally on the
+  `codex/windows-preview-0.1.10-20260910` branch. It includes an official embedded Python
+  runtime, self-contained .NET shell and WebView2 workspace, with managed `.lnk`
+  placements. It is **not feature complete or accepted as equivalent to macOS**.
+  Use a new test Library only. See [Windows Preview status](docs/WINDOWS_PREVIEW_STATUS.md)
+  and the matching [Windows HTML guide](windows/Windows_Preview_Guide.html) /
+  [Windows PDF guide](windows/Windows_Preview_Guide.pdf) for supported boundaries,
+  installation requirements and remaining acceptance work.
 
 Instructions that name Finder, Preview, Quick Look, or the Dock describe the
 current macOS integration rather than a limitation of the underlying research

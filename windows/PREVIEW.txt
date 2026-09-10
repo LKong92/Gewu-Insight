@@ -1,0 +1,39 @@
+Gewu Insight - Windows Preview (development build)
+
+This installer is an early Windows development build. It is not feature complete
+and has not passed macOS feature-parity acceptance. Use a NEW test Library only.
+Do not relocate or import an existing macOS Library database into this build.
+
+Included: native Windows window, bundled Python/.NET service, shared research UI,
+SQLite model, file opening, Explorer reveal, and managed .lnk file placements.
+
+Added in 0.1.5: Windows-specific settings, larger app icon and visible seal,
+menu dismissal, native folder selection/import, PDF thumbnail rendering,
+article metadata capture with local-PDF selection and History time ranges.
+
+Added in 0.1.8: page-at-a-time PDF preview with zoom and selectable page text,
+cancelled stale requests, Browser-session Get PDF, native file drag-out, and
+Paper Files Recycle Bin removal with SQLite/verified-file recovery. Bulk permanent
+removal from Library Recycle remains blocked pending its transaction adaptation.
+
+Corrected in 0.1.9: continuous PDF scrolling and PDF-only touchpad/Ctrl-wheel
+zoom; the extra page/zoom/Text toolbar is removed. No default-reader settings
+menu was added. Get PDF is under Browser > Save to Gewu > Details. PDF sources
+and redirects must match reviewed publishers or authorized repositories;
+unverified sources are stopped. No piracy services or access-control bypass.
+
+Still under development: full preview and keyboard parity, complete drag and drop,
+bulk Recycle Bin integration, remaining native dialogs,
+old-Library migration, and upgrade/recovery acceptance. Some research operations
+also require network access and configured API providers.
+
+Requires Windows 10 2004 or later (x64) and Microsoft Edge WebView2 Runtime.
+Windows 11 x64 is the current test machine. Windows 10 and ARM64 are not verified.
+Python and .NET do not need to be installed separately.
+
+File > Open Data Folder shows the actual Library folder. A selected existing
+Library is recorded in %USERPROFILE%\.gewu-insight\preview-workspace.txt.
+New Libraries use %USERPROFILE%\Gewu Insight Preview. A missing selected database
+stops startup; the app does not silently replace it with an empty Library.
+Uninstall removes the app and retains Library data. Close the app before
+installing an update. This development installer is not digitally signed.

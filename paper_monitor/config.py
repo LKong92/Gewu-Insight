@@ -9,11 +9,12 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = Path(os.environ.get("GEWU_DATA_ROOT") or (ROOT / "data")).expanduser().resolve()
+WORKSPACE_ROOT = Path(os.environ.get("GEWU_WORKSPACE_ROOT") or ROOT).expanduser().resolve()
+DATA_ROOT = Path(os.environ.get("GEWU_DATA_ROOT") or (WORKSPACE_ROOT / "data")).expanduser().resolve()
 DEFAULT_CONFIG_PATH = ROOT / "config" / "journals.json"
 DEFAULT_DB_PATH = DATA_ROOT / "paper_monitor.sqlite"
-DEFAULT_DAILY_REPORT_DIR = ROOT / "reports" / "daily"
-DEFAULT_ANALYSIS_DIR = ROOT / "reports" / "analyses"
+DEFAULT_DAILY_REPORT_DIR = WORKSPACE_ROOT / "reports" / "daily"
+DEFAULT_ANALYSIS_DIR = WORKSPACE_ROOT / "reports" / "analyses"
 DEFAULT_PDF_DIR = DATA_ROOT / "pdfs"
 DEFAULT_LIBRARY_IMPORT_DIR = DATA_ROOT / "library_imports"
 DEFAULT_LIBRARY_DIR = DATA_ROOT / "Library"

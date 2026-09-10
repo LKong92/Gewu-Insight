@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -11,7 +12,21 @@ def system_timezone_name() -> str:
     candidates: list[str] = []
     env_name = str(os.environ.get("TZ") or "").strip().lstrip(":")
     if env_name:
-        candidates.append(env_name)
+        try:
+            ZoneInfo(env_name)
+        except (ValueError, ZoneInfoNotFoundError):
+            pass
+        else:
+            return env_name
+    # Windows exposes localized display names and Windows zone identifiers,
+    # not the IANA keys used by persisted Monitor calendars. tzlocal maps the
+    # system registry identifier to IANA without changing the OS setting.
+    if sys.platform == "win32":
+        from tzlocal import get_localzone_name
+
+        zone_name = get_localzone_name()
+        ZoneInfo(zone_name)  # Fail visibly if the required tzdata is unavailable.
+        return zone_name
     for path in (Path("/etc/localtime"), Path("/var/db/timezone/localtime")):
         try:
             resolved = str(path.resolve())

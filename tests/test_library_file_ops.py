@@ -11,6 +11,7 @@ from unittest.mock import patch
 from pypdf import PdfWriter
 
 from paper_monitor import ui_server
+from paper_monitor.desktop_files import create_placement, is_placement, placement_path, resolve_placement
 from paper_monitor.storage import Storage
 
 
@@ -620,8 +621,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         full_sync.assert_not_called()
         self.assertTrue(source_pdf.exists())
         self.assertIsNotNone(target_path)
-        self.assertTrue(target_path.is_symlink())
-        self.assertEqual(target_path.resolve(), source_pdf.resolve())
+        self.assertTrue(is_placement(target_path))
+        self.assertEqual(resolve_placement(target_path), source_pdf.resolve())
 
     def test_alias_only_library_item_move_does_not_run_global_sync(self) -> None:
         owner_folder = self.storage.create_library_folder(parent_id=1, name="Owner")
@@ -675,8 +676,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertFalse(canonical_moved)
         self.assertFalse(source_alias.exists())
         self.assertEqual(int(moved["folder_id"]), int(target_folder["id"]))
-        self.assertTrue(target_alias.is_symlink())
-        self.assertEqual(target_alias.resolve(), source_pdf.resolve())
+        self.assertTrue(is_placement(target_alias))
+        self.assertEqual(resolve_placement(target_alias), source_pdf.resolve())
 
     def test_canonical_item_move_relocates_the_associated_work_directory(self) -> None:
         source_folder = self.storage.create_library_folder(parent_id=1, name="Source")
@@ -853,8 +854,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         cached_pdf.write_bytes(b"%PDF fixture")
         stale_dir = ui_server.SPACES_LOCAL_COPY_ROOT / "Wigner C"
         stale_dir.mkdir(parents=True)
-        stale_alias = stale_dir / cached_pdf.name
-        stale_alias.symlink_to(cached_pdf)
+        stale_alias = create_placement(cached_pdf, stale_dir / cached_pdf.name)
         self.storage.update_download_status(
             "cached-space-paper",
             status="success",
@@ -869,7 +869,7 @@ class LibraryFileOperationTests(unittest.TestCase):
 
         self.assertTrue(changed)
         self.assertFalse(cached_pdf.exists())
-        self.assertFalse(stale_alias.is_symlink(), list(stale_dir.iterdir()) if stale_dir.exists() else [])
+        self.assertFalse(is_placement(stale_alias), list(stale_dir.iterdir()) if stale_dir.exists() else [])
         self.assertFalse(stale_dir.exists(), list(stale_dir.iterdir()) if stale_dir.exists() else [])
         self.assertTrue(stored_pdf.exists())
         self.assertFalse(stored_pdf.is_symlink())
@@ -923,7 +923,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         result = ui_server.sync_all_pdf_aliases_for_paper(self.storage, "named-paper")
         paper = self.storage.get_paper("named-paper") or {}
         canonical = Path(paper["merged_pdf_path"])
-        shortcut = shortcut_dir / "02.Space Shortcut Name.pdf"
+        shortcut = placement_path(shortcut_dir / "02.Space Shortcut Name.pdf")
 
         self.assertTrue(result["canonical_renamed"])
         self.assertEqual(
@@ -932,8 +932,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         )
         self.assertTrue(canonical.exists())
         self.assertFalse(source_pdf.exists())
-        self.assertTrue(shortcut.is_symlink())
-        self.assertEqual(shortcut.resolve(), canonical.resolve())
+        self.assertTrue(is_placement(shortcut))
+        self.assertEqual(resolve_placement(shortcut), canonical.resolve())
         self.assertEqual(paper["main_pdf_path"], paper["merged_pdf_path"])
         audit = ui_server.audit_library_pdf_names(self.storage)
         self.assertEqual(audit["mismatched_real_files"], 0)
@@ -1127,8 +1127,8 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(renamed["display_name"], "New Shortcut")
         self.assertEqual(Path(paper["merged_pdf_path"]).name, "Real Name.pdf")
         self.assertTrue((real_dir / "Real Name.pdf").exists())
-        self.assertFalse((shortcut_dir / "Old Shortcut.pdf").exists())
-        self.assertTrue((shortcut_dir / "New Shortcut.pdf").is_symlink())
+        self.assertFalse(placement_path(shortcut_dir / "Old Shortcut.pdf").exists())
+        self.assertTrue(is_placement(placement_path(shortcut_dir / "New Shortcut.pdf")))
 
     def test_shortcut_name_collision_is_numbered_without_overwrite(self) -> None:
         real_folder = self.storage.create_library_folder(parent_id=1, name="Real")
@@ -1176,7 +1176,7 @@ class LibraryFileOperationTests(unittest.TestCase):
 
         self.assertEqual(occupied.read_bytes(), b"%PDF existing")
         self.assertEqual(adjusted["display_name"], "Shared Name 2")
-        self.assertTrue((shortcut_dir / "Shared Name 2.pdf").is_symlink())
+        self.assertTrue(is_placement(placement_path(shortcut_dir / "Shared Name 2.pdf")))
 
     def test_shared_real_pdf_rename_updates_every_paper_path(self) -> None:
         folder = self.storage.create_library_folder(parent_id=1, name="Shared")
@@ -1219,12 +1219,12 @@ class LibraryFileOperationTests(unittest.TestCase):
         first = self.storage.get_paper("a-shared-paper") or {}
         second = self.storage.get_paper("b-shared-paper") or {}
         renamed_path = target_dir / "Shared Canonical Name.pdf"
-        shortcut_path = target_dir / "Shared Shortcut Name.pdf"
+        shortcut_path = placement_path(target_dir / "Shared Shortcut Name.pdf")
 
         self.assertTrue(renamed_path.exists())
         self.assertFalse(source_pdf.exists())
-        self.assertTrue(shortcut_path.is_symlink())
-        self.assertEqual(shortcut_path.resolve(), renamed_path.resolve())
+        self.assertTrue(is_placement(shortcut_path))
+        self.assertEqual(resolve_placement(shortcut_path), renamed_path.resolve())
         self.assertEqual(Path(first["merged_pdf_path"]).resolve(), renamed_path.resolve())
         self.assertEqual(Path(second["merged_pdf_path"]).resolve(), renamed_path.resolve())
 
@@ -1282,7 +1282,7 @@ class LibraryFileOperationTests(unittest.TestCase):
         self.assertEqual(moved_path.resolve(), (dir_b / "paper.pdf").resolve())
         self.assertTrue(moved_path.exists())
         self.assertFalse(moved_path.is_symlink())
-        self.assertTrue((dir_c / "paper.pdf").is_symlink())
+        self.assertTrue(is_placement(placement_path(dir_c / "paper.pdf")))
 
     def test_delete_moves_pdf_to_recycle_when_no_remaining_non_recycle_link(self) -> None:
         folder = self.storage.create_library_folder(parent_id=1, name="Only")

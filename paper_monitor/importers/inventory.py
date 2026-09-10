@@ -5,12 +5,12 @@ import os
 import re
 import shutil
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from pypdf import PdfReader
 
-from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT
+from ..config import DEFAULT_DB_PATH, DEFAULT_LIBRARY_DIR, ROOT, WORKSPACE_ROOT
 from ..resource_fingerprint import fingerprint_file
 from ..storage import Storage
 from ..text import clean_text, is_placeholder_publication_title, make_paper_id, normalize_doi, safe_slug, sha1_short
@@ -19,7 +19,7 @@ from ..text import clean_text, is_placeholder_publication_title, make_paper_id, 
 SUPPORTED_COPY_MODES = {"copy"}
 PAPER_CANDIDATE_KIND = "pdf"
 PAPER_CANDIDATE_IMPORT_AS = "paper_candidate"
-REPORT_DIR = ROOT / "reports" / "imports"
+REPORT_DIR = WORKSPACE_ROOT / "reports" / "imports"
 LIBRARY_IMPORT_DIR = DEFAULT_LIBRARY_DIR
 SYSTEM_METADATA_FILENAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 DOCUMENT_EXTENSIONS = {".doc", ".docx", ".rtf", ".txt", ".md", ".tex"}
@@ -846,6 +846,8 @@ def file_kind(path: Path) -> str:
     suffix = path.suffix.lower()
     if is_system_metadata_filename(name):
         return "system_metadata"
+    if suffix == ".lnk":
+        return "windows_shortcut"
     if suffix == ".pdf":
         return "pdf"
     if is_probable_mac_alias(path):
@@ -878,7 +880,7 @@ def import_as_for_kind(kind: str) -> str:
         return "paper_candidate"
     if kind == "system_metadata":
         return "ignore_candidate"
-    if kind == "mac_alias":
+    if kind in {"mac_alias", "windows_shortcut"}:
         return "alias_reference"
     return "resource"
 
@@ -1455,6 +1457,8 @@ def copy_record(record: dict[str, Any], *, target_root: Path) -> str:
     source = Path(record["source_path"])
     relative_path = safe_inventory_relative_path(record["relative_path"] or record["filename"])
     target = unique_target_path(target_root / relative_path)
+    if not target.resolve().is_relative_to(target_root.resolve()):
+        raise ValueError("Inventory target escapes the managed import directory")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     return str(target)
@@ -1494,6 +1498,12 @@ def reusable_stored_path(storage: Storage, record: dict[str, Any], *, copy_mode:
 
 
 def safe_inventory_relative_path(value: str) -> Path:
+    # Inventories can cross platforms. A drive-qualified or rooted Windows
+    # path is unsafe even when the inventory is being inspected on macOS.
+    windows_path = PureWindowsPath(value)
+    if (Path(value).is_absolute() or windows_path.drive or windows_path.root
+            or ".." in re.split(r"[\\/]", value)):
+        raise ValueError("Inventory file paths must be relative and cannot contain parent traversal")
     parts = []
     for part in Path(value).parts:
         if part in {"", ".", ".."}:

@@ -2,6 +2,8 @@
  * separate native WKWebView. Never embed a remote page under the local origin. */
 (function (global) {
   "use strict";
+  const windowsPreview = global.gewuPlatform?.os === "windows";
+  const shortcut = key => (global.gewuPlatform?.os === "windows" ? "Ctrl+" : "⌘") + key;
   const escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   function address(value) {
     const text = String(value || "").trim();
@@ -135,10 +137,10 @@
         <div id="browserProgress" class="browser-progress"></div>
       </form>
       <button type="button" id="browserSaveGewu" class="browser-save-gewu" title="Save this article or PDF to Library" disabled>Save to Gewu</button>
-      ${button("browserAddBookmark", "Add Bookmark (⌘D)", "bookmark")}
-      ${button("browserPasswords", "Open Passwords", "key")}
+      ${button("browserAddBookmark", `Add Bookmark (${shortcut("D")})`, "bookmark")}
+      ${windowsPreview ? "" : button("browserPasswords", "Open Passwords", "key")}
       ${button("browserShare", "Share and page actions", "share")}
-      ${button("browserNewTab", "New Tab (⌘T)", "plus")}
+      ${button("browserNewTab", `New Tab (${shortcut("T")})`, "plus")}
     </div>
     <div class="browser-body">
       <aside id="browserSidebar" class="browser-sidebar" aria-label="Browser sidebar">
@@ -171,6 +173,18 @@
       </div>
     </div><div id="browserContext" class="browser-context" hidden></div>`;
   document.body.append(root);
+  if (windowsPreview) {
+    for (const id of ["browserDownload", "browserShare"]) {
+      $(id).disabled = true;
+      $(id).title = "Not available in this Windows Preview yet";
+    }
+    $("browserExternal").title = "Open in Default Browser";
+    $("browserExternal").setAttribute("aria-label", "Open in Default Browser");
+    $("browserAddBookmark").title = "Add Bookmark";
+    $("browserAddBookmark").setAttribute("aria-label", "Add Bookmark");
+    $("browserNewTab").title = "New Tab";
+    $("browserNewTab").setAttribute("aria-label", "New Tab");
+  }
 
   const siteIcons = new Map();
   const faviconObserver = new IntersectionObserver(entries => {
@@ -243,7 +257,7 @@
       if (!element) {
         element = document.createElement('div'); element.dataset.browserTab = tab.id;
         element.setAttribute('role','tab');
-        element.innerHTML = '<span class="browser-tab-icon" aria-hidden="true"></span><span class="browser-tab-title"></span><button class="browser-tab-close" title="Close Tab (⌘W)">×</button>';
+        element.innerHTML = `<span class="browser-tab-icon" aria-hidden="true"></span><span class="browser-tab-title"></span><button class="browser-tab-close" title="Close Tab (${shortcut("W")})">×</button>`;
       }
       element.className = 'browser-web-tab' + (selected ? ' selected' : '');
       element.tabIndex = selected ? 0 : -1; element.setAttribute('aria-selected', String(selected));
@@ -329,7 +343,7 @@
       const rows = bookmarkTree(data.bookmarks, data.expanded, data.query);
       list.innerHTML = rows.map(node => `<div class="browser-bookmark-row${data.selected === node.id ? " selected" : ""}" data-bookmark-id="${node.id}" data-kind="${node.kind}" style="--depth:${Math.min(node.depth, 10)}" draggable="true" tabindex="0" title="${escape(node.url || node.title)}">
         <button class="browser-disclosure" data-disclose="${node.id}" ${node.kind !== "folder" ? 'tabindex="-1" disabled' : `aria-expanded="${data.expanded.has(node.id)}" aria-label="${data.expanded.has(node.id) ? "Collapse" : "Expand"} ${escape(node.title)}"`}>${node.kind === "folder" ? icon(data.expanded.has(node.id) ? "down" : "right") : ""}</button>
-        <span class="browser-entry-icon ${node.kind}">${bookmarkIcon(node)}</span><span class="browser-entry-title">${escape(node.title)}</span></div>`).join("") || `<div class="browser-empty">${data.query ? "No matching bookmarks." : "Your saved websites will appear here.<br>Use Add Bookmark or ⌘D to save a page."}</div>`;
+        <span class="browser-entry-icon ${node.kind}">${bookmarkIcon(node)}</span><span class="browser-entry-title">${escape(node.title)}</span></div>`).join("") || `<div class="browser-empty">${data.query ? "No matching bookmarks." : `Your saved websites will appear here.<br>Use Add Bookmark or ${shortcut("D")} to save a page.`}</div>`;
       list.querySelectorAll('[data-icon-host]').forEach(element => faviconObserver.observe(element));
     } else {
       let day = "";
@@ -377,7 +391,7 @@
     c.element.querySelector('[data-capture="details"]').disabled = false;
     c.element.querySelector('[data-capture="cancel"]').disabled = Boolean(c.saving);
     c.element.querySelector('[data-capture="save"]').disabled = busy || !c.review?.can_save;
-    c.element.querySelector('[data-capture="download"]').disabled = busy || !c.review?.snapshot.pdf_urls.length;
+    c.element.querySelector('[data-capture="download"]').disabled = global.gewuPlatform?.captureDownload === false || busy || !c.review?.snapshot.pdf_urls.length;
     c.element.querySelector('[data-capture="origin"]').hidden = !c.review?.origin || Boolean(c.review?.paper);
     c.element.querySelector('[name="include_pdf"]').disabled = busy || !c.review?.pdf_ready;
     if (status) captureStatus(c, status);
@@ -447,6 +461,14 @@
     const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
     document.body.append(element);
     captureDetails(c, typeof state !== "undefined" && state.browserCaptureDetailsExpanded === true);
+    if (global.gewuPlatform?.captureDownload === false) {
+      const button = element.querySelector('[data-capture="download"]');
+      button.title = "Session PDF retrieval is not available yet. Choose a local PDF below.";
+      const note = document.createElement("p");
+      note.textContent = "To include a PDF, open Details and choose a local file. Retrieval from the website session is still being implemented.";
+      note.className = "capture-file-type-hint";
+      element.querySelector(".capture-file-type-hint").after(note);
+    }
     captureBusy(c, true); scheduleLayout();
     element.querySelector('[data-capture="cancel"]').focus();
     element.addEventListener("keydown", event => {
@@ -554,7 +576,7 @@
         const review = await api("capture_begin", {snapshot:event.snapshot});
         if (capturePanel !== c) { api("capture_cancel", {token:review.token}).catch(() => {}); return; }
         renderCapture(c, review);
-        if (review.snapshot.is_pdf && review.snapshot.pdf_urls.length) downloadCapture(c);
+        if (review.snapshot.is_pdf && review.snapshot.pdf_urls.length && global.gewuPlatform?.captureDownload !== false) downloadCapture(c);
       } catch (error) { if (capturePanel === c) { captureBusy(c, false); captureStatus(c, error.message, true); } }
     } else if (event.event === "capture-pdf" && event.token === c.review?.token) {
       if (event.error) { captureBusy(c, false); captureStatus(c, event.error + " You can save the article alone or choose a local PDF.", true); }
@@ -683,8 +705,10 @@
       ["browserSyncSafari", "Sync from Safari…", () => startSync("safari")],
       ["browserSyncChrome", "Sync from Chrome…", () => startSync("chrome")]
     ]) {
+      if (windowsPreview && id === "browserSyncSafari") continue;
       const item = document.createElement("button"); item.id = id; item.textContent = title; item.setAttribute("role", "menuitem");
-      item.disabled = Boolean(data.sourceSyncBusy);
+      item.disabled = Boolean(data.sourceSyncBusy) || (windowsPreview && id.startsWith("browserSync"));
+      if (windowsPreview && id.startsWith("browserSync")) item.title = "Not available in this Windows Preview yet; use HTML Import";
       item.onclick = () => { closeContext(); anchor.focus(); Promise.resolve(action()).catch(fail); };
       menu.append(item);
     }
@@ -772,11 +796,12 @@
       if (switched || document.activeElement !== $("browserAddress")) $("browserAddress").value = data.url;
       $("browserSiteIcon").href = data.url || "#";
       $("browserSiteIcon").draggable = Boolean(data.url);
-      $("browserSaveGewu").disabled = !data.url || data.home || event.loading;
+      $("browserSaveGewu").disabled = global.gewuPlatform?.capture === false || !data.url || data.home || event.loading;
+      if (global.gewuPlatform?.capture === false) $("browserSaveGewu").title = "Not available in this Windows development build yet";
       $("browserAddBookmark").disabled = !data.url;
-      $("browserDownload").disabled = !data.url;
+      $("browserDownload").disabled = windowsPreview || !data.url;
       $("browserExternal").disabled = !data.url;
-      $("browserShare").disabled = !data.url;
+      $("browserShare").disabled = windowsPreview || !data.url;
       $("browserSiteIcon").title = data.home ? "Local Favorites" : data.url.startsWith("https:") ? "HTTPS website · Drag to bookmarks" : "Not encrypted · Drag to bookmarks";
       $("browserBack").disabled = !event.canBack; $("browserForward").disabled = !event.canForward;
       $("browserReload").innerHTML = icon(event.loading ? "stop" : "reload");
@@ -828,7 +853,7 @@
     native({action:"export-bookmarks", html:result.html});
   }
   $("browserBookmarkMenu").onclick = bookmarkMenu;
-  $("browserPasswords").onclick = () => native({action:"passwords"});
+  if ($("browserPasswords")) $("browserPasswords").onclick = () => native({action:"passwords"});
   $("browserNewTab").onclick = () => newTab();
   $("browserTabs").onclick = event => {
     const close = event.target.closest("[data-close-tab]");

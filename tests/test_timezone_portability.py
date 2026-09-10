@@ -1,4 +1,5 @@
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime
@@ -12,6 +13,22 @@ from paper_monitor.ui_server import arxiv_auto_target
 
 
 class TimezonePortabilityTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "Windows timezone adapter")
+    def test_windows_iana_zone_preserves_dst_rules_and_explicit_override(self):
+        with patch.dict(os.environ, {"TZ": ""}), patch("tzlocal.get_localzone_name", return_value="America/New_York"):
+            self.assertEqual(system_timezone_name(), "America/New_York")
+            zone = local_timezone()
+            self.assertEqual(datetime(2026, 1, 15, tzinfo=zone).utcoffset().total_seconds(), -18000)
+            self.assertEqual(datetime(2026, 7, 15, tzinfo=zone).utcoffset().total_seconds(), -14400)
+        with patch.dict(os.environ, {"TZ": "Asia/Tokyo"}), patch("tzlocal.get_localzone_name", side_effect=AssertionError("override must win")):
+            self.assertEqual(system_timezone_name(), "Asia/Tokyo")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows registry integration")
+    def test_windows_actual_system_zone_matches_local_clock(self):
+        with patch.dict(os.environ, {"TZ": ""}):
+            now = datetime.now().astimezone()
+            self.assertEqual(now.astimezone(local_timezone()).utcoffset(), now.utcoffset())
+
     def test_environment_timezone_is_an_iana_zone(self):
         with patch.dict(os.environ, {"TZ": "America/New_York"}):
             self.assertEqual(system_timezone_name(), "America/New_York")

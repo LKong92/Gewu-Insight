@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlsplit
 
 from .browser_store import browser_url, history_url
 from .pdf_utils import is_valid_pdf_bytes
+from .pdf_sources import approved_pdf_source, UNVERIFIED_PDF_SOURCE
 from .text import clean_text, make_paper_id, normalize_doi
 from .storage import PAPER_FILE_TYPES, AUTOMATIC_DEFAULT_FILE_TYPE_RANK, inferred_paper_file_source, legacy_role_projection
 
@@ -52,11 +53,11 @@ def normalize_snapshot(payload: dict) -> dict:
     for value in payload.get("pdf_urls", [])[:8] if isinstance(payload.get("pdf_urls"), list) else []:
         try:
             candidate = browser_url(value)
-            if candidate not in candidates:
+            if candidate not in candidates and approved_pdf_source(candidate):
                 candidates.append(candidate)
         except ValueError:
             continue
-    if payload.get("is_pdf") is True and url not in candidates:
+    if payload.get("is_pdf") is True and url not in candidates and approved_pdf_source(url):
         candidates.insert(0, url)
     return {"url": url, "metadata": cleaned, "pdf_urls": candidates[:8], "is_pdf": payload.get("is_pdf") is True,
             "origin_paper_id": clean_text(str(payload.get("origin_paper_id") or ""))[:512],
@@ -136,6 +137,8 @@ class BrowserCaptureService:
         with capture.lock:
             if capture.result:
                 raise ValueError("This capture was already saved.")
+            if source_url and not approved_pdf_source(source_url):
+                raise ValueError(UNVERIFIED_PDF_SOURCE)
             if not content or len(content) > MAX_PDF_BYTES:
                 raise ValueError("Choose a PDF up to 64 MB.")
             if not is_valid_pdf_bytes(content):

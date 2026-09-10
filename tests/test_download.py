@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -168,6 +169,7 @@ class DownloadCandidateTests(unittest.TestCase):
             )
         )
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS textutil/CUPS conversion')
     def test_doc_supplement_can_be_converted_with_macos_text_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "supplement.doc"

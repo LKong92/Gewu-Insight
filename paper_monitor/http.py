@@ -59,6 +59,7 @@ def request_with_retries(
     retry_sleep: float = RETRY_SLEEP,
     retry_on_429: bool = True,
     stream: bool = False,
+    allow_redirects: bool = True,
 ) -> requests.Response:
     merged_headers = {"User-Agent": USER_AGENT}
     if headers:
@@ -75,7 +76,7 @@ def request_with_retries(
                 headers=merged_headers,
                 timeout=timeout,
                 stream=stream,
-                allow_redirects=True,
+                allow_redirects=allow_redirects,
             )
             if response.status_code == 429:
                 last_error = RuntimeError(f"HTTP 429 Too Many Requests for {response.url}")

@@ -39,6 +39,7 @@ from pypdf import PdfReader, PdfWriter
 import requests
 
 from .browser_store import BrowserStore, browser_url
+from . import desktop_files
 from .config import (
     AppConfig,
     DEFAULT_ASSOCIATED_FILES_DIR,
@@ -52,6 +53,7 @@ from .config import (
     DEFAULT_PDF_DIR,
     DEFAULT_SPACES_DIR,
     ROOT,
+    WORKSPACE_ROOT,
     load_config,
 )
 from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha256_for_file
@@ -373,15 +375,15 @@ AUTHOR_MONITOR_ENRICHMENT_RETRY_DAYS = 7
 AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS = 0.45
 NCBI_EUTILS_TOOL = "GewuInsight"
 NCBI_EUTILS_EMAIL = "paper.monitor.local@example.com"
-PDF_THUMB_CACHE_DIR = Path("/private/tmp/paper_monitor_pdf_thumbs")
+PDF_THUMB_CACHE_DIR = (WORKSPACE_ROOT / "cache" / "pdf_thumbs") if sys.platform == "win32" else Path("/private/tmp/paper_monitor_pdf_thumbs")
 PDF_THUMB_CACHE_MAX_BYTES = 256 * 1024 * 1024
 PDF_THUMB_CACHE_TARGET_BYTES = 192 * 1024 * 1024
 LOCAL_FILE_RESPONSE_CHUNK_BYTES = 1024 * 1024
 ARXIV_ANNOUNCEMENT_BUFFER = timedelta(minutes=20)
 INTERRUPTED_FETCH_RESUME_AFTER = timedelta(minutes=30)
 LATE_ARRIVAL_LOOKBACK_DAYS = 3
-DEFAULT_COMMENT_REPORT_DIR = ROOT / "reports" / "citation_comments"
-PUBLICATION_EXPORT_DIR = ROOT / "reports" / "publication_exports"
+DEFAULT_COMMENT_REPORT_DIR = WORKSPACE_ROOT / "reports" / "citation_comments"
+PUBLICATION_EXPORT_DIR = WORKSPACE_ROOT / "reports" / "publication_exports"
 COMMENT_REPORT_MAX_OPENALEX_PAGES = 10
 COMMENT_REPORT_OPENALEX_PER_PAGE = 100
 COMMENT_REPORT_LIST_LIMIT = 200
@@ -391,7 +393,7 @@ COMMENT_REPORT_HIGHLIGHT_LIMIT = 10
 WEBKIT_NETWORK_CACHE_DIR = Path.home() / "Library" / "Caches" / "local.paper-monitor" / "WebKit" / "NetworkCache"
 WEBKIT_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 WEBKIT_CACHE_TARGET_BYTES = 512 * 1024 * 1024
-SUBJECTS_CONFIG_PATH = ROOT / "config" / "subjects.json"
+SUBJECTS_CONFIG_PATH = WORKSPACE_ROOT / "config" / "subjects.json"
 THEME_GROUPS: dict[str, dict[str, Any]] = {}
 AUTHOR_MONITOR_CARD_CACHE_BUILD_LOCK = threading.Lock()
 
@@ -451,6 +453,9 @@ def run_ui_server(
     }
     credential_storage = Storage(db_path)
     try:
+        if sys.platform == "win32":
+            from .windows_recycle import recover_pending
+            recover_pending(credential_storage)
         raw_config = read_config_json()
         credential_storage.seed_journal_subscriptions(
             raw_config.get("journals", []),
@@ -3215,7 +3220,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"path": folder_path})
 
     def handle_choose_library_import_report(self) -> None:
-        imports_root = (ROOT / "reports" / "imports").resolve()
+        imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
         try:
             script = (
                 "POSIX path of (choose file with prompt "
@@ -3434,8 +3439,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         copy_mode = "copy"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(folder_path.name or "library-folder", 60)
-        inventory_path = ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
-        report_path = ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
+        inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"folder-inventory-{slug}-{timestamp}.json"
+        report_path = WORKSPACE_ROOT / "reports" / "imports" / f"folder-import-{slug}-import-{timestamp}.json"
         try:
             build_inventory_from_folder(folder_path, output_path=inventory_path, parse_pdfs=True)
             storage = Storage(self.configured_db_path)
@@ -3492,8 +3497,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         slug = safe_slug(paths[0].name or "finder-drop", 60)
-        inventory_path = ROOT / "reports" / "imports" / f"finder-drop-inventory-{slug}-{timestamp}.json"
-        report_path = ROOT / "reports" / "imports" / f"finder-drop-import-{slug}-{timestamp}.json"
+        inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"finder-drop-inventory-{slug}-{timestamp}.json"
+        report_path = WORKSPACE_ROOT / "reports" / "imports" / f"finder-drop-import-{slug}-{timestamp}.json"
         try:
             build_inventory_from_paths(paths, output_path=inventory_path, parse_pdfs=True)
             storage = Storage(self.configured_db_path)
@@ -3716,7 +3721,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_set_quick_look_settings(self, payload: dict[str, Any]) -> None:
         mode = str(payload.get("mode") or "").strip().lower()
         if mode not in QUICK_LOOK_MODES:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown Quick Look mode")
+            self.send_error_json(HTTPStatus.BAD_REQUEST, "Unknown preview mode" if sys.platform == "win32" else "Unknown Quick Look mode")
             return
         storage = Storage(self.configured_db_path)
         try:
@@ -4839,7 +4844,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not requested.exists() or requested.suffix.lower() != ".pdf":
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
             return
-        subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
+        desktop_files.open_file(requested, macos_application="Preview")
         self.send_json({"status": "opened", "path": str(requested)})
 
     def handle_open_native_file(self, payload: dict[str, Any]) -> None:
@@ -4854,15 +4859,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         if mode == "folder":
             target = requested if requested.is_dir() else requested.parent
-            subprocess.run(["open", str(target)], check=True)
+            desktop_files.open_file(target)
             self.send_json({"status": "opened", "path": str(requested), "opened_path": str(target), "mode": "folder"})
             return
         if requested.is_dir():
-            subprocess.run(["open", str(requested)], check=True)
+            desktop_files.open_file(requested)
         elif requested.suffix.lower() == ".pdf":
-            subprocess.run(["open", "-a", "Preview", str(requested)], check=True)
+            desktop_files.open_file(requested, macos_application="Preview")
         else:
-            subprocess.run(["open", str(requested)], check=True)
+            desktop_files.open_file(requested)
         self.send_json({"status": "opened", "path": str(requested), "mode": "open"})
 
     def handle_open_url(self, payload: dict[str, Any]) -> None:
@@ -5450,12 +5455,21 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
             self.send_error_json(HTTPStatus.NOT_FOUND, "PDF not found")
             return
         stat = requested.stat()
-        page_count = cached_pdf_page_count(str(requested), int(stat.st_size), int(stat.st_mtime_ns))
+        page_sizes = None
+        if sys.platform == "win32":
+            from .windows_pdf import page_count as windows_page_count
+            page_count = windows_page_count(str(requested), int(stat.st_size), int(stat.st_mtime_ns))
+            if first(query, "layout") == "1":
+                from .windows_pdf import page_sizes as windows_page_sizes
+                page_sizes = windows_page_sizes(str(requested), int(stat.st_size), int(stat.st_mtime_ns))
+        else:
+            page_count = cached_pdf_page_count(str(requested), int(stat.st_size), int(stat.st_mtime_ns))
         self.send_json(
             {
                 "path": str(requested),
                 "page_count": page_count,
                 "file_version": f"{stat.st_size:x}-{stat.st_mtime_ns:x}",
+                **({"page_sizes": page_sizes} if page_sizes is not None else {}),
             }
         )
 
@@ -5480,6 +5494,10 @@ button{{border:1px solid #cfd8e6;border-radius:8px;background:#fff;padding:9px 1
         if not requested:
             return
         page_number = max(1, int(first(query, "page") or 1))
+        if sys.platform == "win32" and first(query, "text") == "1":
+            from .windows_pdf import page_text
+            self.send_json({"text": page_text(requested, page_number)})
+            return
         size = max(120, min(1800, int(first(query, "size") or 240)))
         data, content_type = pdf_page_thumbnail(requested, page_number, size=size)
         self.send_response(HTTPStatus.OK)
@@ -12918,7 +12936,7 @@ def remove_library_workspace_tab(storage: Storage, payload: dict[str, Any]) -> d
     target_dir = local_copy_dir_for_library_folder(storage, root_folder_id)
     if target_dir.exists():
         if not target_dir.is_dir() or any(target_dir.iterdir()):
-            raise ValueError("This Space still contains files in Finder and cannot be removed")
+            raise ValueError("This Space still contains local files and cannot be removed")
         target_dir.rmdir()
     try:
         storage.delete_library_folder(folder_id=root_folder_id)
@@ -13024,7 +13042,7 @@ def move_library_workspace_to_library(
     target_parent_dir = local_copy_dir_for_library_folder(storage, target_folder_id).expanduser().resolve()
     target_dir = target_parent_dir / finder_safe_name(str(root_folder.get("name") or "Space"))
     if target_dir.exists():
-        raise ValueError("A Finder folder with this Space name already exists at the selected destination")
+        raise ValueError("A local folder with this Space name already exists at the selected destination")
     paper_ids = [str(item.get("paper_id") or "") for item in library_items_in_folder_tree(storage, root_folder_id)]
     moved_native_dir = False
     moved_database_folder = False
@@ -13233,8 +13251,34 @@ def workspace_html(storage: Storage) -> str:
     settings = website_link_settings_payload(storage)
     browser = settings["browser"]
     details = "true" if settings["capture_details_expanded"] else "false"
-    return INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1).replace(
+    html = INDEX_HTML.replace('websiteLinkBrowser: "builtin",', f'websiteLinkBrowser: "{browser}",', 1).replace(
         'browserCaptureDetailsExpanded: false,', f'browserCaptureDetailsExpanded: {details},', 1)
+    if sys.platform == "win32":
+        html = html.replace("Open in Preview", "Open in Default App")
+        html = html.replace("default web browser selected in macOS", "default web browser selected in Windows")
+        html = html.replace("Gewu Insight.app", "Gewu Insight")
+        # Translate display text only; keep API names, native bridge identifiers
+        # and descriptions of actual macOS formats/features intact.
+        for original, replacement in (
+            ("Finder Target", "Destination Folder"),
+            ("Finder target", "Destination Folder"),
+            ("in Finder", "in File Explorer"),
+            ("open Finder", "open File Explorer"),
+            ("Finder list view", "List view"),
+            ("data/Library Finder tree", "data/Library folder structure"),
+            (' title="Drag a real-file copy to Finder"', ""),
+            ("Quick Look Settings", "Preview Settings"),
+            (">Quick Look<", ">Preview<"),
+            ("Quick Look settings", "preview settings"),
+            ("Quick Look preference saved.", "Preview preference saved."),
+            ("Quick Look open", "Preview open"),
+            ("macOS Trash", "Windows Recycle Bin"),
+            ("to Trash", "to Windows Recycle Bin"),
+        ):
+            html = html.replace(original, replacement)
+        html = html.replace('placeholder="/path/to/folder"', 'placeholder="C:\\Research\\Papers"')
+        html = re.sub(r'<label class="quick-look-mode-option">\s*<input type="radio" name="quick-look-mode" value="(?:hybrid|native_all)">[\s\S]*?</label>', '', html)
+    return html
 
 
 def normalize_font_size_scale(value: Any) -> int:
@@ -17678,6 +17722,9 @@ def open_publication_export_result(path: Path, export_format: str) -> dict[str, 
         desktop_copy = copy_publication_export_to_desktop(requested)
         result.update({"status": "copied", "mode": "desktop-copy", "desktop_path": str(desktop_copy)})
         return result
+    if sys.platform == "win32":
+        desktop_files.open_file(requested)
+        return result
     if requested.suffix.lower() == ".pdf":
         subprocess.run(["open", "-a", "Preview", str(requested)], check=True, capture_output=True, text=True)
     elif requested.suffix.lower() == ".tex":
@@ -17703,6 +17750,13 @@ def copy_publication_export_to_desktop(path: Path) -> Path:
 
 def reveal_path_in_finder(path: Path) -> dict[str, str]:
     requested = path.expanduser().resolve()
+    if sys.platform == "win32":
+        target = requested
+        while not target.exists() and target != target.parent:
+            target = target.parent
+        desktop_files.reveal_windows_file(target)
+        return {"status": "opened", "path": str(requested), "opened_path": str(target),
+                "revealed": "nearest_parent" if target != requested else "folder" if target.is_dir() else "file"}
     target = requested
     revealed = "file"
     if requested.exists():
@@ -17799,7 +17853,7 @@ def export_my_publication_list(rows: list[dict[str, Any]], *, my_name: str, expo
         raise RuntimeError(f"LaTeX is not installed. The source file was written to {tex_path}")
     latex_env = os.environ.copy()
     engine_dir = str(Path(engine).parent)
-    latex_env["PATH"] = f"{engine_dir}:{latex_env.get('PATH', '')}" if engine_dir else latex_env.get("PATH", "")
+    latex_env["PATH"] = f"{engine_dir}{os.pathsep}{latex_env.get('PATH', '')}" if engine_dir else latex_env.get("PATH", "")
     for _ in range(2):
         result = subprocess.run(
             [engine, "-interaction=nonstopmode", tex_path.name],
@@ -20151,8 +20205,8 @@ def run_library_import_job(
     source_paths = source_paths or [folder_path]
     metadata_mode = normalize_import_metadata_mode(metadata_mode)
     import_prefix = "finder-drop" if preserve_top_level else "folder"
-    inventory_path = ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
-    report_path = ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
+    inventory_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-inventory-{slug}-{timestamp}.json"
+    report_path = WORKSPACE_ROOT / "reports" / "imports" / f"{import_prefix}-import-{slug}-import-{timestamp}.json"
     progress = library_import_progress_callback(job_id)
     complete_export_manifest = (
         read_gewu_complete_export_manifest(folder_path)
@@ -20302,7 +20356,7 @@ def run_library_import_job(
 def load_import_report_summary(report_path: Any) -> dict[str, Any] | None:
     try:
         path = Path(str(report_path or "")).expanduser().resolve()
-        imports_root = (ROOT / "reports" / "imports").resolve()
+        imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
         if not is_allowed_file(path, [imports_root]) or not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -20319,7 +20373,7 @@ def load_library_import_report(report_path: Any) -> dict[str, Any]:
         path = Path(path_text).expanduser().resolve()
     except OSError as exc:
         raise ValueError(f"Could not resolve report path: {exc}") from exc
-    imports_root = (ROOT / "reports" / "imports").resolve()
+    imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
     if not is_allowed_file(path, [imports_root]):
         raise ValueError("Loader reports must be inside reports/imports")
     if not path.exists() or not path.is_file():
@@ -20340,7 +20394,7 @@ def load_library_import_report(report_path: Any) -> dict[str, Any]:
 
 
 def list_library_import_reports(*, limit: int = 80) -> list[dict[str, Any]]:
-    imports_root = (ROOT / "reports" / "imports").resolve()
+    imports_root = (WORKSPACE_ROOT / "reports" / "imports").resolve()
     if not imports_root.exists():
         return []
     candidates: list[Path] = []
@@ -20417,7 +20471,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
         deleted_paths = []
         for path_value in [job.get("inventory_path"), result.get("report_path")]:
             path_text = clean_text(path_value)
-            if delete_import_path(path_text, ROOT / "reports" / "imports"):
+            if delete_import_path(path_text, WORKSPACE_ROOT / "reports" / "imports"):
                 deleted_paths.append(path_text)
         with LIBRARY_IMPORT_JOBS_LOCK:
             live_job = LIBRARY_IMPORT_JOBS.get(job_id)
@@ -20484,7 +20538,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
                 break
     cleanup_local_copy_empty_parents(deleted_paths)
     for path_value in [job.get("inventory_path"), result.get("report_path")]:
-        if delete_import_path(clean_text(path_value), ROOT / "reports" / "imports"):
+        if delete_import_path(clean_text(path_value), WORKSPACE_ROOT / "reports" / "imports"):
             deleted_paths.append(clean_text(path_value))
 
     with LIBRARY_IMPORT_JOBS_LOCK:
@@ -21150,7 +21204,7 @@ def finder_safe_name(value: str, fallback: str = "Untitled") -> str:
     clean = " ".join(str(value or "").strip().split()) or fallback
     clean = re.sub(r"[/:\0]+", "-", clean)
     clean = clean.strip(" .")
-    return clean[:120] or fallback
+    return desktop_files.safe_filename(clean[:120] or fallback)
 
 
 def library_folder_chain(storage: Storage, folder_id: int) -> list[dict[str, Any]]:
@@ -21538,6 +21592,19 @@ def update_paper_resource_role(
 
 
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    if sys.platform == "win32":
+        from .windows_recycle import resource_removal
+        with resource_removal(storage, paper_id, resource_id):
+            storage.conn.execute("BEGIN IMMEDIATE")
+            try:
+                return _delete_paper_resource(storage, paper_id, resource_id)
+            except Exception:
+                storage.conn.rollback()
+                raise
+    return _delete_paper_resource(storage, paper_id, resource_id)
+
+
+def _delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
@@ -21573,7 +21640,8 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
     if managed_file and stored_path and not shared_file:
         trash_destination = move_path_to_macos_trash(stored_path)
     try:
-        storage.conn.execute("BEGIN IMMEDIATE")
+        if not storage.conn.in_transaction:
+            storage.conn.execute("BEGIN IMMEDIATE")
         storage.conn.execute(
             """
             UPDATE papers
@@ -21586,7 +21654,7 @@ def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> 
         storage.conn.commit()
     except Exception:
         storage.conn.rollback()
-        if stored_path and not stored_path.exists() and trash_destination and trash_destination.exists():
+        if stored_path and not stored_path.exists() and trash_destination and trash_destination.exists() and not (sys.platform == "win32" and trash_destination.name.startswith("$R")):
             stored_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(trash_destination), str(stored_path))
         raise
@@ -22965,7 +23033,7 @@ def canonical_pdf_path_for_paper(paper: dict[str, Any] | None) -> Path | None:
         raw = str(paper.get(key) or "")
         if not raw:
             continue
-        path = Path(raw).expanduser()
+        path = desktop_files.resolve_placement(Path(raw))
         if path.exists() and path.is_file():
             return path.resolve()
     return None
@@ -23468,10 +23536,10 @@ def remove_symlinks_to(target: Path, roots: list[Path]) -> list[str]:
         if not root.exists():
             continue
         for candidate in root.rglob("*"):
-            if not candidate.is_symlink():
+            if not desktop_files.is_placement(candidate):
                 continue
             try:
-                if candidate.resolve() == target_resolved:
+                if desktop_files.resolve_placement(candidate) == target_resolved:
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23489,10 +23557,10 @@ def remove_direct_symlinks_to(target: Path, folders: list[Path]) -> list[str]:
         if not folder.exists() or not folder.is_dir():
             continue
         for candidate in folder.iterdir():
-            if not candidate.is_symlink():
+            if not desktop_files.is_placement(candidate):
                 continue
             try:
-                if candidate.resolve() == target_resolved:
+                if desktop_files.resolve_placement(candidate) == target_resolved:
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23521,6 +23589,8 @@ def library_item_display_name_for_synced_filename(
     item: dict[str, Any],
     filename: str,
 ) -> str:
+    if sys.platform == "win32" and filename.lower().endswith(".pdf.lnk"):
+        filename = filename[:-4]
     original = clean_text(item.get("display_name") or "")
     return filename if original.lower().endswith(".pdf") or not original else Path(filename).stem
 
@@ -23539,9 +23609,11 @@ def library_item_local_pdf_path(
         return None
     desired_name = library_item_pdf_filename(item, paper, canonical)
     desired_path = target_dir / desired_name
+    if sys.platform == "win32" and desired_path != canonical:
+        desired_path = desktop_files.placement_path(desired_path)
     if desired_path.exists() or desired_path.is_symlink():
         try:
-            if desired_path.resolve() == canonical:
+            if desktop_files.resolve_placement(desired_path) == canonical:
                 return desired_path
         except OSError:
             pass
@@ -23553,10 +23625,10 @@ def library_item_local_pdf_path(
     ):
         return canonical
     for candidate in target_dir.iterdir():
-        if not candidate.is_symlink():
+        if not desktop_files.is_placement(candidate):
             continue
         try:
-            if candidate.resolve() == canonical:
+            if desktop_files.resolve_placement(candidate) == canonical:
                 return candidate
         except OSError:
             continue
@@ -23574,6 +23646,8 @@ def create_pdf_alias(
     if not desired_name.lower().endswith(".pdf"):
         desired_name = f"{desired_name}.pdf"
     desired_path = target_dir / desired_name
+    if sys.platform == "win32":
+        return desktop_files.create_placement(canonical, desired_path)
     if canonical.parent.resolve() == target_dir.resolve() and desired_path == canonical:
         return canonical
     if target_dir.exists():
@@ -23783,10 +23857,10 @@ def sync_all_pdf_aliases_for_paper(
         before = None
         if MY_PUBLICATIONS_LOCAL_COPY_ROOT.exists():
             for candidate in MY_PUBLICATIONS_LOCAL_COPY_ROOT.iterdir():
-                if not candidate.is_symlink():
+                if not desktop_files.is_placement(candidate):
                     continue
                 try:
-                    if candidate.resolve() == canonical:
+                    if desktop_files.resolve_placement(candidate) == canonical:
                         before = candidate
                         break
                 except OSError:
@@ -23826,10 +23900,10 @@ def sync_all_pdf_aliases_for_paper(
         if not target_dir.exists():
             continue
         for candidate in target_dir.iterdir():
-            if not candidate.is_symlink() or candidate.name in valid_names:
+            if not desktop_files.is_placement(candidate) or desktop_files.placement_name(candidate) in valid_names:
                 continue
             try:
-                if candidate.resolve() == canonical:
+                if desktop_files.resolve_placement(candidate) == canonical:
                     candidate.unlink()
                     removed.append(str(candidate))
             except OSError:
@@ -23980,7 +24054,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
         elif not actual:
             result["missing_shortcuts"] += 1
             mismatch_type = "missing_shortcut"
-        elif actual.name != expected:
+        elif desktop_files.placement_name(actual) != expected:
             result["mismatched_shortcuts"] += 1
             mismatch_type = "shortcut"
         if mismatch_type and len(result["samples"]) < max(0, int(sample_limit)):
@@ -24711,6 +24785,9 @@ def move_path_to_macos_trash(path: Path) -> Path:
     requested = path.expanduser().resolve()
     if not requested.exists():
         raise FileNotFoundError(str(requested))
+    if sys.platform == "win32":
+        from .windows_recycle import recycle_resource_path
+        return recycle_resource_path(requested)
     if sys.platform != "darwin":
         trash_dir = Path.home() / ".Trash"
         trash_dir.mkdir(parents=True, exist_ok=True)
@@ -24894,6 +24971,17 @@ def pdf_page_thumbnail(path: Path, page_number: int, *, size: int = 240) -> tupl
             return output_path.read_bytes(), "image/png"
         except OSError:
             pass
+    if sys.platform == "win32":
+        from .windows_pdf import render_page_png
+        image_data = render_page_png(path, page_number, size)
+        PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        temporary = output_path.with_name(f"{cache_key}-{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(image_data)
+            os.replace(temporary, output_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return image_data, "image/png"
     data = single_page_pdf_bytes(path, page_number)
     if data:
         PDF_THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -41648,11 +41736,17 @@ INDEX_HTML = """<!doctype html>
 
     async function chooseLibraryImportFolder() {
       await runLibraryMenuAction(async () => {
-        state.libraryImportStatus = "Waiting for macOS folder permission...";
+        state.libraryImportStatus = "Choose a source folder...";
         renderLibraryLoader();
-        const res = await fetch("/api/library/import-folder/choose", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-        const data = await parseJsonResponse(res);
-        if (!res.ok) throw new Error(data.error || "Could not choose folder");
+        let data;
+        if (window.gewuChoosePath) {
+          data = await window.gewuChoosePath("folder");
+          if (data.cancelled) { state.libraryImportStatus = "Folder selection cancelled."; renderLibraryLoader(); return; }
+        } else {
+          const res = await fetch("/api/library/import-folder/choose", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+          data = await parseJsonResponse(res);
+          if (!res.ok) throw new Error(data.error || "Could not choose folder");
+        }
         state.libraryImportPath = data.path || "";
         state.libraryImportSourcePaths = [];
         state.libraryImportTargetFolderId = state.libraryRootId || 1;
@@ -44781,6 +44875,7 @@ INDEX_HTML = """<!doctype html>
 
     function libraryNativeFileDragAttrs(path, fileName) {
       if (!path) return "";
+      if (window.gewuPlatform?.os === "windows") return `data-native-file-drag-handle draggable="true" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName || fileNameFromPath(path))}" title="Drag to File Explorer or another application"`;
       return `data-native-file-drag-handle draggable="false" data-native-drag-path="${escapeAttr(path)}" data-native-drag-name="${escapeAttr(fileName || fileNameFromPath(path))}" title="Drag to Finder or an application icon"`;
     }
 
@@ -47922,7 +48017,7 @@ INDEX_HTML = """<!doctype html>
         quickLookLibraryPdf({merged_pdf_path: path, original_filename: name}, {toggle});
         return;
       }
-      quickLookLibraryFile({native_file_path: path, original_filename: name}, {toggle});
+      quickLookLibraryFile({native_file_path: path, original_filename: name, file_extension: file.extension, file_mime_type: file.mime_type}, {toggle});
     }
 
     function libraryPaperResourceIsPdf(file) {
@@ -48568,7 +48663,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function fileNameFromPath(path) {
-      return String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+      return String(path || "").replaceAll(String.fromCharCode(92), "/").split("/").filter(Boolean).pop() || "";
     }
 
     function sanitizeDragFileName(name) {
@@ -48837,7 +48932,7 @@ INDEX_HTML = """<!doctype html>
       const explicit = String(paper?.file_extension || "").trim().replace(/^\./, "");
       if (explicit) return explicit.toLowerCase();
       const path = paperNativePath(paper || {});
-      const name = path.split(/[\\/]/).pop() || "";
+      const name = fileNameFromPath(path);
       const match = name.match(/\.([^.]+)$/);
       return match ? match[1].toLowerCase() : "";
     }
@@ -48847,7 +48942,7 @@ INDEX_HTML = """<!doctype html>
       const ext = libraryFileExtension(paper);
       if (["md", "markdown", "mdown", "mkd"].includes(ext)) return "markdown";
       const textExtensions = new Set(["txt", "md", "markdown", "csv", "tsv", "json", "jsonl", "xml", "html", "htm", "css", "js", "ts", "py", "c", "cc", "cpp", "h", "hpp", "java", "m", "mm", "tex", "bib", "ris", "log", "ini", "yaml", "yml", "toml", "rtf"]);
-      if (mime.startsWith("image/")) return "image";
+      if (mime.startsWith("image/") || (!mime && ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "ico", "svg"].includes(ext))) return "image";
       if (mime.startsWith("video/")) return "video";
       if (mime.startsWith("audio/")) return "audio";
       if (mime.startsWith("text/") || textExtensions.has(ext) || mime === "application/json" || mime.endsWith("+json") || mime.endsWith("+xml")) return "text";
@@ -49037,6 +49132,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function quickLookLibraryFile(paper, options = {}) {
+      window.gewuWindowsPdf?.close();
       const path = paperNativePath(paper || {});
       const status = $("libraryDetailStatus");
       if (!path) {
@@ -49517,6 +49613,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeLibraryQuickLook(options = {}) {
+      window.gewuWindowsPdf?.close();
       cancelLibraryMarkdownPreview();
       const returnFocus = state.libraryQuickLookReturnFocus;
       const quickLookKind = state.libraryQuickLookKind;
@@ -49680,6 +49777,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function showLibraryQuickLookPlaceholder(options = {}) {
+      window.gewuWindowsPdf?.close();
       cancelLibraryMarkdownPreview();
       if (!state.libraryQuickLookOpen && !options.open) return;
       if (state.libraryQuickLookKind === "native-file") postNativeQuickLook("close");
@@ -49739,6 +49837,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function updateLibraryPdfFramePage(page) {
+      if (window.gewuWindowsPdf) { window.gewuWindowsPdf.page(page); return; }
       const frame = $("libraryQuickLookPages")?.querySelector(".library-pdf-frame");
       if (!frame) return;
       const nextUrl = libraryPdfFrameUrl(page);
@@ -49753,6 +49852,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderLibraryQuickLookThumbs(pageCount) {
+      if (window.gewuWindowsPdf) { window.gewuWindowsPdf.thumbs(pageCount); return; }
       const root = $("libraryQuickLookThumbs");
       if (!root) return;
       const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
@@ -49818,6 +49918,13 @@ INDEX_HTML = """<!doctype html>
     function renderLibraryQuickLookPages(pageCount) {
       const root = $("libraryQuickLookPages");
       if (!root) return;
+      if (window.gewuWindowsPdf) {
+        window.gewuWindowsPdf.render(root, state.libraryQuickLookPath, (page, count) => {
+          state.libraryQuickLookPageCount = count;
+          updateLibraryQuickLookActivePage(page);
+        });
+        return;
+      }
       const count = Math.max(0, Math.min(200, Number(pageCount || 0)));
       if (!state.libraryQuickLookUrl) {
         root.innerHTML = "";
@@ -49894,14 +50001,17 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function loadLibraryQuickLookInfo(path) {
+      if (window.gewuWindowsPdf) return;
+      const token = state.libraryQuickLookRenderToken;
       try {
         const res = await fetch(`/api/pdf-info?path=${encodeURIComponent(path)}`);
         const data = await res.json();
-        if (!res.ok || path !== state.libraryQuickLookPath) return;
+        if (!res.ok || path !== state.libraryQuickLookPath || token !== state.libraryQuickLookRenderToken || !state.libraryQuickLookOpen) return;
         state.libraryQuickLookPageCount = Number(data.page_count || 0);
         renderLibraryQuickLookPages(state.libraryQuickLookPageCount);
         scheduleLibraryQuickLookThumbs(path, state.libraryQuickLookPageCount);
       } catch (error) {
+        if (path !== state.libraryQuickLookPath || token !== state.libraryQuickLookRenderToken || !state.libraryQuickLookOpen) return;
         state.libraryQuickLookPageCount = 0;
         renderLibraryQuickLookThumbs(0);
       }
@@ -53993,6 +54103,7 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryViewShortcut(event) {
       if (event.altKey || !event.shiftKey) return false;
+      if (editableClipboardTarget(event.target)) return false;
       const key = String(event.key || "").toLowerCase();
       const isCommandLike = event.metaKey || event.ctrlKey;
       if (!isCommandLike || key !== "v") return false;
@@ -54006,6 +54117,9 @@ INDEX_HTML = """<!doctype html>
       const key = String(event.key || "").toLowerCase();
       const isCommandLike = event.metaKey || event.ctrlKey;
       if (!isCommandLike) return false;
+      // WebView2 already handles editable clipboard shortcuts. Intercepting
+      // Ctrl+V would require the separate, intentionally denied readText API.
+      if (window.gewuPlatform?.os === "windows" && editableClipboardTarget(event.target)) return true;
       if (key === "c") {
         const selected = selectedTextForCopy();
         if (!selected) return false;
@@ -54433,6 +54547,10 @@ INDEX_HTML = """<!doctype html>
       const normalized = normalizeQuickLookMode(mode);
       document.querySelectorAll('input[name="quick-look-mode"]').forEach((input) => {
         input.checked = input.value === normalized;
+        if (window.gewuPlatform?.os === "windows" && input.value !== "builtin_all") {
+          input.disabled = true;
+          input.closest("label").title = "macOS Quick Look is unavailable on Windows.";
+        }
       });
     }
 
@@ -54447,7 +54565,9 @@ INDEX_HTML = """<!doctype html>
       try {
         await loadQuickLookSettings({force: true, refreshPreview: false});
         renderQuickLookSettingsSelection();
-        $("quickLookSettingsStatus").textContent = "Choose how Space-bar previews open in Library and Spaces.";
+        $("quickLookSettingsStatus").textContent = window.gewuPlatform?.os === "windows"
+          ? "Space opens the built-in viewer. Use Open in Default App to open files with your Windows reader."
+          : "Choose how Space-bar previews open in Library and Spaces.";
       } catch (error) {
         $("quickLookSettingsStatus").textContent = error.message || "Could not load Quick Look settings";
         $("quickLookSettingsStatus").className = "citation-settings-status err";

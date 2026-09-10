@@ -434,7 +434,7 @@ def cache_aps_abstract(doi: str, abstract: str) -> None:
     _APS_ABSTRACT_CACHE[doi] = (time.monotonic(), clean_text(abstract))
 
 
-def request_aps_page(url: str) -> requests.Response | None:
+def request_aps_page(url: str, *, allow_redirects: bool = True, stream: bool = False) -> requests.Response | None:
     global _APS_ABSTRACT_BLOCKED_UNTIL, _APS_ABSTRACT_LAST_REQUEST_AT
     with _APS_ABSTRACT_REQUEST_LOCK:
         now = time.monotonic()
@@ -448,7 +448,8 @@ def request_aps_page(url: str) -> requests.Response | None:
                 url,
                 headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
                 timeout=10,
-                allow_redirects=True,
+                allow_redirects=allow_redirects,
+                stream=stream,
             )
         except requests.RequestException:
             _APS_ABSTRACT_LAST_REQUEST_AT = time.monotonic()

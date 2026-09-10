@@ -1,5 +1,6 @@
 """Capture-to-Library behavior with temporary SQLite/files and synthetic PDFs."""
 import io
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -300,8 +301,6 @@ class BrowserCaptureTests(unittest.TestCase):
             ('https://www.medrxiv.org/content/fixture.full.pdf', 'preprint_server'),
             ('https://chemrxiv.org/engage/fixture.pdf', 'preprint_server'),
             ('https://assets-eu.researchsquare.com/files/fixture.pdf', 'preprint_server'),
-            ('https://repository.example.edu/paper.pdf', 'institutional_repository'),
-            ('https://files.example.net/paper.pdf', 'other'),
         ]
         for index, (url, expected) in enumerate(cases):
             with self.subTest(url=url):
@@ -324,6 +323,14 @@ class BrowserCaptureTests(unittest.TestCase):
                     "SELECT source_key FROM paper_source_observations WHERE paper_id=? AND source_kind='browser'", (key,)
                 ).fetchone()
                 self.assertEqual(observation['source_key'], capture.snapshot['url'])
+
+    def test_unverified_remote_sources_are_blocked_even_with_an_edu_host(self):
+        for url in ('https://repository.example.edu/paper.pdf', 'https://files.example.net/paper.pdf'):
+            with self.subTest(url=url):
+                capture = self.service.begin(self.db, {'url':url, 'is_pdf':True})
+                self.assertEqual(capture.snapshot['pdf_urls'], [])
+                with self.assertRaisesRegex(ValueError, 'source is not verified'):
+                    self.service.upload(capture, self.pdf('A quantum sensing paper'), source_url=url)
 
     def test_signed_pdf_retains_host_but_never_persists_authorization_url(self):
         self.paper()
@@ -451,6 +458,10 @@ class BrowserCaptureTests(unittest.TestCase):
         for host in ('www.nature.com.example.org','www.biorxiv.org'):
             url='https://'+host+'/articles/s41567-026-03429-7.pdf'
             capture=self.service.begin(self.db,{'url':url,'is_pdf':True})
+            if host == 'www.nature.com.example.org':
+                with self.assertRaisesRegex(ValueError, 'source is not verified'):
+                    self.service.upload(capture,self.pdf('A quantum sensing paper'),source_url=url)
+                continue
             with patch.object(ui,'extract_identifier_from_pdf_or_title',return_value={'kind':'doi','identifier':'10.1038/s41567-026-03429-7'}):
                 self.service.upload(capture,self.pdf('A quantum sensing paper'),source_url=url)
             self.assertEqual(self.review(capture)['suggested_file_type'],'unknown')
@@ -484,7 +495,7 @@ class BrowserCaptureTests(unittest.TestCase):
         for url in ('http://127.0.0.1/paper','file:///tmp/paper','https://a:b@example.org/'):
             with self.assertRaises(ValueError): normalize_snapshot({'url':url})
         snapshot = normalize_snapshot({'url':'https://example.org/?token=private', 'origin_url':'https://example.org/?token=private', 'pdf_urls':['http://localhost/private','https://example.org/paper.pdf'], 'snapshot_id':'binding'})
-        self.assertEqual(snapshot['pdf_urls'], ['https://example.org/paper.pdf'])
+        self.assertEqual(snapshot['pdf_urls'], [])
         self.assertEqual(snapshot['snapshot_id'], 'binding')
         self.assertEqual(snapshot['origin_url'], '')
         folder = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
@@ -582,6 +593,7 @@ class BrowserCaptureApiTests(unittest.TestCase):
                 resource_id=file['id']
                 self.post('capture_cancel',token=review['token'])
 
+@unittest.skipUnless(sys.platform == "darwin", "Requires macOS Cocoa/WebKit and xcrun")
 class BrowserCaptureNativeTests(unittest.TestCase):
     def test_native_capture_lifecycle(self):
         import shutil

@@ -125,7 +125,7 @@ def import_bookmarks(store: BrowserStore, payload: dict) -> dict:
     parser.close()
     parser.finish_item()
     if not parser.saw_list or not parser.nodes:
-        raise ValueError("No bookmark list was found. Choose a Safari or Chrome bookmark HTML export.")
+        raise ValueError("No bookmark list was found. Choose a bookmarks HTML file exported from your browser.")
     parent = store._parent(payload.get("parent_id"))
     label = str(payload.get("folder_name") or "Imported Bookmarks").strip()[:1000] or "Imported Bookmarks"
     result = {"imported": 0, "folders_created": 0, "duplicates": 0, "skipped": 0}

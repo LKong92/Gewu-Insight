@@ -1,0 +1,58 @@
+# Reviewed publisher / authorized scholarly repository hosts.
+# Subdomains are included. General file-sharing hosts and arbitrary mirrors are
+# deliberately absent. This is source eligibility, not a substitute for access
+# rights: authentication and subscription restrictions must still be respected.
+nature.com
+springer.com
+springernature.com
+science.org
+sciencemag.org
+aaas.org
+cell.com
+sciencedirect.com
+elsevier.com
+els-cdn.com
+wiley.com
+acs.org
+rsc.org
+aps.org
+aip.org
+scitation.org
+iop.org
+iopscience.iop.org
+cpb.iphy.ac.cn
+cpl.iphy.ac.cn
+iphy.ac.cn
+sciencechina.cn
+scichina.com
+sciengine.com
+pnas.org
+oup.com
+cambridge.org
+ieee.org
+mdpi.com
+mdpi-res.com
+frontiersin.org
+plos.org
+copernicus.org
+copernicuspublications.org
+tandfonline.com
+taylorfrancis.com
+sagepub.com
+acm.org
+royalsocietypublishing.org
+arxiv.org
+biorxiv.org
+medrxiv.org
+chemrxiv.org
+researchsquare.com
+ncbi.nlm.nih.gov
+europepmc.org
+hal.science
+hal.archives-ouvertes.fr
+cds.cern.ch
+authors.library.caltech.edu
+# Official standards documents, including the public PDF integration fixture.
+w3.org
+# Identifier resolver: each redirect destination is checked separately.
+doi.org

@@ -14,3 +14,10 @@ deep_survey/plugins/
 # Local-only development history and generated evaluation/design artifacts.
 benchmarks/
 scripts/bench_local.py
+
+# Windows build outputs and local SDK/package caches are not product sources.
+windows/bin/
+windows/obj/
+tests/windows_native/obj/
+tests/windows_native/bin/
+dist/

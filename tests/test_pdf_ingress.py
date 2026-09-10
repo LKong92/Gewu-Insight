@@ -133,8 +133,9 @@ class PdfIngressTests(unittest.TestCase):
 
         def response_for(payload: bytes) -> SimpleNamespace:
             return SimpleNamespace(
+                status_code=200, close=lambda: None,
                 headers={"content-type": "application/pdf"},
-                url="https://publisher.example/paper.pdf",
+                url="https://www.w3.org/paper.pdf",
                 iter_content=lambda chunk_size: [payload],
             )
 
@@ -146,7 +147,7 @@ class PdfIngressTests(unittest.TestCase):
         ):
             self.assertFalse(
                 download.try_download_pdf(
-                    "https://publisher.example/paper.pdf",
+                    "https://www.w3.org/paper.pdf",
                     invalid_target,
                     messages,
                 )
@@ -162,7 +163,7 @@ class PdfIngressTests(unittest.TestCase):
         ):
             self.assertTrue(
                 download.try_download_pdf(
-                    "https://publisher.example/paper.pdf",
+                    "https://www.w3.org/paper.pdf",
                     valid_target,
                     messages,
                 )
@@ -178,15 +179,16 @@ class PdfIngressTests(unittest.TestCase):
             raise OSError("connection interrupted")
 
         response = SimpleNamespace(
-            headers={"content-type": "application/pdf"},
-            url="https://publisher.example/interrupted.pdf",
+            status_code=200, close=lambda: None,
+                headers={"content-type": "application/pdf"},
+            url="https://www.w3.org/interrupted.pdf",
             iter_content=interrupted_stream,
         )
         target = self.root / "interrupted.pdf"
         with patch.object(download, "request_with_retries", return_value=response):
             self.assertFalse(
                 download.try_download_pdf(
-                    "https://publisher.example/interrupted.pdf",
+                    "https://www.w3.org/interrupted.pdf",
                     target,
                     messages,
                 )
@@ -209,7 +211,7 @@ class PdfIngressTests(unittest.TestCase):
         ):
             self.assertFalse(
                 download.try_download_pdf(
-                    "https://publisher.example/existing.pdf",
+                    "https://www.w3.org/existing.pdf",
                     target,
                     messages,
                 )
