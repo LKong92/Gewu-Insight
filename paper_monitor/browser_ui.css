@@ -21,6 +21,7 @@
 .browser-toolbar > button { width: 30px; height: 30px; display: grid; place-items: center; }
 .browser-tabs { display: flex; flex: 0 0 30px; min-height: 30px; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: #e8e8ea; padding: 0; gap: 0; border-bottom: 1px solid #d2d4d7; }
 .browser-tabs::-webkit-scrollbar { display: none; }
+.browser-tabs, .browser-tabs * { -webkit-user-select: none; user-select: none; }
 .browser-web-tab { display: flex; align-items: center; justify-content: center; gap: 7px; flex: 1 0 112px; min-width: 112px; padding: 0 7px 0 12px; margin: 0; border: 0; border-right: 1px solid #d2d4d7; border-radius: 0; color: #687281; user-select: none; cursor: default; }
 .browser-web-tab:last-child { border-right: 0; }
 .browser-web-tab:hover { background: #efeff1; }
