@@ -390,10 +390,11 @@
     if (!q('[name="title"]').value) q('[name="title"]').value = review.suggested_title || "";
     q(".capture-manual").hidden = Boolean(p);
     const target = q('[name="folder_id"]');
-    const folder = review.folders.find(f => String(f.id) === target.value) || review.folders.find(f => f.id === 1);
-    target.value = String(folder?.id || 1);
-    q('[data-capture="folder"]').textContent = (folder?.title || "Library") + " ▸";
-    q('[data-capture="folder"]').title = folder?.title || "Library";
+    if (!c.folderSelectionExplicit) target.value = String(review.destination?.folder_id || 0);
+    const folder = review.folders.find(f => String(f.id) === target.value);
+    const folderTitle = folder?.title || review.destination?.title || "Library / unsorted";
+    q('[data-capture="folder"]').textContent = folderTitle + " ▸";
+    q('[data-capture="folder"]').title = folderTitle;
     const urls = q('[name="pdf_url"]'), selected = urls.value;
     urls.replaceChildren(...review.snapshot.pdf_urls.map(url => new Option(url, url)));
     if ([...urls.options].some(o => o.value === selected)) urls.value = selected;
@@ -441,10 +442,12 @@
       <label class="capture-check"><input name="include_pdf" type="checkbox"> Include this PDF in Paper Files</label>
       <p class="capture-file-type-hint"></p>
       </div>
-      <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="1"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
+      <div class="capture-row"><label>File type<select name="file_type">${captureFields.map(t => `<option value="${t.toLowerCase().replaceAll(" ","_")}">${t}</option>`).join("")}</select></label><div class="capture-folder-control library-add-control"><span id="browserCaptureDestinationLabel">Add to Library</span><input name="folder_id" type="hidden" value="0"><button type="button" data-capture="folder" data-action="add-library" aria-haspopup="menu" aria-expanded="false" aria-labelledby="browserCaptureDestinationLabel">Library / unsorted ▸</button><div class="library-add-menu browser-capture-folder-menu" data-role="library-add-menu" role="menu" aria-hidden="true"></div></div></div>
       <footer><button data-capture="cancel">Cancel</button><button data-capture="save" class="capture-primary">Save to Library</button></footer>
     </section>`;
     const c = capturePanel = {element, requestID:crypto.randomUUID(), busy:true, review:null, snapshot:null};
+    c.originLibraryItemId = typeof state !== "undefined" && state.librarySelection?.type === "item"
+      ? Number(state.librarySelection.id || 0) : 0;
     document.body.append(element);
     captureDetails(c, typeof state !== "undefined" && state.browserCaptureDetailsExpanded === true);
     captureBusy(c, true); scheduleLayout();
@@ -485,6 +488,7 @@
           portalRoot:element, selectedFolderId:Number(q("folder_id").value),
           onSelect:selection => {
             if (capturePanel !== c) return;
+            c.folderSelectionExplicit = true;
             q("folder_id").value = String(selection.folderId);
             const button = element.querySelector('[data-capture="folder"]');
             button.textContent = selection.path + " ▸"; button.title = selection.path;
@@ -494,7 +498,7 @@
       if (action === "save") {
         c.saving = true; captureBusy(c, true, "Saving to Library…");
         try {
-          const result = await api("capture_save", {token:c.review.token, folder_id:Number(q("folder_id").value), file_type:q("file_type").value, file_type_manual:Boolean(c.fileTypeManual), include_pdf:q("include_pdf").checked});
+          const result = await api("capture_save", {token:c.review.token, folder_id:Number(q("folder_id").value), folder_selection_explicit:Boolean(c.folderSelectionExplicit), file_type:q("file_type").value, file_type_manual:Boolean(c.fileTypeManual), include_pdf:q("include_pdf").checked});
           if (typeof applyPaperFilesPayloads === "function") applyPaperFilesPayloads(result.paper_files);
           if (typeof state !== "undefined" && (result.ok || result.metadata_saved)) state.libraryLoaded = false;
           if (!result.ok) throw new Error(result.error || "The article could not be saved.");
@@ -551,7 +555,7 @@
       if (event.error) { captureBusy(c, false); captureStatus(c, event.error, true); return; }
       c.snapshot = event.snapshot;
       try {
-        const review = await api("capture_begin", {snapshot:event.snapshot});
+        const review = await api("capture_begin", {snapshot:{...event.snapshot, origin_library_item_id:c.originLibraryItemId}});
         if (capturePanel !== c) { api("capture_cancel", {token:review.token}).catch(() => {}); return; }
         renderCapture(c, review);
         if (review.snapshot.is_pdf && review.snapshot.pdf_urls.length) downloadCapture(c);

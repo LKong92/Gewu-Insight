@@ -1576,68 +1576,42 @@ class LibraryFileOperationTests(unittest.TestCase):
 
         self.assertEqual(paths, [orphan.resolve()])
 
-    def test_macos_trash_uses_nsfilemanager_instead_of_writing_dot_trash_directly(self) -> None:
+    def test_macos_trash_uses_native_helper_and_returns_recoverable_destination(self) -> None:
         source = self.root / "system-trash.pdf"
-        source.write_bytes(b"%PDF fixture")
+        source.write_bytes(b"fixture")
         destination = self.root / "Finder Trash" / source.name
-        completed = CompletedProcess(args=[], returncode=0, stdout=f"{destination}\n", stderr="")
-
-        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
-            ui_server.subprocess,
-            "run",
-            return_value=completed,
-        ) as run:
+        def native_move(*args, **kwargs):
+            destination.parent.mkdir()
+            source.rename(destination)
+            return CompletedProcess(args=args[0], returncode=0, stdout=f"{destination}\n", stderr="")
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(ui_server.subprocess, "run", side_effect=native_move) as run:
             result = ui_server.move_path_to_macos_trash(source)
-
         command = run.call_args.args[0]
-        self.assertEqual(command[0:4], ["/usr/bin/osascript", "-l", "JavaScript", "-e"])
-        self.assertIn("trashItemAtURLResultingItemURLError", command[4])
-        self.assertEqual(command[5], str(source.resolve()))
+        self.assertEqual(command[1:], ["--trash-item", str(source.resolve())])
         self.assertEqual(result, destination)
-        self.assertTrue(source.exists())
-
-    def test_macos_trash_accepts_false_error_after_source_was_moved(self) -> None:
-        source = self.root / "false-error.pdf"
-        source.write_bytes(b"%PDF fixture")
-        original_path = source.resolve()
-
-        def false_error_after_move(*args, **kwargs):
-            source.unlink()
-            return CompletedProcess(
-                args=args[0],
-                returncode=1,
-                stdout="",
-                stderr="execution error: macOS refused the Trash operation",
-            )
-
-        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
-            ui_server.subprocess,
-            "run",
-            side_effect=false_error_after_move,
-        ):
-            result = ui_server.move_path_to_macos_trash(source)
-
-        self.assertEqual(result, original_path)
+        self.assertEqual(result.read_bytes(), b"fixture")
         self.assertFalse(source.exists())
+
+    def test_macos_trash_passes_dangling_link_without_following_it(self) -> None:
+        source = self.root / "broken.pdf"
+        source.symlink_to(self.root / "missing.pdf")
+        destination = self.root / "trashed-link.pdf"
+        def native_move(*args, **kwargs):
+            source.rename(destination)
+            return CompletedProcess(args=args[0], returncode=0, stdout=f"{destination}\n", stderr="")
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(ui_server.subprocess, "run", side_effect=native_move) as run:
+            self.assertEqual(ui_server.move_path_to_macos_trash(source), destination)
+        self.assertEqual(run.call_args.args[0][-1], str(source.parent.resolve() / source.name))
+        self.assertTrue(destination.is_symlink())
+        self.assertFalse(destination.exists())
 
     def test_macos_trash_still_raises_when_source_remains(self) -> None:
         source = self.root / "real-error.pdf"
-        source.write_bytes(b"%PDF fixture")
-        completed = CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="",
-            stderr="execution error: permission denied",
-        )
-
-        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(
-            ui_server.subprocess,
-            "run",
-            return_value=completed,
-        ):
+        source.write_bytes(b"fixture")
+        completed = CompletedProcess(args=[], returncode=1, stdout="", stderr="permission denied")
+        with patch.object(ui_server.sys, "platform", "darwin"), patch.object(ui_server.subprocess, "run", return_value=completed):
             with self.assertRaises(PermissionError):
                 ui_server.move_path_to_macos_trash(source)
-
         self.assertTrue(source.exists())
 
     def test_embedded_recycle_item_delete_uses_incremental_state_update(self) -> None:

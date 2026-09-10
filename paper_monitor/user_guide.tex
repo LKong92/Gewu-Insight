@@ -490,7 +490,7 @@ A Monitor result & Its discovery evidence, report, and available actions. & Addi
 
 \section{Tabs across the top}\label{tabs-across-the-top}
 
-Use the six top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Browser instead has a Bookmarks/History sidebar beside a native webpage. Progress messages appear in reserved status areas so the main layout remains stable.
+Click a top tab to change workspaces and focus that tab. Left/Right then switch tabs; Down enters the page. Monitors show calendars, filters and papers. Browser has a Bookmarks/History sidebar beside a native webpage. Progress messages stay in reserved status areas.
 
 The compact, flat search control at the top right expands on hover or focus. Each research workspace retains its own query; clear it with ×. On macOS, double-click only blank title-bar space to zoom or restore the window. Tabs, search and other controls do not resize it.
 
@@ -1659,8 +1659,10 @@ A paper record does not require a local PDF. \textbf{Add Paper} creates or reuse
 \begin{quote}
 \textbf{Note}
 
-A file added to an existing paper's \textbf{Paper Files} bundle is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.
+A file added to an existing paper's \textbf{Paper Files} bundle is an attachment or version of that paper. A normal folder drop creates or reuses a paper placement in that folder. When identity matching finds an existing paper, the incoming file joins its Paper Files; different PDFs are retained even when they share a DOI.
 \end{quote}
+
+Folder drops and Folder Loader use the same import rules. An identity mismatch keeps the file with the matched paper, preserves its existing metadata and Default, and records the filename and identifiers in \textbf{Details}. It does not pause for a review decision. Import status stays in the bottom bar until dismissed; failed or stopped imports also refresh Library so completed items remain visible. A temporary progress connection failure triggers reconnection rather than reporting that the import stopped.
 
 \begin{GewuRelated}
 \textbf{See also:} \hyperref[attachments]{Add and Classify Attachments} · \hyperref[folder-loader]{Use Folder Loader} · \hyperref[drag-attach]{Move a Standalone File into Paper Files}
@@ -1817,6 +1819,14 @@ Library Paper Details no longer repeats this bundle. In My Publications, which h
 
 Deleting a private managed attachment moves its bytes to macOS Trash before removing its resource record. Shared files and external originals are preserved. A failed database deletion restores the moved file when macOS returns its Trash path. The interface shows progress and updates only after success; path indexes keep the shared-file safety check fast even in large libraries.
 
+\subsection{Correct a file\textquotesingle s paper assignment}\label{correct-a-files-paper-assignment}
+
+If an imported PDF was matched to the wrong paper, Control-click its card and choose \textbf{Move to Another Paper\ldots{}}. Search the destination in Library by title, DOI, or Gewu Key, select it, and choose \textbf{Move File}. To make it independent, choose \textbf{Create Paper from File\ldots{}}, enter a title, and choose \textbf{Create Paper}. The new paper appears in the current Library folder with a new Gewu Key and no guessed DOI.
+
+Only the selected file changes ownership. Its bytes, filename, file ID, classification and source information remain intact; the existing paper\textquotesingle s title and DOI stay unchanged. If you move its Default or primary file, the source falls back to a remaining eligible file. The new independent paper uses the selected file as its Default. A repeat import of the same source path and size respects the explicit reassignment. Historical analysis text is not rewritten, so check any notes that refer to the old grouping.
+
+These correction commands are user interface actions. AI Access cannot move, edit, overwrite or delete Paper Files; it can only read authorized files and append new Markdown analyses.
+
 \subsection{Understand a Missing File row}\label{understand-a-missing-file-row}
 
 \textbf{Missing File} means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper\textquotesingle s live canonical file.
@@ -1915,7 +1925,7 @@ Previewing is read-only from Gewu Insight\textquotesingle s perspective. Opening
 \section{Choose File Types and the Default File}\label{versions-current}
 
 \begin{GewuLead}
-The default file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.
+The default file is the preferred local representation of the paper. Choose it manually or let Gewu Insight select it. Default appears first in the file list; Up and Down follow the visible order.
 \end{GewuLead}
 
 \subsection{Automatic selection}\label{automatic-selection}
@@ -2148,12 +2158,12 @@ Removing every currently saved article of a running profile import pauses that i
 
 \subsection{Delete permanently}\label{delete-permanently}
 
-Final deletion of Library items takes place inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.
+Final deletion of Library items takes place inside Recycle. Choosing \textbf{Delete} on a folder moves that folder intact, including its subfolders and unregistered contents, to macOS Trash. The confirmation lists the folders and files to move. Original imported source files outside Gewu Insight are not touched. If another Library, Space, Recycle or My Publications location still refers to the paper, its shared record, Gewu Key, Paper Files and Default remain; any required local files are retained outside the folder being removed. Only papers with no remaining references are removed from SQLite.
 
 \begin{quote}
-\textbf{Important}
+\textbf{Empty Recycle}
 
-\textbf{Delete All} affects every eligible item in the selected Recycle context. Back up first if you are uncertain.
+Control-click the Recycle root folder or blank space directly inside it to choose \textbf{Empty Recycle}. This clears every Recycle entry and moves all contents of its local disk directory to macOS Trash, including unregistered files, empty folders and broken shortcuts. The Recycle root remains. This command is not offered on files or folders inside Recycle.
 \end{quote}
 
 \begin{GewuRelated}
@@ -2219,6 +2229,14 @@ Folder Loader. Choose a source directory and metadata mode before Import. The li
 \end{itemize}
 
 Folder Loader copies into Gewu Insight's managed storage. It does not move, rename, or delete the external source files and folders you selected.
+
+\subsection{Identity mismatches and partial imports}\label{identity-mismatches-and-partial-imports}
+
+Loader and Finder folder drops share the same matching and file-preservation policy. When a DOI, title or existing identifier disagrees with the matched paper, the incoming file is still saved in its Paper Files and the paper is placed in the target folder. Existing metadata and Default are preserved. Different PDFs with the same DOI are kept as separate files; the import continues without a mandatory review prompt.
+
+The live log and \textbf{Result Guide} identify each mismatch by filename, detected DOI, existing DOI and Gewu Key. Correct a wrong assignment later from the file card\textquotesingle s \textbf{Move to Another Paper\ldots{}} or \textbf{Create Paper from File\ldots{}} command. This preserves the PDF; it does not certify that the identified DOI is correct.
+
+A disk or other import error can still stop a batch. Completed items remain available, and the result shows the failing file and actual progress. For a background drop, use the bottom bar\textquotesingle s \textbf{Details} to reopen its current result and \textbf{Dismiss} when finished. Previously saved results remain available in Loader logs.
 
 \subsection{Delete an import batch}\label{delete-an-import-batch}
 
@@ -2968,7 +2986,7 @@ WebKit follows macOS networking without changing proxies/Clash. When system prox
   \textbf{Choose the destination.} Click the folder button under \textbf{Add to Library}. The same column picker used by Journal and Subject Monitor shows \textbf{My Library} and Spaces on the left, then subfolders in successive columns. Check the full path and click \textbf{Confirm} to select the destination. Choose the file type, then click \textbf{Save to Library} to import. Recognized publisher article PDFs suggest \textbf{Published version}. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest \textbf{Preprint}, regardless of the article's journal metadata. Review the suggestion; uncertain files remain \textbf{Unknown}. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF's actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.
 \end{enumerate}
 
-Opening Details, identifying or cancelling does not import anything. Save creates or reuses the article and chosen placement, immediately refreshing Paper Files. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. Click \textbf{Show in Library} beside the success message to select the saved article in its Library or Space folder. Browser keeps the webpage.
+Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement default to unsorted unless you confirm another folder. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. \textbf{Show in Library} selects the saved occurrence. Browser keeps the webpage.
 
 \textbf{Source context is a hint.} An Open Website link may lead to another work. Gewu checks the current article and PDF identity before attachment. If identification fails, you can explicitly choose the source article when offered. Conflicting identifiers block saving; open the correct PDF separately or select its matching local file.
 

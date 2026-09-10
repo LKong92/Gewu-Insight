@@ -1,0 +1,17 @@
+# Independent Monitor downloads
+
+Journal Monitor and Subject Monitor share the paper-card download and Add to Library handlers. Background completion updates only the affected paper's controls and cached record. It must not render a whole workspace, restore an old scroll snapshot, select a paper, close Quick Look, or return from Browser.
+
+In-flight download and Library-add state is held per paper, independently of DOM nodes. Recreated cards recover that state; retained Monitor surfaces receive the same updates. Failures remain visible on the affected card. The next Library file read refreshes any file list cached before the download finished.
+
+All UI callers share one pending download promise per paper, including its publisher fallback and supplementary-file sequence. A second click while that request is active joins it. An ordinary Download reuses a valid local PDF even if a legacy overlapping request left a failed status; a missing PDF is fetched again. A later explicit refresh remains available after completion. Identical refreshed bytes reuse the same file/resource; changed bytes retain the preceding version. The UI server serializes a paper's download, resource registration, path reconciliation and Library additions with a process-local reentrant lock. Different papers remain concurrent. This is not a persistent download queue and does not resume downloads after quitting the App.
+
+Each download has its own temporary directory inside its destination filesystem. Main PDFs, supplements and merge intermediates no longer share fixed names in a Library folder. Complete new output is published exclusively so another download cannot overwrite it after a filename collision. Renaming updates both the paper path and the corresponding Paper Files path in one transaction. A database failure rolls back the rename and its path updates; custom resource labels and original import-source paths remain intact. Existing explicit refresh/version and Default-selection rules remain in force. This change does not remove pre-existing unregistered duplicate files.
+
+## Regression coverage
+
+- `tests/test_monitor_paper_updates.py`: generic Subject responses retain group/selection context; background downloads survive navigation; repeated calls coalesce, different papers proceed independently, and failures permit retry.
+- `tests/monitor_download_ui_probe.cjs`: real product card handlers and CSS on synthetic DOM in Chrome; both Monitor modes retain status, node identity, scroll, input focus and preview state while adding another paper. List recreation and cached-background failures preserve operation status; Browser and Library remain selected on completion.
+- `tests/test_download_concurrency.py`: real temporary UI HTTP service and generated PDFs. Adding another paper completes while a download waits; repeated requests produce one registered PDF; simultaneous papers retain distinct bytes; colliding output names never overwrite each other. Sequential clicks, repeated identical refreshes, stale download status, missing local files, resource-only rename and rename-failure rollback are also covered.
+
+All automated reproduction uses temporary SQLite and synthetic PDFs. Cleaning up existing real duplicates is separate maintenance: require explicit scope authorization, verify byte hashes and other references, back up the affected records and retained files, preserve identities/classification/Default, and use recoverable macOS Trash with verified destinations and rollback. Ordinary downloads never perform a Library-wide cleanup.

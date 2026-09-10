@@ -79,7 +79,7 @@ class BrowserCaptureTests(unittest.TestCase):
         folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
         capture = self.begin()
         review = self.review(capture)
-        result = self.service.save(capture, self.storage, {'folder_id':folder['id']})
+        result = self.service.save(capture, self.storage, {'folder_id':folder['id'], 'folder_selection_explicit':True})
         self.assertTrue(result['ok'])
         self.assertEqual(result['gewu_key'], review['paper']['gewu_key'])
         self.assertEqual(result['folder_id'], folder['id'])
@@ -97,6 +97,89 @@ class BrowserCaptureTests(unittest.TestCase):
         self.assertEqual(self.count('papers'), 1)
         self.assertEqual(self.storage.get_paper('first')['title'], before['title'])
         self.assertEqual(self.storage.get_paper('first')['doi'], before['doi'])
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+
+    def test_new_article_defaults_to_unsorted_without_writing_during_review(self):
+        capture = self.begin()
+        before = self.count('library_folders')
+        review = self.review(capture)
+        self.assertEqual(self.count('library_folders'), before)
+        self.assertEqual(review['destination']['title'], 'Library / unsorted')
+        result = self.save(capture)
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['parent_id'], 1)
+        self.assertEqual(self.count('library_items'), 1)
+
+    def test_existing_nested_article_pdf_reuses_placement_on_save_and_retry(self):
+        before = self.paper()
+        unsorted = self.storage.ensure_library_folder(parent_id=1, name='unsorted')
+        folder = self.storage.ensure_library_folder(parent_id=unsorted['id'], name='New Folder')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        self.storage.rename_library_item(item_id=item['id'], name='My existing name')
+        placements = [tuple(row) for row in self.storage.conn.execute('SELECT * FROM library_items')]
+        for retry in (False, True):
+            capture = self.begin()
+            self.upload(capture)
+            review = self.review(capture)
+            self.assertEqual(review['destination']['item_id'], item['id'])
+            result = self.save(capture, include_pdf=True)
+            self.assertTrue(result['ok'])
+            self.assertEqual(result['duplicate_file'], retry)
+            self.assertEqual(result['folder_id'], folder['id'])
+            self.assertEqual(result['item_id'], item['id'])
+            self.assertEqual(result['gewu_key'], before['storage_key'])
+            self.assertEqual([tuple(row) for row in self.storage.conn.execute('SELECT * FROM library_items')], placements)
+        self.assertEqual(len(self.storage.list_paper_resources('first')), 1)
+
+    def test_existing_placement_preference_is_scoped_to_the_identified_paper(self):
+        self.paper()
+        first_folder = self.storage.ensure_library_folder(parent_id=1, name='First')
+        second_folder = self.storage.create_library_root_folder(name='Space')
+        first = self.storage.add_library_item(paper_id='first', folder_id=first_folder['id'])
+        second = self.storage.add_library_item(paper_id='first', folder_id=second_folder['id'])
+        self.paper(key='other', doi='10.1234/other', title='Different paper')
+        unrelated = self.storage.add_library_item(paper_id='other', folder_id=1)
+        for preferred, expected in [(second['id'], second), (unrelated['id'], first), (999999, first)]:
+            capture = self.begin(origin_library_item_id=preferred)
+            self.assertEqual(self.review(capture)['destination']['item_id'], expected['id'])
+            result = self.save(capture)
+            self.assertEqual(result['item_id'], expected['id'])
+        self.assertEqual(self.count('library_items'), 3)
+
+    def test_only_confirmed_destination_adds_another_existing_article_placement(self):
+        self.paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        capture = self.begin(); self.review(capture)
+        result = self.save(capture, folder_selection_explicit=True)
+        self.assertEqual(result['folder_id'], 1)
+        self.assertNotEqual(result['item_id'], item['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_recycle_placement_is_not_reused_and_stale_reviews_recheck_locations(self):
+        self.paper()
+        recycle = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
+        child = self.storage.ensure_library_folder(parent_id=recycle['id'], name='Discarded')
+        self.storage.add_library_item(paper_id='first', folder_id=child['id'])
+        capture = self.begin()
+        self.assertFalse(self.review(capture)['destination']['reused'])
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Added while reviewing')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        result = self.save(capture)
+        self.assertEqual(result['item_id'], item['id'])
+        self.assertEqual(result['folder_id'], folder['id'])
+        self.assertEqual(self.count('library_items'), 2)
+
+    def test_reviewed_placement_removed_before_save_is_not_a_dangling_target(self):
+        self.paper()
+        folder = self.storage.ensure_library_folder(parent_id=1, name='Reading')
+        item = self.storage.add_library_item(paper_id='first', folder_id=folder['id'])
+        capture = self.begin(); self.review(capture)
+        self.storage.delete_library_item(item_id=item['id'])
+        result = self.save(capture)
+        self.assertTrue(result['ok'])
+        self.assertEqual(self.storage.get_library_folder(result['folder_id'])['name'], 'unsorted')
+        self.assertEqual(self.count('library_items'), 1)
 
     def test_open_website_origin_is_a_hint_not_automatic_attachment(self):
         origin = self.paper(url='https://example.org/source')
@@ -562,7 +645,7 @@ class BrowserCaptureTests(unittest.TestCase):
         capture = self.begin()
         review = self.review(capture)
         self.assertIn({'id':child['id'], 'title':'Reading Space / Quantum'}, review['folders'])
-        result = self.service.save(capture, self.storage, {'folder_id':child['id']})
+        result = self.service.save(capture, self.storage, {'folder_id':child['id'], 'folder_selection_explicit':True})
         self.assertEqual(result['folder_id'], child['id'])
         self.assertEqual(self.storage.get_library_item(result['item_id'])['folder_id'], child['id'])
 
@@ -584,7 +667,7 @@ class BrowserCaptureTests(unittest.TestCase):
         folder = self.storage.ensure_library_folder(parent_id=1, name='Recycle')
         child = self.storage.ensure_library_folder(parent_id=folder['id'],name='Discarded')
         capture = self.begin(); self.review(capture)
-        with self.assertRaises(ValueError): self.service.save(capture,self.storage,{'folder_id':child['id']})
+        with self.assertRaises(ValueError): self.service.save(capture,self.storage,{'folder_id':child['id'], 'folder_selection_explicit':True})
         self.assertEqual(self.count('papers'),0)
 
     def test_concurrent_reviews_recheck_canonical_doi_before_save(self):

@@ -208,8 +208,8 @@ def save_analysis(storage, grant, paper, args):
         fail(410, 'analysis_removed', 'The previously saved analysis has been removed. Use a new request ID to create another.')
     if receipt and receipt['resource_id']:
         resource = storage.get_paper_resource(receipt['resource_id'])
-        if not resource or not Path(storage.resource_local_path(resource)).is_file():
-            fail(410, 'analysis_removed', 'The previously saved analysis has been removed. Use a new request ID to create another.')
+        if not resource or resource.get('paper_id') != paper['paper_id'] or not Path(storage.resource_local_path(resource)).is_file():
+            fail(410, 'analysis_removed', 'The previously saved analysis has been moved or removed. Use a new request ID to create another.')
         return {'gewu_key': paper['storage_key'], 'file': file_metadata(resource), 'reused': True}
     source_id = args.get('source_file_id')
     source_hash = args.get('source_sha256', '')

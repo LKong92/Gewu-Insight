@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import mimetypes
+import os
+import tempfile
+import threading
+import weakref
 import re
 import shutil
 import subprocess
@@ -21,6 +26,27 @@ from .storage import Storage
 from .text import safe_slug
 
 
+_DOWNLOAD_LOCKS = weakref.WeakValueDictionary()
+_DOWNLOAD_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def paper_download_lock(db_path: Path, paper_id: str):
+    """Serialize one paper's download and registration within this process.
+
+    Waiting callers retain a strong reference; unused locks are released.
+    Distinct papers and unrelated Library additions remain independent.
+    """
+    key = (str(Path(db_path).expanduser().resolve()), str(paper_id))
+    with _DOWNLOAD_LOCKS_GUARD:
+        lock = _DOWNLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _DOWNLOAD_LOCKS[key] = lock
+    with lock:
+        yield
+
+
 def download_paper(
     *,
     storage: Storage,
@@ -29,19 +55,34 @@ def download_paper(
     target_dir: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
+    with paper_download_lock(storage.db_path, paper_id):
+        destination = target_dir if target_dir is not None else pdf_dir / paper_id
+        destination.mkdir(parents=True, exist_ok=True)
+        # Never share main.pdf or supplement intermediates in a Library folder.
+        with tempfile.TemporaryDirectory(prefix=".gewu-download-", dir=destination) as temporary:
+            return _download_paper_into(storage=storage, paper_id=paper_id,
+                                        target_dir=destination, work_dir=Path(temporary), force=force)
+
+
+def _download_paper_into(*, storage: Storage, paper_id: str, target_dir: Path,
+                         work_dir: Path, force: bool) -> dict[str, Any]:
     paper = storage.get_paper(paper_id)
     if not paper:
         raise ValueError(f"Unknown paper id: {paper_id}")
 
-    if paper.get("download_status") in {"success", "partial"} and not force:
+    # Older overlapping requests could reset status after bytes were saved.
+    # A valid local PDF is the authority for an ordinary Download click.
+    existing = existing_downloaded_pdf_path(paper) if not force else None
+    if existing:
+        if paper.get("download_status") not in {"success", "partial"} or str(existing) != paper.get("merged_pdf_path"):
+            storage.update_download_status(paper_id, status="partial",
+                message="existing PDF reused; use --force to refresh",
+                main_pdf_path=str(existing), merged_pdf_path=str(existing))
         return {
             "status": "skipped",
             "message": "already downloaded; use --force to retry",
-            "merged_pdf_path": paper.get("merged_pdf_path"),
+            "merged_pdf_path": str(existing),
         }
-
-    target_dir = target_dir if target_dir is not None else pdf_dir / paper_id
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     candidates = collect_pdf_candidates(paper)
     preserved_main_pdf_path = existing_science_main_only_pdf_path(paper) if force else None
@@ -52,26 +93,26 @@ def download_paper(
 
     if not main_pdf_path:
         for index, url in enumerate(candidates["main"]):
-            path = target_dir / "main.pdf"
+            path = work_dir / "main.pdf"
             if try_download_pdf(url, path, messages):
                 main_pdf_path = path
                 main_pdf_url = url
                 break
 
     for index, url in enumerate(candidates["supplements"], start=1):
-        path = target_dir / f"supplement_{index}.pdf"
+        path = work_dir / f"supplement_{index}.pdf"
         if try_download_pdf(url, path, messages):
             supplement_paths.append(path)
 
     for index, url in enumerate(candidates.get("supplement_documents") or [], start=1):
         source_path = try_download_word_supplement(
             url,
-            target_dir / f"supplement_document_{index}",
+            work_dir / f"supplement_document_{index}",
             messages,
         )
         if not source_path:
             continue
-        converted_path = target_dir / f"supplement_document_{index}.pdf"
+        converted_path = work_dir / f"supplement_document_{index}.pdf"
         try:
             convert_word_document_to_pdf(source_path, converted_path)
             supplement_paths.append(converted_path)
@@ -120,27 +161,30 @@ def download_paper(
         # untouched until the resource layer has archived or de-duplicated it.
         current_path="" if force else current_merged_path,
     )
-    working_merged_path = merged_path
-    replacing_existing_pdf = merged_path.exists()
-    if replacing_existing_pdf or (preserved_main_pdf_path and merged_path == preserved_main_pdf_path):
-        working_merged_path = merged_path.with_name(f".{merged_path.stem}-download-merge.pdf")
-        working_merged_path.unlink(missing_ok=True)
+    working_merged_path = work_dir / "merged.pdf"
+    replacing_existing_pdf = bool(
+        not force and current_merged_path and merged_path.exists()
+        and merged_path.resolve() == Path(current_merged_path).expanduser().resolve()
+    )
     downloaded_pdf_replaced = False
     try:
         merge_inputs = [main_pdf_path] + supplement_paths
         merge_pdfs(merge_inputs, working_merged_path)
         if not structurally_valid_pdf_file(working_merged_path):
             raise ValueError("merged output is not a complete PDF")
-        if working_merged_path != merged_path:
+        if replacing_existing_pdf:
             working_merged_path.replace(merged_path)
+        else:
+            merged_path = publish_new_download(working_merged_path, merged_path)
         downloaded_pdf_replaced = True
         status = "success" if supplement_paths else "partial"
         message = "downloaded and merged; temporary PDFs removed" if supplement_paths else "main PDF saved as merged PDF; no PDF supplement found"
     except Exception as exc:
         if working_merged_path != merged_path:
             working_merged_path.unlink(missing_ok=True)
-        if not replacing_existing_pdf and main_pdf_path != merged_path:
-            shutil.copyfile(main_pdf_path, merged_path)
+        if not replacing_existing_pdf:
+            shutil.copyfile(main_pdf_path, working_merged_path)
+            merged_path = publish_new_download(working_merged_path, merged_path)
         status = "partial"
         if replacing_existing_pdf:
             message = f"existing PDF kept; refreshed PDF merge failed: {exc}"
@@ -169,6 +213,34 @@ def download_paper(
         "supplement_pdf_paths": [],
         "merged_pdf_path": str(merged_path),
     }
+
+
+def existing_downloaded_pdf_path(paper: dict[str, Any]) -> Path | None:
+    for key in ("merged_pdf_path", "main_pdf_path"):
+        value = str(paper.get(key) or "").strip()
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        if structurally_valid_pdf_file(path):
+            return path
+    return None
+
+
+def publish_new_download(source: Path, requested: Path) -> Path:
+    """Publish complete bytes without racing another paper with the same title.
+
+    The staging directory is on the destination filesystem. An exclusive hard
+    link is atomic; unlike rename it cannot overwrite another download's file.
+    """
+    candidate = requested
+    while True:
+        try:
+            os.link(source, candidate)
+        except FileExistsError:
+            candidate = unique_download_path(requested)
+            continue
+        source.unlink()
+        return candidate
 
 
 def existing_science_main_only_pdf_path(paper: dict[str, Any]) -> Path | None:

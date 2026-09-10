@@ -10,6 +10,62 @@ static const NSTimeInterval GewuInsightServerPollInterval = 0.25;
 static const NSTimeInterval GewuInsightServerRecoveryDelay = 0.75;
 static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
 
+static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, NSWindow *parentWindow) {
+    NSString *text = message.length ? message : @"Delete this file?";
+    // Keep short confirmations compact; long file lists get a fixed viewport.
+    if (text.length <= 600 && [text componentsSeparatedByString:@"\n"].count <= 8) {
+        alert.informativeText = text;
+        return;
+    }
+    NSRange paragraph = [text rangeOfString:@"\n\n"];
+    if (paragraph.location != NSNotFound && paragraph.location <= 240) {
+        alert.informativeText = [text substringToIndex:paragraph.location];
+        text = [text substringFromIndex:NSMaxRange(paragraph)];
+    } else {
+        alert.informativeText = @"Review the details below before deleting.";
+    }
+    NSScreen *screen = parentWindow.screen ?: NSScreen.mainScreen;
+    NSSize available = screen ? screen.visibleFrame.size : NSMakeSize(1024, 768);
+    if (parentWindow) {
+        available.width = MIN(available.width, NSWidth(parentWindow.frame));
+        available.height = MIN(available.height, NSHeight(parentWindow.frame));
+    }
+    CGFloat width = MAX(180, MIN(520, available.width - 180));
+    CGFloat height = MAX(80, MIN(320, available.height - 260));
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, width, height)];
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = NO;
+    scroll.autohidesScrollers = NO;
+    scroll.borderType = NSBezelBorder;
+    scroll.accessibilityLabel = @"Deletion details and files";
+    NSSize contentSize = scroll.contentSize;
+    NSTextView *details = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, contentSize.width, contentSize.height)];
+    details.editable = NO;
+    details.selectable = YES;
+    details.richText = NO;
+    details.font = [NSFont systemFontOfSize:13];
+    details.textColor = NSColor.labelColor;
+    details.backgroundColor = NSColor.textBackgroundColor;
+    details.textContainerInset = NSMakeSize(8, 8);
+    details.verticallyResizable = YES;
+    details.horizontallyResizable = NO;
+    details.autoresizingMask = NSViewWidthSizable;
+    details.minSize = NSMakeSize(0, contentSize.height);
+    details.maxSize = NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX);
+    details.textContainer.containerSize = NSMakeSize(contentSize.width - 16, CGFLOAT_MAX);
+    details.textContainer.widthTracksTextView = YES;
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.lineBreakMode = NSLineBreakByCharWrapping;
+    details.defaultParagraphStyle = style;
+    details.string = text;
+    details.accessibilityLabel = @"Files and deletion effects";
+    scroll.documentView = details;
+    [details.layoutManager ensureLayoutForTextContainer:details.textContainer];
+    [details sizeToFit];
+    [details scrollRangeToVisible:NSMakeRange(0, 0)];
+    alert.accessoryView = scroll;
+}
+
 // This view paints synchronously with the window's first frame. A second
 // WKWebView would itself need an asynchronous first paint before showing this art.
 @interface GewuStartupView : NSView
@@ -987,10 +1043,10 @@ static const NSInteger GewuInsightServerMaxRestartAttempts = 3;
     NSAlert *alert = [[NSAlert alloc] init];
     alert.alertStyle = NSAlertStyleWarning;
     alert.messageText = @"Delete File";
-    alert.informativeText = message.length > 0 ? message : @"Delete this file?";
+    NSWindow *parentWindow = webView.window ?: self.window;
+    GewuConfigureConfirmationDetails(alert, message, parentWindow);
     [alert addButtonWithTitle:@"Delete"];
     [alert addButtonWithTitle:@"Cancel"];
-    NSWindow *parentWindow = webView.window ?: self.window;
     if (parentWindow) {
         [alert beginSheetModalForWindow:parentWindow completionHandler:^(NSModalResponse response) {
             completionHandler(response == NSAlertFirstButtonReturn);
@@ -2550,6 +2606,21 @@ createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        // A short-lived native file operation; never create a window or server.
+        // NSURL keeps the final symlink intact, including a dangling symlink.
+        if (argc == 3 && strcmp(argv[1], "--trash-item") == 0) {
+            NSURL *source = [NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[2]]];
+            NSURL *destination = nil;
+            NSError *error = nil;
+            BOOL moved = [[NSFileManager defaultManager] trashItemAtURL:source
+                resultingItemURL:&destination error:&error];
+            if (!moved || !destination) {
+                fprintf(stderr, "%s\n", error.localizedDescription.UTF8String ?: "macOS did not return the Trash location.");
+                return 1;
+            }
+            printf("%s\n", destination.path.UTF8String);
+            return 0;
+        }
         NSApplication *application = [NSApplication sharedApplication];
         PaperMonitorDelegate *delegate = [[PaperMonitorDelegate alloc] init];
         application.delegate = delegate;

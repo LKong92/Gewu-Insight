@@ -803,7 +803,7 @@
           </table>
 
           <h2>Tabs across the top</h2>
-          <p>Use the six top tabs to change workspaces. A monitor may show a calendar and filters at the left, results in the middle, and a selected-paper view at the right. Browser instead has a Bookmarks/History sidebar beside a native webpage. Progress messages appear in reserved status areas so the main layout remains stable.</p>
+          <p>Click a top tab to change workspaces and focus that tab. Left/Right then switch tabs; Down enters the page. Monitors show calendars, filters and papers. Browser has a Bookmarks/History sidebar beside a native webpage. Progress messages stay in reserved status areas.</p>
           <p>The compact, flat search control at the top right expands on hover or focus. Each research workspace retains its own query; clear it with ×. On macOS, double-click only blank title-bar space to zoom or restore the window. Tabs, search and other controls do not resize it.</p>
 
           <table class="plain-table">
@@ -1457,7 +1457,8 @@
 
           <div class="note"><span class="callout-title">Note</span>A paper record does not require a local PDF. <span class="ui">Add Paper</span> creates or reuses the metadata record; it does not automatically download a PDF. Use <span class="ui">Download</span> or <span class="ui">Add File</span> separately when you want a managed local file.</div>
 
-          <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Paper Files</span> bundle is an attachment or version of that paper. A file dropped into a normal Library folder is initially its own Library item.</div>
+          <div class="note"><span class="callout-title">Note</span>A file added to an existing paper’s <span class="ui">Paper Files</span> bundle is an attachment or version of that paper. A normal folder drop creates or reuses a paper placement in that folder. When identity matching finds an existing paper, the incoming file joins its Paper Files; different PDFs are retained even when they share a DOI.</div>
+          <p>Folder drops and Folder Loader use the same import rules. An identity mismatch keeps the file with the matched paper, preserves its existing metadata and Default, and records the filename and identifiers in <span class="ui">Details</span>. It does not pause for a review decision. Import status stays in the bottom bar until dismissed; failed or stopped imports also refresh Library so completed items remain visible. A temporary progress connection failure triggers reconnection rather than reporting that the import stopped.</p>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#attachments">Add and Classify Attachments</a><a href="#folder-loader">Use Folder Loader</a><a href="#drag-attach">Move a Standalone File into Paper Files</a></div></div>
         </article>
@@ -1555,6 +1556,11 @@
           <p>Library Paper Details no longer repeats this bundle. In My Publications, which has no adjacent Paper Files column, the collapsible <span class="ui">Files</span> panel keeps its file-management controls. <span class="ui">Show in Finder</span> reveals a physical file.</p>
           <p>Deleting a private managed attachment moves its bytes to macOS Trash before removing its resource record. Shared files and external originals are preserved. A failed database deletion restores the moved file when macOS returns its Trash path. The interface shows progress and updates only after success; path indexes keep the shared-file safety check fast even in large libraries.</p>
 
+          <h2>Correct a file's paper assignment</h2>
+          <p>If an imported PDF was matched to the wrong paper, Control-click its card and choose <span class="ui">Move to Another Paper…</span>. Search the destination in Library by title, DOI, or Gewu Key, select it, and choose <span class="ui">Move File</span>. To make it independent, choose <span class="ui">Create Paper from File…</span>, enter a title, and choose <span class="ui">Create Paper</span>. The new paper appears in the current Library folder with a new Gewu Key and no guessed DOI.</p>
+          <p>Only the selected file changes ownership. Its bytes, filename, file ID, classification and source information remain intact; the existing paper's title and DOI stay unchanged. If you move its Default or primary file, the source falls back to a remaining eligible file. The new independent paper uses the selected file as its Default. A repeat import of the same source path and size respects the explicit reassignment. Historical analysis text is not rewritten, so check any notes that refer to the old grouping.</p>
+          <p>These correction commands are user interface actions. AI Access cannot move, edit, overwrite or delete Paper Files; it can only read authorized files and append new Markdown analyses.</p>
+
           <h2>Understand a Missing File row</h2>
           <p><span class="ui">Missing File</span> means that SQLite still has a resource record, but the file is not present at the recorded local path. Gewu Insight keeps genuine missing resources visible so you can identify and repair them; it hides only an older untyped migration alias when it can prove that the alias has already been replaced by the same paper's live canonical file.</p>
 
@@ -1614,7 +1620,7 @@
         <article class="help-topic guide-topic" id="versions-current" data-group="Papers and Files" data-title="Choose File Types and the Default File" data-keywords="make default auto preferred eligibility corrected published accepted manuscript preprint supplement annotation source classify">
           <p class="topic-kicker">Library</p>
           <h1>Choose File Types and the Default File</h1>
-          <p class="lead">The default file is the preferred local representation of the paper. You can choose it manually or let Gewu Insight select it automatically.</p>
+          <p class="lead">The default file is the preferred local representation of the paper. Choose it manually or let Gewu Insight select it. Default appears first in the file list; Up and Down follow the visible order.</p>
 
           <h2>Automatic selection</h2>
           <p>The automatic order is <span class="ui">Corrected published version</span>, <span class="ui">Published version</span>, <span class="ui">Accepted manuscript</span>, then <span class="ui">Preprint</span>. Within a type, a later recognized version normally wins. Correction notices, supplementary material, peer review files, Other, and Invalid file never become the automatic default. When a paper has no Default or main PDF, its first article PDF saved through Browser becomes a fallback Default even if File type is Unknown. It enters the main file folder immediately; later Unknown copies do not replace it.</p>
@@ -1760,9 +1766,9 @@
           </ol>
 
           <h2>Delete permanently</h2>
-          <p>Final deletion of Library items takes place inside Recycle. The confirmation summarizes how many paper records will be removed, identifies managed local copies that will move to the macOS Trash, and states that original imported source files outside Gewu Insight are not touched. If the same paper is still referenced by another folder or My Publications, the shared record and files are preserved.</p>
+          <p>Final deletion of Library items takes place inside Recycle. Choosing <span class="ui">Delete</span> on a folder moves that folder intact, including its subfolders and unregistered contents, to macOS Trash. The confirmation lists the folders and files to move. Original imported source files outside Gewu Insight are not touched. If another Library, Space, Recycle or My Publications location still refers to the paper, its shared record, Gewu Key, Paper Files and Default remain; any required local files are retained outside the folder being removed. Only papers with no remaining references are removed from SQLite.</p>
 
-          <div class="important"><span class="callout-title">Important</span><span class="ui">Delete All</span> affects every eligible item in the selected Recycle context. Back up first if you are uncertain.</div>
+          <div class="important"><span class="callout-title">Empty Recycle</span>Control-click the Recycle root folder or blank space directly inside it to choose <span class="ui">Empty Recycle</span>. This clears every Recycle entry and moves all contents of its local disk directory to macOS Trash, including unregistered files, empty folders and broken shortcuts. The Recycle root remains. This command is not offered on files or folders inside Recycle.</div>
 
           <div class="see-also"><h2>See also</h2><div class="see-links"><a href="#backup-migrate">Back Up or Move to Another Mac</a><a href="#storage-model">How Gewu Insight Stores Files</a></div></div>
         </article>
@@ -1802,6 +1808,11 @@
           </ul>
 
           <p>Folder Loader copies into Gewu Insight’s managed storage. It does not move, rename, or delete the external source files and folders you selected.</p>
+
+          <h2>Identity mismatches and partial imports</h2>
+          <p>Loader and Finder folder drops share the same matching and file-preservation policy. When a DOI, title or existing identifier disagrees with the matched paper, the incoming file is still saved in its Paper Files and the paper is placed in the target folder. Existing metadata and Default are preserved. Different PDFs with the same DOI are kept as separate files; the import continues without a mandatory review prompt.</p>
+          <p>The live log and <span class="ui">Result Guide</span> identify each mismatch by filename, detected DOI, existing DOI and Gewu Key. Correct a wrong assignment later from the file card's <span class="ui">Move to Another Paper…</span> or <span class="ui">Create Paper from File…</span> command. This preserves the PDF; it does not certify that the identified DOI is correct.</p>
+          <p>A disk or other import error can still stop a batch. Completed items remain available, and the result shows the failing file and actual progress. For a background drop, use the bottom bar's <span class="ui">Details</span> to reopen its current result and <span class="ui">Dismiss</span> when finished. Previously saved results remain available in Loader logs.</p>
 
           <h2>Delete an import batch</h2>
           <p><span class="ui">Delete Import</span> is a rollback for the selected Loader batch, not a way to forget a log. Stop an active import first. The command removes database records created by that batch, eligible empty folders, its Loader reports, and managed local copies associated with the batch; eligible paths are sent to the macOS Trash. It never deletes the original external source directory.</p>
@@ -2256,7 +2267,7 @@
             <li><strong>Choose the PDF in Details.</strong> A directly opened PDF is retrieved automatically into temporary staging. On an article page, select a detected PDF link and click <span class="ui">Get PDF</span>, or choose a local PDF. Each file must be a readable PDF up to 64 MB. Check the filename and leave <span class="ui">Include this PDF in Paper Files</span> selected to attach it.</li>
             <li><strong>Choose the destination.</strong> Click the folder button under <span class="ui">Add to Library</span>. The same column picker used by Journal and Subject Monitor shows <span class="ui">My Library</span> and Spaces on the left, then subfolders in successive columns. Check the full path and click <span class="ui">Confirm</span> to select the destination. Choose the file type, then click <span class="ui">Save to Library</span> to import. Recognized publisher article PDFs suggest <span class="ui">Published version</span>. Recognized arXiv, bioRxiv, medRxiv, ChemRxiv and Research Square preprints suggest <span class="ui">Preprint</span>, regardless of the article’s journal metadata. Review the suggestion; uncertain files remain <span class="ui">Unknown</span>. The first article PDF becomes Default in the main folder, even if Unknown. Supplements stay separate, and manual Default is preserved. Source follows the PDF’s actual website: Publisher, Preprint server, Institutional repository or Other. Local files use User import without a webpage source.</li>
           </ol>
-          <p>Opening Details, identifying or cancelling does not import anything. Save creates or reuses the article and chosen placement, immediately refreshing Paper Files. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. Click <span class="ui">Show in Library</span> beside the success message to select the saved article in its Library or Space folder. Browser keeps the webpage.</p>
+          <p>Opening Details, identifying or cancelling imports nothing. Save reuses an existing active Library or Space placement, preferring the selected occurrence of that same paper. Attaching a PDF does not add a root-level entry. To add another location, explicitly choose and confirm its folder. Papers with no active placement default to unsorted unless you confirm another folder. Paper Files refreshes immediately. Exact duplicates retain their existing source and settings; distinct versions stay separate, and manual Default is preserved. <span class="ui">Show in Library</span> selects the saved occurrence. Browser keeps the webpage.</p>
           <p><strong>Source context is a hint.</strong> An Open Website link may lead to another work. Gewu checks the current article and PDF identity before attachment. If identification fails, you can explicitly choose the source article when offered. Conflicting identifiers block saving; open the correct PDF separately or select its matching local file.</p>
           <p><strong>If PDF retrieval fails:</strong> retry after opening the site's PDF, choose a downloaded local PDF, or save the article alone. Errors stay visible; missing or conflicting identity opens Details. If storage fails after saving the article, retry reuses its record and placement. Browser capture uses its current WebKit session without exporting sign-in cookies. It cannot bypass a site's login, access rights or embedded-browser restrictions. The collector currently belongs to Gewu's built-in Browser; a Safari extension is not included.</p>
 

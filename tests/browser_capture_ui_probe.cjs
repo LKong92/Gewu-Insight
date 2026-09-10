@@ -32,7 +32,7 @@ function workspaceFunction(name) {
     await page.evaluate(() => {
       window.commands=[]; window.calls=[];
       window.state={mode:'browser',libraryLoaded:true,libraryRootId:1,paperFilesByPaperId:{paper:{paper_id:'paper',files:[]}},paperFileRequests:{},libraryItems:[{id:202,paper_id:'paper',folder_id:21},{id:101,paper_id:'paper',folder_id:7}]};
-      window.pickerFolders=[{id:1,name:'Library',parent_id:null},{id:4,name:'Unsorted',parent_id:1,is_unsorted:true},{id:5,name:'Reading',parent_id:1},{id:6,name:'Quantum',parent_id:5},{id:7,name:'Experiments',parent_id:6},{id:8,name:'Recycle',parent_id:1,is_recycle:true},{id:9,name:'Discarded',parent_id:8},{id:20,name:'Project Space',parent_id:null},{id:21,name:'Space Papers',parent_id:20}];
+      window.pickerFolders=[{id:1,name:'Library',parent_id:null},{id:4,name:'unsorted',parent_id:1,is_unsorted:true},{id:5,name:'Reading',parent_id:1},{id:6,name:'Quantum',parent_id:5},{id:7,name:'Experiments',parent_id:6},{id:8,name:'Recycle',parent_id:1,is_recycle:true},{id:9,name:'Discarded',parent_id:8},{id:20,name:'Project Space',parent_id:null},{id:21,name:'Space Papers',parent_id:20}];
       window.libraryFolderById=id=>state.libraryFolders?.find(f=>f.id===Number(id));
       window.libraryChildFolders=id=>(state.libraryFolders||[]).filter(f=>f.parent_id===Number(id));
       window.libraryFolderIsWithin=(id,root)=>{const seen=new Set();while(id&&!seen.has(id)){if(id===root)return true;seen.add(id);id=libraryFolderById(id)?.parent_id;}return false;};
@@ -56,7 +56,7 @@ function workspaceFunction(name) {
       window.monitorSaves=[]; window.addPaperToLibrary=(article,id,options)=>monitorSaves.push({id,...options});
 
       window.webkit={messageHandlers:{browser:{postMessage(value){commands.push(value);}}}};
-      window.review={token:'capture-token',upload_token:'upload-token',paper:{paper_id:'paper',title:'Quantum sensing with light',existing:false,gewu_key:'gw_1234567890',doi:'10.1234/fixture',journal:'Fixture Journal'},snapshot:{snapshot_id:'native-snapshot',url:'https://example.org/article',is_pdf:false,pdf_urls:['https://example.org/paper.pdf']},can_save:true,pdf_ready:false,pdf_name:'Article.pdf',identifier:'10.1234/fixture',folders:[{id:1,title:'Library'},{id:5,title:'Library / Reading'},{id:6,title:'Library / Reading / Quantum'},{id:7,title:'Library / Reading / Quantum / Experiments'},{id:20,title:'Project Space'},{id:21,title:'Project Space / Space Papers'}]};
+      window.review={token:'capture-token',upload_token:'upload-token',paper:{paper_id:'paper',title:'Quantum sensing with light',existing:false,gewu_key:'gw_1234567890',doi:'10.1234/fixture',journal:'Fixture Journal'},snapshot:{snapshot_id:'native-snapshot',url:'https://example.org/article',is_pdf:false,pdf_urls:['https://example.org/paper.pdf']},can_save:true,pdf_ready:false,pdf_name:'Article.pdf',identifier:'10.1234/fixture',destination:{folder_id:4,title:'Library / unsorted',reused:false},folders:[{id:1,title:'Library'},{id:4,title:'Library / unsorted'},{id:5,title:'Library / Reading'},{id:6,title:'Library / Reading / Quantum'},{id:7,title:'Library / Reading / Quantum / Experiments'},{id:20,title:'Project Space'},{id:21,title:'Project Space / Space Papers'}]};
       window.fetch=async (url,options) => {
         if(url==='/api/library/add-targets') return {ok:true,json:async()=>({root_id:1,folders:structuredClone(pickerFolders),workspace_tabs:[{root_folder_id:20,label:'Project Space'}]})};
         const payload=JSON.parse(options.body); calls.push(payload);
@@ -119,7 +119,7 @@ function workspaceFunction(name) {
     await menu.locator('button[data-folder-id="7"]').click();
     assert.equal(await menu.locator('.library-add-column').count(),4);
     assert.match(await menu.locator('.library-add-selected-path').innerText(),/My Library \/ Reading \/ Quantum \/ Experiments/);
-    assert.equal(await page.inputValue('[name="folder_id"]'),'1','navigation alone does not change destination');
+    assert.equal(await page.inputValue('[name="folder_id"]'),'4','navigation alone does not change destination');
     assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').length),0);
     await page.screenshot({path:'/private/tmp/gewu-capture-picker.png'});
     await menu.locator('[data-action="confirm-library-add"]').click();
@@ -171,6 +171,7 @@ function workspaceFunction(name) {
     await page.waitForFunction(()=>!document.querySelector('.browser-capture-panel'));
     const saved=await page.evaluate(()=>calls.filter(c=>c.action==='capture_save'));
     assert.equal(saved.length,1); assert.equal(saved[0].folder_id,7); assert.equal(saved[0].include_pdf,true);
+    assert.equal(saved[0].folder_selection_explicit,true);
     assert.equal(saved[0].file_type_manual,true);
     assert.equal(await page.evaluate(()=>state.libraryLoaded),false);
     assert.equal(await page.evaluate(()=>state.paperFilesByPaperId.paper.files.length),1,'saving replaces a cached empty Paper Files list');
@@ -215,6 +216,31 @@ function workspaceFunction(name) {
     assert.equal(await page.evaluate(()=>state.libraryTab),'workspace-0');
     assert.equal(await page.evaluate(()=>state.librarySelection.id),202);
     await page.evaluate(()=>{state.mode='browser';gewuBrowser.setActive(true);});
+
+    // An already placed paper defaults to its existing folder, including after
+    // PDF identification; merely opening/cancelling the picker is not consent
+    // to add another placement. The backend separately verifies this hint.
+    await page.evaluate(()=>{
+      review.paper.existing=true;review.destination={folder_id:7,item_id:101,reused:true};
+      state.librarySelection={type:'item',id:101};
+    });
+    id=await start(); await deliver(id);
+    await page.waitForFunction(()=>!document.querySelector('[data-capture="save"]').disabled);
+    assert.equal(await page.inputValue('[name="folder_id"]'),'7');
+    assert.match(await page.locator('[data-capture="folder"]').innerText(),/Experiments/);
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_begin').at(-1).snapshot.origin_library_item_id),101);
+    await page.click('[data-capture="folder"]');
+    await menu.locator('button[data-folder-id="7"]').waitFor();
+    await menu.locator('[data-action="cancel-library-add"]').click();
+    await details(); await page.click('[data-capture="download"]');
+    await page.evaluate(()=>gewuBrowserNativeEvent({event:'capture-pdf',token:'capture-token',error:''}));
+    await page.waitForFunction(()=>document.querySelector('[name="include_pdf"]').checked);
+    assert.equal(await page.inputValue('[name="folder_id"]'),'7');
+    await page.click('[data-capture="save"]');
+    await page.waitForFunction(()=>!document.querySelector('.browser-capture-panel'));
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).folder_selection_explicit),false);
+    assert.equal(await page.evaluate(()=>calls.filter(c=>c.action==='capture_save').at(-1).folder_id),7);
+    await page.evaluate(()=>{review.paper.existing=false;review.destination={folder_id:4,title:'Library / unsorted',reused:false};});
 
     await page.evaluate(()=>{state.browserCaptureDetailsExpanded=true;});
     id=await start(); await deliver(id);

@@ -41,6 +41,7 @@ import requests
 
 from . import publication_jobs
 from .publication_deletion import delete_publications
+from .recycle import delete_recycle_selection, preview_recycle_selection
 from .publication_errors import report_publication_error
 from .workflow_store import (publication_work_snapshot, preserve_subject_history,
                              subject_revision, subject_window_preserved)
@@ -64,6 +65,7 @@ from .resource_fingerprint import fingerprint_file, sha256_for_file as exact_sha
 from .download import (
     convert_word_document_to_pdf,
     download_paper,
+    paper_download_lock,
     is_nature_reference_pdf_url,
     normalize_doi,
     publisher_browser_candidate,
@@ -178,32 +180,6 @@ SEMANTIC_INFLUENTIAL_RATE_LIMIT_COOLDOWN_SECONDS = 5 * 60
 SEMANTIC_INFLUENTIAL_CACHE_LOCK = threading.RLock()
 SEMANTIC_INFLUENTIAL_CACHE: dict[tuple[str, int], tuple[float, list[dict[str, Any]]]] = {}
 SEMANTIC_INFLUENTIAL_RATE_LIMITED_UNTIL: dict[str, float] = {}
-
-
-MACOS_TRASH_JXA = r'''
-function run(argv) {
-  ObjC.import("Foundation");
-  const source = $.NSURL.fileURLWithPath($(argv[0]).stringByStandardizingPath);
-  const manager = $.NSFileManager.defaultManager;
-  const destination = Ref();
-  const error = Ref();
-  const ok = manager.trashItemAtURLResultingItemURLError(source, destination, error);
-  const sourceStillExists = manager.fileExistsAtPath(source.path);
-  if (!ok && sourceStillExists) {
-    let detail = "macOS refused the Trash operation";
-    try {
-      if (error[0]) detail = ObjC.unwrap(error[0].localizedDescription);
-    } catch (_) {
-    }
-    throw new Error(detail);
-  }
-  try {
-    if (destination[0]) return ObjC.unwrap(destination[0].path);
-  } catch (_) {
-  }
-  return "";
-}
-'''
 
 
 FETCH_PROGRESS: dict[str, dict[str, Any]] = {}
@@ -835,6 +811,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path in {"/api/paper-files/role", "/api/paper-files/version-role"}:
                 self.handle_set_paper_file_role(payload)
                 return
+            if parsed.path == "/api/paper-files/reassign":
+                self.handle_reassign_paper_file(payload)
+                return
             if parsed.path == "/api/paper-files/delete":
                 self.handle_delete_paper_file(payload)
                 return
@@ -1421,61 +1400,62 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        storage = Storage(self.configured_db_path)
-        try:
-            force_download = bool(payload.get("force"))
-            target_dir = local_copy_dir_for_download_context(storage, payload)
-            if target_dir is None:
-                target_dir = preferred_local_pdf_dir_for_paper(storage, paper_id)
-            if target_dir:
-                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
-            download_snapshot = snapshot_primary_resource_before_download(
-                storage,
-                paper_id,
-                force=force_download,
-            )
+        with paper_download_lock(self.configured_db_path, paper_id):
+            storage = Storage(self.configured_db_path)
             try:
-                result = download_paper(
-                    storage=storage,
-                    paper_id=paper_id,
-                    target_dir=target_dir,
-                    force=force_download,
-                )
-                register_downloaded_paper_resource(
+                force_download = bool(payload.get("force"))
+                target_dir = local_copy_dir_for_download_context(storage, payload)
+                if target_dir is None:
+                    target_dir = preferred_local_pdf_dir_for_paper(storage, paper_id)
+                if target_dir:
+                    reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
+                download_snapshot = snapshot_primary_resource_before_download(
                     storage,
                     paper_id,
-                    result=result,
-                    snapshot=download_snapshot,
+                    force=force_download,
                 )
+                try:
+                    result = download_paper(
+                        storage=storage,
+                        paper_id=paper_id,
+                        target_dir=target_dir,
+                        force=force_download,
+                    )
+                    register_downloaded_paper_resource(
+                        storage,
+                        paper_id,
+                        result=result,
+                        snapshot=download_snapshot,
+                    )
+                finally:
+                    cleanup_download_resource_snapshot(download_snapshot)
+                if target_dir:
+                    reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
+                if target_dir:
+                    context = clean_text(str(payload.get("context") or "")).lower()
+                    if context == "my-publications":
+                        sync_my_publication_alias(storage, paper_id)
+                    elif context in {"library", "workspace", "space"}:
+                        folder_id = int(payload.get("folder_id") or 0)
+                        item_id = int(payload.get("item_id") or 0)
+                        if item_id:
+                            item = storage.get_library_item(item_id)
+                            if item:
+                                folder_id = int(item.get("folder_id") or folder_id or 1)
+                        if folder_id:
+                            sync_alias_for_library_item(storage, paper_id, folder_id)
+                sync_all_pdf_aliases_for_paper(storage, paper_id)
+                paper = storage.get_paper(paper_id)
             finally:
-                cleanup_download_resource_snapshot(download_snapshot)
-            if target_dir:
-                reconcile_paper_pdf_storage(storage, paper_id, target_dir=target_dir)
-            if target_dir:
-                context = clean_text(str(payload.get("context") or "")).lower()
-                if context == "my-publications":
-                    sync_my_publication_alias(storage, paper_id)
-                elif context in {"library", "workspace", "space"}:
-                    folder_id = int(payload.get("folder_id") or 0)
-                    item_id = int(payload.get("item_id") or 0)
-                    if item_id:
-                        item = storage.get_library_item(item_id)
-                        if item:
-                            folder_id = int(item.get("folder_id") or folder_id or 1)
-                    if folder_id:
-                        sync_alias_for_library_item(storage, paper_id, folder_id)
-            sync_all_pdf_aliases_for_paper(storage, paper_id)
-            paper = storage.get_paper(paper_id)
-        finally:
-            storage.close()
-        response_payload: dict[str, Any] = {
-            "result": result,
-            "paper": paper_to_api(paper) if paper else None,
-        }
-        browser_fallback = published_pdf_browser_fallback(paper, result)
-        if browser_fallback:
-            response_payload["browser_fallback"] = browser_fallback
-        self.send_json(response_payload)
+                storage.close()
+            response_payload: dict[str, Any] = {
+                "result": result,
+                "paper": paper_to_api(paper) if paper else None,
+            }
+            browser_fallback = published_pdf_browser_fallback(paper, result)
+            if browser_fallback:
+                response_payload["browser_fallback"] = browser_fallback
+            self.send_json(response_payload)
 
     def handle_manual_pdf(self) -> None:
         fields, files = self.read_multipart_body()
@@ -1710,6 +1690,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 "paper": paper_to_api(paper) if paper else None,
             }
         )
+
+    def handle_reassign_paper_file(self, payload: dict[str, Any]) -> None:
+        from .file_reassignment import reassign_paper_file
+        storage = Storage(self.configured_db_path)
+        try:
+            result = reassign_paper_file(storage, clean_text(str(payload.get("paper_id") or "")),
+                int(payload.get("resource_id") or 0), target_key=clean_text(str(payload.get("target_key") or "")),
+                new_title=clean_text(str(payload.get("new_title") or "")), folder_id=int(payload.get("folder_id") or 0))
+            response = {"reassignment": result, "paper_files": [paper_files_state_payload(storage, result[key])
+                         for key in ("source_paper_id", "target_paper_id")]}
+        except (ValueError, KeyError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Could not reassign Paper File")
+            self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, "Could not move the file to another paper. Refresh Paper Files and try again.")
+            return
+        finally:
+            storage.close()
+        self.send_json(response)
 
     def handle_delete_paper_file(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
@@ -3728,55 +3728,56 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        storage = Storage(self.configured_db_path)
-        try:
-            target_folder = None
-            if payload.get("unsorted"):
-                target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
-                folder_id = int(target_folder.get("id") or 1)
-            else:
-                target_folder = storage.get_library_folder(folder_id)
-                if not target_folder:
-                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
+        with paper_download_lock(self.configured_db_path, paper_id):
+            storage = Storage(self.configured_db_path)
+            try:
+                target_folder = None
+                if payload.get("unsorted"):
+                    target_folder = storage.ensure_library_folder(parent_id=1, name=LIBRARY_UNSORTED_FOLDER_NAME)
+                    folder_id = int(target_folder.get("id") or 1)
+                else:
+                    target_folder = storage.get_library_folder(folder_id)
+                    if not target_folder:
+                        self.send_error_json(HTTPStatus.BAD_REQUEST, "Target Library or Space folder was not found")
+                        return
+                    recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
+                    if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
+                        self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
+                        return
+                paper = storage.get_paper(paper_id)
+                if not paper:
+                    self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
                     return
-                recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
-                if recycle_id and library_folder_is_within(storage, folder_id, recycle_id):
-                    self.send_error_json(HTTPStatus.BAD_REQUEST, "Recycle cannot be used as an Add to Library target")
-                    return
-            paper = storage.get_paper(paper_id)
-            if not paper:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            if payload.get("refresh_metadata"):
-                paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
-            item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
-            if item and not item.get("display_name"):
-                naming_rule = library_naming_rule(storage)
-                item = storage.rename_library_item(
-                    item_id=int(item["id"]),
-                    name=default_library_item_display_name(paper, rule=naming_rule),
-                )
-            if item:
-                reconcile_paper_pdf_storage(
-                    storage,
-                    paper_id,
-                    target_dir=local_copy_dir_for_library_folder(storage, folder_id),
-                )
-                sync_alias_for_library_item(storage, paper_id, folder_id)
-            target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
-            updated_paper = storage.get_paper(paper_id) or paper
-            updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
-            updated_paper = updated_papers[0] if updated_papers else updated_paper
-            item_api = library_item_to_api(item, updated_paper) if item else {}
-            snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
-        finally:
-            storage.close()
-        self.send_json({
-            "item": item_api,
-            "folder": target_folder_api,
-            "paper": paper_to_api(updated_paper),
-            **snapshot,
-        })
+                if payload.get("refresh_metadata"):
+                    paper = refresh_paper_metadata_from_doi_if_possible(storage, paper, timeout=12, max_retries=1)
+                item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+                if item and not item.get("display_name"):
+                    naming_rule = library_naming_rule(storage)
+                    item = storage.rename_library_item(
+                        item_id=int(item["id"]),
+                        name=default_library_item_display_name(paper, rule=naming_rule),
+                    )
+                if item:
+                    reconcile_paper_pdf_storage(
+                        storage,
+                        paper_id,
+                        target_dir=local_copy_dir_for_library_folder(storage, folder_id),
+                    )
+                    sync_alias_for_library_item(storage, paper_id, folder_id)
+                target_folder_api = library_folder_to_api(target_folder, storage) if target_folder else None
+                updated_paper = storage.get_paper(paper_id) or paper
+                updated_papers = annotate_papers_with_library_status(storage, [updated_paper])
+                updated_paper = updated_papers[0] if updated_papers else updated_paper
+                item_api = library_item_to_api(item, updated_paper) if item else {}
+                snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
+            finally:
+                storage.close()
+            self.send_json({
+                "item": item_api,
+                "folder": target_folder_api,
+                "paper": paper_to_api(updated_paper),
+                **snapshot,
+            })
 
     def handle_get_library_naming_rule(self) -> None:
         storage = Storage(self.configured_db_path)
@@ -4324,8 +4325,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         try:
             deleted = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
+            refreshed_files = deleted.get("paper_files", [])
             snapshot = library_snapshot(storage) if include_snapshot else {}
-        except ValueError as exc:
+        except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         except OSError as exc:
@@ -4334,7 +4336,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"deleted": deleted, **snapshot})
+        self.send_json({"deleted": deleted, "paper_files": refreshed_files, **snapshot})
 
     def handle_delete_library_entries(self, payload: dict[str, Any]) -> None:
         entries = payload.get("entries")
@@ -4346,15 +4348,28 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         deleted: list[dict[str, Any]] = []
         try:
+            recycle_id = int(ensure_library_special_folders(storage)["recycle"]["id"])
+            all_in_recycle = True
             for entry in entries:
                 if not isinstance(entry, dict):
                     raise ValueError("Each entry must be an object")
+                entry_id = int(entry.get("id") or 0)
+                item = storage.get_library_item(entry_id) if entry.get("type") == "item" else None
+                folder_id = int(item["folder_id"]) if item else entry_id if entry.get("type") == "folder" else 0
+                all_in_recycle = all_in_recycle and bool(folder_id) and library_folder_is_within(storage, folder_id, recycle_id)
+            if all_in_recycle:
+                result = delete_recycle_selection(storage, entries, recycle_id=recycle_id, confirmed=confirmed)
+                deleted = [{"type": entry["type"], "id": int(entry["id"]), "mode": "removed",
+                            "paper_ids": result["paper_ids"], "cleanup": result["cleanup"],
+                            "retained_paper_ids": result["retained_paper_ids"], "paper_files": result["paper_files"]} for entry in entries]
+            for entry in ([] if all_in_recycle else entries):
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
                 result = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
                 deleted.append(result or {"type": entry_type, "id": entry_id})
+            refreshed_files = list({p["paper_id"]: p for result in deleted for p in result.get("paper_files", [])}.values())
             snapshot = library_snapshot(storage) if include_snapshot else {}
-        except ValueError as exc:
+        except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         except OSError as exc:
@@ -4363,7 +4378,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"deleted": deleted, **snapshot})
+        self.send_json({"deleted": deleted, "paper_files": refreshed_files, **snapshot})
 
     def handle_library_delete_preview(self, payload: dict[str, Any]) -> None:
         entries = payload.get("entries")
@@ -4377,13 +4392,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         try:
             special = ensure_library_special_folders(storage)
             recycle_id = int(special["recycle"].get("id") or 0)
-            preview = recycle_delete_preview_for_entries(storage, preview_entries, recycle_folder_id=recycle_id)
-            if payload.get("clear_special"):
-                orphan_paths = library_recycle_orphan_paths(storage, recycle_id)
-                preview["orphan_local_copy_paths"] = [str(path) for path in orphan_paths]
-                preview["orphan_local_copy_count"] = len(orphan_paths)
-                preview["requires_confirmation"] = bool(preview.get("requires_confirmation") or orphan_paths)
-        except ValueError as exc:
+            preview = preview_recycle_selection(storage, preview_entries, recycle_id=recycle_id,
+                                                empty=bool(payload.get("clear_special")))
+        except (ValueError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
         finally:
@@ -4401,20 +4412,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             folder_id = int(item.get("folder_id") or 1)
             paper_ids = [str(item.get("paper_id") or "")]
             if library_folder_is_within(storage, folder_id, recycle_id):
-                preview = recycle_delete_preview_for_entries(storage, [{"type": "item", "id": entry_id}], recycle_folder_id=recycle_id)
-                if preview.get("requires_confirmation") and not confirmed:
-                    raise ValueError("confirmation is required")
-                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
-                has_outside_reference = paper_has_reference_outside_recycle(storage, paper_ids[0], recycle_id)
-                if has_outside_reference:
-                    promote_canonical_pdf_outside_recycle(storage, paper_ids[0], recycle_id)
-                    remove_pdf_aliases_for_paper_in_folders(storage, paper_ids[0], [folder_id])
-                else:
-                    remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], [folder_id])
-                storage.delete_library_item(item_id=entry_id)
-                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
-                cleanup["trashed_files"] = file_cleanup["trashed_files"]
-                return {"type": "item", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
+                result = delete_recycle_selection(storage, [{"type": "item", "id": entry_id}],
+                                                  recycle_id=recycle_id, confirmed=confirmed)
+                return {"type": "item", "id": entry_id, "mode": "removed", **result}
             else:
                 remaining = first_outside_reference_item(storage, paper_ids[0], recycle_id, exclude_item_id=entry_id)
                 retained_by_my_publications = paper_has_my_publication_reference(storage, paper_ids[0])
@@ -4462,21 +4462,9 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if int(folder.get("id") or 0) in {1, unsorted_id, recycle_id} or folder.get("parent_id") is None:
                 raise ValueError("This folder cannot be deleted")
             if library_folder_is_within(storage, int(folder.get("parent_id") or 0), recycle_id):
-                preview = recycle_delete_preview_for_entries(storage, [{"type": "folder", "id": entry_id}], recycle_folder_id=recycle_id)
-                if preview.get("requires_confirmation") and not confirmed:
-                    raise ValueError("confirmation is required")
-                paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=entry_id)
-                removed_folder_ids = library_folder_tree_ids(storage, entry_id)
-                file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=recycle_id)
-                for paper_id in paper_ids:
-                    if paper_has_reference_outside_recycle(storage, paper_id, recycle_id):
-                        promote_canonical_pdf_outside_recycle(storage, paper_id, recycle_id)
-                        remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
-                remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
-                storage.delete_library_folder(folder_id=entry_id)
-                cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=recycle_id, delete_files=False)
-                cleanup["trashed_files"] = file_cleanup["trashed_files"]
-                return {"type": "folder", "id": entry_id, "mode": "removed", "paper_ids": paper_ids, "cleanup": cleanup}
+                result = delete_recycle_selection(storage, [{"type": "folder", "id": entry_id}],
+                                                  recycle_id=recycle_id, confirmed=confirmed)
+                return {"type": "folder", "id": entry_id, "mode": "removed", **result}
             else:
                 pdf_move_plan = folder_tree_pdf_move_plan(storage, entry_id)
                 moved = storage.move_library_folder_to_trash(folder_id=entry_id, recycle_folder_id=recycle_id)
@@ -4565,32 +4553,14 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if not folder or folder_id not in allowed_ids:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "Only Recycle can be cleared")
                 return
-            preview = recycle_delete_preview_for_entries(
-                storage,
-                [{"type": "folder", "id": folder_id}],
-                recycle_folder_id=folder_id,
-            )
-            orphan_paths = library_recycle_orphan_paths(storage, folder_id)
-            if (preview.get("requires_confirmation") or orphan_paths) and not confirmed:
-                self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
-                return
-            paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
-            removed_folder_ids = library_folder_tree_ids(storage, folder_id)
-            file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=folder_id)
-            trashed_orphans: list[str] = []
-            for path in orphan_paths:
-                move_path_to_macos_trash(path)
-                trashed_orphans.append(str(path))
-            for paper_id in paper_ids:
-                if paper_has_reference_outside_recycle(storage, paper_id, folder_id):
-                    promote_canonical_pdf_outside_recycle(storage, paper_id, folder_id)
-                    remove_pdf_aliases_for_paper_in_folders(storage, paper_id, removed_folder_ids)
-            remove_pdf_aliases_for_paths_in_folders(storage, file_cleanup["trashed_files"], removed_folder_ids)
-            removed = clear_library_folder_contents(storage, folder_id=folder_id)
-            cleanup = cleanup_unreferenced_recycle_papers(storage, paper_ids, recycle_folder_id=folder_id, delete_files=False)
-            cleanup["trashed_files"] = file_cleanup["trashed_files"]
-            cleanup["trashed_orphan_files"] = trashed_orphans
+            result = delete_recycle_selection(storage, [], recycle_id=folder_id,
+                                              empty=True, confirmed=confirmed)
+            removed, cleanup = result["removed"], result["cleanup"]
+            refreshed_files = result["paper_files"]
             snapshot = library_snapshot(storage) if include_snapshot else {}
+        except (ValueError, sqlite3.Error) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         except IsADirectoryError:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "Refusing to delete a folder")
             return
@@ -4602,7 +4572,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         finally:
             storage.close()
-        self.send_json({"removed": removed, "cleanup": cleanup, **snapshot})
+        self.send_json({"removed": removed, "cleanup": cleanup, "paper_files": refreshed_files, **snapshot})
 
     def handle_recover_library_entry(self, payload: dict[str, Any]) -> None:
         entry_type = str(payload.get("type") or "")
@@ -10414,6 +10384,7 @@ def library_file_search_snapshot(
         LOWER(
           COALESCE(library_items.display_name, '') || ' ' ||
           COALESCE(papers.title, '') || ' ' ||
+          COALESCE(papers.storage_key, '') || ' ' ||
           COALESCE(papers.original_filename, '') || ' ' ||
           COALESCE(papers.doi, '') || ' ' ||
           COALESCE(papers.journal, '') || ' ' ||
@@ -10451,6 +10422,7 @@ def library_file_search_snapshot(
           library_items.created_at,
           library_items.sort_order,
           papers.title,
+          papers.storage_key,
           papers.journal,
           papers.publication_date,
           papers.doi,
@@ -10496,6 +10468,7 @@ def library_file_search_snapshot(
         local_path = merged_path or main_path or source_path
         paper = {
             "paper_id": clean_text(row["paper_id"] or ""),
+            "storage_key": clean_text(row["storage_key"] or ""),
             "title": clean_text(row["title"] or ""),
             "journal": clean_text(row["journal"] or ""),
             "publication_date": clean_text(row["publication_date"] or ""),
@@ -10582,6 +10555,8 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
         "source_root",
         "total_files",
         "paper_candidates_seen",
+        "processed_files",
+        "identity_conflicts",
         "created_papers",
         "updated_papers",
         "existing_papers",
@@ -20453,7 +20428,7 @@ def run_library_import_job(
             status="failed" if summary.get("errors") else "completed",
             stage="complete",
             finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            percent=100,
+            percent=(min(100, round(100 * int(summary.get("processed_files") or 0) / max(1, int(summary.get("total_files") or 0)))) if summary.get("errors") else 100),
             result=summary,
         )
     except ImportCancelled as exc:
@@ -20635,18 +20610,55 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
             (batch_id,),
         ).fetchall()
     ]
+    removed_resources = [dict(row) for row in storage.conn.execute(
+        "SELECT * FROM resources WHERE import_batch_id = ?", (batch_id,))]
     storage.conn.execute("DELETE FROM resources WHERE import_batch_id = ?", (batch_id,))
-    storage.conn.execute("DELETE FROM papers WHERE import_batch_id = ?", (batch_id,))
+    # A file explicitly reassigned after import is no longer owned by this batch.
+    # Preserve its destination paper, including destinations created by the batch.
+    paper_count = storage.conn.execute(
+        """DELETE FROM papers WHERE import_batch_id = ? AND NOT EXISTS
+           (SELECT 1 FROM resources WHERE resources.paper_id = papers.paper_id)""",
+        (batch_id,),
+    ).rowcount
+    storage.conn.execute("UPDATE papers SET import_batch_id = NULL WHERE import_batch_id = ?", (batch_id,))
+    from .file_reassignment import _repair_source_pointers
+    for resource in removed_resources:
+        surviving_paper = storage.get_paper(resource.get("paper_id"))
+        if surviving_paper:
+            _repair_source_pointers(storage, surviving_paper, resource)
     storage.conn.execute("DELETE FROM inventory_import_batches WHERE id = ?", (batch_id,))
     deleted_folders = cleanup_empty_import_folders(storage, started_at)
     storage.conn.commit()
+
+    # Reassignment changes ownership without moving bytes. Never trash a surviving
+    # file, or an import directory that still contains one of those files.
+    protected_paths = set()
+    for row in storage.conn.execute("""SELECT stored_path, source_path FROM resources
+        UNION ALL SELECT main_pdf_path, merged_pdf_path FROM papers
+        UNION ALL SELECT source_path, analysis_path FROM papers"""):
+        for value in row:
+            if not value:
+                continue
+            try:
+                path = Path(value).expanduser().resolve()
+                protected_paths.update([str(path), *(str(parent) for parent in path.parents)])
+            except (OSError, RuntimeError, ValueError):
+                continue
+
+    def trash_unreferenced_import_path(value, root):
+        try:
+            if value and str(Path(value).expanduser().resolve()) in protected_paths:
+                return False
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return delete_import_path(value, root)
 
     deleted_paths: list[str] = []
     copy_target = str(result.get("copy_target_root") or "") or str(DEFAULT_LIBRARY_IMPORT_DIR / batch_id)
     deletable_roots = [DEFAULT_LIBRARY_DIR, DEFAULT_SPACES_DIR, DEFAULT_MY_PUBLICATIONS_DIR, DEFAULT_LIBRARY_IMPORT_DIR]
     for path_value in resource_paths:
         for root in deletable_roots:
-            if delete_import_path(path_value, root):
+            if trash_unreferenced_import_path(path_value, root):
                 deleted_paths.append(path_value)
                 break
     try:
@@ -20656,7 +20668,7 @@ def delete_library_import_job_data(storage: Storage, job_id: str) -> dict[str, A
     protected_copy_roots = {str(root.resolve()) for root in deletable_roots}
     if copy_target_path and str(copy_target_path) not in protected_copy_roots:
         for root in deletable_roots:
-            if delete_import_path(str(copy_target_path), root):
+            if trash_unreferenced_import_path(str(copy_target_path), root):
                 deleted_paths.append(str(copy_target_path))
                 break
     cleanup_local_copy_empty_parents(deleted_paths)
@@ -23499,7 +23511,9 @@ def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, messa
     )
 
 
-def update_paper_file_path_references(storage: Storage, paper_id: str, old_path: Path, new_path: Path) -> None:
+def update_paper_file_path_references(
+    storage: Storage, paper_id: str, old_path: Path, new_path: Path, *, commit: bool = True,
+) -> None:
     paper = storage.get_paper(paper_id)
     if not paper:
         return
@@ -23525,12 +23539,43 @@ def update_paper_file_path_references(storage: Storage, paper_id: str, old_path:
         imported["stored_path"] = new_value
         raw["import"] = imported
         updates["raw_json"] = json.dumps(raw, ensure_ascii=False)
-    if not updates:
+    # Update the file registration in the same transaction, including the case
+    # where only a resource still refers to the old name. Source provenance for
+    # managed copies remains unchanged; linked files use source_path directly.
+    resource_updates = []
+    for resource in storage.conn.execute(
+        "SELECT id, stored_path, source_path, display_name FROM resources WHERE paper_id = ?", (paper_id,),
+    ):
+        field = "stored_path" if resource["stored_path"] else "source_path"
+        value = str(resource[field] or "")
+        try:
+            matches = bool(value) and Path(value).expanduser().resolve() == old_path.expanduser().resolve()
+        except OSError:
+            matches = value == old_value
+        if matches:
+            display = resource["display_name"] or ""
+            if not display or display == old_path.name:
+                display = new_path.name
+            resource_updates.append((int(resource["id"]), field, display))
+    if not updates and not resource_updates:
         return
-    assignments = ", ".join(f"{key} = ?" for key in updates)
-    params = list(updates.values()) + [paper_id]
-    storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", params)
-    storage.conn.commit()
+    storage.conn.execute("SAVEPOINT gewu_file_path_update")
+    try:
+        if updates:
+            assignments = ", ".join(f"{key} = ?" for key in updates)
+            storage.conn.execute(f"UPDATE papers SET {assignments} WHERE paper_id = ?", list(updates.values()) + [paper_id])
+        for resource_id, field, display in resource_updates:
+            storage.conn.execute(
+                f"UPDATE resources SET {field} = ?, display_name = ?, missing_status = ?, updated_at = ? WHERE id = ? AND paper_id = ?",
+                (new_value, display, "" if new_path.is_file() else "missing", now_iso(), resource_id, paper_id),
+            )
+        storage.conn.execute("RELEASE gewu_file_path_update")
+        if commit:
+            storage.conn.commit()
+    except Exception:
+        storage.conn.execute("ROLLBACK TO gewu_file_path_update")
+        storage.conn.execute("RELEASE gewu_file_path_update")
+        raise
 
 
 def rename_library_item_pdf_from_metadata(storage: Storage, item_id: int) -> dict[str, Any]:
@@ -23999,14 +24044,22 @@ def sync_all_pdf_aliases_for_paper(
                 except OSError:
                     pass
             target_path = unique_path_in_dir(target_path)
-            canonical.rename(target_path)
-            for referenced_paper_id in shared_paper_ids or [str(paper_id)]:
-                update_paper_file_path_references(
-                    storage,
-                    referenced_paper_id,
-                    canonical,
-                    target_path,
-                )
+            storage.conn.execute("SAVEPOINT gewu_pdf_rename")
+            renamed = False
+            try:
+                canonical.rename(target_path)
+                renamed = True
+                for referenced_paper_id in shared_paper_ids or [str(paper_id)]:
+                    update_paper_file_path_references(
+                        storage, referenced_paper_id, canonical, target_path, commit=False,
+                    )
+                storage.conn.execute("RELEASE gewu_pdf_rename")
+            except Exception:
+                storage.conn.execute("ROLLBACK TO gewu_pdf_rename")
+                storage.conn.execute("RELEASE gewu_pdf_rename")
+                if renamed and target_path.exists() and not canonical.exists():
+                    target_path.rename(canonical)
+                raise
             canonical = target_path.resolve()
             canonical_renamed = True
             removed.extend(remove_direct_symlinks_to(old_canonical, alias_dirs))
@@ -24981,8 +25034,10 @@ def delete_allowed_files(paths: list[str], roots: list[Path]) -> list[str]:
 
 
 def move_path_to_macos_trash(path: Path) -> Path:
-    requested = path.expanduser().resolve()
-    if not requested.exists():
+    # Move the link itself, even when its target no longer exists.
+    requested = path.expanduser().absolute()
+    requested = requested.parent.resolve() / requested.name
+    if not os.path.lexists(requested):
         raise FileNotFoundError(str(requested))
     if sys.platform != "darwin":
         trash_dir = Path.home() / ".Trash"
@@ -24990,32 +25045,23 @@ def move_path_to_macos_trash(path: Path) -> Path:
         target = unique_trash_path(trash_dir / requested.name)
         shutil.move(str(requested), str(target))
         return target
+    helper = ROOT / "Gewu Insight.app" / "Contents" / "MacOS" / "Gewu Insight"
     result = subprocess.run(
-        ["/usr/bin/osascript", "-l", "JavaScript", "-e", MACOS_TRASH_JXA, str(requested)],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
+        [str(helper), "--trash-item", str(requested)], check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30,
     )
-    if result.returncode != 0:
-        # JXA can expose NSFileManager's successful BOOL result as a falsey value.
-        # The Trash move itself is synchronous, so disappearance of the source is
-        # the authoritative success signal and must not require a second delete.
-        if not requested.exists():
-            return requested
-        detail = clean_text(result.stderr or result.stdout) or "macOS refused the Trash operation"
-        message = f"Could not move {requested.name} to macOS Trash. The source file is still present. {detail}"
-        lowered = detail.lower()
-        if "permission" in lowered or "not authorized" in lowered or "operation not permitted" in lowered:
-            raise PermissionError(message)
-        raise MacOSTrashError(message)
     destination = str(result.stdout or "").strip()
-    return Path(destination).expanduser() if destination else requested
+    if result.returncode == 0 and destination and not os.path.lexists(requested):
+        return Path(destination).expanduser()
+    detail = clean_text(result.stderr or "") or "macOS did not confirm the Trash operation"
+    message = f"Could not move {requested.name} to macOS Trash. {detail}"
+    if any(word in detail.lower() for word in ("permission", "not authorized", "operation not permitted")):
+        raise PermissionError(message)
+    raise MacOSTrashError(message)
 
 
 def unique_trash_path(target: Path) -> Path:
-    if not target.exists():
+    if not os.path.lexists(target):
         return target
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     stem = target.stem
@@ -25023,7 +25069,7 @@ def unique_trash_path(target: Path) -> Path:
     parent = target.parent
     for index in range(1, 1000):
         candidate = parent / f"{stem} {timestamp}-{index}{suffix}"
-        if not candidate.exists():
+        if not os.path.lexists(candidate):
             return candidate
     raise FileExistsError(str(target))
 
@@ -35812,6 +35858,7 @@ INDEX_HTML = """<!doctype html>
       reportCache: {},
       reportCacheOrder: [],
       monitorPaperDomCache: {report: null, theme: null},
+      monitorPaperOperations: new Map(),
       monitorReturnViewports: {report: null, theme: null},
       monthCacheKey: "",
       monthLoaded: false,
@@ -38708,7 +38755,8 @@ INDEX_HTML = """<!doctype html>
     async function addPaperToLibrary(article, paperId, options = {}) {
       const button = article.querySelector('[data-action="add-library"]');
       if (button?.dataset.libraryState === "show") return showPaperInLibrary(article, paperId);
-      const monitorViewport = captureMonitorViewport(article);
+      if (state.monitorPaperOperations.get(paperId)?.library?.busy) return;
+      setMonitorPaperOperation(paperId, "library", {busy: true});
       if (button) {
         button.disabled = true;
         button.classList.add("is-busy");
@@ -38738,13 +38786,14 @@ INDEX_HTML = """<!doctype html>
         if (button) {
           setReportLibraryButtonShowState(button);
         }
-        renderCurrentPaperSurface({monitorViewport});
+        setMonitorPaperOperation(paperId, "library", null);
       } catch (error) {
+        setMonitorPaperOperation(paperId, "library", {error: error.message});
         if (button) {
           setReportLibraryButtonAddState(button);
         }
         const status = article.querySelector('[data-role="status"]');
-        if (status) {
+        if (status && !article.classList.contains("paper")) {
           status.textContent = error.message;
           status.className = "status err";
         }
@@ -38927,6 +38976,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entry");
+        applyPaperFilesPayloads(data.paper_files);
         applyLocalLibraryDeleteResult(data.deleted);
         selectLibraryDeletionFallback(parentId, deletedEntry, entriesBeforeDelete);
         renderLibrary();
@@ -38939,14 +38989,15 @@ INDEX_HTML = """<!doctype html>
       if (!recycleId || targetFolderId !== recycleId) return;
       const deletePreview = await previewRecycleDeletion({clear_special: true, folder_id: targetFolderId});
       if (deletePreview.requires_confirmation && !(await confirmRecycleDeletion("all items in Recycle", deletePreview))) return;
-      return withLibraryActivityStatus("Deleting Recycle...", "Delete complete.", async () => {
+      return withLibraryActivityStatus("Emptying Recycle...", "Recycle emptied.", async () => {
         const res = await fetch("/api/library/special-folder/clear", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({folder_id: targetFolderId, confirmed: Boolean(deletePreview.requires_confirmation), snapshot: false})
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not delete Recycle");
+        if (!res.ok) throw new Error(data.error || "Could not empty Recycle");
+        applyPaperFilesPayloads(data.paper_files);
         clearLibraryFolderContentsLocal(targetFolderId);
         clearLibraryRangeSelection();
         setLibraryColumnSelection(parentFolderId(targetFolderId), {type: "folder", id: targetFolderId});
@@ -38960,8 +39011,7 @@ INDEX_HTML = """<!doctype html>
       const recycleId = Number(libraryRecycleFolderId());
       if (!recycleId) return 0;
       if (entryType === "folder" && Number(entryId) === recycleId) return recycleId;
-      if (Number(parentId || 0) === recycleId) return recycleId;
-      if (Number(state.libraryActiveFolderId || 0) === recycleId) return recycleId;
+      if (!entryType && !Number(entryId || 0) && Number(parentId || 0) === recycleId) return recycleId;
       return 0;
     }
 
@@ -39009,20 +39059,24 @@ INDEX_HTML = """<!doctype html>
       const pathList = Array.isArray(preview.local_copy_paths) ? preview.local_copy_paths : [];
       const metadataCount = Number(preview.metadata_paper_count || 0);
       const shortcutOnlyCount = Number(preview.shortcut_only_paper_count || 0);
+      const folderPaths = Array.isArray(preview.folder_paths) ? preview.folder_paths : [];
       const orphanPaths = Array.isArray(preview.orphan_local_copy_paths) ? preview.orphan_local_copy_paths : [];
       const lines = [
         `Delete ${targetLabel} permanently?`,
         "",
         `${metadataCount} paper record${metadataCount === 1 ? "" : "s"} no longer used outside Recycle will be removed with related metadata and source/resource records.`
       ];
+      if (folderPaths.length) {
+        lines.push("", "Folders to move intact to macOS Trash, including all contents:", ...folderPaths);
+      }
       if (pathList.length) {
         lines.push(
           "",
           `Managed local cop${pathList.length === 1 ? "y" : "ies"} to move to macOS Trash:`,
           ...pathList
         );
-      } else {
-        lines.push("", "No managed local copy files were found.");
+      } else if (!folderPaths.length) {
+        lines.push("", "No local files were found.");
       }
       if (orphanPaths.length) {
         lines.push(
@@ -39076,6 +39130,7 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not delete library entries");
+        applyPaperFilesPayloads(data.paper_files);
         (Array.isArray(data.deleted) ? data.deleted : []).forEach(applyLocalLibraryDeleteResult);
         clearLibraryRangeSelection();
         const lastDeleted = selectedEntries[selectedEntries.length - 1];
@@ -40262,22 +40317,22 @@ INDEX_HTML = """<!doctype html>
     }
 
     function focusMonitorCalendarCursor(mode = activeMonitorKeyboardMode()) {
-      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+      if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
       const iso = state.monitorCalendarCursorDates[mode] || state.selectedDate;
       window.requestAnimationFrame(() => {
-        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
+        if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "calendar") return;
         const button = document.querySelector(`#calendar .day[data-date="${CSS.escape(iso)}"]`);
         button?.focus({preventScroll: true});
       });
     }
 
     function focusMonitorPaperSelection(mode = activeMonitorKeyboardMode(), options = {}) {
-      if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+      if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
       const papers = activeReportPapers();
       ensureReportPaperSelection(papers);
       const selectedId = String(state.reportSelectedPaperId || "");
       window.requestAnimationFrame(() => {
-        if (mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
+        if (state.primaryKeyboardLayer === "root" || mode !== state.mode || state.monitorKeyboardPanes[mode] !== "papers") return;
         const root = $("papers");
         const article = selectedId
           ? root?.querySelector(`.paper[data-paper-id="${CSS.escape(selectedId)}"]`)
@@ -40503,6 +40558,16 @@ INDEX_HTML = """<!doctype html>
       state.primaryKeyboardLayer = "root";
       syncPrimaryKeyboardLayer();
       return true;
+    }
+
+    function focusClickedPrimaryTab(event) {
+      const button = event.target.closest?.(".view-switch");
+      if (!button || !$("primaryViewSwitcher")?.contains(button)) return;
+      // Run before each tab's loader. Async Monitor restoration must already
+      // see the root layer, and the clicked tab must retain real DOM focus.
+      state.primaryKeyboardLayer = "root";
+      syncPrimaryKeyboardLayer({focus: false});
+      button.focus({preventScroll: true});
     }
 
     function leavePrimaryKeyboardRoot(options = {}) {
@@ -41224,6 +41289,7 @@ INDEX_HTML = """<!doctype html>
 
     function loaderStatusText(job) {
       if (!job?.status) return "Idle";
+      if (job.status === "completed" && job.result?.identity_conflicts?.length) return `Completed · ${job.result.identity_conflicts.length} identity mismatch(es); files kept`;
       const base = `${job.status}${job.stage ? ` · ${job.stage}` : ""}`;
       if (job.stage === "scan") {
         return `${base} · ${job.scan_files || 0} files · ${job.scan_dirs || 0} folders`;
@@ -41464,6 +41530,7 @@ INDEX_HTML = """<!doctype html>
       const selectedDoi = missingDoi[doiIndex] || null;
       return `
         <h3>Result Guide</h3>
+        ${result.identity_conflicts?.length ? `<h3>Files Kept Despite Identity Mismatches</h3><p>All listed files were kept in Paper Files. Existing paper metadata was preserved. Use the file menu to change ownership if needed.</p>${result.identity_conflicts.map((entry) => `<div class="loader-metric"><strong>${escapeHtml(entry.filename || entry.relative_path)}</strong><span>${escapeHtml(entry.relative_path || "")}<br>Detected DOI: ${escapeHtml(entry.incoming_doi || "(none)")}<br>Existing DOI: ${escapeHtml(entry.existing_doi || "(none)")}<br>${escapeHtml(entry.gewu_key || "")}</span></div>`).join("")}` : ""}
         ${loaderLocalCopyPlanMarkup(plan, result)}
         <div class="loader-metric"><strong>${result.created_papers || 0} created</strong><span>New shared paper/file records created in the database.</span></div>
         <div class="loader-metric"><strong>${result.library_items_created || 0} library items</strong><span>Folder shortcuts created or restored in Library, including already-known papers.</span></div>
@@ -41477,7 +41544,7 @@ INDEX_HTML = """<!doctype html>
         <div class="loader-metric"><strong>${result.reused_existing_files || 0} reused</strong><span>Already-copied files reused from Journal Monitor storage, so repeated imports do not copy them again.</span></div>
         <div class="loader-metric"><strong>${result.skipped || 0} skipped</strong><span>${result.skipped_system_metadata || 0} system metadata and ${result.mac_aliases_found || 0} macOS aliases. Normal papers are not deleted by this.</span></div>
         <div class="loader-metric"><strong>${result.missing_source_files || 0} missing</strong><span>Source paths that could not be read during import. These need checking in Finder.</span></div>
-        <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI duplicates and ${result.arxiv_duplicates || 0} arXiv duplicates were merged into existing paper records.</span></div>
+        <div class="loader-metric"><strong>${result.duplicate_paper_candidates || 0} duplicates</strong><span>${result.doi_duplicates || 0} DOI matches and ${result.arxiv_duplicates || 0} arXiv matches share paper records; distinct files are retained.</span></div>
         <h3 style="margin-top:12px;">PDFs Without DOI</h3>
         ${missingDoi.length ? `
           <div class="loader-missing-tools">
@@ -41622,7 +41689,7 @@ INDEX_HTML = """<!doctype html>
           <button type="button" data-action="sort-by-modified">Sort by Modified Time</button>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="recover-entry">Recover</button>
-          <button type="button" data-action="delete-recycle-all">Delete All</button>
+          <button type="button" data-action="delete-recycle-all">Empty Recycle</button>
           <button type="button" data-action="delete-entry">Delete</button>
           <input class="library-color-input" data-action="folder-color-picker" type="color" value="#4f46e5">
         </div>
@@ -41640,6 +41707,8 @@ INDEX_HTML = """<!doctype html>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="add-paper-resource">Add File</button>
           <button type="button" data-action="sync-paper-resources">Sync Versions</button>
+          <button type="button" data-action="move-paper-resource">Move to Another Paper…</button>
+          <button type="button" data-action="split-paper-resource">Create Paper from File…</button>
           <button type="button" data-action="delete-paper-resource">Delete from Paper Files</button>
         </div>
       `;
@@ -42045,6 +42114,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryFolderImport() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       const sourcePaths = Array.isArray(state.libraryImportSourcePaths) ? state.libraryImportSourcePaths.filter(Boolean) : [];
       const path = sourcePaths.length ? "" : ($("libraryImportPath")?.value || state.libraryImportPath || "").trim();
       if (!sourcePaths.length && !path) {
@@ -42096,6 +42167,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryMetadataRefresh() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = false;
@@ -42130,6 +42203,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function runLibraryIdentifierRecovery() {
+      state.libraryImportNotice = null;
+      renderLibraryActivityStatus();
       stopLibraryImportPolling();
       state.libraryImportBusy = true;
       state.libraryImportBackground = false;
@@ -42272,6 +42347,8 @@ INDEX_HTML = """<!doctype html>
       const result = job.result || {};
       if (status === "completed") {
         const total = Number(result.library_items_created || 0);
+        const conflicts = Array.isArray(result.identity_conflicts) ? result.identity_conflicts.length : 0;
+        if (conflicts) return `Loaded ${total} items into ${target}; ${conflicts} identity mismatch(es), files kept. See Details.`;
         return total
           ? `Loaded ${total} item${total === 1 ? "" : "s"} into ${target}.`
           : `Finished loading into ${target}.`;
@@ -42280,7 +42357,7 @@ INDEX_HTML = """<!doctype html>
         const message = job.error || (Array.isArray(result.errors) ? result.errors[0] : "") || "Unknown error";
         const count = Number(result.library_items_created || 0);
         const conflicts = Array.isArray(result.identity_conflicts) ? result.identity_conflicts.length : 0;
-        return `${count ? `Partial import: ${count} items loaded` : "Library load failed"} into ${target}. ${conflicts ? `${conflicts} identity conflict(s) need review.` : message}`;
+        return `${count ? `Partial import: ${count} items loaded` : "Library load failed"} into ${target}. ${conflicts ? `${conflicts} identity mismatch(es); files kept. ${message}` : message}`;
       }
       if (status === "cancelled") return `Library load cancelled for ${target}; ${Number(result.library_items_created || 0)} items loaded.`;
       if (status === "unavailable") return `Import status unavailable for ${target}. ${job.error || "Check Details before retrying."}`;
@@ -44913,7 +44990,7 @@ INDEX_HTML = """<!doctype html>
       const paperId = String(item?.paper_id || paper.paper_id || "");
       const snapshot = paperFilesSnapshot(paperId);
       if (!snapshot && paperId) loadPaperFiles(paperId).catch(() => {});
-      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+      const files = orderedLibraryPaperResources(paperId);
       const rows = files.length
         ? files.map((file) => {
               const name = file.display_name || String(file.local_path || "").split("/").pop() || "Attached File";
@@ -45596,7 +45673,7 @@ INDEX_HTML = """<!doctype html>
     function paperFilesPanelMarkup(paper) {
       const paperId = String(paper?.paper_id || "");
       const snapshot = paperFilesSnapshot(paperId);
-      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
+      const files = orderedLibraryPaperResources(paperId);
       const collapsed = !state.expandedPaperFiles.has(paperId);
       const defaultFile = files.find((file) => file.is_default) || null;
       const currentSummary = !snapshot
@@ -48326,7 +48403,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function orderedLibraryPaperResources(paperId) {
-      const files = Array.isArray(paperFilesSnapshot(paperId)?.files) ? paperFilesSnapshot(paperId).files : [];
+      // Renderers and keyboard/deletion navigation share this stable order.
+      // Default stays first; the remaining files retain their snapshot order.
+      const snapshot = paperFilesSnapshot(paperId);
+      const files = Array.isArray(snapshot?.files) ? snapshot.files : [];
       return [...files].sort((left, right) => Number(Boolean(right.is_default)) - Number(Boolean(left.is_default)));
     }
 
@@ -48618,6 +48698,12 @@ INDEX_HTML = """<!doctype html>
           downloadArxivPreprintVersions(paper, "all", syncButton);
         };
       }
+      for (const [action, createNew] of [["move-paper-resource", false], ["split-paper-resource", true]]) {
+        const button = menu.querySelector(`[data-action="${action}"]`);
+        if (!button) continue;
+        button.style.display = file?.exists ? "" : "none";
+        button.onclick = () => { hidePaperResourceContextMenu(); openPaperFileReassignment(paperId, file, createNew); };
+      }
       if (deleteButton) {
         deleteButton.style.display = file && !file.is_primary ? "" : "none";
         deleteButton.onclick = () => {
@@ -48631,6 +48717,98 @@ INDEX_HTML = """<!doctype html>
         menu.style.left = `${Math.max(6, Math.min(event.clientX, window.innerWidth - rect.width - 6))}px`;
         menu.style.top = `${Math.max(6, Math.min(event.clientY, window.innerHeight - rect.height - 6))}px`;
       });
+    }
+
+    function openPaperFileReassignment(paperId, file, createNew) {
+      document.getElementById("paperFileReassignBackdrop")?.remove();
+      const dialog = document.createElement("div");
+      dialog.id = "paperFileReassignBackdrop";
+      dialog.className = "settings-backdrop open";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "paperFileReassignTitle");
+      const name = file.display_name || "Attached File";
+      dialog.innerHTML = `<div class="settings-modal" style="width:min(600px,92vw);max-height:80vh;overflow:auto;padding:20px">
+        <h2 id="paperFileReassignTitle">${createNew ? "Create Paper from File" : "Move to Another Paper"}</h2>
+        <p style="overflow-wrap:anywhere">${escapeHtml(name)}</p>
+        <p>${createNew ? "Create a separate paper in the current folder. Its title is editable; no DOI will be guessed." : "Choose the paper that should contain this file."} The file will leave the current paper. Other files stay in place.</p>
+        <label for="paperFileReassignInput">${createNew ? "New paper title" : "Search title, DOI or Gewu Key"}</label>
+        <input id="paperFileReassignInput" style="width:100%;box-sizing:border-box;margin:8px 0" value="${escapeAttr(createNew ? name.replace(/\.[^.]+$/, "") : "")}">
+        <div id="paperFileReassignResults" style="max-height:240px;overflow:auto;display:grid;gap:6px"></div>
+        <p id="paperFileReassignStatus" role="status" style="overflow-wrap:anywhere"></p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
+          <button type="button" class="smallbtn" id="paperFileReassignCancel">Cancel</button>
+          <button type="button" class="smallbtn" id="paperFileReassignSave" ${createNew ? "" : "disabled"}>${createNew ? "Create Paper" : "Move File"}</button>
+        </div></div>`;
+      document.body.appendChild(dialog);
+      const input = dialog.querySelector("input");
+      const results = dialog.querySelector("#paperFileReassignResults");
+      const status = dialog.querySelector("#paperFileReassignStatus");
+      const save = dialog.querySelector("#paperFileReassignSave");
+      const cancel = dialog.querySelector("#paperFileReassignCancel");
+      let targetKey = "", sequence = 0, timer = 0, busy = false;
+      const close = () => { if (!busy) { sequence++; window.clearTimeout(timer); dialog.remove(); } };
+      cancel.onclick = close;
+      dialog.onclick = (event) => { if (event.target === dialog) close(); };
+      dialog.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } });
+      input.oninput = () => {
+        targetKey = ""; sequence++; const request = sequence;
+        save.disabled = !createNew || !input.value.trim();
+        results.innerHTML = ""; status.textContent = "";
+        window.clearTimeout(timer);
+        if (createNew || !input.value.trim()) return;
+        timer = window.setTimeout(async () => {
+          status.textContent = "Searching…";
+          try {
+            const response = await fetch(`/api/library/search?q=${encodeURIComponent(input.value.trim())}&limit=40`);
+            const data = await response.json();
+            if (request !== sequence || !dialog.isConnected) return;
+            if (!response.ok) throw new Error(data.error || "Could not search Library");
+            const seen = new Set();
+            for (const result of data.results || []) {
+              const paper = result.item?.paper;
+              if (!paper?.storage_key || paper.paper_id === paperId || seen.has(paper.storage_key)) continue;
+              seen.add(paper.storage_key);
+              const button = document.createElement("button");
+              button.type = "button"; button.className = "smallbtn";
+              button.style.cssText = "text-align:left;white-space:normal;overflow-wrap:anywhere";
+              button.textContent = `${paper.title || result.item.display_name} · ${paper.doi || paper.storage_key}`;
+              button.onclick = () => {
+                targetKey = paper.storage_key; save.disabled = false;
+                status.textContent = `Destination: ${paper.title || paper.storage_key} (${paper.storage_key})`;
+              };
+              results.appendChild(button);
+            }
+            status.textContent = seen.size ? "Select a destination." : "No matching paper in Library.";
+          } catch (error) { if (request === sequence) status.textContent = error.message; }
+        }, 250);
+      };
+      save.onclick = async () => {
+        if (busy || (!createNew && !targetKey) || (createNew && !input.value.trim())) return;
+        busy = true; save.disabled = true; cancel.disabled = true; input.disabled = true;
+        results.querySelectorAll("button").forEach((button) => button.disabled = true);
+        status.textContent = "Updating file ownership…";
+        try {
+          const response = await fetch("/api/paper-files/reassign", {method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paperId, resource_id: file.id,
+              folder_id: Number(state.libraryCurrentFolderId || state.libraryRootId || 1),
+              ...(createNew ? {new_title: input.value.trim()} : {target_key: targetKey})})});
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Could not reassign file");
+          applyPaperFilesPayloads(data.paper_files);
+          clearLibraryPaperResourceSelection({focusPaper: true});
+          if (state.libraryQuickLookOpen) closeLibraryQuickLook({restoreFocus: false});
+          await refreshMainLibrarySnapshot("file-reassigned");
+          busy = false; close();
+          updateLibraryActivityStatus(`File moved to ${data.reassignment.target_gewu_key}.`, {live: false, clear: false});
+        } catch (error) {
+          busy = false; save.disabled = false; cancel.disabled = false; input.disabled = false;
+          results.querySelectorAll("button").forEach((button) => button.disabled = false);
+          status.textContent = error.message;
+        }
+      };
+      focusDialogSurface(dialog);
+      input.focus();
     }
 
     function wireLibraryResourceInteractions(shell) {
@@ -49906,7 +50084,17 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function requestPaperPdfDownload(payload) {
+    const pendingPaperPdfDownloads = new Map();
+
+    function requestPaperPdfDownload(payload) {
+      const paperId = String(payload?.paper_id || "");
+      if (pendingPaperPdfDownloads.has(paperId)) return pendingPaperPdfDownloads.get(paperId);
+      const pending = performPaperPdfDownload(payload).finally(() => pendingPaperPdfDownloads.delete(paperId));
+      pendingPaperPdfDownloads.set(paperId, pending);
+      return pending;
+    }
+
+    async function performPaperPdfDownload(payload) {
       const res = await fetch("/api/download", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -50623,7 +50811,7 @@ INDEX_HTML = """<!doctype html>
         if ($("libraryNavBackdrop")?.classList.contains("open")) {
           $("libraryNavStatus").textContent = message;
         }
-        updateLibraryActivityStatus(message, {delay: 4600});
+        updateLibraryActivityStatus(message, {clear: false});
         console.error(error);
       }
     }
@@ -54092,6 +54280,7 @@ INDEX_HTML = """<!doctype html>
       const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
       article.className = `paper${reserveFigure ? " with-figure" : ""}${paper.late_arrival_unread ? " late-unread" : ""}${inLibrary ? " in-library" : ""}${selected ? " report-selected" : ""}`;
       article.dataset.paperId = paper.paper_id;
+      article._monitorPaper = paper;
       article.tabIndex = -1;
       article.setAttribute("role", "option");
       article.setAttribute("aria-selected", selected ? "true" : "false");
@@ -54163,7 +54352,7 @@ INDEX_HTML = """<!doctype html>
       });
       article.querySelector('[data-action="download"]').addEventListener("click", () => downloadReportPaper(article, paper.paper_id));
       const pdfButton = article.querySelector('[data-action="open-pdf"]');
-      if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, paper));
+      if (pdfButton) pdfButton.addEventListener("click", () => openPdf(article, monitorPaperForId(paper.paper_id) || paper));
       const analysisButton = article.querySelector('[data-action="view-analysis"]');
       if (analysisButton) analysisButton.addEventListener("click", () => viewAnalysis(article, paper.paper_id));
       const deletePdfButton = article.querySelector('[data-action="delete-pdf"]');
@@ -54180,6 +54369,7 @@ INDEX_HTML = """<!doctype html>
       } else if (reserveFigure && !paper.image_url) {
         queuePaperFigureHydration(paper.paper_id);
       }
+      syncMonitorPaperActions(article, paper);
       return article;
     }
 
@@ -54659,6 +54849,87 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function monitorPaperForId(paperId) {
+      return [state.papers, state.themePapers, state.authorMonitorPapers,
+        ...Object.values(state.reportCache).map(report => report?.papers),
+        ...Object.values(state.themePapersByDate)]
+        .filter(Array.isArray).flat().find(paper => paper.paper_id === paperId);
+    }
+
+    function setMonitorPaperOperation(paperId, kind, operation) {
+      const operations = state.monitorPaperOperations.get(paperId) || {};
+      if (operation) operations[kind] = operation;
+      else delete operations[kind];
+      if (Object.keys(operations).length) state.monitorPaperOperations.set(paperId, operations);
+      else state.monitorPaperOperations.delete(paperId);
+      refreshMonitorPaperActions(paperId);
+    }
+
+    function syncMonitorPaperActions(article, paper) {
+      if (!article || !paper) return;
+      const operations = state.monitorPaperOperations.get(paper.paper_id) || {};
+      const inLibrary = Boolean(paper.in_library || Number(paper.library_item_count || 0) > 0);
+      article.classList.toggle("in-library", inLibrary);
+      const library = article.querySelector('[data-action="add-library"]');
+      if (library) {
+        // Leave an unrelated open folder picker and its focus intact.
+        if (inLibrary && library.dataset.libraryState !== "show") setReportLibraryButtonShowState(library);
+        else if (!inLibrary && (library.dataset.libraryState !== "add" || (!operations.library?.busy && library.classList.contains("is-busy")))) setReportLibraryButtonAddState(library);
+        if (operations.library?.busy) {
+          library.disabled = true;
+          library.classList.add("is-busy");
+          library.textContent = "Adding...";
+        }
+      }
+      const download = article.querySelector('[data-action="download"]');
+      if (download) download.disabled = Boolean(operations.download?.busy);
+      const actions = article.querySelector(".actions");
+      if (actions && paper.merged_pdf_path) {
+        for (const [action, label, title] of [["open-pdf", "PDF", "Open merged PDF in Preview"], ["delete-pdf", "Delete PDF", "Delete local PDF and reset download status"]]) {
+          if (article.querySelector(`[data-action="${action}"]`)) continue;
+          const button = document.createElement("button");
+          button.className = action === "delete-pdf" ? "action danger" : "action";
+          button.dataset.action = action;
+          button.textContent = label;
+          button.title = title;
+          button.addEventListener("click", () => action === "open-pdf"
+            ? openPdf(article, monitorPaperForId(paper.paper_id) || paper)
+            : deletePaperAsset(article, paper.paper_id, "delete-pdf"));
+          actions.insertBefore(button, article.querySelector('[data-role="status"]'));
+        }
+      }
+      const deletion = article.querySelector('[data-action="delete-pdf"]');
+      if (deletion) deletion.disabled = Boolean(operations.download?.busy);
+      const status = article.querySelector('[data-role="status"]');
+      if (status) {
+        status.textContent = [operations.download?.busy ? "Downloading..." : operations.download?.error,
+          operations.library?.error].filter(Boolean).join(" · ");
+        status.className = operations.download?.error || operations.library?.error ? "status err" : "status";
+      }
+      // Keep the retained monitor DOM cache valid without replacing its cards.
+      const fields = ["merged_pdf_path", "download_status", "in_library", "library_item_count"];
+      article._monitorPaper = {...(article._monitorPaper || paper)};
+      fields.forEach(key => { article._monitorPaper[key] = paper[key]; });
+    }
+
+    function refreshMonitorPaperActions(paperId) {
+      const paper = monitorPaperForId(paperId);
+      if (!paper) return;
+      const root = $("papers");
+      const surfaces = [[root, root?.dataset.monitorMode],
+        ...Object.entries(state.monitorPaperDomCache).map(([mode, cache]) => [cache?.fragment, mode])];
+      for (const [surface, mode] of surfaces) {
+        if (!surface) continue;
+        surface.querySelectorAll(`.paper[data-paper-id="${CSS.escape(paperId)}"]`)
+          .forEach(article => syncMonitorPaperActions(article, paper));
+        const cards = [...surface.querySelectorAll(".paper")];
+        if (!cards.length) continue;
+        const signature = monitorPaperSignature(cards.map(card => card._monitorPaper), mode);
+        if (surface === root) root.dataset.monitorSignature = signature;
+        else state.monitorPaperDomCache[mode].signature = signature;
+      }
+    }
+
     function captureMonitorViewport(article) {
       const mode = state.mode;
       const root = $("papers");
@@ -54699,7 +54970,7 @@ INDEX_HTML = """<!doctype html>
       if (state.mode === "library") renderActiveLibraryTab();
       else if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
       else if (state.mode === "theme") renderThemeMonitor();
-      else renderReport();
+      else if (state.mode === "report") renderReport();
       restoreMonitorViewport(options.monitorViewport);
     }
 
@@ -54732,20 +55003,19 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function downloadReportPaper(article, paperId) {
-      const buttons = article.querySelectorAll("button");
-      const status = article.querySelector('[data-role="status"]');
-      buttons.forEach((button) => button.disabled = true);
-      status.textContent = "Downloading...";
-      status.className = "status";
+      if (state.monitorPaperOperations.get(paperId)?.download?.busy) return;
+      setMonitorPaperOperation(paperId, "download", {busy: true});
       try {
         const data = await requestPaperPdfDownload({paper_id: paperId});
-        const monitorViewport = captureMonitorViewport(article);
         updatePaperState(paperId, data.paper);
-        renderCurrentPaperSurface({monitorViewport});
+        setMonitorPaperOperation(paperId, "download", null);
       } catch (error) {
-        status.textContent = error.message;
-        status.className = "status err";
-        buttons.forEach((button) => button.disabled = false);
+        setMonitorPaperOperation(paperId, "download", {error: error.message});
+      } finally {
+        // A Library view opened mid-download may have cached an empty file list.
+        // Invalidate it without redrawing the user's current workspace.
+        delete state.paperFilesByPaperId?.[paperId];
+        delete state.paperFileRequests?.[paperId];
       }
     }
 
@@ -57553,6 +57823,7 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    $("primaryViewSwitcher").addEventListener("click", focusClickedPrimaryTab, true);
     $("reportMode").addEventListener("click", () => openJournalMonitor().catch((error) => {
       showMonitorStatusMessage(error.message);
     }));

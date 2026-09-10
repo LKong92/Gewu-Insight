@@ -316,6 +316,8 @@ def empty_result(
         "reused_existing_files": 0,
         "resources_or_attachments_to_import": 0,
         "skipped": 0,
+        "processed_files": 0,
+        "identity_conflicts": [],
         "skipped_system_metadata": 0,
         "mac_aliases_found": 0,
         "missing_source_files": 0,
@@ -416,33 +418,9 @@ def evaluate_files(
                 result["warnings"].append(f"Skipping PDF without usable identity: {source_path or record['filename']}")
                 continue
 
-            doi = record["doi"]
-            arxiv_id = record["arxiv_id"]
-            path_key = source_fingerprint(record)
-            duplicate = False
-            if doi and doi in seen_dois:
-                result["doi_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_dois"], {"doi": doi, **compact_record(record)}, 200)
-            if arxiv_id and arxiv_id in seen_arxiv_ids:
-                result["arxiv_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_arxiv_ids"], {"arxiv_id": arxiv_id, **compact_record(record)}, 200)
-            if path_key and path_key in seen_paths:
-                result["path_duplicates"] += 1
-                duplicate = True
-                append_limited(result["duplicate_paths"], {"path_key": path_key, **compact_record(record)}, 200)
-            if identity in seen_identities or duplicate:
-                result["duplicate_paper_candidates"] += 1
+            if is_duplicate_record(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths, result):
                 continue
-
-            seen_identities.add(identity)
-            if doi:
-                seen_dois.add(doi)
-            if arxiv_id:
-                seen_arxiv_ids.add(arxiv_id)
-            if path_key:
-                seen_paths.add(path_key)
+            remember_record_identity(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths)
 
             matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
             plan = paper_plan(record, paper_id=matched_paper_id or new_paper_id(record))
@@ -452,6 +430,7 @@ def evaluate_files(
             else:
                 result["created_papers"] += 1
                 append_limited(result["papers_to_create"], plan, 500)
+                add_existing_index(existing, record, plan["paper_id"])
             if source_path and source_exists:
                 result["pdf_attachments_to_import"] += 1
                 result["resources_or_attachments_to_import"] += 1
@@ -505,6 +484,7 @@ def execute_import(
 
     try:
         for index, raw in enumerate(files):
+            result["processed_files"] = index + 1
             emit_progress(progress_callback, stage="import", message="", current=index + 1, total=total)
             if index == 0 or (index + 1) % 100 == 0 or index + 1 == total:
                 emit_progress(
@@ -554,8 +534,9 @@ def execute_import(
                     continue
                 remember_record_identity(record, identity, seen_identities, seen_dois, seen_arxiv_ids, seen_paths)
 
-                matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+                matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
@@ -568,13 +549,14 @@ def execute_import(
                     if stored_path:
                         result["pdf_attachments_to_import"] += 1
                         result["resources_or_attachments_to_import"] += 1
-                        attach_imported_file_to_existing_paper(
-                            storage,
-                            record,
-                            paper_id=paper_id,
-                            stored_path=stored_path,
-                            pdf_like=True,
-                        )
+                        if not conflict:
+                            attach_imported_file_to_existing_paper(
+                                storage,
+                                record,
+                                paper_id=paper_id,
+                                stored_path=stored_path,
+                                pdf_like=True,
+                            )
                         upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                     if result["preserve_folders"]:
                         folder_id = ensure_folder_path(storage, record["parent_relative_path"], folder_cache)
@@ -599,10 +581,16 @@ def execute_import(
                     result["pdf_attachments_to_import"] += 1
                     result["resources_or_attachments_to_import"] += 1
 
-                upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                result["created_papers"] += 1
-                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                queue_metadata_refresh_candidate(result, record, paper_id)
+                accepted = upsert_imported_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
+                if accepted:
+                    result["created_papers"] += 1
+                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                else:
+                    # Another import may have registered this identity after our lookup.
+                    note_import_identity_conflict(storage, record, paper_id, result, progress_callback)
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
                 add_existing_index(existing, record, paper_id)
                 if stored_path:
                     upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
@@ -621,8 +609,9 @@ def execute_import(
                 continue
 
             if import_as == "resource":
-                matched_paper_id = existing_paper_id(record, existing, dedupe_keys)
+                matched_paper_id = matched_import_paper(storage, record, existing, dedupe_keys)
                 paper_id = matched_paper_id or new_paper_id(record)
+                conflict = note_import_identity_conflict(storage, record, paper_id, result, progress_callback) if matched_paper_id else False
                 if matched_paper_id:
                     result["existing_papers"] += 1
                     append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
@@ -635,13 +624,14 @@ def execute_import(
                     if stored_path:
                         result["created_resources"] += 1
                         result["resources_or_attachments_to_import"] += 1
-                        attach_imported_file_to_existing_paper(
-                            storage,
-                            record,
-                            paper_id=paper_id,
-                            stored_path=stored_path,
-                            pdf_like=False,
-                        )
+                        if not conflict:
+                            attach_imported_file_to_existing_paper(
+                                storage,
+                                record,
+                                paper_id=paper_id,
+                                stored_path=stored_path,
+                                pdf_like=False,
+                            )
                         upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                         append_limited(result["resources_to_import"], resource_plan(record), 500)
                     if result["preserve_folders"]:
@@ -666,10 +656,16 @@ def execute_import(
                 if stored_path:
                     result["created_resources"] += 1
                     result["resources_or_attachments_to_import"] += 1
-                upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
-                result["created_papers"] += 1
-                append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
-                queue_metadata_refresh_candidate(result, record, paper_id)
+                accepted = upsert_imported_file_paper(storage, record, paper_id=paper_id, batch_id=batch_id, stored_path=stored_path)
+                if accepted:
+                    result["created_papers"] += 1
+                    append_limited(result["papers_to_create"], paper_plan(record, paper_id=paper_id), 500)
+                    queue_metadata_refresh_candidate(result, record, paper_id)
+                else:
+                    # Another import may have registered this identity after our lookup.
+                    note_import_identity_conflict(storage, record, paper_id, result, progress_callback)
+                    result["existing_papers"] += 1
+                    append_limited(result["papers_existing"], paper_plan(record, paper_id=paper_id), 500)
                 add_existing_index(existing, record, paper_id)
                 upsert_resource(storage, record, batch_id=batch_id, paper_id=paper_id, stored_path=stored_path)
                 append_limited(result["resources_to_import"], resource_plan(record), 500)
@@ -695,9 +691,52 @@ def execute_import(
         finish_import_batch(storage, batch_id=batch_id, result=result, status="cancelled")
         raise
     except Exception as exc:
-        result["errors"].append(f"Import failed: {exc}")
+        label = (record.get("relative_path") or record.get("filename")) if "record" in locals() else ""
+        result["errors"].append(f"Import failed{f' at {label}' if label else ''}: {exc}")
         finish_import_batch(storage, batch_id=batch_id, result=result, status="failed")
-        emit_progress(progress_callback, stage="import", message=f"Import failed: {exc}", current=total, total=total)
+        emit_progress(progress_callback, stage="import", message=result["errors"][-1], current=result["processed_files"], total=total)
+
+
+def matched_import_paper(storage, record, existing, dedupe_keys):
+    # An explicit file reassignment wins over later DOI-based imports.
+    moved = storage.conn.execute(
+        "SELECT paper_id FROM resources WHERE source_path=? AND size_bytes=? AND kind=? AND status='reassigned'",
+        (record["source_path"], record["size_bytes"], record["kind"]),
+    ).fetchone()
+    if moved and moved["paper_id"]:
+        return str(moved["paper_id"])
+    matched = existing_paper_id(record, existing, dedupe_keys)
+    if matched:
+        return matched
+    candidate = new_paper_id(record)
+    return candidate if storage.get_paper(candidate) else ""
+
+
+def note_import_identity_conflict(storage, record, paper_id, result, progress_callback):
+    paper = storage.get_paper(paper_id) or {}
+    incoming = {"paper_id": paper_id, "doi": record["doi"],
+                "title": record["title"] or record["filename"], "authors": record["authors"],
+                "journal": "Imported Library" if is_paper_candidate(record) else "Imported File", "source": "inventory",
+                "url": f"https://arxiv.org/abs/{record['arxiv_id']}" if record["arxiv_id"] else ""}
+    reasons = storage.paper_identity_conflict_reasons(paper, incoming)
+    if not reasons:
+        return False
+    conflict_id = storage.record_paper_identity_conflict(paper, incoming, reasons)
+    storage.conn.execute("UPDATE paper_identity_conflicts SET status='attached' WHERE id=?", (conflict_id,))
+    storage.conn.commit()
+    entry = {"conflict_id": conflict_id, "filename": record["filename"],
+             "relative_path": record["relative_path"], "incoming_doi": record["doi"],
+             "existing_doi": paper.get("doi") or "", "gewu_key": paper.get("storage_key") or "",
+             "reasons": reasons}
+    result["identity_conflicts"].append(entry)
+    message = (f"Identity mismatch for {record['relative_path'] or record['filename']}: "
+               f"detected DOI {record['doi'] or '(none)'}, existing DOI {paper.get('doi') or '(none)'}. "
+               "Keeping the file in Paper Files without changing the paper metadata.")
+    result["warnings"].append(message)
+    record["identity_conflict_detail"] = message
+    emit_progress(progress_callback, stage="import", message=message,
+                  current=result["processed_files"], total=result["total_files"])
+    return True
 
 
 def is_duplicate_record(
@@ -727,7 +766,7 @@ def is_duplicate_record(
         append_limited(result["duplicate_paths"], {"path_key": path_key, **compact_record(record)}, 200)
     if identity in seen_identities or duplicate:
         result["duplicate_paper_candidates"] += 1
-        return True
+        return bool(path_key and path_key in seen_paths)
     return False
 
 
@@ -1003,10 +1042,12 @@ def split_pdf_authors(value: str) -> list[str]:
 
 def doi_from_text(value: str) -> str:
     text = re.sub(r"(10\.\d{4,9}/)\s+", r"\1", value or "", flags=re.I)
-    match = DOI_PATTERN.search(text)
-    if not match:
-        return ""
-    return normalize_doi(match.group(0).rstrip(".,;)"))
+    text = re.sub(r"(10\.1073/pnas\.)[ \t]*\r?\n[ \t]*(?=\d)", r"\1", text, flags=re.I)
+    for match in DOI_PATTERN.finditer(text):
+        doi = normalize_doi(match.group(0).rstrip(".,;)"))
+        if doi != "10.1073/pnas":
+            return doi
+    return ""
 
 
 def doi_from_filename(filename: str) -> str:
@@ -1015,6 +1056,9 @@ def doi_from_filename(filename: str) -> str:
     if doi:
         return doi
     normalized = filename.lower()
+    pnas = re.search(r"\bpnas\.(\d{10})(?!\d)", normalized)
+    if pnas:
+        return f"10.1073/pnas.{pnas.group(1)}"
     physrev = re.search(r"(revmodphys|physrev[a-z]*|prxquantum)\.?\s*(\d+)\.([0-9a-z]+)", normalized, flags=re.I)
     if physrev:
         journal = physrev.group(1).replace("physrevlett", "physrevlett")
@@ -1078,7 +1122,7 @@ def upsert_imported_paper(
     paper_id: str,
     batch_id: str,
     stored_path: str,
-) -> None:
+) -> bool:
     title = "" if is_placeholder_publication_title(record["title"]) else record["title"]
     title = title or record["filename"] or "(Untitled imported PDF)"
     journal = "arXiv" if record["arxiv_id"] and not record["doi"] else "Imported Library"
@@ -1109,7 +1153,7 @@ def upsert_imported_paper(
         }
     )
     if not accepted:
-        raise ValueError("Imported paper identity conflict is pending review")
+        return False
     storage.conn.execute(
         """
         UPDATE papers
@@ -1160,6 +1204,7 @@ def upsert_imported_paper(
         ),
     )
     storage.conn.commit()
+    return True
 
 
 def upsert_imported_file_paper(
@@ -1169,7 +1214,7 @@ def upsert_imported_file_paper(
     paper_id: str,
     batch_id: str,
     stored_path: str,
-) -> None:
+) -> bool:
     title = record["filename"] or record["title"] or "(Untitled imported file)"
     raw = {
         "import": import_metadata(record, batch_id=batch_id, stored_path=stored_path),
@@ -1200,7 +1245,7 @@ def upsert_imported_file_paper(
         }
     )
     if not accepted:
-        raise ValueError("Imported file identity conflict is pending review")
+        return False
     storage.conn.execute(
         """
         UPDATE papers
@@ -1245,6 +1290,7 @@ def upsert_imported_file_paper(
         ),
     )
     storage.conn.commit()
+    return True
 
 
 def attach_imported_file_to_existing_paper(
@@ -1362,8 +1408,8 @@ def upsert_resource(
           import_as, import_batch_id, size_bytes, modified_at, parse_status,
           parse_error, page_count, sha256, content_sha256, annotation_count,
           is_annotated, file_type, file_source, source_detail, annotation_state,
-          status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, created_at, updated_at, added_via
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_path, size_bytes, kind) DO UPDATE SET
           paper_id = COALESCE(excluded.paper_id, resources.paper_id),
           stored_path = COALESCE(NULLIF(excluded.stored_path, ''), resources.stored_path),
@@ -1372,7 +1418,7 @@ def upsert_resource(
           original_filename = excluded.original_filename,
           mime_type = excluded.mime_type,
           import_as = excluded.import_as,
-          import_batch_id = excluded.import_batch_id,
+          import_batch_id = CASE WHEN resources.status = 'reassigned' THEN resources.import_batch_id ELSE excluded.import_batch_id END,
           modified_at = excluded.modified_at,
           parse_status = excluded.parse_status,
           parse_error = excluded.parse_error,
@@ -1397,7 +1443,8 @@ def upsert_resource(
             ELSE resources.file_source
           END,
           source_detail = COALESCE(NULLIF(resources.source_detail, ''), excluded.source_detail),
-          status = excluded.status,
+          status = CASE WHEN resources.status = 'reassigned' THEN resources.status ELSE excluded.status END,
+          added_via = CASE WHEN resources.status = 'reassigned' THEN resources.added_via ELSE COALESCE(resources.added_via, excluded.added_via) END,
           updated_at = excluded.updated_at
         """,
         (
@@ -1422,11 +1469,12 @@ def upsert_resource(
             1 if fingerprint and fingerprint.is_annotated else 0,
             file_type,
             "user_import",
-            "inventory",
+            record.get("identity_conflict_detail") or "inventory",
             annotation_state,
             "imported" if stored_path else "missing_source",
             timestamp,
             timestamp,
+            "inventory_conflict" if record.get("identity_conflict_detail") else "inventory",
         ),
     )
     storage.conn.commit()

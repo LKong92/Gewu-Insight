@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import shutil
+import subprocess
 from pathlib import Path
 
 from paper_monitor.ui_server import INDEX_HTML
@@ -10,6 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PaperFilesUiTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is needed for the real JavaScript behavior probe')
+    def test_visible_file_order_matches_keyboard_and_adjacent_deletion(self):
+        result = subprocess.run(
+            ['node', str(ROOT / 'tests/paper_files_order_probe.cjs')],
+            input=INDEX_HTML, text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_non_pdf_quick_look_uses_the_selected_engine_and_keeps_browser_fallback(self) -> None:
         quicklook = INDEX_HTML.split("function nativeQuickLookBridgeAvailable", 1)[1].split(
             "async function openNativeTarget", 1

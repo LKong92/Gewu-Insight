@@ -59,6 +59,7 @@ def normalize_snapshot(payload: dict) -> dict:
     if payload.get("is_pdf") is True and url not in candidates:
         candidates.insert(0, url)
     return {"url": url, "metadata": cleaned, "pdf_urls": candidates[:8], "is_pdf": payload.get("is_pdf") is True,
+            "origin_library_item_id": int(payload.get("origin_library_item_id") or 0),
             "origin_paper_id": clean_text(str(payload.get("origin_paper_id") or ""))[:512],
             "tab_id": clean_text(str(payload.get("tab_id") or ""))[:100],
             "snapshot_id": clean_text(str(payload.get("snapshot_id") or ""))[:100],
@@ -346,11 +347,12 @@ class BrowserCaptureService:
                            "date": p.get("publication_date") or "", "gewu_key": p.get("storage_key") or storage.storage_key_for_paper_id(p["paper_id"]),
                            "existing": bool(existing)}
             folders = self.folders(storage)
+            destination = self.destination(capture, storage, capture.paper["paper_id"] if capture.paper else "", folders)
             suggested_type, type_reason = self.suggested_file_type(capture)
             return {"token": capture.token, "upload_token": capture.upload_token, "snapshot": capture.snapshot, "paper": summary,
                     "identifier": value, "suggested_title": title, "pdf_ready": capture.pdf_ready, "pdf_name": capture.pdf_name,
                     "origin": {"title": origin["title"], "gewu_key": origin.get("storage_key")} if origin else None,
-                    "conflict": capture.conflict, "warning": warning, "folders": folders,
+                    "conflict": capture.conflict, "warning": warning, "folders": folders, "destination": destination,
                     "suggested_file_type": suggested_type, "file_type_reason": type_reason,
                     "can_save": bool(summary) and not capture.conflict}
 
@@ -377,6 +379,36 @@ class BrowserCaptureService:
                 walk(int(node["id"]), "", set())
         return result
 
+    @staticmethod
+    def destination(capture, storage, paper_id, folders, payload=None):
+        """Reuse an active placement unless the user confirms another folder.
+
+        The source selection is only a location preference for this exact
+        canonical paper. It cannot choose the article or resurrect Recycle.
+        """
+        payload = payload or {}
+        active = {int(folder["id"]) for folder in folders}
+        requested = int(payload.get("folder_id") or 0)
+        explicit = payload.get("folder_selection_explicit") is True
+        if not explicit:
+            items = [dict(row) for row in storage.conn.execute(
+                "SELECT * FROM library_items WHERE paper_id=? ORDER BY id", (paper_id,)
+            ) if int(row["folder_id"]) in active]
+            if items:
+                preferred = int(capture.snapshot.get("origin_library_item_id") or 0)
+                item = next((item for item in items if int(item["id"]) == preferred), items[0])
+                return {"folder_id": int(item["folder_id"]), "item_id": int(item["id"]), "reused": True}
+            # Review is read-only, including a fresh database where unsorted
+            # has not been created yet. Save creates it only when needed.
+            unsorted = storage.conn.execute(
+                "SELECT id FROM library_folders WHERE parent_id=1 AND name='unsorted'"
+            ).fetchone()
+            folder_id = int(unsorted["id"]) if unsorted and int(unsorted["id"]) in active else None
+            return {"folder_id": folder_id, "item_id": None, "reused": False, "title": "Library / unsorted"}
+        if requested not in active:
+            raise ValueError("Choose an active Library folder.")
+        return {"folder_id": requested, "item_id": None, "reused": False}
+
     def save(self, capture: Capture, storage, payload: dict) -> dict:
         from . import ui_server as ui
         with capture.lock:
@@ -384,9 +416,10 @@ class BrowserCaptureService:
                 return capture.result
             if not capture.paper or capture.conflict:
                 raise ValueError(capture.conflict or "Identify and review the article before saving.")
-            folder_id = int(payload.get("folder_id") or 1)
-            if folder_id not in {n["id"] for n in self.folders(storage)}:
-                raise ValueError("Choose an active Library folder.")
+            folders = self.folders(storage)
+            # Validate before any new paper write; choose again after the
+            # canonical lookup so a concurrent save's placement is reused.
+            self.destination(capture, storage, capture.paper["paper_id"], folders, payload)
             include_pdf = payload.get("include_pdf") is True
             if include_pdf and not capture.pdf_ready:
                 raise ValueError("The PDF has not been received. Retry, choose a local PDF, or save the article only.")
@@ -405,7 +438,10 @@ class BrowserCaptureService:
             elif not storage.upsert_paper(paper):
                 raise ValueError("The article identity conflicts with an existing record.")
             paper_id = paper["paper_id"]
-            item = storage.add_library_item(paper_id=paper_id, folder_id=folder_id)
+            destination = self.destination(capture, storage, paper_id, folders, payload)
+            folder_id = destination["folder_id"] or int(storage.ensure_library_folder(parent_id=1, name="unsorted")["id"])
+            item = (storage.get_library_item(destination["item_id"]) if destination["reused"]
+                    else storage.add_library_item(paper_id=paper_id, folder_id=folder_id))
             source = persistent_url(capture.snapshot["url"])
             if source:
                 storage.record_paper_source_observation(paper_id, source_kind="browser", source_name=urlsplit(source).hostname or "browser", source_key=source)

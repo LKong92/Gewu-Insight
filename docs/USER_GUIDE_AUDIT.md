@@ -1,5 +1,19 @@
 # User Guide audit — September 6, 2026
 
+## September 10 file order, capture destination and tab focus
+
+- Document Default-first file display with matching arrow navigation; Browser reuse of existing active placements, unsorted for first Library placement and explicit folder confirmation for another location; clicking a top tab restores its existing keyboard focus style.
+- Preserve 103 PDF pages, all 32 original-App screenshots and continuous Product Identity chapters on pages 91–93. Revised pages 12, 44 and 69 were rendered and visually checked; page 69 was checked again after restoring the explicit duplicate-source guarantee.
+- Validation: 78 focused file/capture checks passed, as did the Browser capture interface and six-tab delayed-focus DOM probes using temporary Chrome profiles. The full 897-test run passed 896 tests and caught one missing Guide phrase about preserving duplicate source information. That phrase was restored; all 26 Guide/audit checks passed on the final text. Six PDF structure checks, Python/JavaScript syntax and diff checks passed. No final full-suite rerun is claimed.
+- Original App restarted with user authorization on September 10 at 22:15:36 (App 10462, sole service 10464). Health, signed staged/installed bundle, served file ordering/focus functions, Browser JavaScript and HTML/PDF guides were verified. No actual Browser capture or historical-placement cleanup was performed against research data; no commit/push. Evidence and pre-install App/source backups: `/private/tmp/gewu-file-order-capture-qa/`.
+
+## September 10 import recovery follow-up
+
+- Document shared Finder-drop/Folder Loader conflict handling, retained PDFs and target-folder placements, persistent partial-failure status and current-job Details.
+- Add Paper Files instructions for Move to Another Paper and Create Paper from File, preserving file identity and the read-only/append-only MCP boundary.
+- Keep all 32 original-App screenshots and the 103-page PDF. Revised pages 38, 41 and 49 plus continuous Identity pages 91–93 were rendered and reviewed. HTML checks passed at 1440, 960 and 520 pixels; six PDF structure functions passed through a direct runner (pytest is unavailable).
+- Product validation: 862 tests passed before the final Default-fallback refinement, followed by focused checks. The original App was rebuilt, signed and its bundled PDF matched the generated source. After Mac unlock, normal original-App relaunch and replacement of the stale backend completed. The new single service (PID 55855) is healthy; both new file commands were verified in the native UI, and the imported folder is visible. No real import was rerun and no direct research-data repair was performed.
+
 ## September 10 original-file MCP delivery
 
 - Document `get_paper_file`: authorized original bytes and metadata, read-only client-local temporary copies, file/session limits, client-owned PDF/OCR processing, and reloading the local MCP connection. Distinguish full-file delivery from the ten-page `read_paper` text limit.
@@ -125,7 +139,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Attachments](../paper_monitor/user_guide.html#attachments) | Retain import-first/classify-later, independent metadata and add-file flow; resource/ingress tests. |
 | [Download and Sync](../paper_monitor/user_guide.html#download-sync) | Retain arXiv revisions, PDF validation, atomic saves and duplicate/annotation boundaries; PDF ingress/fingerprint tests. |
 | [Standalone File Adoption](../paper_monitor/user_guide.html#drag-attach) | Remove retired Image/Data/Code role choices; use Other/Supplementary material. Adoption rollback tests. |
-| [Delete and Recover](../paper_monitor/user_guide.html#recycle) | Retain reference-aware Recycle and macOS Trash behavior; file-operation and resource tests. |
+| [Delete and Recover](../paper_monitor/user_guide.html#recycle) | Empty Recycle is limited to the root/its blank space; whole-folder Trash moves include disk-only remnants. Last-reference, shared-file preservation, rollback, API/menu tests and native Trash checks cover the behavior. |
 | [Folder Loader](../paper_monitor/user_guide.html#folder-loader) | Qualify Command-L outside Browser; retain source, metadata modes and resumable/logged import. Inventory importer tests. |
 | [Loader Maintenance](../paper_monitor/user_guide.html#loader-maintenance) | Retain refresh/identifier retry and stop/log semantics; Loader handlers and importer tests. |
 | [Desktop Copy](../paper_monitor/user_guide.html#desktop-copy) | Retain real-file export and verified manifest; desktop-copy/file-operation tests. |

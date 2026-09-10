@@ -3331,6 +3331,7 @@ class Storage:
             resource
             for resource in resources
             if resource.get("exists")
+            and (resource.get("added_via") != "inventory_conflict" or resource.get("file_type_override"))
             and normalize_paper_file_type(resource.get("file_type"))
             in AUTOMATIC_DEFAULT_FILE_TYPE_RANK
         ]
