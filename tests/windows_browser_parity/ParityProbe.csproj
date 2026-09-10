@@ -14,6 +14,9 @@
     <Compile Include="ParityProbe.cs" />
     <Compile Include="NavigationProbe.cs" />
     <Compile Include="DownloadProbe.cs" />
+    <Compile Include="PublisherProbe.cs" />
+    <Compile Include="LoaderCacheProbe.cs" />
+    <Compile Include="PublisherRoutesProbe.cs" />
     <Content Include="../../windows/GewuInsight.ico" Link="GewuInsight.ico" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="../../windows/workspace.js" LogicalName="GewuInsight.Windows.workspace.js" />
     <EmbeddedResource Include="../../windows/pdf-preview.js" LogicalName="GewuInsight.Windows.pdf-preview.js" />

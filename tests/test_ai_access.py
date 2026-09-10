@@ -9,11 +9,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 from paper_monitor import ai_service, ui_server
 from paper_monitor.ai_store import APIError, create_connection
 from paper_monitor.local_access import WorkspaceAccess
@@ -127,10 +128,15 @@ class AIAccessTests(unittest.TestCase):
         endpoint.write_text(f'http://127.0.0.1:{self.server.server_port}', encoding='utf-8')
         with patch.dict(os.environ, {'GEWU_API_URL_FILE': str(endpoint), 'GEWU_API_URL': 'http://127.0.0.1:1'}):
             client = GewuClient(token=self.token)
+        self.addCleanup(client.close)
         self.assertIn('files:read', client.request('capabilities')['scopes'])
+        delivered = client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(Path(delivered['delivery']['local_path']).read_bytes(), self.pdf_bytes)
         endpoint.write_text('https://example.com', encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'loopback'):
             client.request('capabilities')
+        with self.assertRaisesRegex(ValueError, 'loopback'):
+            client.get_paper_file({'gewu_key': self.key})
         endpoint.unlink()
         with self.assertRaisesRegex(ValueError, 'Start Gewu'):
             client.request('capabilities')
@@ -217,6 +223,12 @@ class AIAccessTests(unittest.TestCase):
         text = Path(resource['stored_path']).read_text(encoding='utf-8')
         self.assertIn(self.key, text); self.assertIn('Fixture assistant', text); self.assertIn(args['markdown'], text)
         self.assertEqual(resource['added_via'], 'ai_analysis')
+        for field, value in {'file_type': 'other', 'file_role': 'note', 'file_source': 'other',
+                             'annotation_state': 'unannotated', 'source_detail': 'AI analysis · Fixture assistant',
+                             'kind': 'md'}.items():
+            self.assertEqual(resource[field], value, field)
+            self.assertEqual(result['file'][field], value, field)
+        self.assertEqual(result['file']['mime_type'], 'text/markdown')
         self.assertEqual(self.call('save_analysis', args)[1]['file']['file_id'], file_id)
         reopened = Storage(self.path)
         self.assertEqual(ai_service.execute(reopened, 'Bearer ' + self.token, 'save_analysis', args)['file']['file_id'], file_id)
@@ -287,11 +299,230 @@ class AIAccessTests(unittest.TestCase):
         results = [json.loads(line) for line in proc.stdout.splitlines()]
         self.assertEqual(len(results), 4)
         self.assertEqual(results[0]['result']['protocolVersion'], '2025-11-25')
-        self.assertEqual(len(results[1]['result']['tools']), 4)
+        self.assertEqual(len(results[1]['result']['tools']), 5)
         self.assertFalse(results[2]['result']['isError']); self.assertTrue(results[3]['result']['isError'])
         self.assertNotIn(self.token, proc.stdout + proc.stderr)
         for bad in ('https://example.org', 'http://127.0.0.1:8765/evil', 'http://user:pass@localhost:8765'):
             with self.assertRaises(ValueError): GewuClient(bad, self.token)
+
+    def file_client(self, token=None):
+        client = GewuClient(f'http://127.0.0.1:{self.server.server_port}', token or self.token)
+        self.addCleanup(client.close)
+        return client
+
+    def test_original_delivery_is_read_only_complete_and_client_readable(self):
+        client = self.file_client()
+        before_paper = self.storage.get_paper('one')
+        before_files = [dict(r) for r in self.storage.conn.execute('SELECT * FROM resources ORDER BY id')]
+        with patch.object(ai_service.subprocess, 'run', side_effect=AssertionError('No PDF processing in Gewu')):
+            result = client.get_paper_file({'gewu_key': self.key})
+        local = Path(result['delivery']['local_path'])
+        self.assertEqual(local.read_bytes(), self.pdf_bytes)
+        self.assertEqual(len(PdfReader(local).pages), 3)  # Processing happens in the receiving client.
+        self.assertEqual(result['sha256'], hashlib.sha256(local.read_bytes()).hexdigest())
+        self.assertEqual(result['file']['file_id'], self.pdf['id'])
+        self.assertEqual(result['paper']['title'], 'Quantum one')
+        self.assertEqual(result['paper']['journal'], 'Fixture Journal')
+        self.assertIn('authors', result['paper']); self.assertIn('doi', result['paper'])
+        self.assertNotEqual(local, Path(before_paper['main_pdf_path']))
+        self.assertEqual(local.stat().st_mode & 0o222, 0)
+        if sys.platform == 'win32':
+            import win32security
+            for path in (local.parent, local):
+                descriptor = win32security.GetNamedSecurityInfo(str(path), win32security.SE_FILE_OBJECT,
+                    win32security.DACL_SECURITY_INFORMATION | win32security.OWNER_SECURITY_INFORMATION)
+                acl = descriptor.GetSecurityDescriptorDacl()
+                self.assertEqual(acl.GetAceCount(), 1)
+                self.assertEqual(acl.GetAce(0)[2], descriptor.GetSecurityDescriptorOwner())
+            self.assertTrue(win32security.GetNamedSecurityInfo(str(local.parent), win32security.SE_FILE_OBJECT,
+                win32security.DACL_SECURITY_INFORMATION).GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED)
+        else:
+            self.assertEqual(local.parent.stat().st_mode & 0o077, 0)
+        with self.assertRaises(PermissionError): local.write_bytes(b'overwrite')
+        self.assertEqual(client.get_paper_file({'gewu_key': self.key})['delivery']['local_path'], str(local))
+        self.assertEqual(self.storage.get_paper('one'), before_paper)
+        self.assertEqual([dict(r) for r in self.storage.conn.execute('SELECT * FROM resources ORDER BY id')], before_files)
+        self.assertNotIn(self.token, json.dumps(result))
+        self.assertNotIn(str(self.root), json.dumps(result))
+        client.close(); self.assertFalse(local.exists())
+
+    def test_delivery_requires_file_permission_and_exact_attachment_ownership(self):
+        token = create_connection(self.storage, {'name': 'Metadata only'})['token']
+        client = self.file_client(token)
+        with self.assertRaisesRegex(ValueError, 'files:read'):
+            client.get_paper_file({'gewu_key': self.key})
+        source = io.StringIO(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize'}) + '\n' +
+                             json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}) + '\n')
+        output = io.StringIO(); serve(client, source, output)
+        tools = json.loads(output.getvalue().splitlines()[1])['result']['tools']
+        self.assertNotIn('get_paper_file', [t['name'] for t in tools])
+        foreign = ui_server.attach_file_to_paper(self.storage, paper_id='two', filename='private.txt', content=b'private')
+        with self.assertRaises(ValueError): self.file_client().get_paper_file({'gewu_key': self.key, 'file_id': foreign['id']})
+        with self.assertRaises(ValueError): self.file_client().get_paper_file({'gewu_key': self.other_key})
+        for args in ({'gewu_key': '../private'}, {'gewu_key': self.key, 'file_id': True},
+                     {'gewu_key': self.key, 'file_id': '../private'}, {'gewu_key': self.key, 'path': '/tmp/output.pdf'}):
+            with self.assertRaises(ValueError): self.file_client().get_paper_file(args)
+
+    def test_delivery_of_nondefault_file_and_null_default(self):
+        note = ui_server.attach_file_to_paper(self.storage, paper_id='one', filename='note.md', content=b'# note', file_role='note')
+        client = self.file_client()
+        request = client.request
+        def without_default(operation, args=None):
+            result = request(operation, args)
+            if operation == 'get_paper': result['default_file_id'] = None
+            return result
+        with patch.object(client, 'request', side_effect=without_default):
+            with self.assertRaisesRegex(ValueError, 'no Default'):
+                client.get_paper_file({'gewu_key': self.key})
+            result = client.get_paper_file({'gewu_key': self.key, 'file_id': note['id']})
+        self.assertEqual(Path(result['delivery']['local_path']).read_bytes(), b'# note')
+
+    def test_delivery_revoked_during_transfer_exposes_no_copy(self):
+        original_read = ai_service.read_bytes
+        def revoke_after_read(*args, **kwargs):
+            content = original_read(*args, **kwargs)
+            db = sqlite3.connect(self.path)
+            db.execute("UPDATE ai_connections SET revoked_at='now' WHERE id=?", (self.connection,)); db.commit(); db.close()
+            return content
+        client = self.file_client()
+        with patch.object(ai_service, 'read_bytes', side_effect=revoke_after_read):
+            with self.assertRaises(ValueError): client.get_paper_file({'gewu_key': self.key})
+        self.assertFalse(client._deliveries)
+
+    def test_delivery_rechecks_grant_after_receiving_and_cleans_partial(self):
+        client = self.file_client(); request = client.request; checks = 0
+        def revoke_on_final_check(operation, args=None):
+            nonlocal checks
+            if operation == 'capabilities':
+                checks += 1
+                if checks == 2:
+                    self.storage.conn.execute("UPDATE ai_connections SET revoked_at='now' WHERE id=?", (self.connection,))
+                    self.storage.conn.commit()
+            return request(operation, args)
+        with patch.object(client, 'request', side_effect=revoke_on_final_check):
+            with self.assertRaises(ValueError): client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(list(Path(client._delivery_dir.name).iterdir()), [])
+
+    def test_delivery_checks_current_grant_even_when_copy_already_exists(self):
+        client = self.file_client(); result = client.get_paper_file({'gewu_key': self.key})
+        local = Path(result['delivery']['local_path'])
+        self.storage.set_setting('ai_access_enabled', 'false')
+        with self.assertRaises(ValueError): client.get_paper_file({'gewu_key': self.key})
+        self.storage.set_setting('ai_access_enabled', 'true')
+        self.storage.conn.execute("UPDATE ai_connections SET expires_at='2000-01-01' WHERE id=?", (self.connection,)); self.storage.conn.commit()
+        with self.assertRaises(ValueError): client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(local.read_bytes(), self.pdf_bytes)  # Previously delivered content cannot be recalled.
+
+    def test_large_delivery_bypasses_json_limit_and_reports_actual_version(self):
+        data = self.pdf_bytes + b'\n%' + b'x' * (34 * 1024 * 1024)
+        Path(self.storage.get_paper('one')['main_pdf_path']).write_bytes(data)
+        client = self.file_client()
+        result = client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(result['file']['size_bytes'], len(data))
+        self.assertEqual(result['sha256'], hashlib.sha256(data).hexdigest())
+        self.assertEqual(Path(result['delivery']['local_path']).read_bytes(), data)
+        self.assertLess(len(json.dumps(result)), 8192)
+
+    def test_delivery_size_limits_clean_up_without_evicting_existing_copies(self):
+        from paper_monitor import mcp_server
+        client = self.file_client(); first = client.get_paper_file({'gewu_key': self.key})
+        with patch.object(mcp_server, 'MAX_FILE_BYTES', 10):
+            with self.assertRaises(ValueError): client.get_paper_file({'gewu_key': self.key})
+        with patch.object(mcp_server, 'MAX_DELIVERY_BYTES', 10):
+            with self.assertRaisesRegex(ValueError, 'session is full'): client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(list(Path(client._delivery_dir.name).glob('*.part')), [])
+        self.assertEqual(Path(first['delivery']['local_path']).read_bytes(), self.pdf_bytes)
+
+    def test_incomplete_delivery_removes_partial_file(self):
+        client = self.file_client(); original_open = client.opener.open
+        def incomplete(request, **kwargs):
+            if request.full_url.endswith('/content'):
+                response = io.BytesIO(self.pdf_bytes[:-1])
+                response.headers = {'Content-Length': str(len(self.pdf_bytes))}
+                return response
+            return original_open(request, **kwargs)
+        with patch.object(client.opener, 'open', side_effect=incomplete):
+            with self.assertRaisesRegex(ValueError, 'incomplete'):
+                client.get_paper_file({'gewu_key': self.key})
+        self.assertEqual(list(Path(client._delivery_dir.name).iterdir()), [])
+
+    def test_stdio_client_can_read_delivered_file_and_append_analysis(self):
+        script = Path(__file__).resolve().parents[1] / 'scripts' / 'gewu_mcp.py'
+        process = subprocess.Popen([sys.executable, str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, env={**os.environ, 'GEWU_API_URL': f'http://127.0.0.1:{self.server.server_port}',
+                                                   'GEWU_API_TOKEN': self.token})
+        local = None
+        try:
+            def rpc(identifier, method, params):
+                process.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': identifier, 'method': method, 'params': params}) + '\n')
+                process.stdin.flush()
+                return json.loads(process.stdout.readline())['result']
+            rpc(1, 'initialize', {'protocolVersion': '2025-11-25'})
+            delivered = rpc(2, 'tools/call', {'name': 'get_paper_file', 'arguments': {'gewu_key': self.key}})
+            self.assertFalse(delivered['isError'])
+            data = json.loads(delivered['content'][0]['text'])
+            local = Path(data['delivery']['local_path'])
+            self.assertEqual(local.read_bytes(), self.pdf_bytes)
+            self.assertEqual(len(PdfReader(local).pages), 3)
+            saved = rpc(3, 'tools/call', {'name': 'save_analysis', 'arguments': {'gewu_key': self.key,
+                'markdown': '# Client-generated fixture note', 'request_id': 'stdio-delivery-analysis',
+                'source_file_id': data['file']['file_id'], 'source_sha256': data['sha256'], 'pages': [1, 2, 3]}})
+            self.assertFalse(saved['isError'])
+            note = json.loads(saved['content'][0]['text'])['file']
+            self.assertEqual(note['mime_type'], 'text/markdown')
+            self.assertEqual(note['file_source'], 'other')
+            self.assertNotIn(self.token, json.dumps([delivered, saved]))
+        finally:
+            process.stdin.close()
+            try: process.wait(timeout=10)
+            except subprocess.TimeoutExpired: process.kill(); process.wait()
+            process.stdout.close(); process.stderr.close()
+        self.assertEqual(process.returncode, 0)
+        self.assertIsNotNone(local); self.assertFalse(local.exists())
+
+    def test_regular_ui_remains_available_while_original_transfer_waits(self):
+        entered, release = threading.Event(), threading.Event()
+        original_read = ai_service.read_bytes
+        def paused_read(*args, **kwargs):
+            entered.set(); release.wait(5)
+            return original_read(*args, **kwargs)
+        results = []
+        client = self.file_client()
+        def receive():
+            try: results.append(client.get_paper_file({'gewu_key': self.key}))
+            except Exception as exc: results.append(exc)
+        with patch.object(ai_service, 'read_bytes', side_effect=paused_read):
+            worker = threading.Thread(target=receive); worker.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                start = time.monotonic()
+                self.assertEqual(self.request('/api/paper?paper_id=one', workspace=True)[0], 200)
+                self.assertLess(time.monotonic() - start, 2)
+                self.assertTrue(worker.is_alive())
+            finally:
+                release.set(); worker.join(10)
+        self.assertIsInstance(results[0], dict)
+
+    def test_save_with_delivered_hash_is_append_only_and_cannot_override_categories(self):
+        delivered = self.file_client().get_paper_file({'gewu_key': self.key})
+        before = [dict(r) for r in self.storage.conn.execute('SELECT * FROM resources ORDER BY id')]
+        args = {'gewu_key': self.key, 'markdown': '# Client analysis', 'title': 'original', 'request_id': 'client-read-analysis',
+                'source_file_id': delivered['file']['file_id'], 'source_sha256': delivered['sha256'], 'pages': [1]}
+        with patch.object(ui_server, 'refresh_paper_resource_fingerprints', side_effect=AssertionError('No edits or rescans of existing files')):
+            status, saved, _ = self.call('save_analysis', args)
+        self.assertEqual(status, 200)
+        self.assertNotEqual(saved['file']['file_id'], self.pdf['id'])
+        self.assertFalse(saved['file']['is_default'])
+        for old in before:
+            self.assertEqual(dict(self.storage.conn.execute('SELECT * FROM resources WHERE id=?', (old['id'],)).fetchone()), old)
+        for override in ({'file_id': self.pdf['id']}, {'file_type': 'published_version'}, {'file_source': 'publisher'}, {'overwrite': True}):
+            self.assertEqual(self.call('save_analysis', {**args, **override})[0], 400)
+        for operation in ('delete_file', 'update_file', 'overwrite_file', 'set_default'):
+            self.assertEqual(self.call(operation, {'gewu_key': self.key, 'file_id': self.pdf['id']})[0], 404)
+        changed = {**args, 'request_id': 'client-read-analysis-new', 'markdown': '# A new analysis'}
+        second = self.call('save_analysis', changed)[1]
+        self.assertNotEqual(second['file']['file_id'], saved['file']['file_id'])
+        self.assertEqual(Path(self.storage.get_paper('one')['main_pdf_path']).read_bytes(), self.pdf_bytes)
 
     def test_schema_upgrade_preserves_papers_and_files_without_backfill(self):
         before = [dict(r) for r in self.storage.conn.execute('SELECT * FROM papers ORDER BY paper_id')]

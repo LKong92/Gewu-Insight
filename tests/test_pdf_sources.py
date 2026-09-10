@@ -10,6 +10,13 @@ from paper_monitor.pdf_sources import approved_pdf_source
 
 
 class PdfSourceTests(TestCase):
+    def test_reviewed_publisher_delivery_hosts_are_tenant_scoped(self):
+        for host in ('acs.figshare.com', 'pdf.sciencedirectassets.com', 'oup.silverchair-cdn.com', 'watermark.silverchair.com'):
+            self.assertTrue(approved_pdf_source('https://' + host + '/file.pdf'), host)
+        for host in ('figshare.com', 'other.figshare.com', 'ndownloader.figshare.com', 'other.silverchair-cdn.com',
+                     'oup.silverchair-cdn.com.invalid', 'sciencedirectassets.com.invalid', 's3.amazonaws.com'):
+            self.assertFalse(approved_pdf_source('https://' + host + '/file.pdf'), host)
+
     def test_official_hosts_and_lookalikes(self):
         for url in ('https://www.nature.com/articles/a.pdf', 'https://arxiv.org/pdf/2601.01234',
                     'https://pmc.ncbi.nlm.nih.gov/articles/PMC123/pdf/a.pdf', 'https://media.springernature.com/a.pdf'):

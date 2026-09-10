@@ -1,5 +1,48 @@
 # Windows Preview — 实现与验收状态
 
+## 2026-09-10：0.1.17 已同步最新 Mac AI/MCP 更新并安装
+
+- 重新只读核对并获取远端 `main`，发现 `2a12320..9ea2bb3b8160aa931667afc1c412608627f2f473` 的两个新提交。三方适配 `f4dc266` 的已撤销连接隐藏/活动记录独立滚动，以及 `9ea2bb3` 的 MCP 原始文件交付/只追加分析。保留 Windows UTF-8 STDIO、重启端口跟随、私有工作区与回收事务；没有合并 Mac 分支或 commit/push。
+- `get_paper_file` 通过既有授权 HTTP 下载原文件，核验大小/实际 SHA-256并复查授权；64 MiB/文件，256 MiB/64 文件/会话。Windows 临时目录仅向当前用户授予可继承权限，文件只读；重复读取核验并复用副本，退出清理，重启使用当前端口。包内 MCP 启动器补齐 pywin32 DLL 搜索路径。`save_analysis` 仅追加带明确 MIME/Other/Unannotated/AI 连接来源的 Markdown；拒绝覆盖/分类参数且不重扫、改写既有附件及 Default。正式库未创建验证用 grant 或分析。
+- M11 增加已核实出版商的单一 PDF 控件弹窗：独立隐藏 WebView2 接收原始 POST、opener、会话；允许一个初始空白窗口后再进入合规来源。来源限制应用于首请求和后续重定向/资源；未知、本地、非预期及额外弹窗停止，完成/取消后清理。直接 PDF/POST/空白窗口/会话流程通过；复杂 HTML 子窗口、嵌套/认证和真实出版商全流程仍有边界。配置顺序遵循 [WebView2 NewWindow 官方说明](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2newwindowrequestedeventargs.newwindow?view=webview2-dotnet-1.0.3537.50)。
+- 213 项隐藏原生检查通过；30 项 AI/MCP、43 项端口/文件/来源和 70 项附件/资源检查通过（模块间有重叠，不当作全仓库测试）。AI Access 真实 headless UI 覆盖三个尺寸、活动独立滚动、撤销隐藏及保留日志；五页 Windows Guide 全部渲染检查。45 项 Python 编译、两项 JS 语法、OpenAPI 对照、.NET 和 diff 检查通过；最后新增的 MCP 启动器另由包内真实 STDIO 验证。首次受限沙箱 WebView2 初始化超时；正常隔离权限后通过。早期 PDF 弹窗拦截顺序、POSIX 权限假设、未审计的活动测试端点、包内 pywin32 初始化和测试工具数等问题已修正后复验。既有 NU1900 审计索引不可达仍保留。
+- 复用并逐项核验 1,732 个运行时文件，刷新 96 个当前产品源码/资源；包内服务/API/MCP两次（含原文件重复交付、中文追加、退出清理及旧配置重启跟随）通过。开发包及实际安装路径 EXE 各两次隔离启动通过。当前 payload 清单含启动检查生成的 Python 字节码，共 2,296 个文件；均与安装位置匹配。
+- 完成 2,338-file 恢复备份，安装器退出 0（21:47:49–21:48:05 JST，约 16 秒），原 App 正常关闭/重开且可见（PID 41184）。文件/卸载版本 0.1.17、四 API、原库全部表摘要及 17 个持久研究文件通过：schema 18，44 papers / 39 Publications / 8 Library items / 5 folders / 4 resources；integrity OK、外键错误 0。Smart App Control ON（1），仍为未签名本机 Preview，发布签名门槛及安全/信任/外部复核偏好不变。
+- 余下主要是复杂出版商路线、实体 OLE 拖放/IME/多 DPI、跨盘和外部编辑并发、六工作区及导出全流程验收；旧 Mac 整库迁移、完整跨机备份还原、正式签名和多机发布尚未交付。Apple Passwords/AutoFill、Safari sync、macOS 系统 Quick Look 仍按用户要求排除。
+- 安装器 SHA-256 `cf765500039a45ffd816d7fe3f545118033605005b8749296fcfc77d0877bd2d`；DLL `f03a7383b25b98bf90b51e6a6b19912b5a74065d09923855190d0994464b16df`。证据与备份：ignored `tmp/windows-parity-0.1.17/`、`tmp/install-0.1.17-20260910/`。
+
+## 2026-09-10：0.1.16 剩余功能对齐与安装
+
+- 当前实际安装/运行 **0.1.16**。恢复备份 2337 个文件通过；安装器退出 0，开始 2026-09-10T21:16:48.955674+09:00、结束 2026-09-10T21:17:05.350157+09:00；2111 个安装文件匹配。原 App 正常关闭/重开且可见（PID 17968），文件/卸载版本、四 API、原库全部表摘要与 17 个持久研究文件核对通过：schema 18、44 papers / 39 Publications / 8 items / 5 folders / 4 resources，integrity OK、外键错误 0。
+- 独立 Folder Loader：本地可信 profile 与主窗口共享认证，远端导航/资源被拒；导入/元数据刷新/缺失标识符使用同一保留窗口，关闭只隐藏。原生选择回调回到请求窗口，导入完成同步主 Library；服务重启保留文档和任务状态。
+- M01：Settings > Clear Monitor Cache 调用工作区 WebView2 profile 的 DiskCache 清理。真实 loopback 缓存命中在清理后重新请求；Monitor 的 cookie/localStorage、独立 Browser profile 登录状态及 SQLite 均保留。
+- M11：加入已核实的 ACS Figshare 租户、Elsevier PDF 资产域和 OUP 专用 CDN/watermark 域；拒绝通用云域与其他租户。单一明确 PDF 控件每页最多触发一次，排除表单/对话框/歧义按钮；Document/Fetch/XHR 捕获原字节，普通 JSON 继续交网页。来源依据见 [出版商域清单](WINDOWS_PUBLISHER_SOURCES.md)。仅弹窗 PDF 按钮仍给出明确手动 Browser 路径；没有扩展未知重定向或自动登录。
+- Windows Word 补充材料转换修复：检测标准 LibreOffice 安装，后备使用新建、可验证归属的 Word 自动化进程；隐藏、禁用宏、只读、不加入最近文档，完成后恢复选项并退出。专用 Job Object 限制超时后的残留进程；拒绝复用已有 Word 进程。生成 DOCX 的真实 PDF 转换分别在源码 Python 和包内 Python 通过；并非所有真实出版商 DOC/Word 格式已验收。
+- **166 项隐藏原生检查通过；41 项 Python 检查中 40 通过、1 macOS 跳过**。服务/API/MCP 两次、开发及安装目录 EXE 各两次通过；Python/JS/.NET/diff 和五页 Guide 视觉检查通过。复用哈希核实的 1,732 个运行时文件并提供 96 个当前产品源码/资源。一次测试 DLL 被应用控制阻止；正常同文件重试仍失败，后续修正测试与产品回调后编译的版本正常启动，未更改策略或信任，不推断放行原因。既有 NU1900 依赖审计索引不可达仍保留。
+- 用户明确排除 Apple Passwords/AutoFill、Safari 同步、macOS 系统 Quick Look。其余完整实际 OLE/跨盘/真实登录网站和全工作流验收、跨平台旧库迁移、正式签名及多机发布仍待完成；不把这些验收缺口全部称为未实现功能。Smart App Control ON（1），未改安全/信任/外部复核，未 commit/push 或改 Mac 分支。
+- 安装器 SHA-256 `d241b58d8e31d5b91feb207365bd0b918fe85a042c410c408024e87c1aec2771`；DLL `da32bdaa694284178f5c8715c871aa855851d4cdc5938c168710008328abf254`。证据与恢复备份：ignored `tmp/windows-parity-0.1.16/`、`tmp/install-0.1.16-20260910/`。
+
+## 2026-09-10：0.1.15 安装历史（已由 0.1.16 替代）
+
+- **当时安装/运行是 0.1.15**；20:08 JST 原 App 正常关闭/重开，窗口可见（PID 30636），文件与卸载登记版本一致。2,317 个恢复备份文件核验；安装器退出 0（20:07:06–20:07:22，约 16 秒），2,110 个 payload 文件逐项匹配。原库四 API 与 Browser 资源通过；44 papers / 39 Publications / 8 items / 5 folders / 4 resources、全部表摘要和 17 个持久研究文件在核验时均不变，schema 18 integrity OK、外键错误 0。
+- M02：Windows 专用 `windows_library_recycle.py` 接通 Recycle 论文、多选、文件夹及 Clear Recycle；沿用原确认框。全部位于 Recycle 的选区使用 `BEGIN IMMEDIATE`，记录和批次提交标记在同一 SQLite 事务提交。私有恢复 journal 逐文件保存校验副本与 Shell 回执；第二个文件失败/SQL 失败恢复整批，提交前中断恢复、提交后中断保留已完成删除。主库不改 schema，提交标记在完成清理后删除；Mac 运行路径不变。
+- 仍被 Library/Space/Shortcut/My Publications 引用的论文保留；不同论文共用的文件、外部原件保留，保留文件维持原存储路径。删除所选位置的受管 `.lnk`，不递归删除实际目录；子目录未知文件保留，Clear Recycle 另明确处理未引用本地副本。拒绝文件回收路径中的 symlink/junction。此轮不迁移保留文件到其他物理目录；跨盘、外部编辑并发和完整真实用户操作继续待验收。
+- **79 项源码检查通过；包内 embedded Python 另 32 项通过**，含真实 Windows Shell、单附件/Publications 回归、批量/清空 handler、共享路径、外部文件、嵌套/重叠选区、失败回滚及提交前后恢复。功能检查只用生成文件和临时 SQLite；所有测试 Shell 回执通过系统恢复接口清理，不碰用户回收站项目。包内服务/API/MCP 两次、开发及安装目录原生 EXE 各两次隔离启动通过。
+- .NET 构建、变更 Python 编译、diff 及四页 HTML/PDF Guide 渲染视觉检查通过。验证旧包 1,826 个服务文件，复用其中 1,732 个运行时依赖，95 个当前产品源码/资源随包提供。既有 NU1900 和 `\s` SyntaxWarning 保留。初次构建选错开发运行时路径，改用已配置工具链；sandbox Shell 操作受限后在正常权限临时库通过。一次旧探针清理报 CloseDesktop 无效句柄，修正清理诊断后两次实际启动通过，没有掩盖启动断言。
+- 本机仍未签名，Smart App Control 保持 ON（1）；标准发布签名门槛、系统防护/信任和外部复核偏好不变。没有 commit/push 或 Mac 分支操作。本轮按本地已同步至 `2a12320` 的 Mac 参考对齐，没有重新拉取远端。M01、部分出版商路线、独立 Loader、平台差异与完整验收继续保留。
+- 安装器 SHA-256 `294950C8ECB490086D68EDD3860DFADF509A8BF87E1069D07B7042F8AE7424AE`；DLL `ED9565EB994E0184A75712BB6D8CE516EAA5324DCFE9520761EF6C2FBE7BA3E5`。证据和恢复备份：ignored `tmp/windows-parity-0.1.15/`、`tmp/install-0.1.15-20260910/`。
+
+## 2026-09-10：0.1.14 安装历史（已由 0.1.15 替代）
+
+- **当时安装/运行是 0.1.14**，原 App 已正常关闭/重开，19:28 JST 窗口可见（PID 40736），文件与卸载登记版本一致。2,317 个恢复备份文件核验通过；安装器退出 0，无需 Windows 重启；2,109 个安装文件匹配 payload。原库四项 API/Browser 资源检查通过，44 papers / 39 Publications / 8 items / 5 folders / 4 resources 与全部表摘要、17 个持久研究文件在核验时均不变；schema 18 integrity OK、外键错误 0。
+- M11：注册 `publisherPdfDownload`，隐藏 WebView2 使用现有 Browser profile，复用原响应流读取和 `/api/manual-pdf-path`。支持文章页正文 PDF 发现、补充 PDF/Word 链接发现及已有附件入库、分类/重复识别/Default 规则；保留原有补充 PDF 合并行为。80 秒/64 MB 限制，HTTPS、已审核来源及对应出版商 host 三重边界；未知重定向止于发出目标请求前。远端收不到工作区凭据，不自动操作登录/验证控件。
+- M12：接通共享 `nativeFileDrag` / `libraryItemDrag`，鼠标移动超过系统阈值后在 WebView 回调外发起 Copy-only OLE；支持真实文件夹导出 CF_HDROP。Library 条目原生自投递复用 Paper Files 回调，同一投递只消费一次，不落入外部文件二次导入。60 秒后只清理已检查的临时导出根目录，拒绝 Library/普通临时根及含 reparse point 的目录。
+- **113 项隐藏原生检查通过；共享 112 项为 110 通过、2 项 macOS 平台跳过**。正文直取、文章页 PDF 发现、补充链接、原生 bridge 到真实后端、正文原始字节/重复复用、原有补充合并两页结果、未知重定向/无效 PDF/超限拒绝、暂存清理、目录/文件 CF_HDROP 及一次性条目回调通过。仍未进行实体鼠标跨应用拖放、真实出版商登录或完整 Word 文件验收；不能把回调检查写成这些流程已经通过。
+- .NET 构建、JS 语法、变更 Python 编译和 diff 检查通过。Windows HTML/PDF 同源指南四页全部渲染检查，页脚已更新 0.1.14；不使用虚构截图。服务未改：标准打包先因 sandbox 无网络失败，随后逐文件验证并复用 0.1.13 的 **1,826 个服务文件**，当前源码/资源全部匹配。新 payload 及实际安装路径 EXE 各两次隔离启动通过，无开发运行时路径。未重复运行未改变的 MCP 全套验收。
+- 首轮检查误把“添加补充 PDF 后的合并文件”与单份原始下载比较；确认共享后端原有合并语义后，补上合并前原始字节/重复检查，合并后核对两页内容与库完整性。重开脚本首次使用了错误的 Windows 显示常量，未启动 App；修正脚本后实际两次重开通过。未为检查改写正式库。
+- 保留未完成项：M01 Windows 对应缓存维护、M02 Recycle 整篇/文件夹永久移除；M11 部分 Mac 出版商 CDN/仅 JS 按钮路径、M12 真实 OLE，以及平台专属能力/独立 Loader 窗口、全流程迁移备份/恢复验收。详见差异台账第 10 节。
+- 安装器 SHA-256 `9B52FADD5F4A89A82A5F9EEC468A2366E32C8B8891DFCF1D181334974B2BCE98`；DLL `D3DF1646CDD0F39D897DA5837BFCD381D030340E2A614271120697A37E607D09`。本机仍未签名；Smart App Control ON（1），标准签名门槛不变，无防护/信任/外部复核或 commit/push 变更。安装器本身 **约 11 秒**（19:26:17–19:26:28），不要把开发、打包、备份与检查时间描述为安装耗时。证据：ignored `tmp/windows-parity-0.1.14/`、`tmp/install-0.1.14-20260910/`。
+
 ## 2026-09-10：0.1.13 已安装，原应用正常重开
 
 - 已完成备份、安装、原安装目录验证和原库正常关闭/重开。安装器于 18:40 JST 成功退出 0，无需重启 Windows；18:47 JST 核验原窗口可见，App/service PID 29572/26844，文件与卸载登记版本均为 0.1.13。已将用户“继续修复/对齐即默认完成安装和重开验证”的要求写入 `AGENTS.md`，不再等待单独安装指令。

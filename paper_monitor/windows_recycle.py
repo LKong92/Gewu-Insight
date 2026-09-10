@@ -1,7 +1,7 @@
 """Recoverable Windows Paper Files deletion with a private SQLite journal.
 
-Resource and reference-aware My Publications transactions are enabled. Library
-Recycle bulk removal stays blocked until it has an equivalent transaction.
+Resource, reference-aware My Publications and Library Recycle transactions use
+verified recovery copies and the main SQLite database as commit authority.
 The Shell owns its Recycle Bin records; never edit $I/$R internals directly.
 """
 from contextlib import contextmanager
@@ -27,6 +27,7 @@ def recycle_file(path):
     from win32com.shell import shell, shellcon
     from win32com.server.util import wrap
     from win32com.server.exception import COMException
+    import pywintypes
 
     class Sink:
         _com_interfaces_ = [shell.IID_IFileOperationProgressSink]
@@ -67,6 +68,8 @@ def recycle_file(path):
         if requested.exists() or not destination.is_file():
             raise OSError("Windows did not confirm the recycled file.")
         return destination
+    except pywintypes.com_error as exc:
+        raise OSError("Windows could not recycle the file; its recovery copy has been preserved.") from exc
     finally:
         pythoncom.CoUninitialize()
 
@@ -74,6 +77,7 @@ def recycle_file(path):
 def restore_shell_item(recycled, source):
     import pythoncom
     import win32com.client
+    import pywintypes
     source, recycled = Path(source), Path(recycled)
     if source.exists():
         raise FileExistsError(str(source))
@@ -92,6 +96,8 @@ def restore_shell_item(recycled, source):
                 return
             time.sleep(.05)
         raise OSError("Windows did not finish restoring the file.")
+    except pywintypes.com_error as exc:
+        raise OSError("Windows could not restore the exact Recycle Bin item.") from exc
     finally:
         pythoncom.CoUninitialize()
 
@@ -103,6 +109,8 @@ def open_journal(storage):
     journal.row_factory = sqlite3.Row
     journal.execute("PRAGMA synchronous=FULL")
     journal.execute("CREATE TABLE IF NOT EXISTS removals (id TEXT PRIMARY KEY, resource_id INTEGER, paper_id TEXT, source TEXT, backup TEXT, sha256 TEXT, recycled TEXT NOT NULL DEFAULT '')")
+    if "batch_id" not in {row[1] for row in journal.execute("PRAGMA table_info(removals)")}:
+        journal.execute("ALTER TABLE removals ADD COLUMN batch_id TEXT NOT NULL DEFAULT ''")
     journal.commit()
     return journal, directory
 
@@ -146,6 +154,11 @@ def recover_pending(storage):
     try:
         records = journal.execute("SELECT * FROM removals").fetchall()
         for record in records:
+            if record["batch_id"]:
+                if not batch_committed(storage, record["batch_id"]):
+                    restore_record(record)
+                finish_record(journal, record)
+                continue
             if record["resource_id"] is None:
                 # Publication cleanup is committed only when its canonical paper
                 # disappeared in the same SQLite transaction as its placement.
@@ -159,14 +172,16 @@ def recover_pending(storage):
                     raise OSError("File recovery found a changed resource. Its backup was preserved.")
                 restore_record(record)
             finish_record(journal, record)
+        clear_batch_markers(storage, journal)
         return len(records)
     finally:
         journal.close()
 
 
 class ResourceRemoval:
-    def __init__(self, storage, paper_id, resource_id):
+    def __init__(self, storage, paper_id, resource_id, batch_id=""):
         self.storage, self.paper_id, self.resource_id = storage, paper_id, resource_id
+        self.batch_id = batch_id
         self.journal = self.record = None
 
     def recycle(self, source):
@@ -189,8 +204,8 @@ class ResourceRemoval:
             backup.unlink()
             raise OSError("The file changed while preparing recovery. Retry after saving it.")
         self.record = dict(id=operation_id, resource_id=self.resource_id, paper_id=self.paper_id,
-                           source=str(source), backup=str(backup), sha256=before, recycled="")
-        self.journal.execute("INSERT INTO removals VALUES (:id,:resource_id,:paper_id,:source,:backup,:sha256,:recycled)", self.record)
+                           source=str(source), backup=str(backup), sha256=before, recycled="", batch_id=self.batch_id)
+        self.journal.execute("INSERT INTO removals (id,resource_id,paper_id,source,backup,sha256,recycled,batch_id) VALUES (:id,:resource_id,:paper_id,:source,:backup,:sha256,:recycled,:batch_id)", self.record)
         self.journal.commit()
         destination = recycle_file(source)
         self.record["recycled"] = str(destination)
@@ -252,5 +267,56 @@ def resource_removal(storage, paper_id, resource_id):
 def recycle_resource_path(path):
     removal = _current.get()
     if removal is None:
-        raise OSError("Bulk permanent removal is unavailable in this Windows Preview; the file has been preserved. Paper Files deletion supports recovery. Library Recycle remains available.")
+        raise OSError("File removal requires a recoverable transaction; the file has been preserved.")
     return removal.recycle(path)
+
+
+BATCH_PREFIX = "windows_recycle_commit:"
+
+
+def batch_committed(storage, batch_id):
+    return storage.conn.execute("SELECT 1 FROM app_settings WHERE key = ?", (BATCH_PREFIX + batch_id,)).fetchone() is not None
+
+
+def clear_batch_markers(storage, journal):
+    pending = {row[0] for row in journal.execute("SELECT DISTINCT batch_id FROM removals WHERE batch_id != ''")}
+    for row in storage.conn.execute("SELECT key FROM app_settings WHERE substr(key,1,?) = ?", (len(BATCH_PREFIX), BATCH_PREFIX)).fetchall():
+        if row[0][len(BATCH_PREFIX):] not in pending:
+            storage.conn.execute("DELETE FROM app_settings WHERE key = ?", (row[0],))
+    storage.conn.commit()
+
+
+class LibraryRemoval:
+    """One durable receipt per file, with one main-DB commit for the selection."""
+    def __init__(self, storage):
+        self.storage = storage
+        self.batch_id = uuid.uuid4().hex
+        self.removals = []
+
+    def recycle(self, source):
+        removal = ResourceRemoval(self.storage, "", None, self.batch_id)
+        self.removals.append(removal)
+        return removal.recycle_verified(Path(source).resolve())
+
+    def mark_committed(self):
+        # Called inside the SAME SQLite transaction as the selected row deletes.
+        self.storage.conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES (?, '1', strftime('%Y-%m-%dT%H:%M:%fZ','now'))", (BATCH_PREFIX + self.batch_id,))
+
+    def finish(self):
+        error = None
+        committed = batch_committed(self.storage, self.batch_id)
+        for removal in reversed(self.removals):
+            try:
+                if removal.record:
+                    if not committed:
+                        restore_record(removal.record)
+                    finish_record(removal.journal, removal.record)
+            except Exception as exc:
+                error = error or exc
+            finally:
+                if removal.journal:
+                    removal.journal.close()
+        if error:
+            raise error
+        self.storage.conn.execute("DELETE FROM app_settings WHERE key = ?", (BATCH_PREFIX + self.batch_id,))
+        self.storage.conn.commit()

@@ -4,6 +4,7 @@ import mimetypes
 import re
 import shutil
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -740,8 +741,17 @@ def convert_word_document_to_pdf(source_path: Path, target_path: Path) -> Path:
     target_path.unlink(missing_ok=True)
 
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if sys.platform == "win32" and not soffice:
+        import os
+        for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(variable)
+            candidate = Path(base) / "LibreOffice/program/soffice.exe" if base else None
+            if candidate and candidate.is_file():
+                soffice = str(candidate)
+                break
     if soffice:
         try:
+            options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
             subprocess.run(
                 [
                     soffice,
@@ -756,6 +766,7 @@ def convert_word_document_to_pdf(source_path: Path, target_path: Path) -> Path:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=90,
+                **options,
             )
             generated = target_path.parent / f"{source_path.stem}.pdf"
             if generated.exists() and generated != target_path:
@@ -764,6 +775,10 @@ def convert_word_document_to_pdf(source_path: Path, target_path: Path) -> Path:
                 return target_path
         except (OSError, subprocess.SubprocessError):
             target_path.unlink(missing_ok=True)
+
+    if sys.platform == "win32":
+        from .windows_word_pdf import convert
+        return convert(source_path, target_path)
 
     text_path = target_path.with_name(f".{target_path.stem}-converted.txt")
     try:

@@ -4339,7 +4339,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             status = HTTPStatus.FORBIDDEN if isinstance(exc, PermissionError) else HTTPStatus.INTERNAL_SERVER_ERROR
             self.send_error_json(status, str(exc))
             return
@@ -4357,18 +4357,24 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         storage = Storage(self.configured_db_path)
         deleted: list[dict[str, Any]] = []
         try:
-            for entry in entries:
+            windows_result = None
+            if sys.platform == "win32":
+                from .windows_library_recycle import delete_entries
+                windows_result = delete_entries(storage, entries, confirmed=confirmed)
+            for entry in ([] if windows_result is not None else entries):
                 if not isinstance(entry, dict):
                     raise ValueError("Each entry must be an object")
                 entry_type = str(entry.get("type") or "")
                 entry_id = int(entry.get("id") or 0)
                 result = self.delete_library_entry_in_storage(storage, entry_type, entry_id, confirmed=confirmed)
                 deleted.append(result or {"type": entry_type, "id": entry_id})
+            if windows_result is not None:
+                deleted = windows_result["deleted"]
             snapshot = library_snapshot(storage) if include_snapshot else {}
         except ValueError as exc:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
             return
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             status = HTTPStatus.FORBIDDEN if isinstance(exc, PermissionError) else HTTPStatus.INTERNAL_SERVER_ERROR
             self.send_error_json(status, str(exc))
             return
@@ -4402,6 +4408,11 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"preview": preview})
 
     def delete_library_entry_in_storage(self, storage: Storage, entry_type: str, entry_id: int, *, confirmed: bool = False) -> dict[str, Any]:
+        if sys.platform == "win32":
+            from .windows_library_recycle import delete_entries
+            result = delete_entries(storage, [{"type": entry_type, "id": entry_id}], confirmed=confirmed)
+            if result is not None:
+                return result["deleted"][0]
         special = ensure_library_special_folders(storage)
         unsorted_id = int(special["unsorted"].get("id") or 1)
         recycle_id = int(special["recycle"].get("id") or 1)
@@ -4585,6 +4596,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if (preview.get("requires_confirmation") or orphan_paths) and not confirmed:
                 self.send_error_json(HTTPStatus.BAD_REQUEST, "confirmation is required")
                 return
+            if sys.platform == "win32":
+                from .windows_library_recycle import delete_entries
+                result = delete_entries(storage, [{"type": "folder", "id": folder_id}], confirmed=confirmed, clear_folder_id=folder_id)
+                snapshot = library_snapshot(storage) if include_snapshot else {}
+                self.send_json({"removed": result["removed"], "cleanup": result["cleanup"], **snapshot})
+                return
             paper_ids = storage.library_paper_ids_in_folder_tree(folder_id=folder_id)
             removed_folder_ids = library_folder_tree_ids(storage, folder_id)
             file_cleanup = trash_unreferenced_recycle_paper_files(storage, paper_ids, recycle_folder_id=folder_id)
@@ -4608,7 +4625,7 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         except PermissionError as exc:
             self.send_error_json(HTTPStatus.FORBIDDEN, str(exc))
             return
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
             return
         finally:
@@ -22321,6 +22338,8 @@ def attach_file_to_paper(
     annotation_state: str = "",
     added_via: str = "paper_details",
     source_url: str = "",
+    refresh_existing: bool = True,
+    mime_type: str = "",
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     if not paper:
@@ -22346,7 +22365,8 @@ def attach_file_to_paper(
     if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
-    refresh_paper_resource_fingerprints(storage, str(paper_id))
+    if refresh_existing:
+        refresh_paper_resource_fingerprints(storage, str(paper_id))
     duplicate = storage.conn.execute(
         "SELECT id FROM resources WHERE paper_id = ? AND sha256 = ? ORDER BY id ASC LIMIT 1",
         (str(paper_id), digest),
@@ -22387,7 +22407,7 @@ def attach_file_to_paper(
                 or ("annotated" if fingerprint.is_annotated else "unannotated")
             ),
             added_via=added_via,
-            mime_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+            mime_type=mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
             kind=suffix.lstrip(".") or "file",
         )
         if resolved_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK and should_promote_new_paper_version(storage, str(paper_id), resource):

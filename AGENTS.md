@@ -10,6 +10,7 @@
 
 - This repo is a local paper-monitoring and research reading assistant. Use paths relative to the repo root unless the user gives an absolute path.
 - SQLite is the source of truth; JSON is export-only.
+- Obtain paper files through configured Gewu MCP: `get_paper_file` provides an authorized read-only client copy for local reading/rendering/OCR, not direct Library/SQLite access. Write derived files separately; `save_analysis` only appends classified Markdown notes and never edits existing Paper Files or earlier analyses.
 - Keep Markdown reports and analysis notes useful as user-facing reading artifacts.
 - Prefer scoped edits that reuse existing `paper_monitor` modules.
 - Avoid filtering by user research keywords unless explicitly requested.
@@ -25,6 +26,7 @@
 - Keep `main` product-only. Benchmark instrumentation, source overrides, tests, data, and artifacts must stay in a separate local benchmark worktree and must not change product runtime behavior.
 - Never push benchmark branches, benchmark-only commits, benchmark artifacts, or benchmark data to GitHub.
 - Windows development and releases stay on a separate Windows branch (`codex/windows-preview-0.1.10-20260910` or an explicitly chosen successor). Never merge or push Windows changes into remote `main` or any macOS branch without a new explicit user request.
+- Windows parity excludes Apple Passwords/AutoFill, Safari source sync, and macOS system Quick Look; the user does not need those Apple-specific capabilities.
 - Windows product updates include backing up, installing the verified Preview, reopening the original App, and checking its version/data. Do not wait for a separate installation request after the user asks to continue fixes or feature alignment. Respect an explicit source-only request or an actual installation blocker; commit/push still require explicit authorization.
 - Keep local upgrades efficient: reuse existing installation/backup scripts and validated artifacts when unchanged. Keep a verified recovery backup and check the installed version, startup and data integrity; repeat or broaden checks only for changed behavior, failures or unresolved concerns. Batch independent checks instead of adding many separate tool rounds.
 - Notify the user promptly once installation and essential verification succeed, before lengthy documentation cleanup. Keep the handoff concise; when explaining elapsed time, distinguish actual installer time from preparation, backup, verification and documentation time.

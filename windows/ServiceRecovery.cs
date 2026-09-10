@@ -57,6 +57,7 @@ internal sealed partial class WorkspaceWindow
                     // Retain the separate webpage views and their native sessions,
                     // including unsent forms. Only the trusted workspace reloads.
                     await SendStateAsync();
+                    await ResumeLoaderAfterServiceRecoveryAsync();
                     startup.Hide(); ActiveControl = workspace; workspace.Focus();
                     log?.WriteLine("Local service recovered; existing Browser tabs retained.");
                     return;

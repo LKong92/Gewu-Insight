@@ -76,11 +76,11 @@ internal sealed partial class WorkspaceWindow : Form
         Activated += (_, _) => { if (!startup.Visible) { var view = selected?.View?.Visible == true ? selected.View : workspace; ActiveControl = view; view.Focus(); } };
         Shown += async (_, _) => { try { await StartAsync(); } catch (Exception error) { startup.Text = "Startup failed\n" + error.Message; } };
         FormClosing += (_, _) => { stopping = true; applicationLifetime.Cancel(); browserPageMenu?.Dispose(); favicons.Dispose(); CancelCapture(); StopServer(); };
-        FormClosed += (_, _) => { foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose(); };
+        FormClosed += (_, _) => { loaderWindow?.Dispose(); foreach (var page in pages) page.View?.Dispose(); client.Dispose(); log?.Dispose(); workspaceLock?.Dispose(); };
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
         file.DropDownItems.Add("Open Data Folder", null, (_, _) => Process.Start(new ProcessStartInfo(dataRoot) { UseShellExecute = true }));
-        file.DropDownItems.Add("Library Loader", null, async (_, _) => { if (workspace.CoreWebView2 != null) await workspace.CoreWebView2.ExecuteScriptAsync("window.openLibraryLoader?.()"); });
+        file.DropDownItems.Add("Library Loader", null, async (_, _) => await ShowLibraryLoaderAsync());
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var edit = new ToolStripMenuItem("Edit");
         foreach (var (label, chord, keys) in new[] { ("Undo", "Ctrl+Z", "^z"), ("Redo", "Ctrl+Y", "^y"), ("Cut", "Ctrl+X", "^x"), ("Copy", "Ctrl+C", "^c"), ("Paste", "Ctrl+V", "^v"), ("Select All", "Ctrl+A", "^a") }) {
@@ -127,7 +127,12 @@ internal sealed partial class WorkspaceWindow : Form
         foreach (var (label, function) in new[] { ("PDF Rename Settings", "openPdfRenameSettings"), ("Preview Settings", "openQuickLookSettings"), ("Website Links", "openWebsiteLinkSettings"), ("AI Access", "openAIAccessSettings"), ("arXiv Scope Settings", "openArxivSettings"), ("Open Source Settings", "openCitationSettings"), ("Field Settings", "openFieldSettings"), ("Font Size", "openFontSizeSettings") }) {
             settings.DropDownItems.Add(label, null, async (_, _) => { if (workspace.CoreWebView2 != null) await workspace.CoreWebView2.ExecuteScriptAsync(function + "()"); });
         }
-        settings.DropDownItems.Add(new ToolStripMenuItem("Clear Monitor Cache (not yet available)") { Enabled = false });
+        settings.DropDownItems.Add("Clear Monitor Cache", null, async (_, _) => {
+            try {
+                await ClearMonitorCacheAsync();
+                if (!stopping) MessageBox.Show(this, "Monitor network cache cleared. Saved research results and Browser sign-ins are kept.", "Monitor cache cleared");
+            } catch (Exception error) { if (!stopping) MessageBox.Show(this, error.Message, "Could not clear Monitor cache"); }
+        });
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("About Gewu Insight", null, (_, _) => MessageBox.Show(this, "Gewu Insight (格物洞见)\nWindows Preview " + Application.ProductVersion.Split('+')[0] + "\n\nWindows feature parity is still in development.", "About Gewu Insight", MessageBoxButtons.OK, MessageBoxIcon.Information));
         help.DropDownItems.Add("Windows Preview Guide", null, (_, _) => Process.Start(new ProcessStartInfo(Path.Combine(root, "Windows_Preview_Guide.html")) { UseShellExecute = true }));
@@ -168,8 +173,12 @@ internal sealed partial class WorkspaceWindow : Form
                 if (channel == "browser") await BrowserCommandAsync(doc.RootElement.GetProperty("payload"));
                 else if (channel == "dismissMenus") DismissMenus();
                 else if (channel == "choosePath") await ChoosePathAsync(doc.RootElement.GetProperty("payload"));
+                else if (channel == "libraryLoaderWindow" && TextValue(doc.RootElement.GetProperty("payload"), "type") == "open") await ShowLibraryLoaderAsync();
                 else if (channel == "nativeFileDrag") StartFileDrag(doc.RootElement.GetProperty("payload"));
+                else if (channel == "libraryItemDrag") ArmLibraryItemDrag(doc.RootElement.GetProperty("payload"));
+                else if (channel == "publisherPdfDownload") await PublisherPdfDownloadAsync(doc.RootElement.GetProperty("payload").Clone());
                 else if (channel == "fileDrop") {
+                    if (await HandleLibraryItemFileDropAsync(doc.RootElement.GetProperty("payload"))) return;
                     var paths = e.AdditionalObjects.OfType<CoreWebView2File>().Select(file => file.Path).Where(path => File.Exists(path) || Directory.Exists(path)).Take(256).ToArray();
                     if (paths.Length > 0) await WorkspaceScriptAsync("window.handleNativeFinderDrop(" + JsonSerializer.Serialize(paths) + "," + doc.RootElement.GetProperty("payload").GetRawText() + ")");
                 }

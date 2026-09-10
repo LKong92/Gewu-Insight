@@ -106,6 +106,8 @@ storage.close()
                     {'jsonrpc':'2.0','id':2,'method':'tools/list'},
                     {'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'read_paper','arguments':{'gewu_key':key,'page_count':1}}},
                     {'jsonrpc':'2.0','id':4,'method':'tools/call','params':{'name':'save_analysis','arguments':{'gewu_key':key,'markdown':'# 隔离验证\n\n这是安装包的合成分析。','request_id':'package-fixture-note'}}},
+                    {'jsonrpc':'2.0','id':5,'method':'tools/call','params':{'name':'get_paper_file','arguments':{'gewu_key':key}}},
+                    {'jsonrpc':'2.0','id':6,'method':'tools/call','params':{'name':'get_paper_file','arguments':{'gewu_key':key}}},
                 ]
                 # Reuse the original config after the port changes in cycle 2.
                 completed = subprocess.run([ai_config['command'], *ai_config['args']], input='\n'.join(json.dumps(m) for m in messages)+'\n',
@@ -113,8 +115,15 @@ storage.close()
                     env={**env, **ai_config['env']}, creationflags=subprocess.CREATE_NO_WINDOW)
                 assert completed.returncode == 0, 'Packaged MCP adapter failed'
                 replies = [json.loads(line) for line in completed.stdout.splitlines()]
-                assert len(replies) == 4 and len(replies[1]['result']['tools']) == 4
+                assert len(replies) == 6 and len(replies[1]['result']['tools']) == 5
                 assert not replies[2]['result']['isError'] and not replies[3]['result']['isError'], 'Packaged read/save failed'
+                assert 'get_paper_file' in {tool['name'] for tool in replies[1]['result']['tools']}
+                assert all(not reply['result']['isError'] for reply in replies[4:6]), 'Packaged original-file/repeat delivery failed'
+                copies = [json.loads(reply['result']['content'][0]['text']) for reply in replies[4:6]]
+                assert copies[0]['sha256'] == copies[1]['sha256']
+                assert copies[0]['delivery']['local_path'] == copies[1]['delivery']['local_path']
+                assert not Path(copies[0]['delivery']['local_path']).exists(), 'MCP exit left delivered file behind'
+                checks['original_pdf_delivery_repeat_and_exit_cleanup'] = True
                 with closing(sqlite3.connect(workspace/'data/paper_monitor.sqlite')) as connection:
                     notes = connection.execute("SELECT id,stored_path FROM resources WHERE added_via='ai_analysis'").fetchall()
                     assert len(notes) == 1

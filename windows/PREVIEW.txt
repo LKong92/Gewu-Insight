@@ -7,6 +7,30 @@ Do not relocate or import an existing macOS Library database into this build.
 Included: native Windows window, bundled Python/.NET service, shared research UI,
 SQLite model, file opening, Explorer reveal, and managed .lnk file placements.
 
+Added in 0.1.17: current Mac AI Access connection/activity updates; authorized
+original-file MCP delivery with private read-only Windows copies and repeat/
+restart support; strictly append-only classified analyses. Supported publisher
+PDF controls can open one hidden child retaining the original POST/session.
+Unverified, unexpected and extra windows remain blocked.
+
+Added in 0.1.16: independent Folder Loader with retained drafts and progress;
+Monitor-only cache clearing; reviewed ACS/Elsevier/Oxford PDF delivery hosts;
+bounded unambiguous JavaScript PDF button/Fetch/XHR capture; installed Word or
+LibreOffice conversion for DOC/DOCX supplements. Supported single-window PDF
+actions are additionally handled in 0.1.17; complex routes may require Browser.
+Apple Passwords/AutoFill, Safari sync and macOS system Quick Look are excluded
+from the user's Windows feature-alignment scope.
+
+Added in 0.1.15: whole-selection Library Recycle removal and Clear Recycle use
+one SQLite transaction and verified Windows Shell recovery copies.
+
+Added in 0.1.14: the supported publisher background-download bridge now retrieves
+main PDFs and discovers PDF/Word supplements using the Browser session, with
+80-second/64 MB bounds and the existing Paper Files backend. Unverified sources
+and redirects stop. Library folder export handles support native CF_HDROP;
+Library item self-drops relay to Paper Files without a second file import.
+Physical cross-application drops and real publisher sign-ins remain unaccepted.
+
 Added in 0.1.13: Browser Home/Back/Forward history with retained documents,
 original popup requests (including POST), focused-page keyboard routing and
 Ctrl+[ return to the source workspace, and Save Download/page actions.
@@ -31,7 +55,7 @@ article metadata capture with local-PDF selection and History time ranges.
 Added in 0.1.8: page-at-a-time PDF preview with zoom and selectable page text,
 cancelled stale requests, Browser-session Get PDF, native file drag-out, and
 Paper Files Recycle Bin removal with SQLite/verified-file recovery. Bulk permanent
-removal from Library Recycle remains blocked pending its transaction adaptation.
+removal from Library Recycle was subsequently connected in 0.1.15.
 
 Corrected in 0.1.9: continuous PDF scrolling and PDF-only touchpad/Ctrl-wheel
 zoom; the extra page/zoom/Text toolbar is removed. No default-reader settings
@@ -40,9 +64,16 @@ and redirects must match reviewed publishers or authorized repositories;
 unverified sources are stopped. No piracy services or access-control bypass.
 
 Still under development: full preview and keyboard parity, complete drag and drop,
-bulk Recycle Bin integration, remaining native dialogs,
+cross-drive Recycle Bin acceptance, remaining native dialogs,
 old-Library migration, and upgrade/recovery acceptance. Some research operations
 also require network access and configured API providers.
+
+Added in 0.1.15: permanent removal of Library Recycle papers, selections and
+folders, plus Clear Recycle. An all-Recycle selection uses one database commit
+and verified recovery copies for its file moves. Shared files, remaining
+placements and external originals are preserved. Retained files keep their
+stored paths; restoring a file from Windows Recycle Bin does not recreate its
+deleted metadata. Full cross-drive and external-editor acceptance is pending.
 
 Requires Windows 10 2004 or later (x64) and Microsoft Edge WebView2 Runtime.
 Windows 11 x64 is the current test machine. Windows 10 and ARM64 are not verified.

@@ -56,3 +56,9 @@ authors.library.caltech.edu
 w3.org
 # Identifier resolver: each redirect destination is checked separately.
 doi.org
+# Publisher delivery endpoints verified in docs/WINDOWS_PUBLISHER_SOURCES.md.
+# Keep ACS/OUP tenant hosts scoped; do not allow all Figshare or cloud storage.
+acs.figshare.com
+sciencedirectassets.com
+oup.silverchair-cdn.com
+watermark.silverchair.com

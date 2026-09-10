@@ -5,7 +5,7 @@
   const send = (channel, payload = {}) => chrome.webview.postMessage({channel, payload});
   window.gewuPlatform = {os: 'windows', capture: true, captureDownload: true, build: 'preview'};
   window.webkit = {messageHandlers: Object.fromEntries(
-    ['browser', 'appReady', 'paperFileChooser', 'authorPhotoChooser'].map(channel => [channel, {postMessage: payload => send(channel, payload)}]))};
+    ['browser', 'appReady', 'paperFileChooser', 'authorPhotoChooser', 'nativeFileDrag', 'libraryItemDrag', 'publisherPdfDownload', 'libraryLoaderWindow'].map(channel => [channel, {postMessage: payload => send(channel, payload)}]))};
   const pending = new Map();
   window.gewuChoosePath = kind => new Promise((resolve, reject) => {
     const request_id = crypto.randomUUID();
@@ -20,11 +20,17 @@
   };
   addEventListener('pointerdown', () => send('dismissMenus'), true);
   addEventListener('keydown', event => { if (event.key === 'Escape') send('dismissMenus'); }, true);
+  addEventListener('mousedown', event => {
+    if (event.button !== 0) return;
+    const handle = event.target.closest?.('[data-native-file-drag-handle][data-native-drag-path]');
+    if (handle && !handle.closest('#libraryShell')) send('nativeFileDrag', {path: handle.dataset.nativeDragPath});
+  }, true);
   addEventListener('dragstart', event => {
     const handle = event.target.closest?.('[data-native-file-drag-handle][data-native-drag-path]');
     if (!handle || !handle.dataset.nativeDragPath) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    send('nativeFileDrag', {path:handle.dataset.nativeDragPath});
+    // The shared mousedown handler already armed the native operation. The
+    // native threshold also works for folder handles (draggable=false).
   }, true);
   const dropSurface = event => event.target.closest?.('#libraryShell, #libraryLoaderBackdrop.open')
     && !event.target.closest?.('input, textarea, [contenteditable], .browser-capture-overlay');
@@ -35,7 +41,7 @@
   addEventListener('drop', event => {
     if (!dropSurface(event) || !event.dataTransfer?.files.length) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    chrome.webview.postMessageWithAdditionalObjects({channel: 'fileDrop', payload: {x: event.clientX, y: event.clientY}}, Array.from(event.dataTransfer.files).slice(0, 256));
+    chrome.webview.postMessageWithAdditionalObjects({channel: 'fileDrop', payload: {x: event.clientX, y: event.clientY, drag_id: window.gewuNativeDragId || ''}}, Array.from(event.dataTransfer.files).slice(0, 256));
   }, true);
   addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');

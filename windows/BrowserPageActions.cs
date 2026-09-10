@@ -61,46 +61,129 @@ internal sealed partial class WorkspaceWindow
         }
     }
 
-    async Task<string> ReadBrowserDownloadAsync(CoreWebView2 core, string url, string destination, CancellationToken cancellation)
+    async Task<string> ReadBrowserDownloadAsync(CoreWebView2 rootCore, string url, string destination, CancellationToken cancellation, PublisherRequest? publisher = null)
     {
         if (!PublicUrl(url)) throw new IOException("Use a public HTTP(S) download address.");
+        if (publisher != null && !publisher.Allowed(url)) throw new IOException(PdfSources.Unverified);
         const long limit = 64L * 1024 * 1024;
         bool approvedChain = PdfSources.Approved(url), takingBody = false;
         int redirects = 0;
         var finished = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var responses = new List<Task>();
-        core.Settings.AreHostObjectsAllowed = false; core.Settings.IsWebMessageEnabled = false;
-        core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
-        core.NewWindowRequested += (_, e) => e.Handled = true;
-        core.DownloadStarting += (_, e) => { e.Cancel = true; e.Handled = true; if (!takingBody) finished.TrySetException(new IOException("The response could not be captured. Download it from the website.")); };
-        core.NavigationStarting += (_, e) => { if (!PublicUrl(e.Uri)) { e.Cancel = true; finished.TrySetException(new IOException("The download redirected to an unsupported address.")); } };
-        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
-        core.WebResourceRequested += (_, e) => {
-            if (e.ResourceContext != CoreWebView2WebResourceContext.Document || !PublicUrl(e.Request.Uri))
-                e.Response = remoteEnvironment!.CreateWebResourceResponse(Stream.Null, 403, "Unsupported download resource", "");
-        };
-        async Task ResponseAsync(string json)
+        var popups = new List<WebView2>();
+        var disconnect = new List<Action>();
+        bool closing = false, popupRequested = false;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        cancellation = lifetime.Token;
+        CoreWebView2 activeCore = rootCore;
+        if (publisher != null) publisher.ActiveView = rootCore;
+        bool Current(CoreWebView2 view) => !closing && !finished.Task.IsCompleted && activeCore == view;
+
+        async Task OpenPopupAsync(CoreWebView2 source, CoreWebView2NewWindowRequestedEventArgs e)
+        {
+            using var deferral = e.GetDeferral();
+            e.Handled = true;
+            if (publisher == null || closing || finished.Task.IsCompleted) return;
+            // One child of the deliberately activated PDF control. Chromium
+            // retains POST bodies, opener and the remote session; never replay
+            // the URL as a GET or expose a privileged workspace view.
+            if (!Current(source) || popupRequested || publisher.PdfActionPage != source.Source) {
+                finished.TrySetException(new IOException("The publisher opened an unexpected extra window. Open its PDF in Browser, then use Save to Gewu.")); return;
+            }
+            if (e.Uri != "about:blank" && !publisher.Allowed(e.Uri)) {
+                finished.TrySetException(new IOException(PdfSources.Unverified)); return;
+            }
+            popupRequested = true;
+            var view = new WebView2 { Visible = false }; popups.Add(view); Controls.Add(view);
+            try {
+                await view.EnsureCoreWebView2Async(remoteEnvironment).WaitAsync(cancellation);
+                cancellation.ThrowIfCancellationRequested();
+                if (!Current(source)) return;
+                view.CoreWebView2.Settings.AreHostObjectsAllowed = false;
+                view.CoreWebView2.Settings.IsWebMessageEnabled = false;
+                view.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = false;
+                publisher.ActiveView = activeCore = view.CoreWebView2;
+                e.NewWindow = view.CoreWebView2;
+                // WebResourceRequested and DevTools target the new contents
+                // only after assignment. The deferral holds its first request.
+                await ConfigureAsync(view.CoreWebView2);
+            } catch (Exception error) { finished.TrySetException(error); }
+        }
+
+        async Task ConfigureAsync(CoreWebView2 core)
+        {
+            core.Settings.AreHostObjectsAllowed = false; core.Settings.IsWebMessageEnabled = false;
+            core.Settings.AreDefaultScriptDialogsEnabled = false;
+            core.PermissionRequested += (_, e) => e.State = CoreWebView2PermissionState.Deny;
+            core.NewWindowRequested += (_, e) => { e.Handled = true; if (!closing) responses.Add(OpenPopupAsync(core, e)); };
+            core.WindowCloseRequested += (_, _) => {
+                if (Current(core) && !takingBody) finished.TrySetException(new IOException("The publisher closed its download window. Retry Download from its article page."));
+            };
+            core.DownloadStarting += (_, e) => { e.Cancel = true; e.Handled = true; if (Current(core) && !takingBody) finished.TrySetException(new IOException("The response could not be captured. Download it from the website.")); };
+            core.NavigationStarting += (_, e) => {
+                if (core != rootCore && e.Uri == "about:blank") return;
+                if (!PublicUrl(e.Uri) || (publisher != null && !publisher.Allowed(e.Uri))) {
+                    e.Cancel = true; if (Current(core)) finished.TrySetException(new IOException(PdfSources.Unverified));
+                }
+            };
+            core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (_, e) => {
+                if (closing || !PublicUrl(e.Request.Uri) || (publisher == null && e.ResourceContext != CoreWebView2WebResourceContext.Document) ||
+                    (publisher != null && !publisher.Allowed(e.Request.Uri)))
+                    e.Response = remoteEnvironment!.CreateWebResourceResponse(Stream.Null, 403, "Unsupported download resource", "");
+            };
+            core.NavigationCompleted += (_, e) => {
+                if (publisher != null && Current(core) && e.IsSuccess && !takingBody && publisher.Allowed(core.Source))
+                    responses.Add(InspectPublisherPageAsync(core, publisher, finished, cancellation));
+            };
+            var receiver = core.GetDevToolsProtocolEventReceiver("Fetch.requestPaused");
+            void Response(object? sender, CoreWebView2DevToolsProtocolEventReceivedEventArgs args) {
+                if (!closing) responses.Add(ResponseAsync(core, args.ParameterObjectAsJson));
+            }
+            receiver.DevToolsProtocolEventReceived += Response;
+            disconnect.Add(() => { receiver.DevToolsProtocolEventReceived -= Response; core.Stop(); });
+            var resourceTypes = publisher == null ? new[] { "Document" } : new[] { "Document", "XHR", "Fetch" };
+            await core.CallDevToolsProtocolMethodAsync("Fetch.enable", JsonSerializer.Serialize(new { patterns = resourceTypes.Select(type => new { urlPattern = "*", resourceType = type, requestStage = "Response" }).ToArray() }));
+        }
+
+        async Task ResponseAsync(CoreWebView2 core, string json)
         {
             string requestId = "", stream = "";
             try {
                 cancellation.ThrowIfCancellationRequested();
                 using var document = JsonDocument.Parse(json);
                 var value = document.RootElement; requestId = TextValue(value, "requestId");
+                if (!Current(core)) return;
                 string responseUrl = TextValue(value.GetProperty("request"), "url");
-                if (!PublicUrl(responseUrl)) throw new IOException("The download redirected to an unsupported address.");
+                bool subresource = TextValue(value, "resourceType") is "XHR" or "Fetch";
+                if (!PublicUrl(responseUrl) || (publisher != null && !publisher.Allowed(responseUrl))) throw new IOException(PdfSources.Unverified);
                 approvedChain &= PdfSources.Approved(responseUrl);
                 int status = value.TryGetProperty("responseStatusCode", out var code) ? code.GetInt32() : 0;
                 var headers = value.TryGetProperty("responseHeaders", out var all) ? all.EnumerateArray().ToArray() : [];
                 string Header(string name) => headers.Where(h => TextValue(h, "name").Equals(name, StringComparison.OrdinalIgnoreCase)).Select(h => TextValue(h, "value")).FirstOrDefault() ?? "";
                 if (status is 301 or 302 or 303 or 307 or 308) {
                     if (++redirects > 10 || !Uri.TryCreate(new Uri(responseUrl), Header("location"), out var next) || !PublicUrl(next.AbsoluteUri) ||
-                        (approvedChain && !PdfSources.Approved(next.AbsoluteUri))) throw new IOException(PdfSources.Unverified);
+                        (approvedChain && !PdfSources.Approved(next.AbsoluteUri)) ||
+                        (publisher != null && !publisher.Allowed(next.AbsoluteUri))) throw new IOException(PdfSources.Unverified);
                     approvedChain &= PdfSources.Approved(next.AbsoluteUri);
                     await core.CallDevToolsProtocolMethodAsync("Fetch.continueRequest", JsonSerializer.Serialize(new { requestId }));
                     requestId = ""; return;
                 }
-                if (status != 200) throw new IOException("The website did not return a complete download. Finish signing in on the website, then retry.");
                 string mime = Header("content-type");
+                if (publisher != null && subresource) {
+                    bool fileResponse = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) ||
+                        (publisher.Supplement && (mime.Contains("msword", StringComparison.OrdinalIgnoreCase) || mime.Contains("wordprocessingml", StringComparison.OrdinalIgnoreCase))) ||
+                        (mime.Contains("octet-stream", StringComparison.OrdinalIgnoreCase) && System.Text.RegularExpressions.Regex.IsMatch(Header("content-disposition"), @"\.pdf\b|\.docx?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+                    if (!fileResponse) {
+                        await core.CallDevToolsProtocolMethodAsync("Fetch.continueRequest", JsonSerializer.Serialize(new { requestId }));
+                        requestId = ""; return;
+                    }
+                }
+                if (status != 200) throw new IOException("The website did not return a complete download. Finish signing in on the website, then retry.");
+                if (publisher != null && mime.Contains("text/html", StringComparison.OrdinalIgnoreCase) && !Header("content-disposition").Contains("attachment", StringComparison.OrdinalIgnoreCase)) {
+                    await core.CallDevToolsProtocolMethodAsync("Fetch.continueRequest", JsonSerializer.Serialize(new { requestId }));
+                    requestId = ""; return;
+                }
                 string name = Uri.UnescapeDataString(Path.GetFileName(new Uri(responseUrl).AbsolutePath));
                 if (ContentDispositionHeaderValue.TryParse(Header("content-disposition"), out var disposition)) name = disposition.FileNameStar ?? disposition.FileName?.Trim('"') ?? name;
                 name = Path.GetFileName(name.Replace('\\', '/'));
@@ -109,6 +192,13 @@ internal sealed partial class WorkspaceWindow
                 if (name.Length == 0) name = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) ? "Download.pdf" : "Download.html";
                 bool documentFile = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) || mime.Contains("octet-stream", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase);
                 if (documentFile && !approvedChain) throw new IOException(PdfSources.Unverified);
+                if (publisher != null) {
+                    bool supported = mime.Contains("pdf", StringComparison.OrdinalIgnoreCase) || mime.Contains("octet-stream", StringComparison.OrdinalIgnoreCase) ||
+                        (publisher.Supplement && (mime.Contains("msword", StringComparison.OrdinalIgnoreCase) || mime.Contains("wordprocessingml", StringComparison.OrdinalIgnoreCase)));
+                    if (!supported) throw new IOException("The publisher did not return a supported PDF or Word supplement.");
+                    publisher.FileUrl = responseUrl;
+                    publisher.FileMime = mime;
+                }
                 if (long.TryParse(Header("content-length"), out long length) && length > limit) throw new IOException("Save Download supports files up to 64 MB.");
                 if (takingBody) throw new IOException("A download is already being read.");
                 takingBody = true;
@@ -132,23 +222,24 @@ internal sealed partial class WorkspaceWindow
                     }
                     if (total == 0) throw new IOException("The website returned an empty download.");
                 }
-                finished.TrySetResult(name);
-            } catch (Exception error) { finished.TrySetException(error); }
+                if (Current(core)) finished.TrySetResult(name);
+            } catch (Exception error) { if (Current(core)) finished.TrySetException(error); }
             finally {
                 if (stream.Length > 0) try { await core.CallDevToolsProtocolMethodAsync("IO.close", JsonSerializer.Serialize(new { handle = stream })); } catch (Exception) { }
                 if (requestId.Length > 0) try { await core.CallDevToolsProtocolMethodAsync("Fetch.failRequest", JsonSerializer.Serialize(new { requestId, errorReason = "Aborted" })); } catch (Exception) { }
             }
         }
-        var receiver = core.GetDevToolsProtocolEventReceiver("Fetch.requestPaused");
-        void Response(object? sender, CoreWebView2DevToolsProtocolEventReceivedEventArgs args) => responses.Add(ResponseAsync(args.ParameterObjectAsJson));
-        receiver.DevToolsProtocolEventReceived += Response;
         try {
-            await core.CallDevToolsProtocolMethodAsync("Fetch.enable", JsonSerializer.Serialize(new { patterns = new[] { new { urlPattern = "*", resourceType = "Document", requestStage = "Response" } } }));
-            core.Navigate(url);
+            await ConfigureAsync(rootCore);
+            if (publisher == null) rootCore.Navigate(url);
+            else NavigatePublisher(rootCore, publisher, url, publisher.Referer);
             return await finished.Task.WaitAsync(cancellation);
         } finally {
-            receiver.DevToolsProtocolEventReceived -= Response;
+            closing = true; lifetime.Cancel();
+            foreach (var detach in disconnect) try { detach(); } catch (Exception) { }
             try { await Task.WhenAll(responses).WaitAsync(TimeSpan.FromSeconds(3)); } catch (Exception) { }
+            foreach (var view in popups) { Controls.Remove(view); view.Dispose(); }
+            if (publisher != null) publisher.ActiveView = null;
             // The caller owns and disposes this dedicated view. No workspace
             // token, upload capability, or local file is sent to a website.
         }

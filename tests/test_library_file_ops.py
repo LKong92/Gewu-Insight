@@ -1475,7 +1475,9 @@ class LibraryFileOperationTests(unittest.TestCase):
             path.replace(target)
             return target
 
-        with patch.object(ui_server, "move_path_to_macos_trash", side_effect=fake_system_trash):
+        with patch.object(ui_server, "move_path_to_macos_trash", side_effect=fake_system_trash), patch(
+            "paper_monitor.windows_recycle.recycle_file", side_effect=fake_system_trash
+        ):
             result = ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
                 None,
                 self.storage,
@@ -1529,7 +1531,7 @@ class LibraryFileOperationTests(unittest.TestCase):
             ui_server,
             "move_path_to_macos_trash",
             side_effect=PermissionError("Finder Trash permission denied"),
-        ):
+        ), patch("paper_monitor.windows_recycle.recycle_file", side_effect=PermissionError("Recycle permission denied")):
             with self.assertRaises(PermissionError):
                 ui_server.PaperMonitorUiHandler.delete_library_entry_in_storage(
                     None,

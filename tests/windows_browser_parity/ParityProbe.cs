@@ -46,6 +46,7 @@ internal sealed partial class WorkspaceWindow
             await UntilJS("window.gewuBrowserNativeEvent && document.getElementById('browserMode')");
             await UntilJS("state.libraryLoaded && state.mode==='library'");
             Check(!server!.HasExited, "original source shell and authenticated workspace start");
+            stage = "independent Folder Loader"; await CheckLoaderAsync();
             stage = "favicons"; await CheckFaviconsAsync();
             stage = "browser";
             await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserMode').click()");
@@ -60,8 +61,11 @@ internal sealed partial class WorkspaceWindow
             core.SetVirtualHostNameToFolderMapping("parity.example", fixtures, CoreWebView2HostResourceAccessKind.DenyCors);
             await OpenPageAsync("https://parity.example/article.html", false);
             await Until(() => !page.Loading && page.Title == "Parity article");
+            stage = "Monitor cache"; await CheckMonitorCacheAsync(page);
             stage = "Home history and keyboard"; await CheckNavigationAsync(page, fixtures);
             stage = "page actions and downloads"; await CheckPageActionsAsync(page);
+            stage = "publisher downloads and native Library drag"; await CheckPublisherAndDragAsync();
+            stage = "publisher CDN and PDF controls"; await CheckPublisherRoutesAsync();
             await workspace.CoreWebView2.ExecuteScriptAsync("window.__parityEvents=[]; const original=window.gewuBrowserNativeEvent; window.gewuBrowserNativeEvent=e=>{window.__parityEvents.push(e); original(e)}");
             stage = "suggestions";
             await workspace.CoreWebView2.ExecuteScriptAsync("document.getElementById('browserAddress').focus()");
@@ -149,6 +153,7 @@ internal sealed partial class WorkspaceWindow
                 server.Kill();
                 await Until(() => server != null && server.Id != previousPid && !recoveringService && !startup.Visible, 45);
                 Check(selected == page && page.View.CoreWebView2 == core, $"service restart {crash + 1} retains the webpage view");
+                Check(loaderView?.CoreWebView2 != null && await loaderView.CoreWebView2.ExecuteScriptAsync("state.libraryImportJob?.status==='completed'") == "true", $"service restart {crash + 1} preserves the Loader document and completed result");
                 Check(await core.ExecuteScriptAsync("document.getElementById('draft').value") == "\"draft retained through crash\"", $"service restart {crash + 1} preserves the unsent form");
                 using var health = await client.GetAsync(new Uri(origin!, "api/library/bootstrap"));
                 Check(health.IsSuccessStatusCode, $"service restart {crash + 1} restores authenticated Library access");
