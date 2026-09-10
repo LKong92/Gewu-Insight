@@ -27,6 +27,10 @@ def operation(tool, body=True, parameters=None):
 def build():
     paths = {}
     for tool in TOOLS:
+        if tool['name'] == 'get_paper_file':
+            # Client-local delivery composes metadata + the binary HTTP route;
+            # it is not a JSON endpoint in the App process.
+            continue
         paths['/api/v1/tools/' + tool['name']] = {'post': operation(tool)}
     key = {'name': 'gewu_key', 'in': 'path', 'required': True, 'schema': {'type': 'string', 'pattern': '^gw_[0-9a-f]{10,64}$'}}
     query = lambda name, spec: {'name': name, 'in': 'query', 'schema': spec}

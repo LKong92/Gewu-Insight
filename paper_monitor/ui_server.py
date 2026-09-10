@@ -22247,6 +22247,8 @@ def attach_file_to_paper(
     annotation_state: str = "",
     added_via: str = "paper_details",
     source_url: str = "",
+    refresh_existing: bool = True,
+    mime_type: str = "",
 ) -> dict[str, Any]:
     paper = storage.get_paper(str(paper_id))
     if not paper:
@@ -22272,7 +22274,8 @@ def attach_file_to_paper(
     if suffix == ".pdf" and not is_valid_pdf_bytes(content):
         raise ValueError("The selected file is not a valid PDF")
     digest = hashlib.sha256(content).hexdigest()
-    refresh_paper_resource_fingerprints(storage, str(paper_id))
+    if refresh_existing:
+        refresh_paper_resource_fingerprints(storage, str(paper_id))
     duplicate = storage.conn.execute(
         "SELECT id FROM resources WHERE paper_id = ? AND sha256 = ? ORDER BY id ASC LIMIT 1",
         (str(paper_id), digest),
@@ -22313,7 +22316,7 @@ def attach_file_to_paper(
                 or ("annotated" if fingerprint.is_annotated else "unannotated")
             ),
             added_via=added_via,
-            mime_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+            mime_type=mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
             kind=suffix.lstrip(".") or "file",
         )
         if resolved_type in AUTOMATIC_DEFAULT_FILE_TYPE_RANK and should_promote_new_paper_version(storage, str(paper_id), resource):

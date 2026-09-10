@@ -1,5 +1,13 @@
 # User Guide audit — September 6, 2026
 
+## September 10 original-file MCP delivery
+
+- Document `get_paper_file`: authorized original bytes and metadata, read-only client-local temporary copies, file/session limits, client-owned PDF/OCR processing, and reloading the local MCP connection. Distinguish full-file delivery from the ten-page `read_paper` text limit.
+- Explicitly prohibit editing, overwriting or deleting any existing Paper Files through MCP, including earlier AI notes. Document server-assigned Markdown categories and provenance: Other / Unannotated / Other, with AI analysis and connection source detail.
+- Preserve all 32 original-App screenshots and continuous Product Identity chapters. The generated guide has 103 pages; revised AI pages 83–86 and Identity pages 91–93 were visually reviewed. No new screenshots or research data were captured.
+- Product validation: 849 tests passed (58.138 s), including 29 AI Access checks; final 26 Guide/audit checks and six PDF structure checks passed, along with Python compile and diff checks. A real STDIO client fixture delivered a 35.7 MB mixed text/image PDF, verified bytes/SHA-256 and read-only mode, extracted text and rendered both pages in client tools, and appended a correctly classified Markdown note. Copies were removed on normal MCP exit. Concurrent synthetic UI requests remained responsive; this does not establish performance for external OCR or every real-world workload.
+- The first sandbox test attempt could not bind loopback ports; the elevated temporary-data run passed. A missing Markdown MIME mapping found during validation was fixed explicitly. The original App was rebuilt and signature-verified using its existing-icon fallback. Native CUA inspection timed out; its owned Python service was reloaded using the launcher's existing recovery mechanism, preserving the App process. Live guide requests require a private workspace session and were not bypassed.
+
 ## September 9 AI methodology follow-up
 
 - Expand AI Access before the connection instructions with the roles of stable Gewu Keys, persistent SQLite records and local files, structured API operations, and MCP tool discovery. Explain that later sessions explicitly retrieve saved state; automatic model-memory synchronization and semantic indexing are not implemented.

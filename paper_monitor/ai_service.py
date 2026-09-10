@@ -92,7 +92,9 @@ def file_metadata(resource, default_id=0):
             'file_type': resource.get('file_type'), 'mime_type': resource.get('mime_type'),
             'size_bytes': resource.get('size_bytes'), 'exists': bool(resource.get('exists', Path(resource.get('stored_path') or resource.get('source_path') or '').is_file())),
             'sha256': resource.get('sha256') or '', 'is_default': resource['id'] == default_id,
-            'annotation_state': resource.get('annotation_state')}
+            'annotation_state': resource.get('annotation_state'), 'file_source': resource.get('file_source'),
+            'source_detail': resource.get('source_detail') or '', 'file_role': resource.get('file_role'),
+            'kind': resource.get('kind'), 'added_via': resource.get('added_via'), 'created_at': resource.get('created_at')}
 
 
 def paper_details(storage, paper):
@@ -187,6 +189,8 @@ def read_paper(storage, paper, args):
 
 def save_analysis(storage, grant, paper, args):
     from .ui_server import attach_file_to_paper
+    if set(args) - {'gewu_key', 'markdown', 'request_id', 'title', 'source_file_id', 'source_sha256', 'pages'}:
+        fail(400, 'invalid_arguments', 'save_analysis only appends a new Markdown file; file editing, deletion and classification overrides are not supported.')
     body = args.get('markdown')
     request_id = args.get('request_id')
     title = args.get('title', 'AI Analysis')
@@ -233,7 +237,9 @@ def save_analysis(storage, grant, paper, args):
                   'source_file_id': source_id, 'source_sha256': source_hash, 'pages': pages}
     content = ('---\ngewu_ai: ' + json.dumps(provenance, ensure_ascii=False) + '\n---\n\n' + body.rstrip() + '\n').encode()
     resource = attach_file_to_paper(storage, paper_id=paper['paper_id'], filename=title.strip() + '.md',
-        content=content, file_role='note', file_type='other', file_source='user_import', added_via='ai_analysis')
+        content=content, file_role='note', file_type='other', file_source='other',
+        source_detail='AI analysis · ' + grant['name'], annotation_state='unannotated',
+        added_via='ai_analysis', refresh_existing=False, mime_type='text/markdown')
     storage.conn.execute('UPDATE ai_analyses SET resource_id=?,completed=1 WHERE id=?', (resource['id'], receipt['id']))
     storage.conn.commit()
     return {'gewu_key': paper['storage_key'], 'file': file_metadata(resource), 'reused': bool(resource.get('duplicate'))}

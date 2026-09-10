@@ -176,7 +176,7 @@
     },
     "/api/v1/tools/read_paper": {
       "post": {
-        "summary": "Read PDF pages or a text/Markdown attachment. Returns the actual SHA-256 and page references; no OCR or external model is invoked.",
+        "summary": "Extract PDF text by page or read a text/Markdown attachment. For original PDFs, figures, scanned pages or extraction failures, use get_paper_file and process the delivered copy in the AI client. No OCR or external model is invoked.",
         "operationId": "read_paper",
         "security": [
           {
@@ -277,7 +277,7 @@
     },
     "/api/v1/tools/save_analysis": {
       "post": {
-        "summary": "Append a new Markdown analysis to Paper Files without changing the Default or existing files. Include the source file ID, hash and pages when based on a file. Same request_id and content safely retry one save.",
+        "summary": "Append a new Markdown analysis to Paper Files. Cannot edit, overwrite or delete any existing file, including earlier AI analyses, or change Default. Gewu assigns File type Other, Annotation Unannotated, Source Other with AI analysis and connection detail. Include the source file ID, SHA-256 from get_paper_file or read_paper, and pages when based on a file. Same request_id and content safely retry one save.",
         "operationId": "save_analysis",
         "security": [
           {
@@ -523,7 +523,7 @@
     },
     "/api/v1/papers/{gewu_key}/read": {
       "get": {
-        "summary": "Read PDF pages or a text/Markdown attachment. Returns the actual SHA-256 and page references; no OCR or external model is invoked.",
+        "summary": "Extract PDF text by page or read a text/Markdown attachment. For original PDFs, figures, scanned pages or extraction failures, use get_paper_file and process the delivered copy in the AI client. No OCR or external model is invoked.",
         "operationId": "readPaper",
         "security": [
           {
@@ -631,7 +631,7 @@
     },
     "/api/v1/papers/{gewu_key}/analyses": {
       "post": {
-        "summary": "Append a new Markdown analysis to Paper Files without changing the Default or existing files. Include the source file ID, hash and pages when based on a file. Same request_id and content safely retry one save.",
+        "summary": "Append a new Markdown analysis to Paper Files. Cannot edit, overwrite or delete any existing file, including earlier AI analyses, or change Default. Gewu assigns File type Other, Annotation Unannotated, Source Other with AI analysis and connection detail. Include the source file ID, SHA-256 from get_paper_file or read_paper, and pages when based on a file. Same request_id and content safely retry one save.",
         "operationId": "saveAnalysis",
         "security": [
           {

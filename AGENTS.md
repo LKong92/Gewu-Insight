@@ -10,6 +10,7 @@
 
 - This repo is a local paper-monitoring and research reading assistant. Use paths relative to the repo root unless the user gives an absolute path.
 - SQLite is the source of truth; JSON is export-only.
+- Obtain real paper files through the configured Gewu MCP. `get_paper_file` delivers an authorized read-only client copy that may be read/rendered/OCR-processed locally; this does not authorize direct Library/SQLite access. Write derived outputs separately. `save_analysis` only appends classified Markdown notes; no MCP operation may edit, overwrite or delete existing Paper Files, including earlier AI analyses.
 - Keep Markdown reports and analysis notes useful as user-facing reading artifacts.
 - Prefer scoped edits that reuse existing `paper_monitor` modules.
 - Avoid filtering by user research keywords unless explicitly requested.
