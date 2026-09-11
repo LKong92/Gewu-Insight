@@ -18658,10 +18658,23 @@ def update_manual_preprint_identifier(
     if cleaned and not normalized:
         raise ValueError("Enter a valid arXiv identifier or arXiv URL")
     raw = parse_raw_json(paper)
+    previous = arxiv_identifier_for_paper(paper)
+    if normalized == previous:
+        return paper
     raw["manual_preprint_identifier_override"] = True
     raw["manual_preprint_identifier"] = normalized
-    raw["manual_preprint_identifier_updated_at"] = now_iso()
-    updated = storage.update_paper_raw_json(str(paper_id), raw)
+    raw["manual_preprint_identifier_updated_at"] = datetime.now().astimezone().isoformat(timespec="microseconds")
+    from . import identifier_correction, paper_identity
+    identifier_correction.mark(raw, 'arxiv', normalized, previous, raw['manual_preprint_identifier_updated_at'])
+    # An edit changes this object; matching an existing ID must not merge objects
+    # implicitly before the user can inspect the corrected information.
+    with paper_identity.transaction(storage):
+        payload = {**paper, 'raw': raw}
+        if normalized and any(p['paper_id'] != paper_id and ('arxiv', normalized) in paper_identity.identifiers(storage, p)
+                              for p in paper_identity.find(storage, payload)):
+            raise ValueError('This arXiv ID is already registered to another Gewu Key. Existing papers were not changed.')
+        updated = storage._update_paper_raw_json_unresolved(str(paper_id), raw)
+        paper_identity.register(storage, updated)
     if not updated:
         raise KeyError(str(paper_id))
     return updated
@@ -39325,21 +39338,84 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function savePaperDoi(paper, root, {render = true} = {}) {
-      const input = root?.querySelector("#libraryDetailDoiInput");
-      if (!input || input.value.trim() === String(paper.doi || "").trim()) return paper;
+    function identifierSaveNotice(root, context, message, error = false) {
+      if (!root?.isConnected || metadataDetailContext(root) !== context) return;
+      const status = root.querySelector(".library-detail-status");
+      if (status) {
+        status.className = "library-detail-status " + (error ? "err" : "ok");
+        status.setAttribute("role", "status");
+        status.textContent = message;
+      }
+    }
+
+    async function savePaperIdentifier(paper, root, kind, {render = true, finishEditing = false} = {}) {
+      const input = root?.querySelector(kind === "doi" ? "#libraryDetailDoiInput" : ".preprint-identifier-input");
+      if (!input) return paper;
+      if (input._identifierSave) return input._identifierSave;
       const context = metadataDetailContext(root);
       const value = input.value.trim();
-      const res = await fetch("/api/library/preprint-identifier", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({paper_id: paper.paper_id, kind: "doi", identifier: value})
+      const changed = value !== input.defaultValue.trim();
+      const finish = (saved) => {
+        updatePaperState(paper.paper_id, saved);
+        if (!root.isConnected || metadataDetailContext(root) !== context || !input.isConnected || input.value.trim() !== value) return saved;
+        input.value = kind === "doi" ? (saved.doi || "") : (saved.preprint_id || "");
+        input.defaultValue = input.value;
+        if (kind === "arxiv") {
+          const label = input.closest(".preprint-identifier-main")?.querySelector('[data-action="edit-preprint-identifier"]');
+          if (label) { label.textContent = input.value || "—"; label.classList.toggle("is-empty", !input.value); }
+        }
+        if (finishEditing) {
+          input.closest(".preprint-identifier-main")?.classList.remove("is-editing");
+          if (document.activeElement === input) input.blur();
+        }
+        if (render) applyMetadataResult(root, context, saved);
+        if (finishEditing) identifierSaveNotice(root, context, changed ? "Identifier updated" : "Identifier saved");
+        return saved;
+      };
+      if (!changed) {
+        // The input's acknowledged value, not an older render closure, is current.
+        const current = state.libraryItems.find((item) => item.paper_id === paper.paper_id)?.paper
+          || state.authorMonitorPapers.find((item) => item.paper_id === paper.paper_id)
+          || state.myPublications.find((item) => item.paper_id === paper.paper_id)?.paper || paper;
+        const saved = {...current, [kind === "doi" ? "doi" : "preprint_id"]: input.defaultValue};
+        return finishEditing ? finish(saved) : saved;
+      }
+      const previousReadOnly = input.readOnly;
+      input.readOnly = true;
+      if (finishEditing) identifierSaveNotice(root, context, "Saving identifier…");
+      const request = (async () => {
+        try {
+          const res = await fetch("/api/library/preprint-identifier", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({paper_id: paper.paper_id, kind, identifier: value})
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Could not save identifier");
+          return finish(data.paper);
+        } catch (error) {
+          if (finishEditing) identifierSaveNotice(root, context, error.message || "Could not save identifier", true);
+          throw error;
+        } finally {
+          input.readOnly = previousReadOnly;
+          input._identifierSave = null;
+        }
+      })();
+      input._identifierSave = request;
+      return request;
+    }
+
+    async function savePaperDoi(paper, root, options = {}) {
+      return savePaperIdentifier(paper, root, "doi", options);
+    }
+
+    function wireDoiIdentifierControls(root, paper) {
+      root?.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.isComposing) {
+          event.preventDefault();
+          event.stopPropagation();
+          savePaperDoi(paper, root, {finishEditing: true}).catch(() => {});
+        }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Could not save DOI");
-      if (input.isConnected && input.value.trim() === value) input.defaultValue = input.value;
-      updatePaperState(paper.paper_id, data.paper);
-      if (render) applyMetadataResult(root, context, data.paper);
-      return data.paper;
     }
 
     async function refreshLibraryMetadataFromDoi(paper) {
@@ -46269,6 +46345,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wirePreprintIdentifierControls(root, paper) {
+      wireDoiIdentifierControls(root, paper);
       if (root) {
         root.dataset.metadataPaperId = String(paper?.paper_id || "");
         root.dataset.metadataCheckedAt = paper?.metadata_refresh?.checked_at || "";
@@ -46286,62 +46363,37 @@ INDEX_HTML = """<!doctype html>
       const input = field?.querySelector(".preprint-identifier-input");
       const status = field?.querySelector(".preprint-identifier-status");
       if (!field || !main || !edit || !input || !paper?.paper_id) return;
-      let busy = false;
       const begin = () => {
-        if (busy) return;
+        if (input._identifierSave) return;
         if (status) status.textContent = "";
-        input.value = String(paper.preprint_id || "");
+        input.value = input.defaultValue;
         main.classList.add("is-editing");
         input.focus({preventScroll: true});
         input.select();
       };
       const cancel = () => {
-        if (busy) return;
-        input.value = String(paper.preprint_id || "");
+        if (input._identifierSave) return;
+        input.value = input.defaultValue;
         main.classList.remove("is-editing");
         if (status) status.textContent = "";
       };
-      const save = async () => {
-        if (busy) return;
-        busy = true;
-        const context = metadataDetailContext(root);
-        input.disabled = true;
-        if (status) status.textContent = "Saving...";
-        try {
-          const res = await fetch("/api/library/preprint-identifier", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({paper_id: paper.paper_id, identifier: String(input?.value || "").trim()})
-          });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Could not update preprint identifier");
-          busy = false;
-          paper = {...paper, ...data.paper};
-          if (input.isConnected) { input.defaultValue = input.value; input.disabled = false; main.classList.remove("is-editing"); edit.textContent = data.paper?.preprint_id || "—"; }
-          applyMetadataResult(root, context, data.paper);
-          const message = data.paper?.preprint_id ? "Preprint identifier updated." : "Preprint identifier removed.";
-          if (status?.isConnected && metadataDetailContext(root) === context) status.textContent = message;
-        } catch (error) {
-          busy = false;
-          input.disabled = false;
-          if (status) status.textContent = error.message || "Could not update preprint identifier";
-          if (input.isConnected && metadataDetailContext(root) === context) input.focus({preventScroll: true});
-        }
-      };
       edit.addEventListener("click", begin);
       input.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !busy) {
+        if (event.isComposing) return;
+        if (event.key === "Escape") {
           event.preventDefault();
+          event.stopPropagation();
           cancel();
         }
-        if (event.key === "Enter" && !busy) {
+        if (event.key === "Enter") {
           event.preventDefault();
-          save();
+          event.stopPropagation();
+          savePaperIdentifier(paper, root, "arxiv", {finishEditing: true}).catch(() => {});
         }
       });
       input.addEventListener("blur", () => {
         window.setTimeout(() => {
-          if (!busy && document.activeElement !== input) cancel();
+          if (document.activeElement !== input) cancel();
         }, 0);
       });
     }
@@ -46833,12 +46885,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
-        }
-      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
@@ -47033,12 +47079,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-pdf"]')?.addEventListener("click", () => downloadLibraryPdf(paper, {force: true}));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
-        }
-      });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
       root.querySelector('[data-action="open-google-scholar"]')?.addEventListener("click", () => openLibraryWebsiteURL(paper.google_scholar_url));
@@ -53302,12 +53342,6 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-copy-bibtex"]')?.addEventListener("click", (event) => copyLibraryBibtex(paper, event.currentTarget));
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
-      root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
-        }
-      });
       wirePreprintIdentifierControls(root, paper);
       wireLibraryFileLocationLinks(root);
       wireCitationSourceSelector(root);

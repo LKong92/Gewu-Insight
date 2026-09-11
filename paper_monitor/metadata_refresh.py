@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from contextlib import contextmanager
 import itertools
-from . import metadata_network, paper_identity
+from . import metadata_network, paper_identity, identifier_correction
 
 _ACTIVE = {}
 _LOCK = threading.Lock()
@@ -231,7 +231,9 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
     original = storage.get_paper(paper_id)
     if not original:
         raise KeyError('Paper not found')
-    doi, arxiv = identifiers(original)
+    correction = identifier_correction.pending(original)
+    base = identifier_correction.baseline(original, correction) if correction else original
+    doi, arxiv = identifiers(base)
     if identifier:  # Compatibility for explicit identifier recovery callers.
         supplied_doi = valid_doi(identifier)
         supplied_arxiv = ui.normalize_arxiv_identifier(identifier) if not supplied_doi else ''
@@ -245,10 +247,10 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
             arxiv = supplied_arxiv
     if not doi and not arxiv:
         raise ValueError('Add a DOI or arXiv ID, or use Get Identifier from Files first.')
-    raw = copy.deepcopy(ui.parse_raw_json(original))
+    raw = copy.deepcopy(ui.parse_raw_json(base))
     manual_doi = raw.get('manual_doi_identifier_override') is True
     manual_arxiv = raw.get('manual_preprint_identifier_override') is True
-    working = dict(original)
+    working = dict(base)
     working['doi'] = doi
     working['raw'] = raw
     sources, conflicts = {}, []
@@ -257,6 +259,8 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
     fetched_dois, fetched_arxiv = set(), set()
     arxiv_record = None
     semantic = None
+    correction_verified = False
+    correction_links = set()
 
     def lookup(name, call):
         identity = json.dumps([doi, arxiv])
@@ -323,8 +327,10 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
         raw.update(ui.ensure_raw_preprint_metadata(raw, arxiv))
 
     def fetch_preprint():
-        nonlocal arxiv_record
+        nonlocal arxiv_record, correction_verified
         if not arxiv or arxiv in fetched_arxiv:
+            return
+        if correction and correction['kind'] == 'doi' and arxiv not in correction_links:
             return
         fetched_arxiv.add(arxiv)
         record = lookup('arXiv', lambda: ui.fetch_arxiv_by_id(arxiv, timeout=12, max_retries=1))
@@ -336,6 +342,12 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
             conflicts.append('arXiv returned a different identifier; result ignored')
             return
         arxiv_record = record
+        if correction and correction['kind'] == 'arxiv':
+            if doi and valid_doi(record.get('doi')) != doi:
+                conflicts.append('The corrected arXiv record does not verify the manually saved DOI; metadata retained.')
+                return
+            correction_verified = bool(record.get('title')) and not ui.is_placeholder_publication_title(record['title'])
+            raw.update(record_raw)
         raw.update(ui.attach_arxiv_preprint_metadata({'doi': doi, 'raw': raw}, record)['raw'])
         if not ui.doi_is_likely_published_version(doi):
             for field in ('title', 'journal', 'publication_date', 'abstract', 'abstract_source', 'url', 'landing_url', 'pdf_url', 'source', 'type'):
@@ -344,7 +356,10 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
         accept_doi(record.get('doi'), 'arXiv')
 
     def fetch_published():
+        nonlocal correction_verified
         if not doi or doi in fetched_dois:
+            return
+        if correction and correction['kind'] == 'arxiv' and not correction_verified:
             return
         fetched_dois.add(doi)
         normalized = lookup('Publication metadata', lambda: ui.publication_metrics_metadata_from_doi(doi, timeout=12, max_retries=1, allow_data_repository=ui.doi_is_likely_data_repository(doi), source_status=sources, source_lookup=lookup))
@@ -354,6 +369,9 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
             conflicts.append('Metadata service returned a different DOI; result ignored')
             return
         fresh_raw = normalized.get('raw') or {}
+        if correction and correction['kind'] == 'doi':
+            correction_verified = bool(normalized.get('title')) and not ui.is_placeholder_publication_title(normalized['title'])
+        correction_links.update(linked_arxiv(fresh_raw) | linked_arxiv(fresh_raw.get('crossref') or {}))
         accept_arxiv(linked_arxiv(fresh_raw) | linked_arxiv(fresh_raw.get('crossref') or {}), 'Crossref / OpenAlex')
         for field in ('title', 'journal', 'publication_date', 'abstract', 'abstract_source', 'url', 'landing_url', 'pdf_url', 'source', 'type', 'type_crossref', 'publisher_section', 'section_allowed', 'image_url'):
             if normalized.get(field) not in (None, '', [], {}):
@@ -368,7 +386,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
     # or if its other identifier is missing. Explicit Refresh always loads it.
     if mode != 'automatic' or doi != initial_doi or not arxiv:
         fetch_published()
-    refs = ([f'DOI:{doi}'] if doi else []) + ([f'ARXIV:{arxiv}'] if arxiv else [])
+    refs = ([f'DOI:{doi}'] if doi else []) + ([f'ARXIV:{arxiv}'] if arxiv and (not correction or correction['kind'] == 'arxiv' or arxiv in correction_links) else [])
     for ref in refs:
         if not detailed and doi and arxiv:
             break
@@ -445,7 +463,8 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
         raise ValueError('Identifiers changed during refresh. Refresh again with the saved values.')
     # Preserve concurrent notes/provenance and manual edits; remote payloads may
     # never replace the entire raw record or stored file ownership.
-    working['raw'] = {**ui.parse_raw_json(current), **{k: v for k, v in raw.items() if ui.parse_raw_json(original).get(k) != v}}
+    current_base = identifier_correction.baseline(current, correction) if correction else current
+    working['raw'] = {**ui.parse_raw_json(current_base), **{k: v for k, v in raw.items() if ui.parse_raw_json(base).get(k) != v}}
     def projection(paper):
         fields = {k: paper.get(k) for k in ('doi', 'title', 'journal', 'publication_date', 'abstract')}
         record = ui.parse_raw_json(paper)
@@ -455,15 +474,19 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
                                  ui.parse_semantic_scholar_json(paper).get('citationCount')])
         return fields
     before = projection(current)
-    merged = ui.merge_refreshed_metadata(current, working)
+    merged = ui.merge_refreshed_metadata(current_base, working)
     linked_preprint = arxiv if doi != initial_doi and arxiv and raw.get('published_doi') == doi else ''
-    reference = storage.metadata_refresh_identity_reference(current, merged, linked_preprint_id=linked_preprint)
+    reference = storage.metadata_refresh_identity_reference(current_base, merged, linked_preprint_id=linked_preprint)
     reasons = storage.paper_identity_conflict_reasons(reference, merged)
-    if reasons:
+    if correction and not correction_verified:
+        conflicts.append('Identifier saved, but matching metadata could not be verified; previous information retained. Retry Refresh Info.')
+        updated = current
+    elif reasons:
         conflicts.append('Metadata disagrees with existing identity (' + ', '.join(reasons) + '); existing values retained')
         updated = current
     else:
-        updated = storage.refresh_paper_metadata(paper_id, merged, linked_preprint_id=linked_preprint) or current
+        updated = (storage.apply_identifier_correction(paper_id, merged, correction) if correction
+                   else storage.refresh_paper_metadata(paper_id, merged, linked_preprint_id=linked_preprint)) or current
         if semantic:
             updated = storage.update_semantic_scholar_enrichment(paper_id, semantic) or updated
     after = projection(updated)
@@ -490,7 +513,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
     if failures:
         message += ' Some sources were unavailable or returned no usable record.'
     if conflicts:
-        message += ' Conflicting evidence was retained for review; existing identifiers were preserved.'
+        message += ' Conflicting source information was not applied; saved identifiers were kept.'
     report = {'status': status, 'message': message, 'changed_fields': changed, 'sources': sources,
               'conflicts': list(dict.fromkeys(conflicts)), 'checked_at': now.isoformat(timespec='microseconds'),
               'next_check_at': (now + timedelta(days=1 if failures else (30 if quiet >= 3 else 7))).isoformat(timespec='seconds'),
@@ -518,7 +541,8 @@ def save_doi(storage, paper_id, value):
         raise ValueError('This DOI is already registered to another Gewu Key. Existing papers were not changed.')
     raw = ui.parse_raw_json(current)
     raw.update(manual_doi_identifier_override=True, manual_doi_identifier=doi,
-               manual_doi_identifier_updated_at=ui.now_iso())
+               manual_doi_identifier_updated_at=datetime.now().astimezone().isoformat(timespec='microseconds'))
+    identifier_correction.mark(raw, 'doi', doi, valid_doi(current.get('doi')), raw['manual_doi_identifier_updated_at'])
     # Retire URLs for the explicitly replaced DOI from the current projection,
     # while retaining them as history. Local file paths are never changed.
     old_doi = valid_doi(current.get('doi'))
@@ -527,7 +551,8 @@ def save_doi(storage, paper_id, value):
     if retired:
         raw.setdefault('manual_identifier_history', []).append({'doi': old_doi, 'urls': retired, 'updated_at': ui.now_iso()})
     assignments = ', '.join(key + ' = NULL' for key in retired)
-    with storage.conn:
+    with paper_identity.transaction(storage):
         storage.conn.execute('UPDATE papers SET doi = ?, raw_json = ?, last_seen_at = ?' + (', ' + assignments if assignments else '') + ' WHERE paper_id = ?',
                              (doi or None, json.dumps(raw, ensure_ascii=False), ui.now_iso(), paper_id))
+        paper_identity.register(storage, storage.get_paper(paper_id))
     return storage.get_paper(paper_id)

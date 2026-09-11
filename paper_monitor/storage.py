@@ -1057,7 +1057,8 @@ class Storage:
             preprint_version.get("versioned_arxiv_id"),
         ]
         paper_id = str(paper.get("paper_id") or "")
-        if paper_id.lower().startswith("arxiv_"):
+        correction = raw.get("manual_identifier_correction") or {}
+        if paper_id.lower().startswith("arxiv_") and correction.get("status") not in {"pending", "applied"}:
             candidates.append(paper_id[6:])
         normalized: list[str] = []
         for candidate in candidates:
@@ -2035,6 +2036,30 @@ class Storage:
                 paper_identity.register(self, updated)
             return updated
 
+    def apply_identifier_correction(self, paper_id: str, paper: dict[str, Any], edit: dict[str, Any]) -> dict[str, Any]:
+        """Apply verified metadata only to the explicitly edited object, never merge it."""
+        from . import identifier_correction
+        paper_id = self.resolve_paper_id(paper_id)
+        with paper_identity.transaction(self):
+            current = self.get_paper(paper_id)
+            if not current or identifier_correction.pending(current) != edit:
+                raise ValueError('Identifier changed during refresh. Refresh again with the saved value.')
+            identity = (edit['kind'], edit['identifier'])
+            if identity not in paper_identity.identifiers(self, paper):
+                raise ValueError('Metadata does not match the corrected identifier.')
+            candidates = paper_identity.find(self, paper)
+            incoming_ids = paper_identity.identifiers(self, paper)
+            if any(p['paper_id'] != paper_id and incoming_ids & paper_identity.identifiers(self, p) for p in candidates):
+                raise ValueError('Corrected metadata matches another Gewu Key. Existing papers and files were preserved.')
+            payload = identifier_correction.with_history(current, paper, edit)
+            reference = identifier_correction.baseline(current, edit)
+            if self.paper_identity_conflict_reasons(reference, payload):
+                raise ValueError('Corrected metadata contains contradictory identifiers; previous information retained.')
+            updated = self._refresh_paper_metadata_unresolved(paper_id, payload, correction_reference=reference, commit=False)
+            self.conn.execute('UPDATE papers SET semantic_scholar_json=NULL, semantic_scholar_enriched_at=NULL WHERE paper_id=?', (paper_id,))
+            paper_identity.register(self, updated)
+            return self.get_paper(paper_id)
+
     def _upsert_paper_unresolved(
         self,
         paper: dict[str, Any],
@@ -2343,10 +2368,12 @@ class Storage:
         reference["journal"] = incoming.get("journal")
         return reference
 
-    def _refresh_paper_metadata_unresolved(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "", commit: bool = True) -> dict[str, Any] | None:
+    def _refresh_paper_metadata_unresolved(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "", correction_reference: dict[str, Any] | None = None, commit: bool = True) -> dict[str, Any] | None:
         existing = self.get_paper(paper_id)
         if not existing:
             return None
+        if correction_reference is not None:
+            existing = correction_reference
         reference = self.metadata_refresh_identity_reference(existing, paper, linked_preprint_id=linked_preprint_id)
         conflict_reasons = self.paper_identity_conflict_reasons(reference, paper)
         if conflict_reasons:

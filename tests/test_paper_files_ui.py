@@ -67,7 +67,7 @@ class PaperFilesUiTests(unittest.TestCase):
         self.assertIn('title="Click to edit the arXiv identifier"', metadata)
         self.assertIn('class="preprint-identifier-input"', metadata)
         self.assertIn('main.classList.add("is-editing")', metadata)
-        self.assertIn('fetch("/api/library/preprint-identifier"', metadata)
+        self.assertIn('savePaperIdentifier(paper, root, "arxiv", {finishEditing: true})', metadata)
         self.assertIn('if (event.key === "Enter"', metadata)
         self.assertIn('if (event.key === "Escape"', metadata)
         self.assertNotIn("showPreprintIdentifierContextMenu", metadata)
