@@ -39,7 +39,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from . import publication_jobs, scholar_access, author_metadata_work
+from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs
 from .publication_deletion import delete_publications
 from .recycle import delete_recycle_selection, preview_recycle_selection
 from .publication_errors import report_publication_error
@@ -640,6 +640,15 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/theme-report":
                 self.handle_theme_report(parse_qs(parsed.query))
                 return
+            if parsed.path == "/api/library/metadata-refresh/jobs":
+                storage = Storage(self.configured_db_path)
+                try:
+                    history = metadata_jobs.listing(storage)
+                    visible = [j for j in history if j["status"] != "completed"] + [j for j in history if j["status"] == "completed"][:30]
+                    self.send_json({"jobs": [{k: v for k, v in j.items() if k != "logs"} for j in visible]})
+                finally:
+                    storage.close()
+                return
             if parsed.path == "/api/library/import-folder/progress":
                 self.handle_library_import_folder_progress(parse_qs(parsed.query))
                 return
@@ -1103,6 +1112,19 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/library/import-folder/start":
                 self.handle_start_library_import_folder(payload)
+                return
+            if parsed.path == "/api/library/metadata-refresh/control":
+                storage = Storage(self.configured_db_path)
+                try:
+                    job = metadata_jobs.control(storage, str(payload.get("job_id") or ""), str(payload.get("action") or ""))
+                except (KeyError, ValueError) as exc:
+                    self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                finally:
+                    storage.close()
+                if job["status"] == "queued":
+                    metadata_jobs.start(self.configured_db_path)
+                self.send_json({"job": job})
                 return
             if parsed.path == "/api/library/metadata-refresh/start":
                 self.handle_start_library_metadata_refresh(payload)
@@ -3488,22 +3510,18 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
 
     def handle_start_library_metadata_refresh(self, payload: dict[str, Any]) -> None:
-        metadata_mode = normalize_metadata_refresh_mode(payload.get("metadata_mode"))
-        skip_days = int(payload.get("skip_days") or 3)
-        skip_days = max(0, min(30, skip_days))
-        job_id = create_library_metadata_refresh_job(metadata_mode=metadata_mode, skip_days=skip_days)
-        thread = threading.Thread(
-            target=run_library_metadata_refresh_job,
-            kwargs={
-                "job_id": job_id,
-                "db_path": self.configured_db_path,
-                "metadata_mode": metadata_mode,
-                "skip_days": skip_days,
-            },
-            daemon=True,
-        )
-        thread.start()
-        self.send_json({"job_id": job_id, "job": get_library_import_job(job_id)})
+        storage = Storage(self.configured_db_path)
+        try:
+            folder_id = int(payload["folder_id"]) if payload.get("folder_id") is not None else None
+            job = metadata_jobs.create(storage, mode=normalize_metadata_refresh_mode(payload.get("metadata_mode")),
+                skip_days=max(0, min(30, int(payload.get("skip_days", 3)))), folder_id=folder_id)
+        except (TypeError, ValueError) as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+        finally:
+            storage.close()
+        metadata_jobs.start(self.configured_db_path)
+        self.send_json({"job_id": job["job_id"], "job": job})
 
     def handle_start_library_identifier_recovery(self, payload: dict[str, Any]) -> None:
         skip_days = int(payload.get("skip_days") or 7)
@@ -3524,6 +3542,12 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
     def handle_library_import_folder_progress(self, query: dict[str, list[str]]) -> None:
         job_id = first(query, "job_id") or first(query, "id")
         job = get_library_import_job(job_id)
+        if not job:
+            storage = Storage(self.configured_db_path)
+            try:
+                job = metadata_jobs.get(storage, job_id)
+            finally:
+                storage.close()
         if not job:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Unknown import job")
             return
@@ -4664,62 +4688,26 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
         self.send_json(snapshot)
 
     def handle_refresh_library_metadata(self, payload: dict[str, Any]) -> None:
-        paper_id = str(payload.get("paper_id") or "")
-        identifier = clean_text(str(payload.get("identifier") or payload.get("doi") or ""))
-        doi = normalize_publication_doi(identifier)
-        arxiv_id = normalize_arxiv_identifier(identifier)
-        include_snapshot = payload.get("snapshot", True) is not False
+        paper_id = clean_text(str(payload.get("paper_id") or ""))
         if not paper_id:
             self.send_error_json(HTTPStatus.BAD_REQUEST, "paper_id is required")
             return
-        if not (doi and looks_like_doi(doi)) and not arxiv_id:
-            self.send_error_json(HTTPStatus.BAD_REQUEST, "A valid DOI or arXiv ID is required")
-            return
         storage = Storage(self.configured_db_path)
         try:
-            try:
-                if arxiv_id and not looks_like_doi(identifier):
-                    normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id)
-                    lookup_label = arxiv_id
-                    lookup_kind = "arXiv ID"
-                else:
-                    normalized = publication_metrics_metadata_from_doi(
-                        doi,
-                        allow_data_repository=doi_is_likely_data_repository(doi),
-                    )
-                    lookup_label = doi
-                    lookup_kind = "data DOI" if doi_is_likely_data_repository(doi) else "DOI"
-            except Exception as exc:
-                self.send_error_json(HTTPStatus.BAD_GATEWAY, f"{lookup_kind} metrics lookup failed: {exc}")
-                return
-            paper = None
-            if normalized:
-                paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(storage.get_paper(paper_id), normalized))
-            if not paper:
-                paper = storage.get_paper(paper_id)
-            if not paper:
-                self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
-                return
-            pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
-            if pubmed_doi and looks_like_doi(pubmed_doi):
-                paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=12, max_retries=1) or paper
-            semantic_lookup_paper = dict(paper)
-            if doi and looks_like_doi(doi):
-                semantic_lookup_paper["doi"] = doi
-            if arxiv_id:
-                raw = parse_raw_json(semantic_lookup_paper)
-                raw["arxiv_id"] = arxiv_id
-                semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
-            paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=12, max_retries=1) or paper
-            paper = refresh_ads_if_possible(storage, paper, timeout=12, max_retries=1) or paper
-            if not normalized and not parse_semantic_scholar_json(paper):
-                self.send_error_json(HTTPStatus.NOT_FOUND, f"No publication found for this {lookup_kind}: {lookup_label}")
-                return
-            snapshot = library_snapshot(storage) if include_snapshot else {}
+            result = metadata_refresh.refresh(storage, paper_id, detailed=True,
+                identifier=clean_text(str(payload.get("identifier") or payload.get("doi") or "")))
+            snapshot = library_snapshot(storage) if payload.get("snapshot", True) is not False else {}
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
+        except KeyError:
+            self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
+            return
+        except ValueError as exc:
+            self.send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         finally:
             storage.close()
-        self.send_json({"paper": paper_to_api(paper), "publications": publications, **snapshot})
+        self.send_json({"paper": paper_to_api(result["paper"]), "metadata_refresh": result["metadata_refresh"],
+                        "publications": publications, **snapshot})
 
     def handle_update_preprint_identifier(self, payload: dict[str, Any]) -> None:
         paper_id = clean_text(str(payload.get("paper_id") or ""))
@@ -4729,7 +4717,8 @@ class PaperMonitorUiHandler(BaseHTTPRequestHandler):
             return
         storage = Storage(self.configured_db_path)
         try:
-            paper = update_manual_preprint_identifier(storage, paper_id, identifier)
+            paper = (metadata_refresh.save_doi(storage, paper_id, identifier) if payload.get("kind") == "doi"
+                     else update_manual_preprint_identifier(storage, paper_id, identifier))
             publications = [my_publication_to_api(row) for row in storage.list_my_publications()]
         except KeyError:
             self.send_error_json(HTTPStatus.NOT_FOUND, "Paper not found")
@@ -10079,6 +10068,7 @@ def paper_to_api(
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
         "citation_label": citation_label(paper),
@@ -10144,6 +10134,7 @@ def monitor_paper_to_api(
         "discipline": classify_discipline(paper),
         "image_url": paper.get("image_url") or "",
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "preprint_category": preprint_primary_category(paper, raw=raw),
         "preprint_categories": preprint_categories(paper, raw=raw),
         "source": paper.get("source") or "",
@@ -10213,6 +10204,7 @@ def author_monitor_paper_to_api(paper: dict[str, Any]) -> dict[str, Any]:
         "authors": author_summary(paper),
         "full_authors": full_author_names(paper),
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
         "citation_label": citation_label(paper, full_lead=True),
         "google_scholar_citation_count": scholar_count,
         "citation_count": scholar_count if scholar_count is not None else fallback_count,
@@ -10614,44 +10606,10 @@ def summarize_import_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def refresh_library_paper_metadata_for_identifier(
-    storage: Storage,
-    paper_id: str,
-    identifier: str,
-    *,
-    timeout: int = 12,
+    storage: Storage, paper_id: str, identifier: str, *, timeout: int = 12,
     max_retries: int = 1,
 ) -> dict[str, Any] | None:
-    cleaned = clean_text(identifier)
-    doi = normalize_publication_doi(cleaned)
-    arxiv_id = normalize_arxiv_identifier(cleaned)
-    if arxiv_id and not looks_like_doi(cleaned):
-        normalized = publication_metrics_metadata_from_arxiv_id(arxiv_id, timeout=timeout, max_retries=max_retries)
-    elif doi and looks_like_doi(doi):
-        normalized = publication_metrics_metadata_from_doi(
-            doi,
-            timeout=timeout,
-            max_retries=max_retries,
-            allow_data_repository=doi_is_likely_data_repository(doi),
-        )
-    else:
-        return None
-    existing = storage.get_paper(paper_id)
-    paper = storage.refresh_paper_metadata(paper_id, merge_refreshed_metadata(existing, normalized)) if normalized else existing
-    if not paper:
-        return None
-    pubmed_doi = normalize_publication_doi(doi or str(paper.get("doi") or ""))
-    if pubmed_doi and looks_like_doi(pubmed_doi):
-        paper = refresh_pubmed_if_possible(storage, paper, doi=pubmed_doi, timeout=timeout, max_retries=max_retries) or paper
-    semantic_lookup_paper = dict(paper)
-    if doi and looks_like_doi(doi):
-        semantic_lookup_paper["doi"] = doi
-    if arxiv_id:
-        raw = parse_raw_json(semantic_lookup_paper)
-        raw["arxiv_id"] = arxiv_id
-        semantic_lookup_paper["raw_json"] = json.dumps(raw, ensure_ascii=False)
-    paper = refresh_semantic_scholar_if_possible(storage, semantic_lookup_paper, timeout=timeout, max_retries=max_retries) or paper
-    paper = refresh_ads_if_possible(storage, paper, timeout=timeout, max_retries=max_retries) or paper
-    return paper
+    return metadata_refresh.refresh(storage, paper_id, identifier=identifier, detailed=True)["paper"]
 
 
 def local_pdf_path_for_identifier_extraction(paper: dict[str, Any]) -> Path | None:
@@ -11231,6 +11189,8 @@ def publication_metrics_metadata_from_doi(
     timeout: int = 20,
     max_retries: int = 3,
     allow_data_repository: bool = False,
+    source_status: dict[str, str] | None = None,
+    source_lookup: Callable | None = None,
 ) -> dict[str, Any] | None:
     doi = normalize_publication_doi(doi)
     if not doi or not looks_like_doi(doi) or (doi_is_likely_data_repository(doi) and not allow_data_repository):
@@ -11238,13 +11198,17 @@ def publication_metrics_metadata_from_doi(
     crossref_count: int | None = None
     crossref_journal = ""
     crossref_raw: dict[str, Any] = {}
+    crossref = None
+    outcomes = source_status if source_status is not None else {}
+    lookup = source_lookup or (lambda name, call: call())
     try:
-        crossref = publication_metadata_from_doi(
+        crossref = lookup("Crossref", lambda: publication_metadata_from_doi(
             doi,
             timeout=timeout,
             max_retries=max_retries,
             allow_data_repository=allow_data_repository,
-        )
+        ))
+        if source_lookup is None: outcomes["Crossref"] = "found" if crossref else "not_found"
         if isinstance(crossref, dict):
             crossref_journal = normalize_openalex_journal_name(crossref.get("journal") or "")
         crossref_raw = crossref.get("raw") if isinstance(crossref, dict) else {}
@@ -11252,18 +11216,20 @@ def publication_metrics_metadata_from_doi(
             crossref_count = int_or_none(crossref_raw.get("is-referenced-by-count"))
         else:
             crossref_raw = {}
-    except Exception:
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        outcomes["Crossref"] = "not_found" if status == 404 else ("rate_limited" if status == 429 else "unavailable")
         crossref_count = None
         crossref_raw = {}
     try:
-        response = openalex_request(
+        item = lookup("OpenAlex", lambda: openalex_request(
             "GET",
             f"https://api.openalex.org/works/https://doi.org/{doi}",
             params={"mailto": "your_email@example.com"},
             timeout=timeout,
             max_retries=max_retries,
-        )
-        item = response.json()
+        ).json())
+        if source_lookup is None: outcomes["OpenAlex"] = "found" if isinstance(item, dict) and item.get("id") else "not_found"
         if isinstance(item, dict) and item.get("id"):
             source_journal = normalize_openalex_journal_name(((item.get("primary_location") or {}).get("source") or {}).get("display_name"))
             journal = crossref_journal or source_journal or "Unknown Journal"
@@ -11274,21 +11240,18 @@ def publication_metrics_metadata_from_doi(
                 if crossref_count is not None:
                     raw["is-referenced-by-count"] = crossref_count
             return normalized
-    except Exception:
-        pass
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        outcomes["OpenAlex"] = "not_found" if status == 404 else ("rate_limited" if status == 429 else "unavailable")
     if allow_data_repository:
         try:
-            datacite = publication_metadata_from_datacite_doi(doi, timeout=timeout, max_retries=max_retries)
+            datacite = lookup("DataCite", lambda: publication_metadata_from_datacite_doi(doi, timeout=timeout, max_retries=max_retries))
+            if source_lookup is None: outcomes["DataCite"] = "found" if datacite else "not_found"
             if datacite:
                 return datacite
         except Exception:
-            pass
-    return publication_metadata_from_doi(
-        doi,
-        timeout=timeout,
-        max_retries=max_retries,
-        allow_data_repository=allow_data_repository,
-    )
+            outcomes["DataCite"] = "unavailable"
+    return crossref
 
 
 def publication_metrics_metadata_from_arxiv_id(
@@ -11326,6 +11289,8 @@ def publication_metrics_metadata_from_arxiv_id(
                 if normalized_title_key(result_title) != normalized_title_key(title) and title_similarity(title, result_title) < 0.88:
                     continue
                 if openalex_item_is_likely_data_repository(item):
+                    continue
+                if normalized_id not in metadata_refresh.linked_arxiv(item):
                     continue
                 raw["openalex_id"] = clean_text(item.get("id") or "")
                 raw["id"] = clean_text(item.get("id") or "")
@@ -11837,6 +11802,24 @@ def best_semantic_scholar_candidate(
     arxiv_id: str = "",
     title: str = "",
 ) -> dict[str, Any] | None:
+    exact = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        ids = candidate.get("externalIds") or {}
+        candidate_doi = normalize_publication_doi(str(ids.get("DOI") or ids.get("doi") or ""))
+        candidate_arxiv = normalize_arxiv_identifier(str(ids.get("ArXiv") or ids.get("arXiv") or ids.get("ARXIV") or ""))
+        if doi and candidate_doi and doi != candidate_doi and doi_is_likely_published_version(doi):
+            continue
+        if arxiv_id and candidate_arxiv and arxiv_id != candidate_arxiv:
+            continue
+        if (doi and candidate_doi == doi) or (arxiv_id and candidate_arxiv == arxiv_id):
+            exact.append(candidate)
+    if doi or arxiv_id:
+        candidates = exact
+    else:
+        candidates = [c for c in candidates if isinstance(c, dict) and title
+                      and normalized_title_key(c.get("title") or "") == normalized_title_key(title)]
     scored = [
         (semantic_scholar_candidate_score(candidate, doi=doi, arxiv_id=arxiv_id, title=title), candidate)
         for candidate in candidates
@@ -12231,16 +12214,7 @@ def recover_imported_pdf_identifiers(
         )
         if not recorded:
             continue
-        try:
-            refreshed = refresh_library_paper_metadata_for_identifier(
-                storage,
-                str(paper.get("paper_id") or ""),
-                identifier,
-                timeout=12,
-                max_retries=1,
-            )
-        except Exception:
-            refreshed = recorded
+        refreshed = recorded  # Refresh once below, using the chosen Quick/Full mode.
         paper_id = str(paper.get("paper_id") or "")
         recovered.add(paper_id)
         source = clean_text(found.get("source") or "unknown")
@@ -12273,75 +12247,42 @@ def refresh_imported_doi_metadata(storage: Storage, result: dict[str, Any], *, j
     mode = normalize_import_metadata_mode(mode)
     result["metadata_mode"] = mode
     if mode == "skip":
-        if job_id:
-            log_library_import_job(job_id, "Metadata refresh skipped by user selection")
-        result["doi_metadata_refreshed"] = 0
-        result["identifier_metadata_refreshed"] = 0
-        result["identifier_recovery_attempted"] = 0
-        result["identifiers_recovered"] = 0
-        result["identifier_recovery_unresolved"] = 0
-        result["identifier_recovery_sources"] = {}
-        result["identifier_recoveries"] = []
+        result.update(doi_metadata_refreshed=0, identifier_metadata_refreshed=0,
+                      identifier_recovery_attempted=0, identifiers_recovered=0,
+                      identifier_recovery_unresolved=0, identifier_recovery_sources={}, identifier_recoveries=[])
         return 0
-    candidates = [item for item in (result.get("metadata_refresh_candidates") or []) if isinstance(item, dict)]
-    recovered_paper_ids = recover_imported_pdf_identifiers(
-        storage,
-        result,
-        job_id=job_id,
-    )
-    papers = [
-        {"paper_id": item.get("paper_id"), "doi": item.get("doi"), "arxiv_id": item.get("arxiv_id")}
-        for item in candidates
-    ]
-    refreshed_count = 0
-    seen: set[str] = set()
-    eligible: list[dict[str, Any]] = []
-    for paper in papers:
-        paper_id = clean_text(paper.get("paper_id") or "")
-        doi = normalize_publication_doi(str(paper.get("doi") or ""))
-        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
-        if paper_id and paper_id not in recovered_paper_ids and (looks_like_doi(doi) or arxiv_id):
-            eligible.append({"paper_id": paper_id, "doi": doi, "arxiv_id": arxiv_id})
-    total = len(eligible)
-    if job_id:
-        if total:
-            log_library_import_job(job_id, f"Refreshing Details metadata and citation metrics from DOI/arXiv for {total} imported papers")
-        else:
-            log_library_import_job(job_id, "No imported papers with DOI/arXiv ID were found for Details metadata refresh")
-    current = 0
-    for paper in eligible:
-        if job_id and library_import_cancel_requested(job_id):
-            raise ImportCancelled("Import stopped by user")
-        paper_id = clean_text(paper.get("paper_id") or "")
-        doi = normalize_publication_doi(str(paper.get("doi") or ""))
-        arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or ""))
-        if not paper_id or paper_id in seen:
-            continue
-        seen.add(paper_id)
-        current += 1
-        identifier = doi if looks_like_doi(doi) else arxiv_id
-        identifier_kind = "DOI" if looks_like_doi(doi) else "arXiv"
-        if job_id:
-            percent = max(0, min(99, round((current / total) * 100))) if total else 0
-            update_library_import_job(job_id, stage="metadata", current=current, total=total, percent=percent)
-            log_library_import_job(job_id, f"Refreshing Details metadata and metrics from {identifier_kind} {current} / {total}: {identifier}")
-        stored_paper = storage.get_paper(paper_id)
-        before = dict(stored_paper or {})
-        if looks_like_doi(doi):
-            refreshed = refresh_paper_metadata_from_doi_if_possible(storage, stored_paper, doi=doi, timeout=12, max_retries=1)
-        else:
-            refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, stored_paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
-        if mode == "full":
-            refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-            refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-        if refreshed and refreshed != before:
-            refreshed_count += 1
-            if job_id:
-                label = clean_text(refreshed.get("title") or identifier)
-                log_library_import_job(job_id, f"Refreshed {identifier_kind} metadata: {label}")
-    result["doi_metadata_refreshed"] = refreshed_count
-    result["identifier_metadata_refreshed"] = refreshed_count
-    return refreshed_count
+    with metadata_refresh.metadata_network.scope(storage):
+        recover_imported_pdf_identifiers(storage, result, job_id=job_id)
+    ids = list(dict.fromkeys(str(p.get("paper_id") or "") for p in result.get("metadata_refresh_candidates", [])
+                            if isinstance(p, dict) and p.get("paper_id")))
+    refresh_job = metadata_jobs.create(storage, mode=mode, paper_ids=ids, origin="import")
+    result["metadata_job_id"] = refresh_job["job_id"]
+    last_progress = None
+    def progress(job):
+        nonlocal last_progress
+        if not job_id:
+            return
+        if library_import_cancel_requested(job_id):
+            metadata_jobs.control(storage, job["job_id"], "pause")
+        update_library_import_job(job_id, stage="metadata", current=job["current"], total=job["total"], percent=min(99, job["percent"]))
+        if job["logs"] and job["current"] != last_progress:
+            log_library_import_job(job_id, job["logs"][-1]["message"])
+        last_progress = job["current"]
+    metadata_jobs.run_job(storage, refresh_job["job_id"], progress=progress)
+    job = metadata_jobs.get(storage, refresh_job["job_id"])
+    # A batch worker may have claimed this import job. Keep the import attached
+    # until its metadata checkpoint is final, including a requested pause.
+    while job["status"] in {"queued", "running", "pausing"}:
+        progress(job)
+        time.sleep(.2)
+        job = metadata_jobs.get(storage, refresh_job["job_id"])
+    counts = job["counts"]
+    result.update(doi_metadata_refreshed=job["changed_count"], identifier_metadata_refreshed=job["changed_count"], metadata_counts=counts)
+    if job["status"] == "paused":
+        raise ImportCancelled("Import metadata paused. Continue it in Refresh tasks.")
+    if job["status"] == "failed":
+        raise RuntimeError(job.get("error") or "Metadata refresh stopped. Continue it in Refresh tasks.")
+    return job["changed_count"]
 
 
 def library_metadata_refresh_candidates(storage: Storage) -> list[dict[str, Any]]:
@@ -12450,25 +12391,7 @@ def identifier_recovery_recently_attempted(
 
 
 def metadata_refresh_recently_completed(storage: Storage, paper_id: str, mode: str, *, skip_days: int) -> bool:
-    if skip_days <= 0:
-        return False
-    cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
-    modes = ("full",) if mode == "full" else ("quick", "full")
-    placeholders = ", ".join("?" for _ in modes)
-    row = storage.conn.execute(
-        f"""
-        SELECT 1
-        FROM paper_metadata_refreshes
-        WHERE paper_id = ?
-          AND status = 'completed'
-          AND mode IN ({placeholders})
-          AND COALESCE(finished_at, started_at) >= ?
-        ORDER BY COALESCE(finished_at, started_at) DESC
-        LIMIT 1
-        """,
-        (paper_id, *modes, cutoff),
-    ).fetchone()
-    return row is not None
+    return metadata_refresh.recently_completed(storage, paper_id, mode, skip_days)
 
 
 def record_metadata_refresh_start(storage: Storage, *, paper_id: str, mode: str, source_summary: str) -> int:
@@ -12497,96 +12420,19 @@ def record_metadata_refresh_finish(storage: Storage, refresh_id: int, *, status:
 
 
 def refresh_single_paper_metadata_for_mode(storage: Storage, paper: dict[str, Any], *, mode: str) -> dict[str, Any] | None:
-    mode = normalize_metadata_refresh_mode(mode)
-    doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    arxiv_id = normalize_arxiv_identifier(str(paper.get("arxiv_id") or "")) or arxiv_identifier_for_paper(paper)
-    if looks_like_doi(doi):
-        refreshed = refresh_paper_metadata_from_doi_if_possible(storage, paper, doi=doi, timeout=12, max_retries=1)
-    elif arxiv_id:
-        refreshed = refresh_paper_metadata_from_arxiv_if_possible(storage, paper, arxiv_id=arxiv_id, timeout=12, max_retries=1)
-    else:
-        refreshed = paper
-    if mode == "full":
-        refreshed = refresh_semantic_scholar_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-        refreshed = refresh_ads_if_possible(storage, refreshed, timeout=6, max_retries=1) or refreshed
-    return refreshed
+    return metadata_refresh.refresh(storage, str(paper["paper_id"]),
+                                    mode=normalize_metadata_refresh_mode(mode), origin="batch")["paper"]
 
 
 def run_library_metadata_refresh_job(*, job_id: str, db_path: Path, metadata_mode: str = "full", skip_days: int = 3) -> None:
-    metadata_mode = normalize_metadata_refresh_mode(metadata_mode)
+    """Compatibility entry for callers that created an in-memory Loader job."""
     storage = Storage(db_path)
-    refreshed_count = 0
-    skipped_recent = 0
-    failed_count = 0
     try:
-        candidates = library_metadata_refresh_candidates(storage)
-        total = len(candidates)
-        log_library_import_job(job_id, f"Refreshing all Library metadata in {metadata_mode} mode")
-        log_library_import_job(job_id, f"Skipping papers refreshed in the last {skip_days} day{'s' if skip_days != 1 else ''}")
-        update_library_import_job(job_id, status="running", stage="metadata", total=total, current=0, percent=0)
-        for index, paper in enumerate(candidates, start=1):
-            if library_import_cancel_requested(job_id):
-                raise ImportCancelled("Metadata refresh stopped by user")
-            paper_id = clean_text(paper.get("paper_id") or "")
-            doi = normalize_publication_doi(str(paper.get("doi") or ""))
-            arxiv_id = arxiv_identifier_for_paper(paper)
-            identifier = doi if looks_like_doi(doi) else arxiv_id
-            percent = max(0, min(99, round((index / total) * 100))) if total else 100
-            update_library_import_job(job_id, current=index, total=total, percent=percent, stage="metadata")
-            if metadata_refresh_recently_completed(storage, paper_id, metadata_mode, skip_days=skip_days):
-                skipped_recent += 1
-                log_library_import_job(job_id, f"Skipped recent metadata {index} / {total}: {identifier or paper_id}")
-                continue
-            log_library_import_job(job_id, f"Refreshing metadata {index} / {total}: {identifier or paper_id}")
-            refresh_id = record_metadata_refresh_start(storage, paper_id=paper_id, mode=metadata_mode, source_summary=identifier or paper_id)
-            before = dict(storage.get_paper(paper_id) or paper)
-            try:
-                refreshed = refresh_single_paper_metadata_for_mode(storage, before, mode=metadata_mode)
-                record_metadata_refresh_finish(storage, refresh_id, status="completed")
-                if refreshed and refreshed != before:
-                    refreshed_count += 1
-                    log_library_import_job(job_id, f"Refreshed metadata: {clean_text(refreshed.get('title') or identifier or paper_id)}")
-            except Exception as exc:
-                failed_count += 1
-                record_metadata_refresh_finish(storage, refresh_id, status="failed", error=str(exc))
-                log_library_import_job(job_id, f"Metadata refresh failed for {identifier or paper_id}: {exc}", level="warn")
-        result = {
-            "job_type": "metadata_refresh",
-            "metadata_mode": metadata_mode,
-            "total_candidates": total,
-            "metadata_refreshed": refreshed_count,
-            "skipped_recent": skipped_recent,
-            "failed": failed_count,
-            "skip_days": skip_days,
-            "errors": [],
-        }
-        log_library_import_job(job_id, f"Done: {refreshed_count} refreshed, {skipped_recent} skipped recent, {failed_count} failed")
-        update_library_import_job(
-            job_id,
-            status="completed",
-            stage="complete",
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            percent=100,
-            result=result,
-        )
-    except ImportCancelled as exc:
-        log_library_import_job(job_id, str(exc) or "Metadata refresh stopped by user", level="warn")
-        update_library_import_job(
-            job_id,
-            status="cancelled",
-            stage="cancelled",
-            error=str(exc),
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-        )
-    except Exception as exc:
-        log_library_import_job(job_id, f"Metadata refresh failed: {exc}", level="error")
-        update_library_import_job(
-            job_id,
-            status="failed",
-            stage="failed",
-            error=str(exc),
-            finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-        )
+        job = metadata_jobs.create(storage, mode=normalize_metadata_refresh_mode(metadata_mode), skip_days=skip_days, job_id=job_id)
+        metadata_jobs.run_job(storage, job["job_id"])
+        snapshot = metadata_jobs.get(storage, job["job_id"]) or {}
+        snapshot.pop("job_id", None)
+        update_library_import_job(job_id, **snapshot)
     finally:
         storage.close()
 
@@ -15277,6 +15123,7 @@ def compact_nature_reference(paper: dict[str, Any]) -> dict[str, str]:
         "year": publication_year_from_raw(paper, raw),
         "doi": clean_text(paper.get("doi") or ""),
         "preprint_id": preprint_identifier(paper, raw=raw),
+        "metadata_refresh": metadata_refresh.marker(paper),
     }
 
 
@@ -16380,10 +16227,13 @@ def arxiv_identifier_from_raw_values(value: Any, *, depth: int = 0) -> str:
                 identifier = arxiv_identifier_from_raw_values(value.get(key), depth=depth + 1)
                 if identifier:
                     return identifier
-        for item in value.values():
-            identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
-            if identifier:
-                return identifier
+        # Only identity-bearing containers are candidates. A reference, abstract
+        # or conflict/history message mentioning arXiv is not this paper's ID.
+        for key in ("ArXiv", "arXiv", "ARXIV", "identifier", "preprint", "citation_versions", "ads", "locations", "primary_location", "best_oa_location"):
+            if key in value:
+                identifier = arxiv_identifier_from_raw_values(value[key], depth=depth + 1)
+                if identifier:
+                    return identifier
     if isinstance(value, list):
         for item in value:
             identifier = arxiv_identifier_from_raw_values(item, depth=depth + 1)
@@ -19559,6 +19409,7 @@ def run_author_monitor_enrichment_job(
     max_papers: int = 0,
     paper_ids: list[str] | None = None,
     time_budget_seconds: float = 0,
+    publication_paper_ids: list[str] | None = None,
 ) -> None:
     storage = Storage(db_path)
     matched = 0
@@ -19575,14 +19426,15 @@ def run_author_monitor_enrichment_job(
                 paper for paper in rows
                 if clean_text(paper.get("paper_id") or "") == selected_paper_id
             ]
+        publication_ids = set(publication_paper_ids or [])
         pending = [
             paper for paper in rows
-            if (
+            if paper["paper_id"] in publication_ids or ((
                 (not author_monitor_paper_has_identifier(paper))
                 if identifiers_only
                 else author_monitor_paper_needs_enrichment(paper)
             )
-            and (force or not author_monitor_enrichment_recently_attempted(paper))
+            and (force or not author_monitor_enrichment_recently_attempted(paper)))
         ]
         if int(max_papers or 0) > 0:
             pending = pending[: int(max_papers)]
@@ -19651,6 +19503,14 @@ def run_author_monitor_enrichment_job(
                 doi = normalize_publication_doi(str(paper.get("doi") or ""))
                 arxiv_id = arxiv_identifier_for_paper(paper)
                 normalized: dict[str, Any] | None = None
+                if paper_id in publication_ids:
+                    result = metadata_refresh.refresh(storage, paper_id, detailed=False, origin="automatic")
+                    matched += bool(result["metadata_refresh"]["changed_fields"])
+                    enriched += bool(result["paper"].get("abstract"))
+                    update_author_monitor_enrichment_job(job_id, current=index, matched=matched, enriched=enriched)
+                    if work_queue:
+                        time.sleep(AUTHOR_MONITOR_ENRICHMENT_REQUEST_PAUSE_SECONDS)
+                    continue
                 if looks_like_doi(doi):
                     normalized = publication_metrics_metadata_from_doi(doi, timeout=12, max_retries=1)
                 elif arxiv_id:
@@ -31461,6 +31321,22 @@ INDEX_HTML = """<!doctype html>
     .library-detail-status { margin-top: 8px; min-height: 18px; color: var(--muted); }
     .library-detail-status.ok { color: #137333; }
     .library-detail-status.err { color: #b42318; }
+    .metadata-refresh-tooltip {
+      position: fixed;
+      z-index: 500;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #cbd2db;
+      border-radius: 8px;
+      background: #fff;
+      color: #394555;
+      box-shadow: 0 5px 18px rgba(0, 0, 0, 0.16);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      overflow-y: auto;
+    }
+    .metadata-refresh-tooltip > div + div { margin-top: 6px; }
     .library-confirm-backdrop {
       position: fixed;
       inset: 0;
@@ -34863,6 +34739,19 @@ INDEX_HTML = """<!doctype html>
       flex: 0 0 auto;
       white-space: nowrap;
     }
+    .library-detail > .actions.paper-detail-actions {
+      flex-direction: column;
+      align-items: flex-start;
+      flex-wrap: nowrap;
+    }
+    .paper-detail-action-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+    .paper-detail-action-row:empty { display: none; }
+    .paper-detail-action-row .action[aria-busy="true"] { opacity: 0.6; }
     .library-detail .library-detail-doi > .action {
       height: 22px;
       min-height: 22px;
@@ -35737,6 +35626,7 @@ INDEX_HTML = """<!doctype html>
       libraryImportBusy: false,
       libraryImportBackground: false,
       libraryImportLastResult: null,
+      metadataRefreshScopeId: null, metadataRefreshScopeLabel: "", metadataRefreshJobs: [],
       libraryImportJobId: "",
       libraryImportJob: null,
       libraryImportPoller: null,
@@ -39323,56 +39213,229 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
-    async function refreshLibraryMetadataFromDoi(paper) {
-      if (!paper?.paper_id) return;
-      const input = $("libraryDetailDoiInput");
-      const identifier = String(input?.value || "").trim();
-      const status = $("libraryDetailStatus");
-      const buttons = $("libraryDetail")?.querySelectorAll("button") || [];
-      const activityId = `metadata:${paper.paper_id}`;
-      if (!identifier) {
-        if (status) {
-          status.textContent = "Enter a DOI or arXiv ID first.";
-          status.className = "library-detail-status err";
+    const paperMetadataRequests = new Map();
+
+    function metadataRefreshActivityText(scope) {
+      const requests = [...paperMetadataRequests.values()].filter((request) => request.scope === scope);
+      if (!requests.length) return "";
+      return requests.length === 1
+        ? `Refreshing info · ${requests[0].title}`
+        : `Refreshing info · ${requests.length} papers`;
+    }
+
+    function updateMetadataRefreshActivity(scope, message = "", failed = false) {
+      const pending = metadataRefreshActivityText(scope);
+      if (scope === "author") {
+        if (message) updateAuthorMonitorActivityStatus(message, {channel: "secondary", kind: "metadata-refresh", delay: failed ? 4800 : 3200});
+        else syncAuthorMonitorActivityDisplay();
+      } else if (scope === "my-publications") {
+        setMyPublicationActivity("metadata-refresh", pending || message, {live: Boolean(pending)});
+        if (!pending) {
+          const notice = state.myPublicationActivities.find((item) => item.id === "metadata-refresh");
+          window.setTimeout(() => {
+            if (state.myPublicationActivities.includes(notice)) clearMyPublicationActivity("metadata-refresh");
+          }, failed ? 4800 : 3200);
         }
-        input?.focus({preventScroll: true});
+      } else {
+        // Keep a separate in-flight refresh indicator alongside imports/downloads.
+        if (message && !state.libraryActivityLive) updateLibraryActivityStatus(message, {delay: failed ? 4800 : 3200});
+        else renderLibraryActivityStatus();
+      }
+    }
+
+    function metadataDetailContext(root) {
+      return `${state.mode}/${state.libraryTab}/${root?.dataset.metadataPaperId || ""}`;
+    }
+
+    function applyMetadataResult(root, context, paper) {
+      if (!paper?.paper_id) return;
+      const known = state.libraryItems.find((item) => item.paper_id === paper.paper_id)?.paper
+        || state.authorMonitorPapers.find((item) => item.paper_id === paper.paper_id)
+        || state.myPublications.find((item) => item.paper_id === paper.paper_id)?.paper;
+      if (Date.parse(known?.metadata_refresh?.checked_at || "") > Date.parse(paper.metadata_refresh?.checked_at || "")) return;
+      updatePaperState(paper.paper_id, paper);
+      if (!root?.isConnected || metadataDetailContext(root) !== context) return;
+      const active = document.activeElement;
+      const editing = root.contains(active) && (active.matches("input, textarea, select") || active.isContentEditable);
+      const drafts = Array.from(root.querySelectorAll("input, textarea")).some((el) => {
+        if (el.id === "libraryDetailDoiInput") return el.value !== el.defaultValue;
+        if (el.classList.contains("preprint-identifier-input")) return el.closest(".is-editing");
+        return el.hasAttribute("data-manual-metadata-field") && el.value !== el.defaultValue;
+      });
+      if (editing || drafts) {
+        updateMetadataRefreshButton(root, paper.metadata_refresh || {});
+        // Preserve unsaved text. The next normal detail opening uses the new data.
         return;
       }
-      buttons.forEach((button) => button.disabled = true);
-      if (status) {
-        status.textContent = "Refreshing metadata, metrics, and PubMed details from identifier...";
-        status.className = "library-detail-status";
+      const showingRefresh = $("metadataRefreshTooltip")?._anchor === root.querySelector('[data-action="refresh-library-metadata"]');
+      const top = root.scrollTop;
+      const focusedAction = root.contains(active) ? active?.dataset?.action : "";
+      if (root.id === "authorMonitorDetailBody") renderAuthorMonitorPaperDetail();
+      else if (state.libraryTab === "my-publications") renderPublicationDetail();
+      else renderLibraryDetail();
+      root.scrollTop = top;
+      const refreshButton = root.querySelector('[data-action="refresh-library-metadata"]');
+      if (showingRefresh && refreshButton?.matches(":hover")) showMetadataRefreshTooltip(refreshButton);
+      if (focusedAction && root.contains(active) === false && document.activeElement === document.body) {
+        root.querySelector(`[data-action="${focusedAction}"]`)?.focus({preventScroll: true});
       }
-      if (state.libraryTab === "my-publications") {
-        setMyPublicationActivity(activityId, "Refreshing metadata...");
-      }
-      updateLibraryActivityStatus("Refreshing metadata...", {live: true, clear: false});
+    }
+
+    async function savePaperDoi(paper, root, {render = true} = {}) {
+      const input = root?.querySelector("#libraryDetailDoiInput");
+      if (!input || input.value.trim() === String(paper.doi || "").trim()) return paper;
+      const context = metadataDetailContext(root);
+      const value = input.value.trim();
+      const res = await fetch("/api/library/preprint-identifier", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({paper_id: paper.paper_id, kind: "doi", identifier: value})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not save DOI");
+      if (input.isConnected && input.value.trim() === value) input.defaultValue = input.value;
+      updatePaperState(paper.paper_id, data.paper);
+      if (render) applyMetadataResult(root, context, data.paper);
+      return data.paper;
+    }
+
+    async function refreshLibraryMetadataFromDoi(paper) {
+      if (!paper?.paper_id || paperMetadataRequests.has(paper.paper_id)) return;
+      const root = $(state.mode === "author" ? "authorMonitorDetailBody" : "libraryDetail");
+      const context = metadataDetailContext(root);
+      const button = root?.querySelector('[data-action="refresh-library-metadata"]');
+      const scope = state.mode === "author" ? "author" : state.libraryTab === "my-publications" ? "my-publications" : "library";
+      const title = paper.title || paper.storage_key || paper.preprint_id || paper.doi || "Paper";
+      let completion = "Info refreshed.";
+      let failed = false;
+      paperMetadataRequests.set(paper.paper_id, {scope, title});
+      updateMetadataRefreshButton(root, paper.metadata_refresh || {});
+      updateMetadataRefreshActivity(scope);
       try {
+        await savePaperDoi(paper, root, {render: false});
         const res = await fetch("/api/library/refresh-metadata", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({paper_id: paper.paper_id, identifier, snapshot: false})
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({paper_id: paper.paper_id, snapshot: false})
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        if (Array.isArray(data.publications)) applyMyPublications(data);
-        updatePaperState(paper.paper_id, data.paper);
-        state.figureFailures.delete(paper.paper_id);
-        if (state.libraryTab === "my-publications") renderMyPublications();
-        else renderLibrary();
-        updateLibraryActivityStatus("Metadata refreshed.", {delay: 2600});
+        const report = data.paper?.metadata_refresh || {};
+        completion = report.status === "partial" ? "Info refresh partial · Hover over Refresh Info for details."
+          : report.status === "unchanged" ? "Info checked · No changes found." : "Info refreshed.";
+        paperMetadataRequests.delete(paper.paper_id);
+        applyMetadataResult(root, context, data.paper);
       } catch (error) {
-        const message = error.message || "Could not refresh metadata";
-        updateLibraryActivityStatus(`Metadata refresh failed: ${message}`, {delay: 4200});
-        if (status) {
-          status.textContent = message;
-          status.className = "library-detail-status err";
+        failed = true;
+        completion = `Info refresh failed: ${error.message || "Could not refresh information"}`;
+        if (metadataDetailContext(root) === context && root?.isConnected) {
+          paperMetadataRequests.delete(paper.paper_id);
+          updateMetadataRefreshButton(root, {...paper.metadata_refresh, error: error.message || "Could not refresh metadata"});
         }
-        buttons.forEach((button) => button.disabled = false);
       } finally {
-        clearMyPublicationActivity(activityId);
+        paperMetadataRequests.delete(paper.paper_id);
+        if (button?.isConnected) updateMetadataRefreshButton(root);
+        updateMetadataRefreshActivity(scope, completion, failed);
       }
     }
+
+    let metadataDetailPollBusy = false;
+    async function pollVisibleMetadataResult() {
+      if (metadataDetailPollBusy || document.hidden || !["library", "author"].includes(state.mode)) return;
+      const root = $(state.mode === "author" ? "authorMonitorDetailBody" : "libraryDetail");
+      const paperId = root?.dataset.metadataPaperId;
+      if (!paperId || paperMetadataRequests.has(paperId)) return;
+      const context = metadataDetailContext(root);
+      metadataDetailPollBusy = true;
+      try {
+        const res = await fetch(`/api/paper?paper_id=${encodeURIComponent(paperId)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const stamp = data.paper?.metadata_refresh?.checked_at || "";
+        if (stamp && (!root.dataset.metadataCheckedAt || Date.parse(stamp) > Date.parse(root.dataset.metadataCheckedAt)) && !paperMetadataRequests.has(paperId) && metadataDetailContext(root) === context) {
+          applyMetadataResult(root, context, data.paper);
+        }
+      } catch (_) {
+      } finally { metadataDetailPollBusy = false; }
+    }
+    window.setInterval(pollVisibleMetadataResult, 30000);
+
+    function metadataRefreshButtonMarkup(paper) {
+      const busy = paperMetadataRequests.has(paper.paper_id);
+      return `<button class="action" type="button" data-action="refresh-library-metadata" data-metadata-refresh-report="${escapeAttr(JSON.stringify(paper.metadata_refresh || {}))}" aria-busy="${busy}" aria-disabled="${busy}">Refresh Info</button>`;
+    }
+
+    function metadataRefreshTooltipMarkup(report, busy = false) {
+      const sources = Object.entries(report.sources || {}).map(([name, status]) => `${name}: ${String(status).replaceAll("_", " ")}`);
+      const retries = Object.entries(report.source_retry_at || {}).map(([name, time]) => `${name}: retry after ${new Date(Number(time) * 1000).toLocaleString()}`);
+      return `${busy ? "<div>Refreshing information…</div>" : ""}${report.error ? `<div>${escapeHtml(report.error)}</div>` : ""}
+        <div>${escapeHtml(report.message || "Refresh paper information using its DOI or arXiv ID.")}</div>
+        ${report.checked_at ? `<div>Last checked: ${escapeHtml(new Date(report.checked_at).toLocaleString())}</div>` : ""}
+        ${sources.length ? `<div>${escapeHtml(sources.join(" · "))}</div>` : ""}
+        ${retries.length ? `<div>${escapeHtml(retries.join(" · "))}</div>` : ""}
+        ${(report.conflicts || []).map((text) => `<div>${escapeHtml(text)}</div>`).join("")}`;
+    }
+
+    function updateMetadataRefreshButton(root, report) {
+      const button = root?.querySelector('[data-action="refresh-library-metadata"]');
+      if (!button) return;
+      if (report) button.dataset.metadataRefreshReport = JSON.stringify(report);
+      const busy = paperMetadataRequests.has(root.dataset.metadataPaperId);
+      button.setAttribute("aria-busy", String(busy));
+      button.setAttribute("aria-disabled", String(busy));
+      if ($("metadataRefreshTooltip")?._anchor === button) showMetadataRefreshTooltip(button);
+    }
+
+    function showMetadataRefreshTooltip(anchor) {
+      closeMetadataRefreshTooltip();
+      if (!anchor?.isConnected) return;
+      let report = {};
+      try { report = JSON.parse(anchor.dataset.metadataRefreshReport || "{}"); } catch (_) {}
+      const tooltip = document.createElement("div");
+      tooltip.id = "metadataRefreshTooltip";
+      tooltip.className = "metadata-refresh-tooltip";
+      tooltip.setAttribute("role", "tooltip");
+      tooltip.innerHTML = metadataRefreshTooltipMarkup(report, anchor.getAttribute("aria-busy") === "true");
+      tooltip._anchor = anchor;
+      const rect = anchor.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 16);
+      tooltip.style.width = `${width}px`;
+      tooltip.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+      // Always below the button, independent of the scrolling Details panel.
+      tooltip.style.top = `${rect.bottom + 6}px`;
+      tooltip.style.maxHeight = `${Math.max(0, window.innerHeight - rect.bottom - 14)}px`;
+      anchor.setAttribute("aria-describedby", tooltip.id);
+      document.body.appendChild(tooltip);
+    }
+
+    function closeMetadataRefreshTooltip() {
+      const tooltip = $("metadataRefreshTooltip");
+      tooltip?._anchor?.removeAttribute("aria-describedby");
+      tooltip?.remove();
+    }
+
+    function wireMetadataRefreshTooltipEvents() {
+      const selector = '[data-action="refresh-library-metadata"]';
+      document.addEventListener("pointerover", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor && !anchor.contains(event.relatedTarget)) showMetadataRefreshTooltip(anchor);
+      });
+      document.addEventListener("pointerout", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor && !anchor.contains(event.relatedTarget)) closeMetadataRefreshTooltip();
+      });
+      document.addEventListener("focusin", (event) => {
+        const anchor = event.target.closest?.(selector);
+        if (anchor?.matches(":focus-visible")) showMetadataRefreshTooltip(anchor);
+      });
+      document.addEventListener("focusout", (event) => {
+        if (event.target.matches?.(selector)) closeMetadataRefreshTooltip();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeMetadataRefreshTooltip();
+      });
+      window.addEventListener("resize", closeMetadataRefreshTooltip);
+      window.addEventListener("scroll", closeMetadataRefreshTooltip, true);
+    }
+    wireMetadataRefreshTooltipEvents();
 
     async function extractLibraryIdentifierFromFiles(paper) {
       if (!paper?.paper_id) return;
@@ -41243,11 +41306,16 @@ INDEX_HTML = """<!doctype html>
       const refreshMode = state.libraryTaskMode === "metadata-refresh";
       const identifierMode = state.libraryTaskMode === "identifier-recovery";
       const maintenanceMode = refreshMode || identifierMode;
-      const runLabel = identifierMode ? "Start Search" : (refreshMode ? "Start Refresh" : "Import");
-      const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Stop Refresh" : "Stop Import");
+      const heading = backdrop.querySelector("h2");
+      const description = backdrop.querySelector(".settings-modal-head p");
+      if (heading) heading.textContent = refreshMode ? "Refresh Info" : (identifierMode ? "Find Missing Identifiers" : "Folder Loader");
+      if (description) description.textContent = refreshMode ? "Refresh paper information in the selected scope. You can keep browsing." : (identifierMode ? "Find identifiers for saved papers with missing DOI or arXiv IDs." : "Import a folder into Library with a live log. Source files are never moved or deleted.");
+      const resumable = refreshMode && ["paused", "failed"].includes(job.status);
+      const runLabel = identifierMode ? "Start Search" : (refreshMode ? (resumable ? "Continue" : "Start Refresh") : "Import");
+      const stopLabel = identifierMode ? "Stop Search" : (refreshMode ? "Pause" : "Stop Import");
       const maintenanceSource = identifierMode
         ? "All Library PDF files without DOI/arXiv"
-        : "All Library papers with DOI/arXiv";
+        : (state.metadataRefreshScopeLabel || "All active Library and Space papers");
       root.innerHTML = `
         <div class="loader-panel">
           <div class="loader-form">
@@ -41260,7 +41328,7 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class="loader-field loader-metadata-field">
               <label for="libraryImportMetadataMode">${identifierMode ? "Lookup" : "Metadata"}</label>
-              <select id="libraryImportMetadataMode"${state.libraryImportBusy || identifierMode ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
+              <select id="libraryImportMetadataMode"${state.libraryImportBusy || identifierMode || resumable ? " disabled" : ""} title="Full metadata refresh can take a long time for large imports.">
                 ${identifierMode
                   ? `<option value="quick" selected>Identifier + quick metadata</option>`
                   : `
@@ -41272,7 +41340,7 @@ INDEX_HTML = """<!doctype html>
               <div class="loader-metadata-hint">${escapeHtml(
                 identifierMode
                   ? "Verified checks within 7 days are skipped; transient failures cool down for 1 hour. No Google Scholar requests."
-                  : (refreshMode ? "Papers refreshed in the last 3 days will be skipped." : loaderMetadataModeHint(state.libraryImportMetadataMode))
+                  : (refreshMode ? "Successful checks within 3 days are skipped; Full also satisfies Quick." : loaderMetadataModeHint(state.libraryImportMetadataMode))
               )}</div>
             </div>
             <div class="loader-action-group">
@@ -41289,7 +41357,7 @@ INDEX_HTML = """<!doctype html>
             <span>${percent ? `${percent}%` : ""}</span>
             <div class="loader-progress-track"><div class="loader-progress-bar" style="width:${percent}%"></div></div>
           </div>
-          ${loaderHistoryMarkup()}
+          ${refreshMode ? metadataJobHistoryMarkup() : loaderHistoryMarkup()}
           ${result ? `<div class="loader-result">${escapeHtml(loaderResultSummary(result))}</div>` : ""}
           <div class="loader-main">
             <div class="loader-console-wrap">
@@ -41328,12 +41396,13 @@ INDEX_HTML = """<!doctype html>
     function loaderMetadataModeHint(mode) {
       mode = normalizeLibraryImportMetadataMode(mode);
       if (mode === "skip") return "Fastest: import files and identifiers only.";
-      if (mode === "full") return "Slow: refreshes detailed metadata and citation sources.";
-      return "Recommended: recovers missing identifiers by PDF title, then refreshes core metadata.";
+      if (mode === "full") return "Core information and DOI/arXiv links, plus detailed authors and citation sources.";
+      return "Core information and verified DOI/arXiv links. Import also recovers missing identifiers first.";
     }
 
     function loaderStatusText(job) {
       if (!job?.status) return "Idle";
+      if (job.job_type === "metadata_refresh") return metadataJobStatusText(job);
       if (job.status === "completed" && job.result?.identity_conflicts?.length) return `Completed · ${job.result.identity_conflicts.length} identity mismatch(es); files kept`;
       const base = `${job.status}${job.stage ? ` · ${job.stage}` : ""}`;
       if (job.stage === "scan") {
@@ -41538,17 +41607,16 @@ INDEX_HTML = """<!doctype html>
         `;
       }
       if (refreshMode) {
+        const job = state.libraryImportJob || {};
+        const counts = job.counts || result || {};
         return `
-          <h3>Metadata Refresh</h3>
-          <p>Refreshes Library papers with DOI/arXiv identifiers. Papers successfully refreshed in the last 3 days are skipped.</p>
-          <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || result?.metadata_mode || "full")}</span></div>
-          <div class="loader-metric"><strong>Scope</strong><span>All Library papers with DOI/arXiv</span></div>
-          <div class="loader-metric"><strong>Skip rule</strong><span>Successful refreshes within 3 days are skipped.</span></div>
-          ${result ? `
-            <div class="loader-metric"><strong>${result.metadata_refreshed || 0} refreshed</strong><span>Papers whose metadata changed during this run.</span></div>
-            <div class="loader-metric"><strong>${result.skipped_recent || 0} skipped</strong><span>Papers already refreshed recently.</span></div>
-            <div class="loader-metric"><strong>${result.failed || 0} failed</strong><span>Papers that could not be refreshed this time.</span></div>
-          ` : ""}
+          <h3>Refresh Info</h3>
+          <div class="loader-metric"><strong>Scope</strong><span>${escapeHtml(job.scope_label || state.metadataRefreshScopeLabel || "All active Library and Space papers")}</span></div>
+          <div class="loader-metric"><strong>Mode</strong><span>${escapeHtml(state.libraryImportMetadataMode || "full")}</span></div>
+          <p>${escapeHtml(loaderMetadataModeHint(state.libraryImportMetadataMode))}</p>
+          <p>One check per Gewu Key. Recycle is excluded. Successful checks within 3 days are skipped; Full also satisfies Quick. Files, Default and folder locations stay unchanged.</p>
+          <p>Pause finishes the current paper and saves the remaining queue. Continue resumes it, including after restarting the App.</p>
+          ${Object.entries({updated:"Updated", unchanged:"Unchanged", partial:"Partial", failed:"Failed", skipped_recent:"Cooldown skipped", missing_identifier:"Missing DOI/arXiv", removed:"No longer in scope"}).map(([key,label]) => `<div class="loader-metric"><strong>${Number(counts[key] || 0)}</strong><span>${label}</span></div>`).join("")}
         `;
       }
       if (!result) {
@@ -41720,6 +41788,7 @@ INDEX_HTML = """<!doctype html>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="open-native-entry">Open Native File</button>
           <button type="button" data-action="reveal-native-entry">Open in Finder</button>
+          <button type="button" data-action="refresh-folder-info">Refresh Info</button>
           <div class="library-menu-separator" role="separator"></div>
           <button type="button" data-action="rename-entry">Rename</button>
           <button type="button" data-action="rename-pdf-metadata">Auto rename from Metadata</button>
@@ -41760,7 +41829,10 @@ INDEX_HTML = """<!doctype html>
       renderLibraryShortcutTabs();
       updateLibraryViewToggle();
       renderLibraryActivityStatus();
-      $("libraryImportDetails")?.addEventListener("click", () => openLibraryLoader({currentJob: true}));
+      $("libraryImportDetails")?.addEventListener("click", () => {
+        if (state.libraryImportNotice) openLibraryLoader({currentJob: true});
+        else { const job = state.metadataRefreshJobs.find(j => ["running","queued","pausing","paused","failed"].includes(j.status)); if (job) showMetadataJob(job.job_id); }
+      });
       $("libraryImportDismiss")?.addEventListener("click", () => {
         if (state.libraryImportBusy) return;
         state.libraryImportNotice = null;
@@ -41892,14 +41964,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     function libraryActivityStatusText() {
-      return state.libraryImportNotice?.text || state.libraryActivityText || "";
+      return [metadataRefreshActivityText("library"), metadataBatchActivityText(), state.libraryImportNotice?.text || state.libraryActivityText].filter(Boolean).join(" · ");
     }
 
     function libraryActivityStatusClass() {
       const base = "library-activity-status";
       const text = libraryActivityStatusText();
       if (!text) return base;
-      if (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive) return `${base} live`;
+      if (metadataRefreshActivityText("library") || state.metadataRefreshJobs?.some(job => ["queued", "running", "pausing"].includes(job.status)) || (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive)) return `${base} live`;
       if (/failed|could not|error|partial|review|unavailable/i.test(text)) return `${base} err`;
       return `${base} ok`;
     }
@@ -41913,7 +41985,7 @@ INDEX_HTML = """<!doctype html>
       }
       const details = $("libraryImportDetails");
       const dismiss = $("libraryImportDismiss");
-      if (details) details.hidden = !state.libraryImportNotice;
+      if (details) details.hidden = !state.libraryImportNotice && !metadataBatchActivityText();
       if (dismiss) dismiss.hidden = !state.libraryImportNotice || state.libraryImportBusy;
     }
 
@@ -42058,11 +42130,18 @@ INDEX_HTML = """<!doctype html>
       });
       $("libraryChooseFolder")?.addEventListener("click", chooseLibraryImportFolder);
       $("libraryRunImport")?.addEventListener("click", () => {
-        if (state.libraryTaskMode === "metadata-refresh") runLibraryMetadataRefresh();
+        if (state.libraryTaskMode === "metadata-refresh") {
+          if (["paused", "failed"].includes(state.libraryImportJob?.status)) controlMetadataJob("resume");
+          else runLibraryMetadataRefresh();
+        }
         else if (state.libraryTaskMode === "identifier-recovery") runLibraryIdentifierRecovery();
         else runLibraryFolderImport();
       });
-      $("libraryStopImport")?.addEventListener("click", stopLibraryFolderImport);
+      $("libraryStopImport")?.addEventListener("click", () => {
+        if (state.libraryTaskMode === "metadata-refresh") controlMetadataJob("pause");
+        else stopLibraryFolderImport();
+      });
+      $("metadataJobHistory")?.addEventListener("change", event => { if (event.target.value) showMetadataJob(event.target.value); });
       $("libraryDeleteImport")?.addEventListener("click", deleteLibraryFolderImport);
       const reportSelect = $("libraryImportReportSelect");
       reportSelect?.addEventListener("focus", () => ensureLibraryImportReportsLoaded());
@@ -42230,7 +42309,7 @@ INDEX_HTML = """<!doctype html>
         const res = await fetch("/api/library/metadata-refresh/start", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({metadata_mode: state.libraryImportMetadataMode, skip_days: 3})
+          body: JSON.stringify({metadata_mode: state.libraryImportMetadataMode, skip_days: 3, folder_id: state.metadataRefreshScopeId})
         });
         const data = await parseJsonResponse(res);
         if (!res.ok) throw new Error(data.error || "Could not start metadata refresh");
@@ -42382,7 +42461,7 @@ INDEX_HTML = """<!doctype html>
     function resumeLibraryImportPollingIfNeeded() {
       if (!state.libraryImportJobId || state.libraryImportPoller) return;
       const status = state.libraryImportJob?.status || "";
-      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable"].includes(status)) return;
+      if (["completed", "failed", "cancelled", "deleted", "loaded", "unavailable", "paused"].includes(status)) return;
       startLibraryImportPolling();
     }
 
@@ -42445,13 +42524,17 @@ INDEX_HTML = """<!doctype html>
           state.libraryImportLastResult = job.result;
           if (job.result.report_path) state.libraryImportReportPath = job.result.report_path;
         }
-        const terminal = ["completed", "failed", "cancelled", "deleted"].includes(job.status);
+        const terminal = ["completed", "failed", "cancelled", "deleted", "paused"].includes(job.status);
         if (terminal) {
           state.libraryImportBusy = false;
           stopLibraryImportPolling();
         }
         updateLibraryDroppedImportActivity(job);
-        if (terminal) {
+        if (job.job_type === "metadata_refresh") {
+          // Polling never reselects a folder or replaces a user's current edit.
+          pollMetadataJobs();
+          if (terminal) signalLibraryRefresh("metadata-completed");
+        } else if (terminal) {
           state.libraryImportReportsLoaded = false;
           // Failed/cancelled imports may already have committed visible items.
           await refreshLibraryAfterImportCompletion();
@@ -42570,6 +42653,9 @@ INDEX_HTML = """<!doctype html>
 
     function handleLibraryRefreshSignal(event) {
       if (event.key !== LIBRARY_REFRESH_SIGNAL_KEY || !event.newValue) return;
+      try {
+        if (JSON.parse(event.newValue).reason === "metadata-completed") { pollVisibleMetadataResult(); return; }
+      } catch (_) {}
       refreshMainLibrarySnapshot("external-loader").catch(() => {});
     }
 
@@ -42596,6 +42682,8 @@ INDEX_HTML = """<!doctype html>
       state.libraryTaskMode = draft.job_type === "metadata_refresh"
         ? "metadata-refresh"
         : (draft.job_type === "identifier_recovery" ? "identifier-recovery" : "import");
+      state.metadataRefreshScopeId = draft.folder_id == null ? null : Number(draft.folder_id);
+      state.metadataRefreshScopeLabel = draft.scope_label || "All active Library and Space papers";
       state.libraryImportSourcePaths = sourcePaths;
       state.libraryImportPath = sourcePaths.length === 1 ? sourcePaths[0] : (sourcePaths.length ? `${sourcePaths.length} dropped items` : (draft.source_root || state.libraryImportPath || ""));
       state.libraryImportTargetFolderId = Number(draft.target_folder_id || state.libraryRootId || 1);
@@ -42633,15 +42721,90 @@ INDEX_HTML = """<!doctype html>
       return false;
     }
 
-    function openMetadataRefreshWindow() {
+    function openMetadataRefreshWindow(folderId = null) {
+      const scope = folderId == null ? null : Number(folderId);
       const draft = {
-        job_type: "metadata_refresh",
-        metadata_mode: "full",
-        status: "Ready to refresh Library metadata. Papers refreshed in the last 3 days will be skipped."
+        job_type: "metadata_refresh", metadata_mode: "full", folder_id: scope,
+        scope_label: scope == null ? "All active Library and Space papers" : `${libraryFolderPath(scope)} — including all subfolders`,
+        status: "Ready to refresh. Successful checks within 3 days are skipped; Full also satisfies Quick."
       };
       saveLibraryImportDraft(draft);
-      applyLibraryImportDraft(draft);
+      if (IS_STANDALONE_LOADER_WINDOW || !window.webkit?.messageHandlers?.libraryLoaderWindow) applyLibraryImportDraft(draft);
       openLibraryLoaderWindow();
+      pollMetadataJobs();
+    }
+
+    function metadataJobStatusText(job) {
+      const c = job.counts || {};
+      return `Refresh Info · ${job.status} · ${Number(job.current || 0)}/${Number(job.total || 0)} checked · ${Number(c.updated || 0)} updated · ${Number(c.unchanged || 0)} unchanged · ${Number(c.partial || 0)} partial · ${Number(c.failed || 0)} failed · ${Number(c.skipped_recent || 0)} skipped · ${Number(c.missing_identifier || 0)} missing ID`;
+    }
+
+    function metadataBatchActivityText() {
+      const pending = (state.metadataRefreshJobs || []).filter(j => ["running","queued","pausing","paused","failed"].includes(j.status));
+      const job = pending.find(j => j.status === "running") || pending[0];
+      if (!job) return "";
+      return `Refresh Info · ${job.status} · ${job.current}/${job.total}${pending.length > 1 ? ` · ${pending.length} tasks` : ""}`;
+    }
+
+    function metadataJobHistoryMarkup() {
+      return `<div class="loader-history"><label for="metadataJobHistory">Refresh tasks</label><select id="metadataJobHistory"><option value="">Select a task to inspect or continue</option>${(state.metadataRefreshJobs || []).map(job => `<option value="${escapeAttr(job.job_id)}"${job.job_id === state.libraryImportJobId ? " selected" : ""}>${escapeHtml(`${job.scope_label} · ${job.metadata_mode} · ${job.status} · ${job.current}/${job.total}`)}</option>`).join("")}</select></div>`;
+    }
+
+    async function showMetadataJob(jobId) {
+      stopLibraryImportPolling();
+      const job = state.metadataRefreshJobs.find(j => j.job_id === jobId);
+      if (!job) return;
+      state.libraryTaskMode = "metadata-refresh";
+      state.libraryImportJobId = jobId;
+      state.libraryImportJob = job;
+      state.libraryImportLastResult = job.result;
+      state.libraryImportMetadataMode = job.metadata_mode;
+      state.metadataRefreshScopeId = job.folder_id;
+      state.metadataRefreshScopeLabel = job.scope_label;
+      state.libraryImportStatus = metadataJobStatusText(job);
+      state.libraryImportBusy = ["queued", "running", "pausing"].includes(job.status);
+      state.libraryImportReadyRefreshDone = true;
+      state.libraryLoaderOpen = true;
+      await refreshLibraryImportJob();
+      renderLibraryLoader();
+      if (state.libraryImportBusy) startLibraryImportPolling();
+    }
+
+    async function controlMetadataJob(action) {
+      try {
+        const res = await fetch("/api/library/metadata-refresh/control", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({job_id:state.libraryImportJobId, action})});
+        const data = await parseJsonResponse(res);
+        if (!res.ok) throw new Error(data.error || "Could not update refresh task");
+        state.libraryImportJob = data.job;
+        state.libraryImportBusy = ["queued","running","pausing"].includes(data.job.status);
+        state.libraryImportStatus = metadataJobStatusText(data.job);
+        renderLibraryLoader();
+        startLibraryImportPolling();
+        pollMetadataJobs();
+      } catch (error) { state.libraryImportStatus = error.message; renderLibraryLoader(); }
+    }
+
+    let metadataJobsPolling = false;
+    async function pollMetadataJobs() {
+      if (metadataJobsPolling) return;
+      metadataJobsPolling = true;
+      try {
+        const res = await fetch("/api/library/metadata-refresh/jobs");
+        if (!res.ok) return;
+        const data = await res.json();
+        const previous = state.metadataRefreshJobs || [];
+        state.metadataRefreshJobs = data.jobs || [];
+        for (const job of state.metadataRefreshJobs) {
+          const old = previous.find(j => j.job_id === job.job_id);
+          if (old && old.status !== "completed" && job.status === "completed") {
+            if (!state.libraryActivityLive) updateLibraryActivityStatus(metadataJobStatusText(job), {delay:5000});
+            pollVisibleMetadataResult();
+          }
+        }
+        renderLibraryActivityStatus();
+        if (state.libraryLoaderOpen && state.libraryTaskMode === "metadata-refresh" && !state.libraryImportBusy && JSON.stringify(previous) !== JSON.stringify(state.metadataRefreshJobs)) renderLibraryLoader();
+      } catch (_) { /* Keep the last known queue; a transient error is not completion. */ }
+      finally { metadataJobsPolling = false; }
     }
 
     function openIdentifierRecoveryWindow() {
@@ -44066,9 +44229,10 @@ INDEX_HTML = """<!doctype html>
           id: activity.id || "",
           text: activity.text,
           live: activity.live !== false
-        }));
+        }))
+        .sort((a, b) => Number(b.id === "metadata-refresh") - Number(a.id === "metadata-refresh"));
       const workItem = myPublicationWorkStatusItem();
-      if (workItem) return [workItem, searchItem?.live ? searchItem : (activities[0] || searchItem)].filter(Boolean);
+      if (workItem) return [workItem, activities.find((item) => item.id === "metadata-refresh") || (searchItem?.live ? searchItem : (activities[0] || searchItem))].filter(Boolean);
       if (searchItem?.live) return [searchItem, ...activities].slice(0, 2);
       if (activities.length) return activities.slice(0, 2);
       return searchItem ? [searchItem] : [];
@@ -45562,7 +45726,7 @@ INDEX_HTML = """<!doctype html>
       return `
         <div class="library-detail-doi">
           <input id="libraryDetailDoiInput" type="text" value="${escapeAttr(value)}" placeholder="Enter DOI">
-          <button class="action" type="button" data-action="refresh-library-metadata" title="Refresh metadata from DOI">Refresh</button>
+
         </div>
       `;
     }
@@ -46031,7 +46195,7 @@ INDEX_HTML = """<!doctype html>
 
     function libraryIdentifierFromFilesButtonMarkup(paper) {
       return (paper?.merged_pdf_path || paper?.main_pdf_path)
-        ? `<button class="action" data-action="extract-library-identifier">Get Identifier from Files</button>`
+        ? `<button class="action" data-action="extract-library-identifier" title="Find DOI or arXiv ID from local paper files">Get DOI</button>`
         : "";
     }
 
@@ -46063,6 +46227,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function wirePreprintIdentifierControls(root, paper) {
+      if (root) {
+        root.dataset.metadataPaperId = String(paper?.paper_id || "");
+        root.dataset.metadataCheckedAt = paper?.metadata_refresh?.checked_at || "";
+      }
       root?.querySelector('[data-action="open-preprint-page"]')?.addEventListener("click", (event) => {
         const url = event.currentTarget?.dataset?.preprintUrl || "";
         openLibraryWebsiteURL(url);
@@ -46094,6 +46262,7 @@ INDEX_HTML = """<!doctype html>
       const save = async () => {
         if (busy) return;
         busy = true;
+        const context = metadataDetailContext(root);
         input.disabled = true;
         if (status) status.textContent = "Saving...";
         try {
@@ -46104,19 +46273,17 @@ INDEX_HTML = """<!doctype html>
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || "Could not update preprint identifier");
-          if (Array.isArray(data.publications)) applyMyPublications(data);
-          updatePaperState(paper.paper_id, data.paper);
-          if (state.mode === "author") renderAuthorMonitorPaperDetail();
-          else if (state.libraryTab === "my-publications") renderPublicationDetail();
-          else renderLibrary();
+          busy = false;
+          paper = {...paper, ...data.paper};
+          if (input.isConnected) { input.defaultValue = input.value; input.disabled = false; main.classList.remove("is-editing"); edit.textContent = data.paper?.preprint_id || "—"; }
+          applyMetadataResult(root, context, data.paper);
           const message = data.paper?.preprint_id ? "Preprint identifier updated." : "Preprint identifier removed.";
-          if (state.mode === "author") updateAuthorMonitorActivityStatus(message, {live: false});
-          else updateLibraryActivityStatus(message, {delay: 3000});
+          if (status?.isConnected && metadataDetailContext(root) === context) status.textContent = message;
         } catch (error) {
           busy = false;
           input.disabled = false;
           if (status) status.textContent = error.message || "Could not update preprint identifier";
-          input?.focus({preventScroll: true});
+          if (input.isConnected && metadataDetailContext(root) === context) input.focus({preventScroll: true});
         }
       };
       edit.addEventListener("click", begin);
@@ -46525,8 +46692,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderLibraryDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("libraryDetail");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const selection = state.librarySelection;
       if (!selection) {
         root.innerHTML = runtimeBrandedEmptyMarkup("Select a folder or paper.");
@@ -46584,13 +46753,18 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions">
+        <div class="actions paper-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           ${isPdfLike ? `<button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>` : ""}
           ${!paper.merged_pdf_path && !isPdfLike && paper.source_path ? `<button class="action primary" data-action="open-native-paper-file">Open File</button>` : ""}
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
         </div>
         <div class="library-detail-status" id="libraryDetailStatus"></div>
         ${libraryDetailMetadataMarkup(paper, authors, null, {showLibraryFolders: true, selectedLibraryItemId: item?.id, hideFiles: true, managePreprintFiles: true})}
@@ -46618,7 +46792,10 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
+        }
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
@@ -46742,8 +46919,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function renderPublicationDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("libraryDetail");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const publication = myPublicationById(state.myPublicationSelectionId);
       const paper = publication?.paper || null;
       if (!paper) {
@@ -46770,12 +46949,17 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions">
+        <div class="actions paper-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="preview-library-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"} library-pdf-drop-target" data-action="${paper.merged_pdf_path ? "refresh-library-pdf" : "download-library-pdf"}" data-library-pdf-drop-target data-pdf-replace="${paper.merged_pdf_path ? "1" : "0"}" data-paper-id="${escapeAttr(paper.paper_id || "")}" title="${paper.merged_pdf_path ? "Download again online or drop one PDF here to replace the current PDF" : "Download online or drop one PDF here"}">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="open-library-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="open-google-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
           <span class="publication-role-flags">
             <label class="publication-role-flag" title="Only check for co-first authors. Leave unchecked for solo first author."><input type="checkbox" data-action="toggle-first-author" ${publication.first_author ? "checked" : ""}> Co-1st</label>
             <label class="publication-role-flag" title="Corresponding or co-corresponding author"><input type="checkbox" data-action="toggle-corresponding-author" ${publication.corresponding_author ? "checked" : ""}> Co-corr.</label>
@@ -46808,7 +46992,10 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshLibraryMetadataFromDoi(paper));
       root.querySelector('[data-action="extract-library-identifier"]')?.addEventListener("click", () => extractLibraryIdentifierFromFiles(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshLibraryMetadataFromDoi(paper);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
+        }
       });
       root.querySelector('[data-action="open-library-page"]')?.addEventListener("click", () => openLibraryWebsite(paper));
       wirePreprintIdentifierControls(root, paper);
@@ -51060,6 +51247,11 @@ INDEX_HTML = """<!doctype html>
       const revealNativeButton = menu.querySelector('[data-action="reveal-native-entry"]');
       const copyFolderDesktopButton = menu.querySelector('[data-action="copy-folder-desktop"]');
       const addPaperButton = menu.querySelector('[data-action="add-paper"]');
+      const refreshFolderButton = menu.querySelector('[data-action="refresh-folder-info"]');
+      if (refreshFolderButton) {
+        refreshFolderButton.style.display = folder && libraryAddFolderCanTarget(folder) ? "" : "none";
+        refreshFolderButton.onclick = () => { hideLibraryContextMenu(); openMetadataRefreshWindow(Number(entryId)); };
+      }
       if (renameButton) {
         renameButton.style.display = hasEntry && !isProtectedFolder ? "" : "none";
         renameButton.onclick = () => {
@@ -51518,6 +51710,8 @@ INDEX_HTML = """<!doctype html>
         nextPaper.in_library = Boolean(existingPaper.in_library);
         nextPaper.library_item_count = Number(existingPaper.library_item_count || 0);
       }
+      const files = state.paperFilesByPaperId?.[String(paperId)];
+      if (files?.paper) files.paper = {...files.paper, ...nextPaper};
       // The active list and its cache can be the same array. Merge into each
       // view's own row before any replacement can discard its Subject groups,
       // scores or matches, which generic paper responses do not include.
@@ -52727,7 +52921,7 @@ INDEX_HTML = """<!doctype html>
         if (work.status === "error") return {text: `Paper metadata check failed · Retry ${autoStatusTime(work.next_run_at)}`, live: false};
         if (pending) return {text: `Paper metadata · ${pending} pending · ${waiting} waiting for retry · Continue ${autoStatusTime(work.next_run_at)}`, live: false};
         if (waiting) return {text: `Paper metadata · ${waiting} waiting for retry${retry}`, live: false};
-        return {text: work.status === "complete" ? "Paper metadata is complete." : "Paper metadata · Waiting for background check", live: false};
+        return {text: work.status === "complete" ? "Paper metadata · No checks currently due." : "Paper metadata · Waiting for background check", live: false};
       }
       const authors = state.authorMonitors || [];
       const selected = selectedAuthorMonitor();
@@ -52743,6 +52937,8 @@ INDEX_HTML = """<!doctype html>
 
     function authorMonitorDisplayedActivity(channel = "primary") {
       const secondary = channel === "secondary";
+      const refresh = secondary ? metadataRefreshActivityText("author") : "";
+      if (refresh) return {text: refresh, live: true};
       const text = secondary ? state.authorMonitorSecondaryActivityText : state.authorMonitorActivityText;
       const live = secondary ? state.authorMonitorSecondaryActivityLive : state.authorMonitorActivityLive;
       return text ? {text, live} : authorMonitorIdleActivity(channel);
@@ -52984,65 +53180,14 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function refreshAuthorMonitorMetadataFromIdentifier(paper) {
-      if (!paper?.paper_id) return;
-      const root = $("authorMonitorDetailBody");
-      const input = root?.querySelector("#libraryDetailDoiInput");
-      const identifier = String(input?.value || "").trim();
-      const status = $("authorMonitorDetailStatus");
-      const buttons = root?.querySelectorAll("button") || [];
-      if (!identifier) {
-        if (status) {
-          status.textContent = "Enter a DOI or arXiv ID first.";
-          status.className = "library-detail-status err";
-        }
-        input?.focus({preventScroll: true});
-        return;
-      }
-      buttons.forEach((button) => button.disabled = true);
-      updateAuthorMonitorActivityStatus("Refreshing selected paper metadata...", {
-        live: true,
-        clear: false
-      });
-      if (status) {
-        status.textContent = "Refreshing metadata from identifier...";
-        status.className = "library-detail-status";
-      }
-      try {
-        const res = await fetch("/api/library/refresh-metadata", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({
-            paper_id: paper.paper_id,
-            identifier,
-            snapshot: false
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        updatePaperState(paper.paper_id, data.paper);
-        state.figureFailures.delete(paper.paper_id);
-        const snapshotRes = await fetch(
-          `/api/author-monitor?author_id=${Number(state.authorMonitorSelectedId || 0)}`
-        );
-        const snapshot = await snapshotRes.json();
-        if (!snapshotRes.ok) throw new Error(snapshot.error || "Could not reload Author Monitor");
-        applyAuthorMonitorSnapshot(snapshot);
-        if (state.mode === "author") renderAuthorMonitor({preserveScroll: true});
-        updateAuthorMonitorActivityStatus("Paper metadata refreshed.", {live: false});
-      } catch (error) {
-        const message = error.message || "Could not refresh metadata";
-        updateAuthorMonitorActivityStatus(`Metadata refresh failed: ${message}`, {live: false});
-        if (status) {
-          status.textContent = message;
-          status.className = "library-detail-status err";
-        }
-        buttons.forEach((button) => button.disabled = false);
-      }
+      return refreshLibraryMetadataFromDoi(paper);
     }
 
     function renderAuthorMonitorPaperDetail() {
+      closeMetadataRefreshTooltip();
       const root = $("authorMonitorDetailBody");
       if (!root) return;
+      delete root.dataset.metadataPaperId;
       const paper = selectedAuthorMonitorPaper();
       if (!paper) {
         root.innerHTML = runtimeBrandedEmptyMarkup("Select a paper to show its details.");
@@ -53074,12 +53219,17 @@ INDEX_HTML = """<!doctype html>
       root.innerHTML = `
         <h3>${publicationTitleMarkup(paper.title || "Untitled paper")}</h3>
         ${libraryDetailFigureMarkup(paper)}
-        <div class="actions author-detail-actions">
+        <div class="actions paper-detail-actions author-detail-actions">
+          <div class="paper-detail-action-row">
           ${paper.merged_pdf_path ? `<button class="action" data-action="author-preview-pdf">Open in Preview</button>` : ""}
           <button class="action ${paper.merged_pdf_path ? "" : "primary"}" data-action="author-download-pdf">${paper.merged_pdf_path ? "Download" : "Download PDF"}</button>
           ${paper.url ? `<button class="action" data-action="author-open-page">Open Website</button>` : ""}
+          </div>
+          <div class="paper-detail-action-row">
           ${paper.google_scholar_url ? `<button class="action" data-action="author-open-scholar">Google Scholar</button>` : ""}
           ${libraryIdentifierFromFilesButtonMarkup(paper)}
+          ${metadataRefreshButtonMarkup(paper)}
+          </div>
         </div>
         <div class="library-detail-status" id="authorMonitorDetailStatus" data-role="status"></div>
         ${libraryDetailMetadataMarkup(paper, authors, null, {
@@ -53110,7 +53260,10 @@ INDEX_HTML = """<!doctype html>
       root.querySelector('[data-action="author-copy-reference"]')?.addEventListener("click", (event) => copyLibraryNatureReference(paper, event.currentTarget));
       root.querySelector('[data-action="refresh-library-metadata"]')?.addEventListener("click", () => refreshAuthorMonitorMetadataFromIdentifier(paper));
       root.querySelector("#libraryDetailDoiInput")?.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") refreshAuthorMonitorMetadataFromIdentifier(paper);
+        if (event.key === "Enter") {
+          event.preventDefault();
+          savePaperDoi(paper, root).catch((error) => { const status = root.querySelector(".library-detail-status"); if (status) status.textContent = error.message; });
+        }
       });
       wirePreprintIdentifierControls(root, paper);
       wireLibraryFileLocationLinks(root);
@@ -58509,6 +58662,8 @@ INDEX_HTML = """<!doctype html>
     window.setLibraryContentView = setLibraryContentViewFromMenu;
     window.toggleLibraryContentView = toggleLibraryContentViewFromMenu;
     wireWorkspaceWebsiteLinks();
+    window.setTimeout(pollMetadataJobs, 2500);
+    window.setInterval(pollMetadataJobs, 5000);
 
     if (IS_STANDALONE_LOADER_WINDOW) {
       document.body.classList.add("loader-window-body");

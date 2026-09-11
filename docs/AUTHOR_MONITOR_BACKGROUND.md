@@ -2,7 +2,7 @@
 
 Opening Author Monitor reuses the available in-memory list regardless of cache age. A cold scope uses the persistent card cache when ready, including live, author-scoped unread relationships. A cache being rebuilt retains the existing projection fallback. Local summary/index polling is separate from remote author checks; clicking tabs or changing scope never enqueues a Scholar request.
 
-The status bar restores a durable publications/metadata summary after transient action messages expire. It distinguishes running work, retry waits, daily limits, failures and complete metadata. Empty automatic polls preserve the last meaningful daily author-check result. Background cards reconcile in place with retained controls, selected paper and reading anchor; details and native previews remain mounted. A background index must preserve the current selection over an older remembered one. After a metadata batch, cached detail data is invalidated for the next explicit selection without replacing an open editor.
+The status bar restores a durable publications/metadata summary after transient action messages expire. It distinguishes running work, retry waits, daily limits, failures and no checks currently due. Empty automatic polls preserve the last meaningful daily author-check result. Background cards reconcile in place with retained controls, selected paper and reading anchor; details and native previews remain mounted. A background index must preserve the current selection over an older remembered one. After a metadata batch, cached detail data is invalidated for the next explicit selection without replacing an open editor.
 
 ## Scholar protection
 
@@ -15,6 +15,8 @@ Preserved limits: request spacing 4–8 seconds; profile-page spacing 12–24 se
 `author_metadata_work.py` owns the automatic worker independently of tabs. It uses the existing DOI/arXiv/abstract resolver, not Google Scholar profile fetching. The canonical paper ID deduplicates shared authors. Newer papers are prioritized within each author's queue, and queues rotate so an empty first author does not block other authors.
 
 Automatic limits are 20 papers per batch and 80 per local day. A worker checks its approximately two-minute time slice between papers, then rests at least five minutes. A single paper's bounded source calls may extend beyond the slice boundary. Existing seven-day retry markers are preserved. Explicit identifier commands use the same single worker slot but remain separate from the automatic daily budget; an explicit request waits for an active automatic slice rather than silently adding work beyond its reserved quota.
+
+Saved Library, Space and My Publications records now share this queue for periodic publication checks, deduplicated by canonical paper and alternating with Author completion work. The shared allowance is unchanged; see `METADATA_REFRESH.md`.
 
 The existing SQLite app-settings table stores the daily reservation, rest deadline, author rotation and summary; no schema migration or new authority is introduced. Reservations are written before network work. Normal completion refunds unused slots; interruption conservatively retains the reservation until the day rolls over. A restart resumes only after the saved rest deadline. Failed/unresolved papers retain their attempt markers, while papers deferred by a time slice have no attempt marker. Metadata status exposes pending and retry-waiting counts instead of treating zero eligible papers as complete.
 

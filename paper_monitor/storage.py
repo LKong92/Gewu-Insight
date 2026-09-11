@@ -2270,11 +2270,38 @@ class Storage:
         if commit:
             self.conn.commit()
 
-    def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any]) -> dict[str, Any] | None:
+    @classmethod
+    def metadata_refresh_identity_reference(cls, existing: dict[str, Any], incoming: dict[str, Any], *, linked_preprint_id: str = "") -> dict[str, Any]:
+        """A verified preprint-to-publication link may replace the arXiv DOI.
+
+        Only metadata refresh opts in; import identity and merge guards remain
+        unchanged. An unrelated published DOI can never use this exception.
+        """
+        if not linked_preprint_id:
+            return existing
+        old_doi = normalize_doi(existing.get("doi"))
+        preprint_doi = "10.48550/arxiv." + linked_preprint_id.lower()
+        if old_doi and old_doi != preprint_doi:
+            return existing
+        incoming_raw = cls._paper_raw_dict(incoming)
+        if normalize_doi(incoming_raw.get("published_doi")) != normalize_doi(incoming.get("doi")):
+            return existing
+        reference = dict(existing)
+        reference["doi"] = incoming.get("doi")
+        for key in ("url", "landing_url", "pdf_url"):
+            if cls._identity_url_doi(reference.get(key)) == preprint_doi:
+                reference[key] = ""
+        # A published title/journal may change; disjoint authors AND a changed
+        # title still trigger the ordinary identity guard.
+        reference["journal"] = incoming.get("journal")
+        return reference
+
+    def refresh_paper_metadata(self, paper_id: str, paper: dict[str, Any], *, linked_preprint_id: str = "") -> dict[str, Any] | None:
         existing = self.get_paper(paper_id)
         if not existing:
             return None
-        conflict_reasons = self.paper_identity_conflict_reasons(existing, paper)
+        reference = self.metadata_refresh_identity_reference(existing, paper, linked_preprint_id=linked_preprint_id)
+        conflict_reasons = self.paper_identity_conflict_reasons(reference, paper)
         if conflict_reasons:
             self.record_paper_identity_conflict(existing, paper, conflict_reasons)
             return existing

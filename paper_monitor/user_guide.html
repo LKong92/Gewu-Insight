@@ -1466,7 +1466,7 @@
         <article class="help-topic guide-topic" id="paper-details" data-group="Papers and Files" data-title="Use Paper Details" data-keywords="open preview website google scholar identifier files citation metadata folders Gewu key">
           <p class="topic-kicker">Library</p>
           <h1>Use Paper Details</h1>
-          <p class="lead">Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. Action labels stay on one line; whole buttons wrap when space is narrow.</p>
+          <p class="lead">Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. The available actions occupy two rows: Preview, Download and Website first; Google Scholar, Get DOI and Refresh Info second. Each button label stays on one line.</p>
 
           <h2>Top actions</h2>
           <table class="plain-table">
@@ -1475,11 +1475,12 @@
             <tr><td><span class="ui">Download</span></td><td>Retrieves the best available paper file without overwriting a different preserved version.</td></tr>
             <tr><td><span class="ui">Open Website</span></td><td>Opens the publisher, DOI, arXiv, or best known work page using <a href="#website-link-settings">Website Links</a>: Gewu Insight Browser by default, or the system default browser.</td></tr>
             <tr><td><span class="ui">Google Scholar</span></td><td>Searches for the work in Google Scholar.</td></tr>
-            <tr><td><span class="ui">Get Identifier from Files</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
+            <tr><td><span class="ui">Get DOI</span></td><td>Examines local paper files for DOI or arXiv evidence.</td></tr>
+            <tr><td><span class="ui">Refresh Info</span></td><td>Refreshes paper information using its saved DOI or arXiv ID. Hover over the button to see the latest result below it.</td></tr>
           </table>
 
           <h2>File management</h2>
-          <p>Library uses the adjacent <span class="ui">Paper Files</span> column; Paper Details does not repeat a Files box. My Publications keeps its collapsible <span class="ui">Files · n</span> management panel. Author Monitor shows a compact local filename with the full path on hover; <span class="ui">Get Identifier from Files</span> appears when a local PDF is available.</p>
+          <p>Library uses the adjacent <span class="ui">Paper Files</span> column; Paper Details does not repeat a Files box. My Publications keeps its collapsible <span class="ui">Files · n</span> management panel. Author Monitor shows a compact local filename with the full path on hover; <span class="ui">Get DOI</span> appears when a local PDF is available.</p>
 
           <h2>Metadata rows</h2>
           <p>The title appears once at the top. The rows below include authors, journal, date, DOI, arXiv, Gewu Key, citation, fields, and folder membership when available. <span class="ui">Gewu Key</span> is the stable, human-visible storage handle for a cataloged work record. It is not a DOI, arXiv identifier, or the database's relational primary key.</p>
@@ -1510,12 +1511,11 @@
           <h1>Edit DOI and arXiv Identifiers</h1>
           <p class="lead">DOI and arXiv can identify the same work across publication stages. Correct either value in Paper Details before downloading or synchronizing versions.</p>
 
-          <h2>Refresh or correct a DOI</h2>
+          <h2>Refresh the whole paper</h2>
           <ol class="steps">
-            <li><strong>Select the paper.</strong> Find the <span class="ui">DOI</span> row in Paper Details.</li>
-            <li><strong>Select the DOI field.</strong> Enter or paste the correct DOI. You can omit a leading <code>https://doi.org/</code>.</li>
-            <li><strong>Choose <span class="ui">Refresh</span> or press <kbd>Return</kbd>.</strong> Gewu Insight saves the identifier, checks supported metadata services, and updates matching bibliographic fields.</li>
-            <li><strong>Inspect the result.</strong> Verify the title, journal, year, and authors before downloading a new file.</li>
+            <li><strong>Select the paper.</strong> Choose <span class="ui">Refresh Info</span> in Paper Details. Either a DOI or an arXiv ID is sufficient; both saved identifiers are considered. The workspace bottom status bar shows the refresh while it runs, followed by a brief result.</li>
+            <li><strong>Review the result.</strong> Hover over <span class="ui">Refresh Info</span>. A temporary information box below the button reports changed fields, last check, source availability and conflicting evidence; it disappears when the pointer leaves. Keyboard focus also reveals it, and <kbd>Escape</kbd> dismisses it. A partial result retains successful updates.</li>
+            <li><strong>Correct a DOI if needed.</strong> Edit the DOI field and press <kbd>Return</kbd> to save without an online lookup. DOI URLs are accepted. Then choose <span class="ui">Refresh Info</span>.</li>
           </ol>
 
           <h2>Edit an arXiv identifier</h2>
@@ -1526,6 +1526,10 @@
           </ol>
 
           <p>The <span class="ui">arXiv</span> row remains visible when empty so you can add a corrected identifier later. Use the arrow icon to open arXiv and the download icon to retrieve the latest available arXiv PDF.</p>
+
+          <p>Explicit links from arXiv, Crossref, OpenAlex, Semantic Scholar or configured ADS can connect a preprint and its published DOI. A newly linked DOI loads detailed publication metadata while retaining the arXiv ID. Title similarity alone cannot bind identifiers. Manual corrections and cleared values are preserved; a DOI owned by another Gewu Key is reported without merging records.</p>
+
+          <p>Saved Library, Space and My Publications papers also enter a shared background queue. Checks become eligible after seven days, or thirty days after three unchanged checks; daily limits may delay them further. The worker shares Author Monitor's limits of 20 papers per batch and 80 per day, pauses between slices, and makes no Google Scholar requests. Background checks do not download PDFs, change Paper Files or Default, create placements, or move your selection and focus.</p>
 
           <div class="important"><span class="callout-title">Important</span>Confirm an identifier before running a version sync. A wrong identifier can attach files from a different work.</div>
 
@@ -1807,7 +1811,7 @@
             <li>A verified exported Paper Files relationship when a Gewu Insight manifest is present.</li>
           </ul>
 
-          <p>Folder Loader copies into Gewu Insight’s managed storage. It does not move, rename, or delete the external source files and folders you selected.</p>
+          <p>Folder Loader copies into Gewu Insight’s managed storage. It does not move, rename, or delete the external source files and folders you selected. Loader, Paper Details, folder and all-Library refresh use the same service and refresh history. <span class="ui">Quick refresh</span> updates core information (title, authors, journal and date) and verified DOI/arXiv links; <span class="ui">Full refresh</span> adds detailed authors, citations and other source data. Recovered identifiers use the selected mode. Partial source failures remain visible in the log and are not recorded as a fully successful refresh.</p>
 
           <h2>Identity mismatches and partial imports</h2>
           <p>Loader and Finder folder drops share the same matching and file-preservation policy. When a DOI, title or existing identifier disagrees with the matched paper, the incoming file is still saved in its Paper Files and the paper is placed in the target folder. Existing metadata and Default are preserved. Different PDFs with the same DOI are kept as separate files; the import continues without a mandatory review prompt.</p>
@@ -1843,10 +1847,14 @@
 
           <h2>Refresh known works</h2>
           <ol class="steps">
-            <li><strong>Choose <span class="ui">Loader &gt; Refresh All Metadata</span>.</strong></li>
-            <li><strong>Choose <span class="ui">Start Refresh</span>.</strong> Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.</li>
-            <li><strong>Review the log.</strong> Recently successful records may be skipped to avoid unnecessary requests.</li>
+            <li><strong>Choose the scope.</strong> Use <span class="ui">Loader &gt; Refresh All Metadata</span>, or Control-click a Library/Space folder and choose <span class="ui">Refresh Info</span>. A folder task includes all its subfolders. Recycle is excluded.</li>
+            <li><strong>Choose Quick or Full.</strong> Folder and all-Library tasks default to Full. Quick updates core information and DOI/arXiv links; Full adds detailed authors and citation sources.</li>
+            <li><strong>Choose <span class="ui">Start Refresh</span>.</strong> Each Gewu Key is checked once, even when it has several files or locations. The bottom status bar shows the task while you continue browsing.</li>
+            <li><strong>Review the log.</strong> Counts distinguish updated, unchanged, partial, failed, cooldown skipped and missing DOI/arXiv records. Missing identifiers remain visible; use the separate identifier search when needed.</li>
+            <li><strong>Pause or continue.</strong> <span class="ui">Pause</span> finishes the current paper and saves the remaining queue. Select the task under <span class="ui">Refresh tasks</span> and choose <span class="ui">Continue</span>, including after reopening or restarting. Interrupted tasks reopen paused.</li>
           </ol>
+          <p>Successful checks within three days are skipped across single-paper, folder, all-Library and Loader entry points. Full satisfies a later Quick task; Quick does not block Full. Partial retries reuse recent successful source responses and retry failed sources. A direct Paper Details refresh can check again immediately, while shared source rate limits still apply. Automatic background checks retain their separate seven/thirty-day schedule and daily allowance; Google Scholar protections are unchanged.</p>
+          <p>Refreshing a shared Gewu Key updates its information in every location. Folder locations, PDF files, Paper Files classifications and Default selections stay unchanged. Multiple tasks wait in a queue; a direct single-paper refresh has priority between papers. The task log shows the most recent 200 entries; totals and the remaining queue are retained.</p>
 
           <h2>Find missing identifiers</h2>
           <ol class="steps">
@@ -2158,7 +2166,7 @@
           <p>Scholar requests remain serialized, with 4–8 seconds between requests, 12–24 seconds between profile pages and 45–90 seconds between automatic author checks. Every request checks the shared workspace cooldown again before sending, including My Publications imports. Access restrictions pause Scholar for 24 hours; manual actions and restarts do not bypass or reset that pause. This is Gewu's protective waiting period, not a promised unblock time from Google.</p>
 
           <h2>Refresh one author or find missing identifiers</h2>
-          <p>Control-click the author and choose <span class="ui">Refresh This Author</span> to update that person's publications. <span class="ui">Find Missing Identifiers</span> checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose <span class="ui">Find Missing Identifier</span>; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from <span class="ui">Get Identifier from Files</span>, which uses an available local PDF.</p>
+          <p>Control-click the author and choose <span class="ui">Refresh This Author</span> to update that person's publications. <span class="ui">Find Missing Identifiers</span> checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose <span class="ui">Find Missing Identifier</span>; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from <span class="ui">Get DOI</span>, which uses an available local PDF.</p>
 
           <h2>Update citation profiles</h2>
           <p>For a Google Scholar author, Control-click the author, choose <span class="ui">Update All Scholar Citations</span>, review the request estimate, then confirm <span class="ui">Update All Citations</span>. This updates that author’s full profile paper by paper and can take a long time. Follow the bottom progress status until it finishes.</p>

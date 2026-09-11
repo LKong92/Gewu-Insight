@@ -1671,7 +1671,7 @@ Folder drops and Folder Loader use the same import rules. An identity mismatch k
 \section{Use Paper Details}\label{paper-details}
 
 \begin{GewuLead}
-Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. Action labels stay on one line; whole buttons wrap when space is narrow.
+Paper Details combines actions, identifiers, metadata, and citation counts. Library, My Publications, and Author Monitor start with the paper title, without a separate heading bar. The available actions occupy two rows: Preview, Download and Website first; Google Scholar, Get DOI and Refresh Info second. Each button label stays on one line.
 \end{GewuLead}
 
 \subsection{Top actions}\label{top-actions}
@@ -1690,14 +1690,15 @@ Action & What it does \\
 \textbf{Download} & Retrieves the best available paper file without overwriting a different preserved version. \\
 \textbf{Open Website} & Opens the publisher, DOI, arXiv, or best known work page using \hyperref[website-link-settings]{Website Links}: Gewu Insight Browser by default, or the system default browser. \\
 \textbf{Google Scholar} & Searches for the work in Google Scholar. \\
-\textbf{Get Identifier from Files} & Examines local paper files for DOI or arXiv evidence. \\
+\textbf{Get DOI} & Examines local paper files for DOI or arXiv evidence. \\
+\textbf{Refresh Info} & Refreshes paper information using its saved DOI or arXiv ID. Hover over the button to see the latest result below it. \\
 \end{longtable}
 \GewuTableEnd
 }
 
 \subsection{File management}\label{file-management}
 
-Library uses the adjacent \textbf{Paper Files} column; Paper Details does not repeat a Files box. My Publications keeps its collapsible \textbf{Files · n} management panel. Author Monitor shows a compact local filename with the full path on hover; \textbf{Get Identifier from Files} appears when a local PDF is available.
+Library uses the adjacent \textbf{Paper Files} column; Paper Details does not repeat a Files box. My Publications keeps its collapsible \textbf{Files · n} management panel. Author Monitor shows a compact local filename with the full path on hover; \textbf{Get DOI} appears when a local PDF is available.
 
 \subsection{Metadata rows}\label{metadata-rows}
 
@@ -1745,18 +1746,16 @@ Gewu Key is assigned when a work is first cataloged in SQLite, before Add to Lib
 DOI and arXiv can identify the same work across publication stages. Correct either value in Paper Details before downloading or synchronizing versions.
 \end{GewuLead}
 
-\subsection{Refresh or correct a DOI}\label{refresh-or-correct-a-doi}
+\subsection{Refresh the whole paper}\label{refresh-the-whole-paper}
 
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Select the paper.} Find the \textbf{DOI} row in Paper Details.
+  \textbf{Select the paper.} Choose \textbf{Refresh Info} in Paper Details. Either a DOI or an arXiv ID is sufficient; both saved identifiers are considered. The workspace bottom status bar shows the refresh while it runs, followed by a brief result.
 \item
-  \textbf{Select the DOI field.} Enter or paste the correct DOI. You can omit a leading \texttt{https://doi.org/}.
+  \textbf{Review the result.} Hover over \textbf{Refresh Info}. A temporary information box below the button reports changed fields, last check, source availability and conflicting evidence; it disappears when the pointer leaves. Keyboard focus also reveals it, and \texttt{Escape} dismisses it. A partial result retains successful updates.
 \item
-  \textbf{Choose \textbf{Refresh} or press \texttt{Return}.} Gewu Insight saves the identifier, checks supported metadata services, and updates matching bibliographic fields.
-\item
-  \textbf{Inspect the result.} Verify the title, journal, year, and authors before downloading a new file.
+  \textbf{Correct a DOI if needed.} Edit the DOI field and press \texttt{Return} to save without an online lookup. DOI URLs are accepted. Then choose \textbf{Refresh Info}.
 \end{enumerate}
 
 \subsection{Edit an arXiv identifier}\label{edit-an-arxiv-identifier}
@@ -1772,6 +1771,10 @@ DOI and arXiv can identify the same work across publication stages. Correct eith
 \end{enumerate}
 
 The \textbf{arXiv} row remains visible when empty so you can add a corrected identifier later. Use the arrow icon to open arXiv and the download icon to retrieve the latest available arXiv PDF.
+
+Explicit links from arXiv, Crossref, OpenAlex, Semantic Scholar or configured ADS can connect a preprint and its published DOI. A newly linked DOI loads detailed publication metadata while retaining the arXiv ID. Title similarity alone cannot bind identifiers. Manual corrections and cleared values are preserved; a DOI owned by another Gewu Key is reported without merging records.
+
+Saved Library, Space and My Publications papers also enter a shared background queue. Checks become eligible after seven days, or thirty days after three unchanged checks; daily limits may delay them further. The worker shares Author Monitor\textquotesingle s limits of 20 papers per batch and 80 per day, pauses between slices, and makes no Google Scholar requests. Background checks do not download PDFs, change Paper Files or Default, create placements, or move your selection and focus.
 
 \begin{quote}
 \textbf{Important}
@@ -2228,7 +2231,7 @@ Folder Loader. Choose a source directory and metadata mode before Import. The li
   A verified exported Paper Files relationship when a Gewu Insight manifest is present.
 \end{itemize}
 
-Folder Loader copies into Gewu Insight's managed storage. It does not move, rename, or delete the external source files and folders you selected.
+Folder Loader copies into Gewu Insight's managed storage. It does not move, rename, or delete the external source files and folders you selected. Loader, Paper Details, folder and all-Library refresh use the same service and refresh history. \textbf{Quick refresh} updates core information (title, authors, journal and date) and verified DOI/arXiv links; \textbf{Full refresh} adds detailed authors, citations and other source data. Recovered identifiers use the selected mode. Partial source failures remain visible in the log and are not recorded as a fully successful refresh.
 
 \subsection{Identity mismatches and partial imports}\label{identity-mismatches-and-partial-imports}
 
@@ -2289,12 +2292,20 @@ Find All Missing Identifiers. Start Search checks eligible Library PDFs for miss
 \begin{enumerate}
 \tightlist
 \item
-  \textbf{Choose \textbf{Loader \textgreater{} Refresh All Metadata}.}
+  \textbf{Choose the scope.} Use \textbf{Loader \textgreater{} Refresh All Metadata}, or Control-click a Library/Space folder and choose \textbf{Refresh Info}. A folder task includes all its subfolders. Recycle is excluded.
 \item
-  \textbf{Choose \textbf{Start Refresh}.} Eligible Library papers with DOI or arXiv identifiers are refreshed sequentially.
+  \textbf{Choose Quick or Full.} Folder and all-Library tasks default to Full. Quick updates core information and DOI/arXiv links; Full adds detailed authors and citation sources.
 \item
-  \textbf{Review the log.} Recently successful records may be skipped to avoid unnecessary requests.
+  \textbf{Choose \textbf{Start Refresh}.} Each Gewu Key is checked once, even when it has several files or locations. The bottom status bar shows the task while you continue browsing.
+\item
+  \textbf{Review the log.} Counts distinguish updated, unchanged, partial, failed, cooldown skipped and missing DOI/arXiv records. Missing identifiers remain visible; use the separate identifier search when needed.
+\item
+  \textbf{Pause or continue.} \textbf{Pause} finishes the current paper and saves the remaining queue. Select the task under \textbf{Refresh tasks} and choose \textbf{Continue}, including after reopening or restarting. Interrupted tasks reopen paused.
 \end{enumerate}
+
+Successful checks within three days are skipped across single-paper, folder, all-Library and Loader entry points. Full satisfies a later Quick task; Quick does not block Full. Partial retries reuse recent successful source responses and retry failed sources. A direct Paper Details refresh can check again immediately, while shared source rate limits still apply. Automatic background checks retain their separate seven/thirty-day schedule and daily allowance; Google Scholar protections are unchanged.
+
+Refreshing a shared Gewu Key updates its information in every location. Folder locations, PDF files, Paper Files classifications and Default selections stay unchanged. Multiple tasks wait in a queue; a direct single-paper refresh has priority between papers. The task log shows the most recent 200 entries; totals and the remaining queue are retained.
 
 \subsection{Find missing identifiers}\label{find-missing-identifiers}
 
@@ -2800,7 +2811,7 @@ Scholar requests remain serialized, with 4--8 seconds between requests, 12--24 s
 
 \subsection{Refresh one author or find missing identifiers}\label{refresh-one-author-or-find-missing-identifiers}
 
-Control-click the author and choose \textbf{Refresh This Author} to update that person\textquotesingle s publications. \textbf{Find Missing Identifiers} checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose \textbf{Find Missing Identifier}; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from \textbf{Get Identifier from Files}, which uses an available local PDF.
+Control-click the author and choose \textbf{Refresh This Author} to update that person\textquotesingle s publications. \textbf{Find Missing Identifiers} checks eligible papers for that author. To check only one unidentified paper, Control-click the paper and choose \textbf{Find Missing Identifier}; it is disabled when an identifier already exists or a lookup is running. These online lookups differ from \textbf{Get DOI}, which uses an available local PDF.
 
 \subsection{Update citation profiles}\label{update-citation-profiles}
 

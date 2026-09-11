@@ -18,7 +18,7 @@ class AuthorDetailsLayoutTests(unittest.TestCase):
     def test_no_redundant_header_or_forced_second_action_group(self):
         self.assertNotIn("author-monitor-detail-head", INDEX_HTML)
         detail = ui_function("renderAuthorMonitorPaperDetail")
-        self.assertEqual(detail.count('class="actions author-detail-actions"'), 1)
+        self.assertEqual(detail.count('class="actions paper-detail-actions author-detail-actions"'), 1)
         self.assertNotIn("Download Again", detail)
         self.assertIn("extractLibraryIdentifierFromFiles(paper)", detail)
         css = INDEX_HTML.split(".author-monitor-detail-body.library-detail > .actions .action {", 1)[1].split("}", 1)[0]
@@ -46,7 +46,7 @@ class AuthorDetailsInteractionTests(unittest.TestCase):
             "libraryDetailGewuKeyMarkup", "libraryIdentifierFromFilesButtonMarkup",
             "libraryDetailFilesMarkup", "escapeHtml", "escapeAttr", "updatePaperState",
         ], r'''
-const root = {innerHTML: '', querySelector() {return null;}};
+const root = {innerHTML: '', dataset: {}, querySelector() {return null;}};
 global.$ = () => root;
 const paper = {paper_id: 'one', title: 'Shared paper', authors: ['A. Author'], full_detail: false};
 global.state = {papers: [], themePapers: [], reportCache: {}, themePapersByDate: {},
@@ -55,8 +55,8 @@ global.selectedAuthorMonitorPaper = () => state.authorMonitorPapers[0];
 global.invalidateAuthorMonitorViewCache = () => {};
 global.publicationTitleMarkup = escapeHtml;
 for (const name of ['libraryDetailFigureMarkup', 'libraryDetailDoiMarkup', 'citationMetricsMarkup',
- 'libraryDetailAbstractMarkup', 'pubmedMarkup', 'natureReferenceMarkup']) global[name] = () => '';
-for (const name of ['wirePreprintIdentifierControls', 'wireLibraryFileLocationLinks',
+ 'libraryDetailAbstractMarkup', 'pubmedMarkup', 'natureReferenceMarkup', 'metadataRefreshButtonMarkup']) global[name] = () => '';
+for (const name of ['closeMetadataRefreshTooltip', 'wirePreprintIdentifierControls', 'wireLibraryFileLocationLinks',
  'wireCitationSourceSelector', 'wireSemanticInfluentialCitations', 'hydrateLibraryDetailFigureIfNeeded']) global[name] = () => {};
 global.authorsMarkup = authors => escapeHtml(authors.join(', '));
 global.paperFieldValues = () => [];
@@ -75,10 +75,10 @@ updatePaperState('one', {paper_id: 'one', storage_key: 'gw_existing', full_detai
 renderAuthorMonitorPaperDetail();
 assert.equal((root.innerHTML.match(/<dt>Gewu Key<\/dt>/g) || []).length, 1);
 assert.match(root.innerHTML, /gw_existing/);
-assert.match(root.innerHTML, /Get Identifier from Files/);
+assert.match(root.innerHTML, /Get DOI/);
 assert.match(root.innerHTML, /PDF: paper.pdf/);
 assert.match(root.innerHTML, /title="\/Library\/Folder\/paper.pdf"/);
-const actions = root.innerHTML.split('class="actions author-detail-actions"')[1].split('</div>')[0];
+const actions = root.innerHTML.split('class="actions paper-detail-actions author-detail-actions"')[1].split('<div class="library-detail-status"')[0];
 for (const label of ['Open in Preview', 'Download', 'Open Website', 'Google Scholar']) assert.ok(actions.includes(label));
 // Add-to-Library updates reuse the same canonical key immediately.
 updatePaperState('one', {paper_id: 'one', storage_key: 'gw_existing', full_detail: true,

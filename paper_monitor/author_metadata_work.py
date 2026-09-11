@@ -6,6 +6,7 @@ import threading
 import time
 
 from .storage import Storage
+from . import metadata_refresh
 
 SETTING = 'author_monitor_metadata_work'
 BATCH_SIZE = 20
@@ -58,6 +59,22 @@ def plan(rows, ui, *, last_author=0):
     return selected, waiting, min(retry_times, default='')
 
 
+def combined_plan(storage, ui, *, last_author=0, now=None):
+    author, waiting, retry = plan(storage.list_author_monitor_papers(0), ui, last_author=last_author)
+    saved = metadata_refresh.saved_candidates(storage)
+    publication = [p for p in saved if metadata_refresh.is_due(p, now)]
+    ready_ids = {pid for _, pid in author}
+    publication_ids = {p['paper_id'] for p in publication}
+    # Alternate both kinds within the same 20/80 allowance; deduplicate shared Keys.
+    queues = [deque(author), deque((0, p['paper_id']) for p in publication if p['paper_id'] not in ready_ids)]
+    combined = []
+    while any(queues):
+        for q in queues:
+            if q:
+                combined.append(q.popleft())
+    return combined, waiting, retry, publication_ids
+
+
 def run_slice(db_path, *, now=None):
     from . import ui_server as ui
     now = now or datetime.now().astimezone()
@@ -77,8 +94,8 @@ def run_slice(db_path, *, now=None):
             pass
         if ui.active_author_monitor_enrichment_job():
             return  # Explicit work owns the same single worker slot.
-        rows = storage.list_author_monitor_papers(0)
-        selected, waiting, retry_at = plan(rows, ui, last_author=int(state.get('last_author') or 0))
+        selected, waiting, retry_at, publication_ids = combined_plan(storage, ui,
+            last_author=int(state.get('last_author') or 0), now=now)
         state.update(eligible=len(selected), waiting_retry=waiting, retry_at=retry_at,
                      updated_at=now.isoformat(timespec='seconds'), daily_limit=DAILY_LIMIT)
         remaining = max(0, DAILY_LIMIT - int(state.get('used') or 0))
@@ -98,13 +115,14 @@ def run_slice(db_path, *, now=None):
         state.update(status='running', job_id=job_id, used=int(state.get('used') or 0) + len(batch))
         save(storage, state)
         ui.run_author_monitor_enrichment_job(job_id=job_id, db_path=db_path,
-            paper_ids=[pid for _, pid in batch], max_papers=len(batch), time_budget_seconds=SLICE_SECONDS)
+            paper_ids=[pid for _, pid in batch], publication_paper_ids=list(publication_ids),
+            max_papers=len(batch), time_budget_seconds=SLICE_SECONDS)
         job = ui.get_author_monitor_enrichment_job(job_id) or {}
         attempted = min(len(batch), int(job.get('current') or 0))
         state['used'] -= len(batch) - attempted
         if attempted:
             state['last_author'] = batch[attempted - 1][0]
-        selected, waiting, retry_at = plan(storage.list_author_monitor_papers(0), ui, last_author=int(state.get('last_author') or 0))
+        selected, waiting, retry_at, _ = combined_plan(storage, ui, last_author=int(state.get('last_author') or 0), now=now)
         state.update(eligible=len(selected), waiting_retry=waiting, retry_at=retry_at,
                      status='resting' if selected else ('waiting_retry' if waiting else 'complete'),
                      updated_at=ui.now_iso(), next_run_at=(datetime.now().astimezone() + timedelta(seconds=REST_SECONDS)).isoformat(timespec='seconds'))

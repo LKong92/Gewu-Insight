@@ -1,7 +1,7 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {chromium}=require('playwright');
 const source=fs.readFileSync(path.resolve(__dirname,'../paper_monitor/ui_server.py'),'utf8');
-const names=['applyAuthorMonitorIndex','openAuthorMonitor','scheduleAuthorMonitorIdleEnrichment','authorMonitorIdleActivity','authorMonitorDisplayedActivity','authorMonitorActivityStatusClass','syncAuthorMonitorActivityDisplay','updateAuthorMonitorActivityStatus','refreshAuthorMonitorInPlace','wireAuthorMonitorIncrementalRender'];
+const names=['metadataRefreshActivityText','applyAuthorMonitorIndex','openAuthorMonitor','scheduleAuthorMonitorIdleEnrichment','authorMonitorIdleActivity','authorMonitorDisplayedActivity','authorMonitorActivityStatusClass','syncAuthorMonitorActivityDisplay','updateAuthorMonitorActivityStatus','refreshAuthorMonitorInPlace','wireAuthorMonitorIncrementalRender'];
 const functions=names.map(n=>{const re=new RegExp('    (?:async )?function '+n+'\\(');const start=source.search(re);assert.ok(start>=0,n);return source.slice(start,source.indexOf('\n    }',start)+6)}).join('\n');
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.GEWU_TEST_CHROME});
@@ -9,6 +9,7 @@ const functions=names.map(n=>{const re=new RegExp('    (?:async )?function '+n+'
  const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setContent('<button id="authorTab">Author Monitor</button><input id="editor" value="unsaved"><div id="authorMonitorAuthors"><div data-author-id="1">A</div></div><div id="authorMonitorPaperList" style="height:170px;overflow:auto"></div><div id="authorMonitorActivityStatus"></div><div id="authorMonitorSecondaryActivityStatus"></div><div id="papers"></div>');
  await page.addScriptTag({content:`
+ const paperMetadataRequests=new Map();
  const $=id=>document.getElementById(id),AUTHOR_MONITOR_INITIAL_CARD_COUNT=10,AUTHOR_MONITOR_CARD_BATCH_SIZE=10;
  const state={mode:'author',authorMonitorLoaded:true,authorMonitorLoadedAt:Date.now()-3600000,authorMonitorSelectedId:1,authorMonitorSelectedPaperId:'p3',authorMonitors:[{id:1,name:'A',status:'success',last_success_at:'2026-09-10T10:00:00+08:00',message:'No new publications.'}],authorMonitorMetadataWork:{status:'waiting_retry',waiting_retry:7,retry_at:'2026-09-17T10:00:00+08:00'}};
  let loads=0,summaryReads=0,remoteRequests=0,paused=false;

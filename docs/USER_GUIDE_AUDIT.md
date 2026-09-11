@@ -1,5 +1,12 @@
 # User Guide audit — September 6, 2026
 
+## September 11 unified metadata tasks
+
+- Align Loader, Details, folder and all-Library Quick/Full meanings, successful three-day history, partial-source retries and provider cooldowns. Explain recursive folder Refresh Info, Key deduplication, explicit missing-ID results, Pause/Continue after reopening and shared metadata in other locations.
+- Preserve the existing 32 original-App screenshots and all other illustrations. The regenerated Guide has 105 pages; pages 49–53 and continuous Product Identity 93–95 were rendered and visually reviewed. All six PDF structure checks pass.
+- All 950 product regression tests passed (64.826 s) with temporary data. The full Chrome fixture verifies real folder UI/API, pause/reopen/continue, outcome counters, cooldown, focus/download preservation and three widths. The Details/footer probe passed. After unlock, the full native WebKit startup fixture passed its ready message, cover removal, folder transitions and zero-JS-error checks. Final menu-label verification passed 69 focused tests and all six PDF checks; page 52 was visually rechecked.
+- Folder menu reads Refresh Info without an ellipsis. The original signed App was installed and normally restarted with approval at 10:27:34 +0800 (App 29174 / sole healthy service 29177). Signature, installed stage, served UI/Browser JS/Guides and the actual restored main window (Hong Ding in Author Monitor) were verified. Signed stage, prior-App/source backups and evidence: `/private/tmp/gewu-unified-refresh-qa/`. Download paths, Scholar protection and real paper files/data were not changed by validation. Commit/push to main is user-authorized; the Windows branch is outside this delivery.
+
 ## September 11 Browser PDF downloads
 
 - Explain website PDF downloads opening in Browser, public-origin page-generated files, retained website login/consent, transfer progress and cancellation on source-page navigation/close. Preview uses temporary storage; recent bytes are reused for Save to Gewu, refresh and explicit Save Download. Library placement, classification and Default rules are unchanged.
@@ -147,7 +154,7 @@ Evidence names below refer to the current implementation or product tests;
 | [Search and Views](../paper_monitor/user_guide.html#search-views) | Clarify that active Library search disables Table View; `currentSurfaceSearchScope`, search/view handlers. |
 | [Add Papers and Files](../paper_monitor/user_guide.html#import-files) | Retain metadata-only and file-backed routes; `test_library_add_targets.py`, ingress tests. |
 | [Paper Details](../paper_monitor/user_guide.html#paper-details) | Correct citation sources, version-aware estimate and OpenAlex histogram; `citation_metrics`, `wireCitationSourceSelector`. Retain metadata/key/file distinctions and Website Links routing. |
-| [Identifiers](../paper_monitor/user_guide.html#identifiers) | Retain explicit DOI/arXiv editing, refresh and source actions; metadata tests, identifier-control handlers. |
+| [Identifiers](../paper_monitor/user_guide.html#identifiers) | Separate DOI/arXiv edits from whole-paper Refresh Info; document the two-row actions, Get DOI label, below-button hover results, verified cross-links, saved source outcomes, 7/30-day eligibility and shared worker limits. Synthetic metadata and focus/draft tests; original screenshots retained. |
 | [Paper Files](../paper_monitor/user_guide.html#paper-files) | Retain independently collapsed metadata, size-footer edge, default/physical-primary guard and native local-file opening. |
 | [Quick Look](../paper_monitor/user_guide.html#quick-look) | Restored embedded viewer, real load/paint distinction, native alternative, controls and bounded thumbnail/text display; `renderLibraryQuickLookPages`, `renderLibraryQuickLookThumbs`, native magnification. |
 | [File Types and Default](../paper_monitor/user_guide.html#versions-current) | Explain footer expansion; all ten labels checked against `paperFileRoleOptions` and `PAPER_FILE_TYPES`. |

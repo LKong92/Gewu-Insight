@@ -53,12 +53,13 @@ class LibraryImportProgressRuntimeTests(unittest.TestCase):
         import subprocess
         import tempfile
         from pathlib import Path
-        names=['libraryActivityStatusText','libraryActivityStatusClass','renderLibraryActivityStatus',
+        names=['metadataBatchActivityText','metadataRefreshActivityText','libraryActivityStatusText','libraryActivityStatusClass','renderLibraryActivityStatus',
                'updateLibraryActivityStatus','libraryDroppedImportActivityText','updateLibraryDroppedImportActivity',
                'refreshLibraryImportJob','stopLibraryImportPolling','loaderStatusText','openLibraryLoader']
         script='\n'.join(js_function(name) for name in names)
         harness=r'''
 const assert=require('node:assert/strict');
+const paperMetadataRequests=new Map();
 const nodes=new Map();
 function $(id) { if (!nodes.has(id)) nodes.set(id,{textContent:'',title:'',className:'',hidden:false}); return nodes.get(id); }
 const timeouts=[]; let refreshes=0, stopped=0, nativeOpens=0, drafts=0, renders=0;
