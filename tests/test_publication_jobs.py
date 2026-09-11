@@ -165,7 +165,7 @@ class PublicationJobsTests(TestCase):
             upgraded=Storage(self.path)
         try:
             self.assertEqual(upgraded.get_paper(publication['paper_id']),original)
-            self.assertEqual(upgraded.conn.execute('PRAGMA user_version').fetchone()[0],18)
+            self.assertEqual(upgraded.conn.execute('PRAGMA user_version').fetchone()[0],19)
             self.assertEqual(publication_work_snapshot(upgraded),{'imports':[],'identifiers':{}})
         finally:upgraded.close()
 

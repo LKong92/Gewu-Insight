@@ -50,7 +50,7 @@ def selection_sql(grant):
     kind = selection['kind']
     if kind == 'papers':
         keys = selection['keys']
-        return 'p.storage_key IN (' + ','.join('?' for _ in keys) + ')', list(keys)
+        return '(p.storage_key IN (' + ','.join('?' for _ in keys) + ') OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias IN (' + ','.join('?' for _ in keys) + ')))', list(keys) * 2
     location = '''EXISTS (SELECT 1 FROM library_items i JOIN active_folders f ON i.folder_id=f.id
       WHERE i.paper_id=p.paper_id AND COALESCE(i.trashed_at,'')='')'''
     if kind == 'saved':
@@ -69,8 +69,8 @@ def paper_for_key(storage, grant, key):
     if not isinstance(key, str) or not re.fullmatch(r'gw_[0-9a-f]{10,64}', key):
         fail(400, 'invalid_key', 'Provide a Gewu Key in the form gw_ followed by its identifier.')
     clause, params = selection_sql(grant)
-    row = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE p.storage_key=? AND ' + clause,
-                               [key] + params).fetchone()
+    row = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE (p.storage_key=? OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias=?)) AND ' + clause,
+                               [key, key] + params).fetchone()
     if not row:
         fail(404, 'paper_unavailable', 'This paper was not found in the authorized collection.')
     return dict(row)
@@ -139,8 +139,8 @@ def search(storage, grant, args):
     clause, params = selection_sql(grant)
     if q.strip():
         term = '%' + q.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-        clause += " AND (p.title LIKE ? ESCAPE '\\' OR p.doi LIKE ? ESCAPE '\\' OR p.storage_key LIKE ? ESCAPE '\\' OR p.abstract LIKE ? ESCAPE '\\')"
-        params += [term] * 4
+        clause += " AND (p.title LIKE ? ESCAPE '\\' OR p.doi LIKE ? ESCAPE '\\' OR p.storage_key LIKE ? ESCAPE '\\' OR p.abstract LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM paper_aliases a WHERE a.paper_id=p.paper_id AND a.alias LIKE ? ESCAPE '\\'))"
+        params += [term] * 5
     rows = storage.conn.execute(ACTIVE_FOLDERS + 'SELECT p.* FROM papers p WHERE ' + clause +
                                 ' ORDER BY p.storage_key LIMIT ? OFFSET ?', params + [limit + 1, offset]).fetchall()
     return {'papers': [metadata(dict(row)) for row in rows[:limit]],

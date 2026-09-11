@@ -76,7 +76,7 @@ def create_connection(storage, payload):
             fail(400, 'invalid_selection', 'Choose between 1 and 200 Gewu Keys.')
         keys = list(dict.fromkeys(k.strip() for k in keys))
         for key in keys:
-            if not storage.conn.execute('SELECT 1 FROM papers WHERE storage_key=?', (key,)).fetchone():
+            if not storage.paper_for_key(key):
                 fail(400, 'invalid_selection', 'One of the Gewu Keys was not found.')
         selection = {'kind': kind, 'keys': keys}
     elif kind == 'folder':

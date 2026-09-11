@@ -14,6 +14,7 @@ def reassign_paper_file(storage: Storage, paper_id: str, resource_id: int, *,
                         target_key: str = "", new_title: str = "", folder_id: int = 0) -> dict:
     if bool(target_key) == bool(new_title):
         raise ValueError("Choose a target Gewu Key or a title for a new paper.")
+    paper_id = storage.resolve_paper_id(paper_id)
     storage.conn.execute("BEGIN IMMEDIATE")
     try:
         source = storage.get_paper(paper_id)
@@ -24,7 +25,7 @@ def reassign_paper_file(storage: Storage, paper_id: str, resource_id: int, *,
         if not path or not Path(path).is_file():
             raise ValueError("The selected file is unavailable.")
         if target_key:
-            row = storage.conn.execute("SELECT paper_id FROM papers WHERE storage_key=?", (target_key,)).fetchone()
+            row = storage.paper_for_key(target_key)
             if not row:
                 raise ValueError("No paper matches that Gewu Key.")
             target_id = row["paper_id"]

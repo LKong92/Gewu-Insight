@@ -245,7 +245,11 @@ class PaperSourceObservationTests(unittest.TestCase):
     def test_repointed_publication_and_canonical_merge_keep_provenance(self) -> None:
         source_id = "legacy-title-identity"
         target_id = "doi_10.1000/product-provenance"
-        self.storage.upsert_paper(paper_payload("subject", paper_id=source_id))
+        source = paper_payload("subject", paper_id=source_id)
+        # Exercise the explicit legacy relation move independently of the new
+        # canonical DOI writer, which would already reuse an existing identity.
+        source["doi"] = ""
+        self.storage.upsert_paper(source)
         self.storage.record_theme_candidate(
             paper_id=source_id,
             source="openalex",
@@ -333,7 +337,7 @@ class PaperSourceObservationMigrationTests(unittest.TestCase):
                     author_monitor_id=int(author["id"]),
                     paper_id=PAPER_ID,
                 )
-                storage.upsert_paper(paper_payload("", paper_id="unproven-paper", title="Unproven work"))
+                storage.upsert_paper({**paper_payload("", paper_id="unproven-paper", title="Unproven work"), "doi": "10.1000/unproven"})
             finally:
                 storage.close()
 
@@ -364,7 +368,7 @@ class PaperSourceObservationMigrationTests(unittest.TestCase):
             finally:
                 migrated.close()
 
-        self.assertEqual(STORAGE_SCHEMA_VERSION, 18)
+        self.assertEqual(STORAGE_SCHEMA_VERSION, 19)
         self.assertEqual(version, STORAGE_SCHEMA_VERSION)
         self.assertEqual(
             {(row["source_kind"], row["source_name"]) for row in observations},

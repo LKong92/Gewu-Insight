@@ -65,6 +65,8 @@ SCOPE_SQL = '''
 
 
 def candidates(storage, folder_id=None, paper_id=None):
+    if paper_id is not None:
+        paper_id = storage.resolve_paper_id(paper_id)
     return [r[0] for r in storage.conn.execute(SCOPE_SQL, (folder_id, folder_id, paper_id, paper_id))]
 
 
@@ -92,7 +94,7 @@ def create(storage, *, mode='full', skip_days=3, folder_id=None, job_id=None,
     if mode not in {'quick', 'full'}:
         raise ValueError('Choose Quick or Full')
     label = scope_label(storage, folder_id) if paper_ids is None else 'Imported papers'
-    ids = candidates(storage, folder_id) if paper_ids is None else list(dict.fromkeys(paper_ids))
+    ids = candidates(storage, folder_id) if paper_ids is None else list(dict.fromkeys(storage.resolve_paper_id(p) for p in paper_ids))
     with _LOCK:
         # Repeated clicks on the same scope attach to the existing job.
         for previous in listing(storage):
@@ -160,7 +162,7 @@ def run_job(storage, job_id, progress=None):
                     job.update(status='paused', stage='paused', current_paper='')
                     _save(storage, job)
                     return
-                paper_id = ids[index]
+                paper_id = storage.resolve_paper_id(ids[index])
                 paper = storage.get_paper(paper_id)
                 job['current_paper'] = (paper or {}).get('title') or paper_id
                 _save(storage, job)

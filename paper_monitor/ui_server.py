@@ -39,7 +39,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
-from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs
+from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
 from .recycle import delete_recycle_selection, preview_recycle_selection
 from .publication_errors import report_publication_error
@@ -9972,6 +9972,7 @@ def paper_resources_to_api(resources: Iterable[dict[str, Any]]) -> list[dict[str
 
 
 def paper_files_state_payload(storage: Storage, paper_id: str) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         return {}
@@ -10609,6 +10610,7 @@ def refresh_library_paper_metadata_for_identifier(
     storage: Storage, paper_id: str, identifier: str, *, timeout: int = 12,
     max_retries: int = 1,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     return metadata_refresh.refresh(storage, paper_id, identifier=identifier, detailed=True)["paper"]
 
 
@@ -11504,6 +11506,7 @@ def pubmed_author_marks(pubmed: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def sync_my_publication_pubmed_author_marks(storage: Storage, *, paper_id: str, pubmed: dict[str, Any]) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     marks = pubmed_author_marks(pubmed)
     if not marks:
         return
@@ -11566,6 +11569,7 @@ def sync_my_publication_pubmed_author_marks(storage: Storage, *, paper_id: str, 
 
 
 def sync_my_publication_existing_pubmed_marks(storage: Storage, *, paper_id: str) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return
@@ -12083,6 +12087,7 @@ def record_recovered_identifier(
     paper_id: str,
     found: dict[str, str],
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return None
@@ -12362,6 +12367,7 @@ def identifier_recovery_recently_attempted(
     *,
     skip_days: int,
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if skip_days <= 0:
         return False
     cutoff = (datetime.now().astimezone() - timedelta(days=skip_days)).isoformat(timespec="seconds")
@@ -12391,10 +12397,12 @@ def identifier_recovery_recently_attempted(
 
 
 def metadata_refresh_recently_completed(storage: Storage, paper_id: str, mode: str, *, skip_days: int) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     return metadata_refresh.recently_completed(storage, paper_id, mode, skip_days)
 
 
 def record_metadata_refresh_start(storage: Storage, *, paper_id: str, mode: str, source_summary: str) -> int:
+    paper_id = storage.resolve_paper_id(paper_id)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     cursor = storage.conn.execute(
         """
@@ -14452,6 +14460,9 @@ def scholar_candidate_key(candidate: dict[str, Any], paper: dict[str, Any]) -> s
         or paper.get("url")
         or ""
     )
+    stable = paper_identity.scholar_identity(url)
+    if stable:
+        return "https://scholar.google.com/citations?citation_for_view=" + quote(stable, safe=":")
     if url:
         return url
     return "|".join(
@@ -14464,37 +14475,20 @@ def scholar_candidate_key(candidate: dict[str, Any], paper: dict[str, Any]) -> s
 
 
 def existing_paper_for_author_monitor(storage: Storage, paper: dict[str, Any]) -> dict[str, Any] | None:
-    paper_id = clean_text(paper.get("paper_id") or "")
-    if paper_id:
-        existing = storage.get_paper(paper_id)
-        if existing:
-            return existing
-    doi = normalize_publication_doi(str(paper.get("doi") or ""))
-    if doi:
-        row = storage.conn.execute(
-            "SELECT * FROM papers WHERE lower(doi) = lower(?) ORDER BY source_count DESC LIMIT 1",
-            (doi,),
-        ).fetchone()
-        if row:
-            return dict(row)
-    title = normalize_publication_title(paper.get("title") or "")
+    matches = paper_identity.find(storage, paper)
+    if matches:
+        # The storage writer rechecks under its SQLite write transaction.
+        return matches[0]
+    title = paper_identity.title_key(paper.get("title"))
     if not title:
         return None
     year = clean_text(paper.get("publication_date") or "")[:4]
-    rows = storage.conn.execute(
-        """
-        SELECT * FROM papers
-        WHERE lower(title) = lower(?)
-        ORDER BY CASE WHEN doi IS NOT NULL AND doi != '' THEN 0 ELSE 1 END,
-                 source_count DESC
-        LIMIT 8
-        """,
-        (title,),
-    ).fetchall()
+    # Retain the existing exact-title/year fallback after stable identifiers.
+    rows = storage.conn.execute("SELECT * FROM papers WHERE lower(title)=lower(?)", (normalize_publication_title(paper.get("title")),))
     for row in rows:
         existing = dict(row)
-        existing_year = clean_text(existing.get("publication_date") or "")[:4]
-        if not year or not existing_year or year == existing_year:
+        existing_year = str(existing.get("publication_date") or "")[:4]
+        if (not year or not existing_year or year == existing_year) and paper_identity.compatible(storage, existing, paper):
             return existing
     return None
 
@@ -14504,6 +14498,7 @@ def save_google_scholar_publication_observation(
     paper_id: str,
     candidate: dict[str, Any],
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     candidate_raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
@@ -14524,6 +14519,7 @@ def save_openalex_author_monitor_observation(
     paper_id: str,
     candidate: dict[str, Any],
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     candidate_raw = candidate.get("raw") if isinstance(candidate.get("raw"), dict) else {}
@@ -14555,6 +14551,7 @@ def save_semantic_scholar_author_monitor_observation(
     paper_id: str,
     candidate: dict[str, Any],
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = clean_text(paper_id)
     current = storage.get_paper(paper_id) if paper_id else None
     semantic = semantic_scholar_author_candidate_raw(candidate)
@@ -14861,6 +14858,10 @@ def refresh_author_monitor_for_db(
                             )
                 if not paper_id:
                     continue
+                normalized["paper_id"] = paper_id
+                if not storage.upsert_paper(normalized):
+                    continue
+                paper_id = normalized["paper_id"]
                 inserted = storage.add_author_monitor_paper(
                     author_monitor_id=author_monitor_id,
                     paper_id=paper_id,
@@ -18648,6 +18649,7 @@ def update_manual_preprint_identifier(
     paper_id: str,
     identifier: str,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -18696,6 +18698,7 @@ def download_arxiv_preprint_versions(
     *,
     include_history: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -19388,6 +19391,7 @@ def record_author_monitor_enrichment_attempt(
     status: str,
     message: str = "",
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     current = storage.get_paper(paper_id) or paper
     raw = parse_raw_json(current)
     raw["author_monitor_enrichment"] = {
@@ -19420,13 +19424,13 @@ def run_author_monitor_enrichment_job(
     try:
         rows = ([paper for pid in paper_ids if (paper := storage.get_paper(pid))]
                 if paper_ids is not None else storage.list_author_monitor_papers(int(author_monitor_id or 0)))
-        selected_paper_id = clean_text(paper_id)
+        selected_paper_id = storage.resolve_paper_id(clean_text(paper_id))
         if selected_paper_id:
             rows = [
                 paper for paper in rows
                 if clean_text(paper.get("paper_id") or "") == selected_paper_id
             ]
-        publication_ids = set(publication_paper_ids or [])
+        publication_ids = {storage.resolve_paper_id(pid) for pid in (publication_paper_ids or [])}
         pending = [
             paper for paper in rows
             if paper["paper_id"] in publication_ids or ((
@@ -19486,9 +19490,11 @@ def run_author_monitor_enrichment_job(
             if not work_queue:
                 break
             paper = work_queue.pop(0)
-            paper_id = clean_text(paper.get("paper_id") or "")
+            paper_id = storage.resolve_paper_id(clean_text(paper.get("paper_id") or ""))
+            processed_ids = {storage.resolve_paper_id(pid) for pid in processed_ids}
             if not paper_id or paper_id in processed_ids:
                 continue
+            paper = storage.get_paper(paper_id) or paper
             processed_ids.add(paper_id)
             index += 1
             title = clean_text(paper.get("title") or paper_id or "Untitled paper")
@@ -21313,6 +21319,7 @@ def associated_scope_for_path(path: Path) -> tuple[str, Path] | None:
 
 
 def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -21353,6 +21360,7 @@ def associated_work_dir_for_paper(storage: Storage, paper_id: str) -> Path:
 
 
 def existing_associated_work_dir(storage: Storage, paper_id: str) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id)) or {}
     storage_key = clean_text(paper.get("storage_key") or "") or storage.storage_key_for_paper_id(str(paper_id))
     marker = f"[{storage_key}]"
@@ -21377,6 +21385,7 @@ def relocate_associated_work_dir(
     paper_id: str,
     canonical: Path,
 ) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     source = existing_associated_work_dir(storage, str(paper_id))
     scope = associated_scope_for_path(canonical)
     if not source or not source.exists() or not scope:
@@ -21518,6 +21527,7 @@ def update_paper_resource_role(
     file_source: str = "",
     source_detail: str | None = None,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
@@ -21646,6 +21656,7 @@ def update_paper_resource_role(
 
 
 def delete_paper_resource(storage: Storage, paper_id: str, resource_id: int) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     resource = storage.get_paper_resource(int(resource_id))
     if not paper or not resource or str(resource.get("paper_id") or "") != str(paper_id):
@@ -21730,6 +21741,7 @@ def refresh_paper_resource_fingerprints(
     commit: bool = True,
 ) -> list[dict[str, Any]]:
     """Refresh exact and annotation-insensitive fingerprints for one work on demand."""
+    paper_id = storage.resolve_paper_id(paper_id)
 
     storage.ensure_primary_pdf_resource(str(paper_id), commit=commit)
     resources = storage.list_paper_resources(str(paper_id), ensure_primary=False)
@@ -21785,6 +21797,7 @@ def snapshot_primary_resource_before_download(
     *,
     force: bool,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not force:
         return None
     paper = storage.get_paper(str(paper_id))
@@ -21879,6 +21892,7 @@ def register_downloaded_paper_resource(
     result: dict[str, Any],
     snapshot: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     status = clean_text(result.get("status") or "").lower()
     if status not in {"success", "partial", "skipped"}:
         return None
@@ -22168,6 +22182,7 @@ def attach_file_to_paper(
     refresh_existing: bool = True,
     mime_type: str = "",
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -22412,6 +22427,7 @@ def attach_downloaded_publisher_pdf_to_paper(
     source_path: Path,
 ) -> tuple[Path, dict[str, Any]]:
     """Register a browser-downloaded publisher PDF without replacing history."""
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -22561,6 +22577,7 @@ def should_promote_new_paper_version(
     paper_id: str,
     resource: dict[str, Any],
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id)) or {}
     if int(paper.get("preferred_resource_id") or 0):
         return False
@@ -22578,6 +22595,7 @@ def should_promote_new_paper_version(
 
 def synchronize_default_pdf_location(storage: Storage, paper_id: str) -> dict[str, Any] | None:
     """Keep the resolved PDF Default and managed primary path in agreement."""
+    paper_id = storage.resolve_paper_id(paper_id)
     resolved = storage.resolve_default_paper_resource(str(paper_id))
     if not resolved or not storage.resource_is_pdf(resolved):
         return resolved
@@ -22587,6 +22605,7 @@ def synchronize_default_pdf_location(storage: Storage, paper_id: str) -> dict[st
 
 
 def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int | None) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     previous = storage.get_paper(str(paper_id)) or {}
     storage.set_preferred_paper_resource(str(paper_id), resource_id)
     try:
@@ -22601,6 +22620,7 @@ def set_preferred_paper_file(storage: Storage, paper_id: str, resource_id: int |
 
 
 def paper_resource_path_is_shared(storage: Storage, path: Path, paper_id: str, resource_id: int) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if any(other != str(paper_id) for other in paper_ids_referencing_pdf_path(storage, path)):
         return True
     values = {str(path), str(path.expanduser().resolve())}
@@ -22626,6 +22646,7 @@ def promote_paper_resource(
     manual_preferred: bool = False,
     allow_any_pdf: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     candidate = storage.get_paper_resource(int(resource_id))
     if not paper or not candidate or str(candidate.get("paper_id") or "") != str(paper_id):
@@ -22791,6 +22812,7 @@ def promote_paper_resource(
 
 
 def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Path]:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return []
     recycle_id = int(ensure_library_special_folders(storage)["recycle"].get("id") or 0)
@@ -22825,6 +22847,7 @@ def active_local_pdf_dirs_for_paper(storage: Storage, paper_id: str) -> list[Pat
 
 
 def preferred_local_pdf_dir_for_paper(storage: Storage, paper_id: str) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     directories = active_local_pdf_dirs_for_paper(storage, paper_id)
     if not directories:
         return None
@@ -22869,6 +22892,7 @@ def paper_pdf_paths(paper: dict[str, Any] | None) -> list[Path]:
 
 
 def pdf_path_referenced_by_other_paper(storage: Storage, path: Path, paper_id: str) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     requested = path.expanduser().resolve()
     rows = storage.conn.execute(
         """
@@ -22948,6 +22972,7 @@ def retire_replaced_managed_pdf_paths(
     old_paths: list[Path],
     new_path: Path,
 ) -> tuple[list[str], list[str]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     managed_roots = allowed_pdf_roots()
     replacement = new_path.expanduser().resolve()
     trashed: list[str] = []
@@ -22984,6 +23009,7 @@ def attach_manual_pdf_to_paper(
     source_path: Path | None = None,
     preserve_filename: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -23076,6 +23102,7 @@ def attach_publisher_supplement_pdf_to_paper(
     context: dict[str, Any],
     source_path: Path,
 ) -> tuple[Path, dict[str, Any]]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     if not paper:
         raise KeyError(str(paper_id))
@@ -23407,6 +23434,7 @@ def paper_pdf_basename(paper: dict[str, Any], canonical_path: Path | None = None
 
 
 def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, message: str = "local PDF moved") -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     storage.update_download_status(
         paper_id,
         status="success",
@@ -23420,6 +23448,7 @@ def update_paper_pdf_paths(storage: Storage, paper_id: str, path: Path, *, messa
 def update_paper_file_path_references(
     storage: Storage, paper_id: str, old_path: Path, new_path: Path, *, commit: bool = True,
 ) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     if not paper:
         return
@@ -23826,6 +23855,7 @@ def sync_alias_for_library_item(
     normal copy or alias-only move does not change the canonical PDF and must
     not rescan every placement of the paper.
     """
+    paper_id = storage.resolve_paper_id(paper_id)
     paper_id = str(paper_id or "")
     folder_id = int(folder_id or 0)
     if not paper_id or not folder_id:
@@ -23856,6 +23886,7 @@ def sync_alias_for_library_item(
 
 
 def sync_my_publication_alias(storage: Storage, paper_id: str) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return None
@@ -23869,6 +23900,7 @@ def sync_all_pdf_aliases_for_paper(
     old_target: Path | None = None,
     preserve_canonical_name: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(str(paper_id))
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
@@ -24229,6 +24261,7 @@ def audit_library_pdf_names(storage: Storage, *, sample_limit: int = 20) -> dict
 
 
 def remove_pdf_aliases_for_paper_in_folders(storage: Storage, paper_id: str, folder_ids: list[int]) -> list[str]:
+    paper_id = storage.resolve_paper_id(paper_id)
     canonical = canonical_pdf_path_for_paper(storage.get_paper(paper_id))
     if not canonical:
         return []
@@ -24245,6 +24278,7 @@ def remove_pdf_aliases_for_paths_in_folders(storage: Storage, paths: list[str], 
 
 
 def move_monitor_pdf_into_context_if_needed(storage: Storage, paper_id: str, target_dir: Path) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
     if not paper or not canonical:
@@ -24272,6 +24306,7 @@ def reconcile_paper_pdf_storage(
     *,
     target_dir: Path | None = None,
 ) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     target = target_dir or preferred_local_pdf_dir_for_paper(storage, paper_id)
     if not target:
         return False
@@ -24474,6 +24509,7 @@ def apply_folder_tree_pdf_move_plan(storage: Storage, plan: list[dict[str, Any]]
 
 
 def first_outside_reference_dir(storage: Storage, paper_id: str, recycle_folder_id: int) -> Path | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     rows = storage.conn.execute(
         """
         SELECT folder_id
@@ -24499,6 +24535,7 @@ def first_outside_reference_item(
     *,
     exclude_item_id: int = 0,
 ) -> dict[str, Any] | None:
+    paper_id = storage.resolve_paper_id(paper_id)
     rows = storage.conn.execute(
         """
         SELECT *
@@ -24518,6 +24555,7 @@ def first_outside_reference_item(
 
 
 def promote_canonical_pdf_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> None:
+    paper_id = storage.resolve_paper_id(paper_id)
     paper = storage.get_paper(paper_id)
     canonical = canonical_pdf_path_for_paper(paper)
     target_dir = first_outside_reference_dir(storage, paper_id, recycle_folder_id)
@@ -24552,6 +24590,7 @@ def library_folder_is_within(storage: Storage, folder_id: int, ancestor_id: int)
 
 
 def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle_folder_id: int) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return False
     if paper_has_my_publication_reference(storage, paper_id):
@@ -24564,6 +24603,7 @@ def paper_has_reference_outside_recycle(storage: Storage, paper_id: str, recycle
 
 
 def paper_has_my_publication_reference(storage: Storage, paper_id: str) -> bool:
+    paper_id = storage.resolve_paper_id(paper_id)
     if not paper_id:
         return False
     return bool(

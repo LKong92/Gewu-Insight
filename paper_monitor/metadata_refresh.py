@@ -1,7 +1,7 @@
 """Paper-level metadata refresh and low-frequency publication checks.
 
-Only bibliographic evidence changes. No file, placement, Default or identity merge
-is performed here. Network work precedes writes and repeated requests coalesce.
+Network work precedes writes and repeated requests coalesce. Confirmed duplicate
+identities are reconciled by Storage while retaining files and references.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from contextlib import contextmanager
 import itertools
-from . import metadata_network
+from . import metadata_network, paper_identity
 
 _ACTIVE = {}
 _LOCK = threading.Lock()
@@ -112,6 +112,7 @@ def saved_candidates(storage):
 
 
 def recently_completed(storage, paper_id, mode, skip_days=3):
+    paper_id = storage.resolve_paper_id(paper_id)
     if skip_days <= 0:
         return False
     modes = ('full',) if mode == 'full' else ('full', 'quick')
@@ -162,6 +163,7 @@ def queue_slot(key, pending):
 
 def refresh(storage, paper_id, *, detailed=True, identifier='', mode=None,
             origin='single', skip_days=0):
+    paper_id = storage.resolve_paper_id(paper_id)
     mode = mode or ('full' if detailed else 'automatic')
     if mode not in {'full', 'quick', 'automatic'}:
         raise ValueError('Unknown metadata refresh mode')
@@ -192,6 +194,7 @@ def refresh(storage, paper_id, *, detailed=True, identifier='', mode=None,
         return result
     try:
         with queue_slot(key, pending):
+            paper_id = storage.resolve_paper_id(paper_id)
             if not identifier and mode != 'automatic' and recently_completed(storage, paper_id, mode, skip_days):
                 paper = storage.get_paper(paper_id)
                 result = {'paper': paper, 'metadata_refresh': {**marker(paper), 'mode': mode,
@@ -237,8 +240,6 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
         if supplied_doi:
             if doi and doi != supplied_doi and ui.doi_is_likely_published_version(doi):
                 raise ValueError('The recovered DOI differs from the saved DOI. Correct the DOI field explicitly before refreshing.')
-            if storage.conn.execute('SELECT 1 FROM papers WHERE lower(doi) = ? AND paper_id <> ?', (supplied_doi, paper_id)).fetchone():
-                raise ValueError('The recovered DOI belongs to another Gewu Key. Existing records were preserved.')
             doi = supplied_doi
         else:
             arxiv = supplied_arxiv
@@ -298,7 +299,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
             conflicts.append(f'{evidence}: candidate DOI {candidate} differs; existing value retained')
             return
         other = storage.conn.execute('SELECT paper_id FROM papers WHERE lower(doi) = ? AND paper_id <> ? LIMIT 1', (candidate, paper_id)).fetchone()
-        if other:
+        if other and not paper_identity.same_work_evidence(storage, storage.get_paper(other['paper_id']), {**original, 'doi': candidate}):
             conflicts.append(f'{evidence}: candidate DOI {candidate} belongs to another Gewu Key; existing records retained')
             return
         doi = candidate
@@ -503,6 +504,7 @@ def _refresh(storage, paper_id, *, detailed, identifier, mode, reuse_days, netwo
 
 
 def save_doi(storage, paper_id, value):
+    paper_id = storage.resolve_paper_id(paper_id)
     ui = api()
     current = storage.get_paper(paper_id)
     if not current:

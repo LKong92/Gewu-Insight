@@ -23,6 +23,29 @@ from paper_monitor.storage import Storage, STORAGE_SCHEMA_VERSION
 
 
 class AIAccessTests(unittest.TestCase):
+    def test_merged_key_keeps_grant_and_completed_analysis_retry(self):
+        from paper_monitor import paper_identity
+        request = {'gewu_key': self.key, 'markdown': 'Synthetic saved note',
+                   'request_id': 'identity-retry-001', 'title': 'Identity note'}
+        status, first, _ = self.call('save_analysis', request)
+        self.assertEqual(status, 200)
+        resource_id = first['file']['file_id']
+        with paper_identity.transaction(self.storage):
+            paper_identity.merge(self.storage,'two','one',reason='synthetic_verified_duplicate')
+        status, repeated, _ = self.call('save_analysis', request)
+        self.assertEqual(status,200)
+        self.assertTrue(repeated['reused'])
+        self.assertEqual(repeated['file']['file_id'],resource_id)
+        self.assertEqual(self.call('get_paper',{'gewu_key':self.key})[0],200)
+        self.assertEqual(self.call('get_paper',{'gewu_key':self.other_key})[0],200)
+        outside=self.storage.get_paper('outside')['storage_key']
+        self.assertEqual(self.call('get_paper',{'gewu_key':outside})[0],404)
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM ai_analyses').fetchone()[0],1)
+        duplicate=ui_server.attach_file_to_paper(self.storage,paper_id='one',filename='same.pdf',
+            content=self.pdf_bytes,refresh_existing=False)
+        self.assertTrue(duplicate['duplicate'])
+        self.assertEqual(duplicate['id'],self.pdf['id'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

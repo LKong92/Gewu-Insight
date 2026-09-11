@@ -30,21 +30,30 @@ _DOWNLOAD_LOCKS = weakref.WeakValueDictionary()
 _DOWNLOAD_LOCKS_GUARD = threading.Lock()
 
 
-@contextmanager
-def paper_download_lock(db_path: Path, paper_id: str):
-    """Serialize one paper's download and registration within this process.
-
-    Waiting callers retain a strong reference; unused locks are released.
-    Distinct papers and unrelated Library additions remain independent.
-    """
+def _paper_download_mutex(db_path: Path, paper_id: str):
     key = (str(Path(db_path).expanduser().resolve()), str(paper_id))
     with _DOWNLOAD_LOCKS_GUARD:
         lock = _DOWNLOAD_LOCKS.get(key)
         if lock is None:
             lock = threading.RLock()
             _DOWNLOAD_LOCKS[key] = lock
-    with lock:
+        return lock
+
+
+@contextmanager
+def paper_download_lock(db_path: Path, paper_id: str, *, blocking: bool = True):
+    """Serialize one paper's download and registration within this process.
+
+    Waiting callers retain a strong reference; unused locks are released.
+    Distinct papers and unrelated Library additions remain independent.
+    """
+    lock = _paper_download_mutex(db_path, paper_id)
+    if not lock.acquire(blocking=blocking):
+        raise ValueError('A paper download is still running. Retry identity reconciliation after it finishes.')
+    try:
         yield
+    finally:
+        lock.release()
 
 
 def download_paper(
@@ -55,7 +64,11 @@ def download_paper(
     target_dir: Path | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
+    paper_id = storage.resolve_paper_id(paper_id)
     with paper_download_lock(storage.db_path, paper_id):
+        resolved = storage.resolve_paper_id(paper_id)
+        if resolved != paper_id:
+            return download_paper(storage=storage,paper_id=resolved,pdf_dir=pdf_dir,target_dir=target_dir,force=force)
         destination = target_dir if target_dir is not None else pdf_dir / paper_id
         destination.mkdir(parents=True, exist_ok=True)
         # Never share main.pdf or supplement intermediates in a Library folder.

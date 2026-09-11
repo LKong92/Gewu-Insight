@@ -117,8 +117,19 @@ class MetadataRefreshTests(unittest.TestCase):
         self.mocks['fetch_arxiv_by_id'].side_effect = lambda *a, **k: preprint(DOI)
         self.assertFalse(self.refresh()['paper']['doi'])
 
-    def test_doi_on_another_key_does_not_merge_records(self):
+    def test_verified_published_identity_reuses_existing_paper(self):
         self.storage.upsert_paper(published())
+        self.mocks['fetch_arxiv_by_id'].side_effect = lambda *a, **k: preprint(DOI)
+        result = self.refresh()
+        self.assertEqual(result['paper']['doi'], DOI)
+        self.assertEqual(self.storage.conn.execute('SELECT count(*) FROM papers').fetchone()[0], 1)
+        self.assertFalse(result['metadata_refresh']['conflicts'])
+        self.assertEqual(self.storage.get_paper(self.pid)['paper_id'], result['paper']['paper_id'])
+
+    def test_another_doi_owner_with_conflicting_evidence_is_not_merged(self):
+        other = published()
+        other.update(title='An unrelated marine organism', raw={'authors':['Z Other']}, journal='Marine Ecology')
+        self.storage.upsert_paper(other)
         self.mocks['fetch_arxiv_by_id'].side_effect = lambda *a, **k: preprint(DOI)
         result = self.refresh()
         self.assertFalse(result['paper']['doi'])
