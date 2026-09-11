@@ -30222,6 +30222,10 @@ INDEX_HTML = """<!doctype html>
       background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,235,231,0.82) 20%, rgba(255,239,236,0.98) 50%, rgba(255,235,231,0.82) 80%, rgba(255,255,255,0) 100%);
       border-color: rgba(180, 35, 24, 0.12);
     }
+    .library-activity-status.refresh-complete,
+    .publication-search-status.refresh-complete {
+      color: #1a7f37;
+    }
     .library-path-item {
       min-width: 0;
       display: inline-flex;
@@ -39345,7 +39349,7 @@ INDEX_HTML = """<!doctype html>
       const button = root?.querySelector('[data-action="refresh-library-metadata"]');
       const scope = state.mode === "author" ? "author" : state.libraryTab === "my-publications" ? "my-publications" : "library";
       const title = paper.title || paper.storage_key || paper.preprint_id || paper.doi || "Paper";
-      let completion = "Info refreshed.";
+      let completion = "Refresh complete";
       let failed = false;
       paperMetadataRequests.set(paper.paper_id, {scope, title});
       updateMetadataRefreshButton(root, paper.metadata_refresh || {});
@@ -39358,9 +39362,6 @@ INDEX_HTML = """<!doctype html>
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Could not refresh metadata");
-        const report = data.paper?.metadata_refresh || {};
-        completion = report.status === "partial" ? "Info refresh partial · Hover over Refresh Info for details."
-          : report.status === "unchanged" ? "Info checked · No changes found." : "Info refreshed.";
         paperMetadataRequests.delete(paper.paper_id);
         applyMetadataResult(root, context, data.paper);
       } catch (error) {
@@ -42012,6 +42013,7 @@ INDEX_HTML = """<!doctype html>
       const text = libraryActivityStatusText();
       if (!text) return base;
       if (metadataRefreshActivityText("library") || state.metadataRefreshJobs?.some(job => ["queued", "running", "pausing"].includes(job.status)) || (state.libraryImportNotice ? state.libraryImportNotice.live : state.libraryActivityLive)) return `${base} live`;
+      if (text === "Refresh complete") return `${base} refresh-complete`;
       if (/failed|could not|error|partial|review|unavailable/i.test(text)) return `${base} err`;
       return `${base} ok`;
     }
@@ -42837,7 +42839,7 @@ INDEX_HTML = """<!doctype html>
         for (const job of state.metadataRefreshJobs) {
           const old = previous.find(j => j.job_id === job.job_id);
           if (old && old.status !== "completed" && job.status === "completed") {
-            if (!state.libraryActivityLive) updateLibraryActivityStatus(metadataJobStatusText(job), {delay:5000});
+            if (!state.libraryActivityLive) updateLibraryActivityStatus("Refresh complete", {delay:5000});
             pollVisibleMetadataResult();
           }
         }
@@ -44279,7 +44281,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function myPublicationStatusClass(item, secondary = false) {
-      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}${item?.id === "work" ? " publication-work-summary" : ""}`;
+      return `publication-search-status${secondary ? " secondary" : ""}${item?.live ? " live" : ""}${!item?.live && item?.id === "metadata-refresh" && item.text === "Refresh complete" ? " refresh-complete" : ""}${item?.id === "work" ? " publication-work-summary" : ""}`;
     }
 
     function myPublicationStatusBarMarkup() {
@@ -52988,6 +52990,7 @@ INDEX_HTML = """<!doctype html>
       const base = `library-activity-status${channel === "secondary" ? " secondary" : ""}`;
       const {text, live} = authorMonitorDisplayedActivity(channel);
       if (live) return `${base} live`;
+      if (text === "Refresh complete") return `${base} refresh-complete`;
       if (/failed|could not|error|paused/i.test(text)) return `${base} err`;
       return text ? `${base} ok` : base;
     }

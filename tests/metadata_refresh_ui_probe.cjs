@@ -128,14 +128,16 @@ const functions = names.map(name => { const start = source.search(new RegExp('  
    assert.ok((await page.locator(selector).getAttribute('class')).includes('live'));
    // Completion stays with the original workspace when the user switches away.
    await page.evaluate(()=>{state.mode='browser';$('tab').focus();release();});await page.evaluate(()=>window.pending);
-   assert.match(await page.locator(selector).innerText(),/Info refreshed/);
+   assert.equal(await page.locator(selector).innerText(),'Refresh complete');
+   await page.waitForFunction(selector=>getComputedStyle(document.querySelector(selector)).color==='rgb(26, 127, 55)',selector);
    assert.equal(await page.evaluate(()=>document.activeElement.id),'tab');
    await page.evaluate(scope=>{state.mode=scope==='author'?'author':'library';state.libraryTab=scope==='my-publications'?'my-publications':'library';deferred=false;fail=true;},scope);
    await page.evaluate(()=>refreshLibraryMetadataFromDoi(state.libraryItems[0].paper));
    assert.match(await page.locator(selector).innerText(),/Info refresh failed/);
    await page.evaluate(()=>{fail=false;updated.metadata_refresh.status='partial';});
    await page.evaluate(()=>refreshLibraryMetadataFromDoi(state.libraryItems[0].paper));
-   assert.match(await page.locator(selector).innerText(),/Info refresh partial/);
+   assert.equal(await page.locator(selector).innerText(),'Refresh complete');
+   await page.waitForFunction(selector=>getComputedStyle(document.querySelector(selector)).color==='rgb(26, 127, 55)',selector);
    await page.evaluate(()=>{delete updated.metadata_refresh.status;});
   }
   await page.evaluate(()=>{
