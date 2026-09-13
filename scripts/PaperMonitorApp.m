@@ -468,6 +468,8 @@ static void GewuConfigureConfirmationDetails(NSAlert *alert, NSString *message, 
 @property(nonatomic) BOOL startupFailurePresented;
 @property(nonatomic, strong) NSAlert *startupFailureAlert;
 @property(nonatomic) NSInteger serverRestartAttempts;
+@property(nonatomic, strong) NSDate *workspaceRecoveryWindow;
+@property(nonatomic) NSInteger workspaceRecoveryAttempts;
 @property(nonatomic, strong) NSURL *url;
 @property(nonatomic, strong) NSMenuItem *titleNamingItem;
 @property(nonatomic, strong) NSMenuItem *citationNamingItem;
@@ -1514,6 +1516,23 @@ decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     }
 }
 
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    if (webView != self.webView || self.applicationIsTerminating) return;
+    [self appendLauncherLogMessage:@"Workspace web process terminated; recovering the authenticated UI. The server and refresh jobs remain running."];
+    if (!self.workspaceRecoveryWindow || -self.workspaceRecoveryWindow.timeIntervalSinceNow > 60) {
+        self.workspaceRecoveryWindow = [NSDate date];
+        self.workspaceRecoveryAttempts = 0;
+    }
+    if (++self.workspaceRecoveryAttempts > 3) {
+        [self presentStartupFailure:@"The workspace preview repeatedly stopped. Please reopen Gewu Insight. Your refresh progress remains saved."];
+        return;
+    }
+    [self closeNativeQuickLookNotifyingWeb:NO];
+    [self showLoadingPage];
+    // Do not restart the server or replay any in-flight user/data operations.
+    [self loadApp];
+}
+
 - (void)webView:(WKWebView *)webView
 navigationAction:(WKNavigationAction *)navigationAction
 didBecomeDownload:(WKDownload *)download {
@@ -2527,6 +2546,7 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 }
 
 - (void)recheckServerWhileStartupFailureIsVisible {
+    if (self.workspaceRecoveryAttempts > 3) return;
     if (!self.startupFailureAlert || self.applicationIsTerminating) return;
     [self checkServerWithCompletion:^(BOOL available) {
         if (!self.startupFailureAlert || self.applicationIsTerminating) return;
@@ -2572,6 +2592,22 @@ completionHandler:(void (^)(NSURL * _Nullable destination))completionHandler {
 decidePolicyForNavigationAction:(WKNavigationAction *)action
 decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSURL *url = action.request.URL;
+    if (webView == self.webView && action.targetFrame.isMainFrame
+        && GewuWorkspaceSameOrigin(url, self.url)
+        && [@[@"", @"/", @"/user-guide"] containsObject:url.path ?: @""]
+        && [(action.request.HTTPMethod ?: @"GET") isEqualToString:@"GET"]
+        && !action.request.HTTPBody && !action.request.HTTPBodyStream
+        && ![action.request valueForHTTPHeaderField:@"Authorization"].length) {
+        NSMutableURLRequest *authenticated = [self workspaceRequestForURL:url];
+        NSString *credential = [authenticated valueForHTTPHeaderField:@"X-Gewu-Workspace"];
+        if (credential.length && ![[action.request valueForHTTPHeaderField:@"X-Gewu-Workspace"] isEqualToString:credential]) {
+            // Cookies can disappear with a WebKit process. Reattach only to
+            // the local top-level UI, never to frames, publishers or APIs.
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [webView loadRequest:authenticated];
+            return;
+        }
+    }
     BOOL webURL = [@[@"http", @"https"] containsObject:url.scheme.lowercaseString];
     if (webView == self.webView && webURL && !GewuWorkspaceSameOrigin(url, self.url)
         && (!action.targetFrame || action.targetFrame.isMainFrame)) {

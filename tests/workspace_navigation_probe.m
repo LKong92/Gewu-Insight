@@ -6,8 +6,10 @@
 
 @interface LinkProbeView : NSObject
 @property(strong) NSMutableArray *scripts;
+@property(strong) NSMutableArray *requests;
 @end
 @implementation LinkProbeView
+- (id)loadRequest:(NSURLRequest *)request { [self.requests addObject:request]; return nil; }
 - (void)evaluateJavaScript:(NSString *)script completionHandler:(id)handler {
     [self.scripts addObject:script];
 }
@@ -27,6 +29,23 @@
 @implementation LinkProbeAction
 @end
 
+@interface RecoveryProbeDelegate : PaperMonitorDelegate
+@property NSInteger recoveries;
+@property NSInteger failures;
+@end
+@implementation RecoveryProbeDelegate
+- (NSMutableURLRequest *)workspaceRequestForURL:(NSURL *)url {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [request setValue:@"synthetic-workspace-session" forHTTPHeaderField:@"X-Gewu-Workspace"];
+    return request;
+}
+- (void)showLoadingPage {}
+- (void)closeNativeQuickLookNotifyingWeb:(BOOL)notify {}
+- (void)loadApp { self.recoveries++; }
+- (void)appendLauncherLogMessage:(NSString *)message {}
+- (void)presentStartupFailure:(NSString *)message { self.failures++; }
+@end
+
 static NSInteger checks;
 static void check(BOOL ok, NSString *label) {
     if (!ok) { fprintf(stderr,"FAILED: %s\n",label.UTF8String); exit(1); }
@@ -34,9 +53,9 @@ static void check(BOOL ok, NSString *label) {
 }
 int main(void) {
     @autoreleasepool {
-        PaperMonitorDelegate *delegate = [PaperMonitorDelegate new];
+        RecoveryProbeDelegate *delegate = [RecoveryProbeDelegate new];
         delegate.url = [NSURL URLWithString:@"http://127.0.0.1:8765/"];
-        LinkProbeView *view = [LinkProbeView new]; view.scripts = [NSMutableArray array];
+        LinkProbeView *view = [LinkProbeView new]; view.scripts = [NSMutableArray array]; view.requests = [NSMutableArray array];
         delegate.webView = (id)view;
         LinkProbeFrame *frame = [LinkProbeFrame new]; frame.mainFrame = YES;
         frame.request = [NSURLRequest requestWithURL:delegate.url];
@@ -69,6 +88,30 @@ int main(void) {
             check(policy == WKNavigationActionPolicyCancel,@"remote form cannot replace workspace");
         }];
         check(before == view.scripts.count,@"form is not replayed");
+        action.targetFrame = frame;
+        action.request = [NSURLRequest requestWithURL:delegate.url];
+        [delegate webView:(id)view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy policy) {
+            check(policy == WKNavigationActionPolicyCancel,@"credential-free workspace reload is replaced");
+        }];
+        check(view.requests.count == 1,@"one authenticated replacement request");
+        check([[view.requests.lastObject valueForHTTPHeaderField:@"X-Gewu-Workspace"] isEqual:@"synthetic-workspace-session"],@"replacement includes private credential");
+        action.request = view.requests.lastObject;
+        [delegate webView:(id)view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy policy) {
+            check(policy == WKNavigationActionPolicyAllow,@"authenticated reload proceeds without a loop");
+        }];
+        frame.mainFrame = NO;
+        action.request = [NSURLRequest requestWithURL:delegate.url];
+        [delegate webView:(id)view decidePolicyForNavigationAction:(id)action decisionHandler:^(WKNavigationActionPolicy policy) {
+            check(policy == WKNavigationActionPolicyAllow,@"subframe does not receive credential injection");
+        }];
+        check(view.requests.count == 1,@"subframe does not create credential request");
+        [delegate webViewWebContentProcessDidTerminate:(id)[LinkProbeView new]];
+        check(delegate.recoveries == 0,@"unrelated webview cannot trigger workspace recovery");
+        for (int i=0; i<4; i++) [delegate webViewWebContentProcessDidTerminate:(id)view];
+        check(delegate.recoveries == 3 && delegate.failures == 1,@"workspace recovery is bounded without restarting jobs");
+        delegate.workspaceRecoveryWindow = [NSDate dateWithTimeIntervalSinceNow:-61];
+        [delegate webViewWebContentProcessDidTerminate:(id)view];
+        check(delegate.recoveries == 4,@"later independent crash can recover");
         printf("Workspace native routing: %ld checks passed\n",(long)checks);
     }
     return 0;

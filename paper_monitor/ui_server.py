@@ -39,6 +39,7 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader, PdfWriter
 import requests
 
+from . import search_matching
 from . import publication_jobs, scholar_access, author_metadata_work, metadata_refresh, metadata_jobs, paper_identity
 from .publication_deletion import delete_publications
 from .recycle import delete_recycle_selection, preview_recycle_selection
@@ -10381,9 +10382,26 @@ def library_file_search_snapshot(
     cleaned_query = clean_text(query)[:300]
     if not cleaned_query:
         return {"query": "", "results": [], "total": 0}
-    tokens = [token for token in library_search_normalize(cleaned_query).split() if token][:8]
-    if not tokens:
-        return {"query": cleaned_query, "results": [], "total": 0}
+    match = search_matching.scorer(cleaned_query)
+
+    scores = {}
+    paper_extras = {}
+
+    def score(blob, paper_id, doi, raw_json):
+        key = (paper_id, blob)
+        if key in scores:
+            return scores[key]
+        if paper_id not in paper_extras:
+            paper = {"paper_id": paper_id, "doi": doi, "raw_json": raw_json}
+            raw = parse_raw_json(paper)
+            authors = (authors_from_openalex(raw) or authors_from_crossref(raw)
+                       or authors_from_arxiv(raw) or authors_from_datacite(raw)
+                       or authors_from_google_scholar(raw))
+            paper_extras[paper_id] = " ".join(authors + [preprint_identifier(paper, raw=raw)])
+        scores[key] = match(f"{blob} {paper_extras[paper_id]}")
+        return scores[key]
+
+    storage.conn.create_function("gewu_search_score", 4, score)
     search_blob = """
         LOWER(
           COALESCE(library_items.display_name, '') || ' ' ||
@@ -10394,74 +10412,68 @@ def library_file_search_snapshot(
           COALESCE(papers.journal, '') || ' ' ||
           COALESCE(papers.abstract, '') || ' ' ||
           COALESCE(papers.url, '') || ' ' ||
-          COALESCE(papers.landing_url, '')
+          COALESCE(papers.landing_url, '') || ' ' ||
+          COALESCE(papers.original_relative_path, '') || ' ' ||
+          folder_paths.path
         )
     """
-    token_clauses = " AND ".join(f"{search_blob} LIKE ?" for _ in tokens)
+    score_sql = f"gewu_search_score({search_blob}, papers.paper_id, papers.doi, papers.raw_json)"
     bounded_limit = max(1, min(500, int(limit or 400)))
-    rows = storage.conn.execute(
-        f"""
-        WITH RECURSIVE folder_paths(id, path, trashed_at) AS (
-          SELECT id, name, COALESCE(trashed_at, '')
-          FROM library_folders
-          WHERE parent_id IS NULL
-          UNION ALL
-          SELECT
-            child.id,
-            folder_paths.path || ' / ' || child.name,
-            CASE
-              WHEN folder_paths.trashed_at <> '' THEN folder_paths.trashed_at
-              ELSE COALESCE(child.trashed_at, '')
-            END
-          FROM library_folders AS child
-          JOIN folder_paths ON child.parent_id = folder_paths.id
-        )
-        SELECT
-          library_items.id,
-          library_items.folder_id,
-          library_items.paper_id,
-          library_items.display_name,
-          library_items.original_folder_id,
-          library_items.trashed_at,
-          library_items.created_at,
-          library_items.sort_order,
-          papers.title,
-          papers.storage_key,
-          papers.journal,
-          papers.publication_date,
-          papers.doi,
-          papers.url,
-          papers.landing_url,
-          papers.source,
-          papers.raw_json,
-          papers.semantic_scholar_json,
-          papers.download_status,
-          papers.main_pdf_path,
-          papers.merged_pdf_path,
-          papers.source_path,
-          papers.original_filename,
-          papers.import_batch_id,
-          papers.import_kind,
-          papers.import_as,
-          papers.size_bytes,
-          papers.analysis_status,
-          inventory_import_batches.copy_mode AS import_copy_mode,
-          folder_paths.path AS folder_path,
-          COUNT(*) OVER() AS search_total
-        FROM library_items
-        JOIN papers ON papers.paper_id = library_items.paper_id
-        JOIN folder_paths ON folder_paths.id = library_items.folder_id
-        LEFT JOIN inventory_import_batches ON inventory_import_batches.id = papers.import_batch_id
-        WHERE COALESCE(library_items.trashed_at, '') = ''
-          AND folder_paths.trashed_at = ''
-          AND {token_clauses}
-        ORDER BY
-          LOWER(COALESCE(NULLIF(library_items.display_name, ''), papers.title)),
-          library_items.id
-        LIMIT ?
-        """,
-        (*[f"%{token}%" for token in tokens], bounded_limit),
-    ).fetchall()
+    try:
+        rows = storage.conn.execute(
+            f"""
+            WITH RECURSIVE folder_paths(id, path, trashed_at) AS (
+              SELECT id, name, COALESCE(trashed_at, '')
+              FROM library_folders
+              WHERE parent_id IS NULL
+              UNION ALL
+              SELECT
+                child.id,
+                folder_paths.path || ' / ' || child.name,
+                CASE
+                  WHEN folder_paths.trashed_at <> '' THEN folder_paths.trashed_at
+                  ELSE COALESCE(child.trashed_at, '')
+                END
+              FROM library_folders AS child
+              JOIN folder_paths ON child.parent_id = folder_paths.id
+            )
+            SELECT
+              library_items.id,
+              library_items.folder_id,
+              library_items.paper_id,
+              library_items.display_name,
+              library_items.created_at,
+              papers.title,
+              papers.storage_key,
+              papers.journal,
+              papers.publication_date,
+              papers.doi,
+              papers.url,
+              papers.landing_url,
+              papers.source,
+              papers.main_pdf_path,
+              papers.merged_pdf_path,
+              papers.source_path,
+              papers.original_filename,
+              folder_paths.path AS folder_path,
+              {score_sql} AS search_score,
+              COUNT(*) OVER() AS search_total
+            FROM library_items
+            JOIN papers ON papers.paper_id = library_items.paper_id
+            JOIN folder_paths ON folder_paths.id = library_items.folder_id
+            WHERE COALESCE(library_items.trashed_at, '') = ''
+              AND folder_paths.trashed_at = ''
+              AND {score_sql} > 0
+            ORDER BY
+              search_score DESC,
+              LOWER(COALESCE(NULLIF(library_items.display_name, ''), papers.title)),
+              library_items.id
+            LIMIT ?
+            """,
+            (bounded_limit,),
+        ).fetchall()
+    finally:
+        storage.conn.create_function("gewu_search_score", 4, None)
     total = int(rows[0]["search_total"] or 0) if rows else 0
 
     def search_item_to_api(row: sqlite3.Row) -> dict[str, Any]:
@@ -35315,8 +35327,8 @@ INDEX_HTML = """<!doctype html>
                 <label class="quick-look-mode-option">
                   <input type="radio" name="quick-look-mode" value="hybrid">
                   <span class="quick-look-mode-copy">
-                    <strong>Gewu Insight for PDFs, macOS for other files</strong>
-                    <span>Uses the built-in PDF reader and macOS Quick Look for presentations, media, images, and other formats.</span>
+                    <strong>Gewu Insight for PDFs and Markdown, macOS for other files</strong>
+                    <span>Uses the built-in PDF reader and rendered Markdown preview, and macOS Quick Look for other formats.</span>
                   </span>
                 </label>
                 <label class="quick-look-mode-option">
@@ -36333,7 +36345,7 @@ INDEX_HTML = """<!doctype html>
       const mode = normalizeQuickLookMode(state.quickLookMode);
       if (mode === "native_all") return true;
       if (mode !== "hybrid") return false;
-      return !libraryPaperIsPdfLike(paper);
+      return !libraryPaperIsPdfLike(paper) && libraryFilePreviewKind(paper) !== "markdown";
     }
 
     function desiredQuickLookKind(paper) {
@@ -37727,24 +37739,31 @@ INDEX_HTML = """<!doctype html>
     }
 
     function librarySearchMatches(haystack, query) {
+      return librarySearchScore(haystack, query) > 0;
+    }
+
+    function librarySearchScore(haystack, query) {
+      query = String(query || "").slice(0, 300);
       const normalizedHaystack = librarySearchNormalize(haystack);
       const normalizedQuery = librarySearchNormalize(query);
-      if (!normalizedQuery) return true;
-      if (normalizedHaystack.includes(normalizedQuery)) return true;
+      if (!normalizedQuery) return 3;
+      if (normalizedHaystack.includes(normalizedQuery)) return 3;
       const compactQuery = libraryDoiSearchKey(query);
-      if (compactQuery && libraryDoiSearchKey(haystack).includes(compactQuery)) return true;
+      if (compactQuery && libraryDoiSearchKey(haystack).includes(compactQuery)) return 3;
       const queryTokens = librarySearchTokens(normalizedQuery).filter((token) => token.length > 1);
-      if (!queryTokens.length) return normalizedHaystack.includes(normalizedQuery);
+      if (!queryTokens.length) return normalizedHaystack.includes(normalizedQuery) ? 3 : 0;
       const haystackTokens = librarySearchTokens(normalizedHaystack);
-      if (!haystackTokens.length) return false;
+      if (!haystackTokens.length) return 0;
       const longQueryTokens = queryTokens.filter((token) => token.length >= 4);
       const haystackTokenSet = new Set(haystackTokens.flatMap((token) => librarySearchTokenVariants(token)));
       let matched = 0;
+      let direct = 0;
       queryTokens.forEach((token) => {
+        if (librarySearchTokenVariants(token).some(v => normalizedHaystack.includes(v) || haystackTokenSet.has(v))) direct += 1;
         if (librarySearchTokenMatches(token, haystackTokens, haystackTokenSet, normalizedHaystack, longQueryTokens.length)) matched += 1;
       });
       const required = queryTokens.length <= 2 ? queryTokens.length : Math.max(2, Math.ceil(queryTokens.length * 0.66));
-      return matched >= required;
+      return direct >= required ? 2 : (matched >= required ? 1 : 0);
     }
 
     function librarySearchNormalize(value) {
@@ -37752,7 +37771,7 @@ INDEX_HTML = """<!doctype html>
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
         .replace(/\s+/g, " ")
         .trim();
     }
@@ -37874,8 +37893,10 @@ INDEX_HTML = """<!doctype html>
         .forEach((item) => {
           const folderPath = libraryGlobalFolderPath(item.folder_id);
           const haystack = `${libraryItemSearchHaystack(item)} ${folderPath}`;
-          if (librarySearchMatches(haystack, query)) {
+          const score = librarySearchScore(haystack, query);
+          if (score > 0) {
             results.push({
+              score,
               type: "item",
               id: Number(item.id),
               parentFolderId: Number(item.folder_id),
@@ -37884,6 +37905,8 @@ INDEX_HTML = """<!doctype html>
           }
         });
       results.sort((a, b) => {
+        const scoreDelta = b.score - a.score;
+        if (scoreDelta) return scoreDelta;
         const left = libraryItemById(a.id)?.display_name || libraryItemById(a.id)?.paper?.title || "";
         const right = libraryItemById(b.id)?.display_name || libraryItemById(b.id)?.paper?.title || "";
         return String(left).localeCompare(String(right)) || Number(a.id) - Number(b.id);
@@ -37906,7 +37929,7 @@ INDEX_HTML = """<!doctype html>
         resetRemoteLibrarySearch();
         return Promise.resolve();
       }
-      if (state.libraryRemoteSearchQuery === normalized || state.libraryRemoteSearchLoadingQuery === normalized) {
+      if (state.libraryRemoteSearchQuery === normalized || state.libraryRemoteSearchLoadingQuery) {
         return Promise.resolve();
       }
       const sequence = Number(state.libraryRemoteSearchSequence || 0) + 1;
@@ -37960,6 +37983,11 @@ INDEX_HTML = """<!doctype html>
               && librarySearchNormalize(state.query) === normalized) {
             renderLibrary();
             updateLibrarySearchTools();
+          } else if (state.mode === "library" && currentSurfaceSearchScope() === "library"
+              && librarySearchNormalize(state.query)) {
+            // One whole-Library scan at a time; intermediate typed queries
+            // are superseded by the latest text once this request finishes.
+            requestRemoteLibrarySearch(state.query);
           }
         });
     }
@@ -58338,19 +58366,14 @@ INDEX_HTML = """<!doctype html>
       if (Number(event.button || 0) !== 0) return;
       const input = $("librarySearchBox");
       if (!input) return;
-      event.preventDefault();
       event.stopPropagation();
+      // Let the input handle native caret placement, double-click and drag selection.
+      if (event.target === input) return;
+      event.preventDefault();
       input.focus({preventScroll: true});
       const caret = searchInputCaretIndexFromPoint(input, event.clientX);
       input.setSelectionRange?.(caret, caret);
     }, {capture: true});
-    $("librarySearchBox").addEventListener("click", (event) => {
-      const input = event.currentTarget;
-      input.focus({preventScroll: true});
-      if (Number(event.detail || 0) > 1) return;
-      const caret = searchInputCaretIndexFromPoint(input, event.clientX);
-      input.setSelectionRange?.(caret, caret);
-    });
     $("librarySearchBox").addEventListener("input", (event) => {
       scheduleLibrarySearch(event.target.value);
     });
