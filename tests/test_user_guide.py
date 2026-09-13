@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import plistlib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -8,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
-from paper_monitor import ui_server
+from paper_monitor import __build__, __version__, ui_server
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -199,6 +200,7 @@ class UserGuideTests(unittest.TestCase):
             "import-files",
             "paper-details",
             "identifiers",
+            "loader-maintenance",
             "paper-files",
             "versions-current",
             "attachments",
@@ -206,7 +208,6 @@ class UserGuideTests(unittest.TestCase):
             "drag-attach",
             "recycle",
             "folder-loader",
-            "loader-maintenance",
             "desktop-copy",
             "backup-migrate",
             "my-publications",
@@ -268,7 +269,7 @@ class UserGuideTests(unittest.TestCase):
             "Local-first does not mean offline-only",
             "Cross-platform core, platform-specific integration",
             "macOS native release",
-            "Planned Windows release",
+            "Windows development branch",
             "supported Windows package is available today",
             "What this guide covers",
             "Six main tabs",
@@ -427,8 +428,8 @@ class UserGuideTests(unittest.TestCase):
             "article", id="persistent-paper-object"
         ).get_text(" ", strip=True)
         for phrase in [
-            "quarantined as an identity conflict",
-            "instead of overwriting the saved paper or forcing a merge",
+            "Automatic metadata enrichment",
+            "File import",
         ]:
             self.assertIn(phrase, persistent_paper_text)
 
@@ -615,7 +616,7 @@ class UserGuideTests(unittest.TestCase):
         quick_look_settings_text = quick_look_settings.get_text(" ", strip=True)
         for phrase in [
             "Gewu Insight for all files",
-            "Gewu Insight for PDFs, macOS for other files",
+            "Gewu Insight for PDFs and Markdown, macOS for other files",
             "macOS Quick Look for all files",
             "The default",
             "keyboard focus remains in Gewu Insight",
@@ -754,6 +755,7 @@ class UserGuideTests(unittest.TestCase):
                 "/user-guide-assets/arxiv-scope.png",
                 "/user-guide-assets/field-settings.png",
                 "/user-guide-assets/quick-look-settings.png",
+                "/user-guide-assets/add-to-library-settings.png",
                 "/user-guide-assets/website-links.png",
                 "/user-guide-assets/ai-access.png",
                 "/user-guide-assets/pdf-rename-settings.png",
@@ -779,7 +781,7 @@ class UserGuideTests(unittest.TestCase):
         )
 
         screenshot_figures = soup.select("figure.guide-screenshot")
-        self.assertEqual(len(screenshot_figures), 32)
+        self.assertEqual(len(screenshot_figures), 33)
         self.assertTrue(all(figure.find("figcaption") for figure in screenshot_figures))
 
     def test_release_bundle_continues_to_include_the_user_guide_asset(self) -> None:
@@ -827,6 +829,22 @@ class UserGuideTests(unittest.TestCase):
         build_script = (ROOT / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
         self.assertIn("Gewu_Insight_User_Guide.pdf", build_script)
         self.assertIn("Gewu Insight User Guide.pdf", build_script)
+
+    def test_release_identity_and_bundled_manual_match_the_source_edition(self) -> None:
+        app = ROOT / "Gewu Insight.app" / "Contents"
+        with (app / "Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        self.assertEqual(info["CFBundleShortVersionString"], __version__)
+        self.assertEqual(info["CFBundleVersion"], __build__)
+        soup = BeautifulSoup(ui_server.load_user_guide_html(), "html.parser")
+        welcome = soup.find("article", id="welcome").get_text(" ", strip=True)
+        self.assertIn(f"Version {__version__}", welcome)
+        self.assertIn(f"Build {__build__}", welcome)
+        pdf = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
+        cover = PdfReader(str(pdf)).pages[0].extract_text()
+        self.assertIn(__version__, cover)
+        self.assertIn(f"Build {__build__}", cover)
+        self.assertEqual(pdf.read_bytes(), (app / "Resources" / "Gewu Insight User Guide.pdf").read_bytes())
 
 
 if __name__ == "__main__":

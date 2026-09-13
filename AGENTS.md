@@ -54,7 +54,7 @@
 
 ## Done Criteria
 
-- User Guide screenshots must come from the real original App, without Codex/Computer Use overlays. Use Hong Ding for Author Monitor, Nature with visible figures for Journal Monitor, and already-classified multiple Paper Files for Library.
+- User Guide screenshots must come from the real original App, without Codex/Computer Use overlays. Main-window captures must retain all six top tabs; use real fullscreen capture if needed, never crop away navigation to hide an overlay. Recapture Add Monitored Author in its normal empty state without stale red Scholar-pause text. Use Hong Ding for Author Monitor, Nature with visible figures for Journal Monitor, and already-classified multiple Paper Files for Library.
 - In the PDF, Product Identity chapters 4-1 through 4-4 flow continuously; do not force each onto a new page. Preserve numbering/links and encode this rule in the builder, not only generated TeX.
 - Relevant CLI or UI workflow still works for the changed area.
 - Run `py_compile` for Python code changes when practical.

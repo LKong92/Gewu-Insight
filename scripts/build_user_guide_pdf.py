@@ -9,7 +9,7 @@ Pandoc, and compiles a publication-quality PDF with XeLaTeX.
 from __future__ import annotations
 
 import argparse
-import plistlib
+import ast
 import re
 import shutil
 import subprocess
@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HTML_SOURCE = ROOT / "paper_monitor" / "user_guide.html"
 TEX_OUTPUT = ROOT / "paper_monitor" / "user_guide.tex"
 PDF_OUTPUT = ROOT / "paper_monitor" / "Gewu_Insight_User_Guide.pdf"
-INFO_PLIST = ROOT / "Gewu Insight.app" / "Contents" / "Info.plist"
+VERSION_SOURCE = ROOT / "paper_monitor" / "__init__.py"
 
 IMAGE_ROUTES = {
     "/api/about-calligraphy": ROOT / "assets" / "branding" / "GewuAboutCalligraphy.png",
@@ -40,6 +40,7 @@ IMAGE_ROUTES = {
     "/user-guide-assets/arxiv-scope.png": ROOT / "assets" / "user-guide" / "screenshots" / "arxiv-scope.png",
     "/user-guide-assets/field-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "field-settings.png",
     "/user-guide-assets/quick-look-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "quick-look-settings.png",
+    "/user-guide-assets/add-to-library-settings.png": ROOT / "assets" / "user-guide" / "screenshots" / "add-to-library-settings.png",
     "/user-guide-assets/website-links.png": ROOT / "assets" / "user-guide" / "screenshots" / "website-links.png",
     "/user-guide-assets/ai-access.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-access.png",
     "/user-guide-assets/ai-new-connection.png": ROOT / "assets" / "user-guide" / "screenshots" / "ai-new-connection.png",
@@ -97,15 +98,15 @@ SPLIT_TOPIC_HEADING_GROUPS = {"About Gewu Insight"}
 
 
 def app_version() -> tuple[str, str]:
-    try:
-        with INFO_PLIST.open("rb") as handle:
-            values = plistlib.load(handle)
-    except OSError:
-        return "0.1", "development"
-    return (
-        str(values.get("CFBundleShortVersionString") or "0.1"),
-        str(values.get("CFBundleVersion") or "development"),
-    )
+    # Read the release source before packaging; an older installed bundle must
+    # not stamp the new manual with its previous version.
+    values = {}
+    for node in ast.parse(VERSION_SOURCE.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {"__version__", "__build__"}:
+                    values[target.id] = ast.literal_eval(node.value)
+    return str(values["__version__"]), str(values["__build__"])
 
 
 def _new_tag(soup: BeautifulSoup, name: str, text: str | None = None, **attrs: str) -> Tag:

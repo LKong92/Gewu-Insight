@@ -24,7 +24,7 @@ class GuideAuditTests(unittest.TestCase):
         documented = re.findall(r'user_guide\.html#([a-z-]+)\)', audit)
         topics = [article["id"] for article in self.soup.select("article.guide-topic")]
         self.assertCountEqual(documented, topics)
-        self.assertIn("September 9, 2026", self.topic("welcome"))
+        self.assertIn("September 13, 2026", self.topic("welcome"))
         self.assertNotIn("five top-level areas", self.topic("personal-research-workspace"))
         self.assertIn("sixth main tab", self.topic("personal-research-workspace"))
 
@@ -91,7 +91,7 @@ class GuideAuditTests(unittest.TestCase):
         caption = figure.find("figcaption").get_text(" ", strip=True)
         self.assertIn("Captured from the original App", caption)
         self.assertIn("Nature Physics PDF", caption)
-        self.assertIn("real bookmark collection", caption)
+        self.assertIn("left bookmark sidebar", caption)
         self.assertIn("not a generated demonstration", caption)
         self.assertNotIn("public sample bookmarks", caption)
         self.assertNotIn("earlier screenshot", caption)

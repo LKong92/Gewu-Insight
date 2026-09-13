@@ -1,5 +1,9 @@
 # Gewu Insight
 
+**Version 1.0.0 · Build 1** — the macOS research and writing baseline.
+The [User Guide](paper_monitor/Gewu_Insight_User_Guide.pdf) covers the current
+workflows; [release notes](docs/RELEASE_1.0.0.md) describe versioning and scope.
+
 **Keep research objects visible, evidence traceable, and insight cumulative.**
 
 Gewu Insight is a local-first desktop workspace for discovering, organizing,
@@ -128,10 +132,9 @@ platform-specific desktop integration.
 - **macOS** — the current native desktop release. It is the primary development
   and validation platform and includes Finder, Preview, Quick Look, Dock, and
   native drag-and-drop integration.
-- **Windows** — planned as an experimental desktop release. A Windows package is
-  not yet a supported distribution, and its Explorer, PDF-viewer, Recycle Bin,
-  native drag-and-drop, installer, and update behavior still require dedicated
-  implementation and validation.
+- **Windows** — developed separately on the experimental Windows branch. This
+  macOS baseline and its screenshots do not establish Windows feature parity;
+  use that branch's own build instructions and limitations.
 
 Instructions that name Finder, Preview, Quick Look, or the Dock describe the
 current macOS integration rather than a limitation of the underlying research
@@ -207,11 +210,13 @@ paper; it does not manufacture another scholarly identity.
 Paper Files groups the current publication PDF, other versions, supplements,
 and attachments without pretending they are another Finder folder level.
 
-- Only publication-version PDFs can become current.
+- Automatic selection prefers publication-version PDFs; a user can explicitly
+  set any existing non-invalid Paper File as Default. Manual selection is sticky.
 - The Published version remains current when a preprint or accepted manuscript
   arrives later.
-- Supplements and other attachments cannot become current merely because they
-  use the PDF format.
+- Supplements and other attachments do not become the automatic Default merely
+  because they use the PDF format. A PDF chosen as Default is promoted to the
+  main file location, keeping the previous PDF in Associated Files.
 - Exact SHA-256 detects byte-identical files; a content fingerprint can relate
   clean and annotated copies while preserving their differences.
 - PDF validation rejects HTML responses, empty files, and truncated pseudo-PDFs
@@ -335,7 +340,7 @@ view, and open the native application window.
 
 Requirements:
 
-- macOS 10.15 or later;
+- macOS 14 or later for the supplied universal native launcher;
 - a working `python3` command;
 - network access for dependency installation and online research services.
 
